@@ -68,6 +68,7 @@ import { installMediaPermissionHandler } from './media-permission'
 import { localMediaRoots } from './media-roots'
 import { resourceDirs } from './runtime-env'
 import {
+  flushDiagnosticLog,
   installDiagnosticConsoleCapture,
   installIpcDiagnostics,
   writeDiagnosticLog
@@ -707,6 +708,9 @@ app.on('before-quit', (event) => {
       /* best-effort — quit regardless so the app never hangs on exit */
     }
     engineUnloaded = true
+    // Buffered diagnostics are written now rather than lost with the process. Bounded, so a
+    // stalled disk delays quit by at most the flush timeout.
+    await flushDiagnosticLog()
     commitApplicationRelaunch(app)
     app.quit()
   })()
