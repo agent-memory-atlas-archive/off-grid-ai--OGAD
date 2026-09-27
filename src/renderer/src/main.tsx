@@ -13,6 +13,7 @@ import { StrictMode, type FC } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { TooltipProvider } from './components/ui/tooltip'
+import { AIRequestLogs } from './components/AIRequestLogs'
 
 // The quick-paste popup is a Pro feature; its component lives in the pro package.
 // The Vite alias resolves `@offgrid/pro/renderer` to a stub in free builds (which
@@ -45,7 +46,11 @@ if (isDictation) {
 // No analytics / telemetry. Off Grid AI is local-first — nothing leaves your device.
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {isClipPopup ? (
+    {hash === '#ai-activity' ? (
+      <TooltipProvider delayDuration={300}>
+        <AIRequestLogs standalone />
+      </TooltipProvider>
+    ) : isClipPopup ? (
       <ClipboardPopup />
     ) : isDictation ? (
       <DictationOverlay />

@@ -329,6 +329,18 @@ const offGridApi = {
 
   // App Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
+  aiLogsList: (
+    query: import('../shared/ai-request-log').AILogQuery = {}
+  ): Promise<import('../shared/ai-request-log').AILogPage> =>
+    ipcRenderer.invoke('ai-logs:list', query),
+  aiLogsDetail: (id: string): Promise<import('../shared/ai-request-log').AIRequestRecord | null> =>
+    ipcRenderer.invoke('ai-logs:detail', id),
+  aiLogsAttachment: (id: string, asset: string): Promise<string | null> =>
+    ipcRenderer.invoke('ai-logs:attachment', id, asset),
+  aiLogsClear: (): Promise<void> => ipcRenderer.invoke('ai-logs:clear'),
+  aiLogsRelated: (id: string): Promise<import('../shared/ai-request-log').AIRequestSummary[]> =>
+    ipcRenderer.invoke('ai-logs:related', id),
+  aiLogsOpenWindow: (): Promise<void> => ipcRenderer.invoke('ai-logs:open-window'),
   saveSetting: (key: string, value: unknown) => ipcRenderer.invoke('settings:save', key, value),
   consoleEnroll: (url: string, token: string) => ipcRenderer.invoke('console:enroll', url, token),
   consoleStatus: () => ipcRenderer.invoke('console:status'),
