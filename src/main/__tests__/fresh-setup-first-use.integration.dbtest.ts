@@ -76,6 +76,7 @@ function installRuntimeBoundaries(): void {
       '#!/usr/bin/env node',
       "const http = require('node:http')",
       'const args = process.argv.slice(2)',
+      "if (args.includes('--list-devices')) { console.log('Available devices:\\n  Vulkan0: test GPU'); process.exit(0) }",
       "const portIndex = args.indexOf('--port')",
       'const port = portIndex >= 0 ? Number(args[portIndex + 1]) : 8439',
       'const server = http.createServer((req, res) => {',
