@@ -12,8 +12,13 @@ const mocks = vi.hoisted(() => ({
   exists: vi.fn()
 }))
 
-vi.mock('node:child_process', () => ({ spawn: mocks.spawn }))
-vi.mock('../../llm/gpu-device-probe', () => ({ gpuDeviceAvailable: vi.fn(async () => true) }))
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(), spawn: mocks.spawn
+}))
+vi.mock('../../llm/gpu-device-probe', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../llm/gpu-device-probe')>(),
+  gpuDeviceAvailable: vi.fn(async () => true)
+}))
 vi.mock('node:fs', () => ({ default: { existsSync: mocks.exists } }))
 vi.mock('../../llm', () => ({
   buildDecisionPrompt: vi.fn(() => 'decision prompt'),

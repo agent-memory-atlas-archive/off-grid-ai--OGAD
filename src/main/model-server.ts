@@ -23,6 +23,8 @@
 // documentation is served at GET /docs (and lives in docs/API.md).
 
 import http from 'http'
+import { AIRequestHandle } from './ai-request-log'
+import { observeAIResponse } from './ai-request-log-http'
 import https from 'https'
 import fs from 'fs'
 import os from 'os'
@@ -67,10 +69,7 @@ import {
   getActiveRemoteVisionServerForModality
 } from './vision/remote-vision-server'
 import { REASONING_BUDGET_AUTO, openRouterReasoningPayload } from '@offgrid/models'
-import {
-  remoteReasoningCapability,
-  remoteTextModelProviderError
-} from './llm/remote-chat'
+import { remoteReasoningCapability, remoteTextModelProviderError } from './llm/remote-chat'
 
 const UPSTREAM_HOST = '127.0.0.1'
 // The upstream llama-server port is LIVE, not fixed: llm.getPort() moves off LLAMA_SERVER_PORT when
@@ -217,7 +216,8 @@ function proxyToLlama(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   bodyOverride?: Buffer,
-  retryUntil = 0
+  retryUntil = 0,
+  activity?: AIRequestHandle
 ): void {
   const headers = { ...req.headers, host: `${UPSTREAM_HOST}:${upstreamPort()}` }
   if (bodyOverride) {
@@ -244,6 +244,7 @@ function proxyToLlama(
           // uncaught exception that crashes the main process. Does not re-settle this promise —
           // it has already resolved once piping begins.
           guardProxyStreams(proxyRes, res)
+          observeAIResponse(proxyRes, res, activity)
           proxyRes.pipe(res)
           resolve()
         }
@@ -257,17 +258,23 @@ function proxyToLlama(
     })
   // Piped requests aren't replayable, so they fail fast (replayable=false).
   retryWithDeadline(attempt, { deadlineMs: retryUntil, replayable: !!bodyOverride }).catch(() => {
+    activity?.finish(undefined, new Error('Local model not ready'))
     json(res, 502, errBody('Local model not ready (llama-server unavailable).', 'upstream_error'))
   })
 }
 
 /** Forward an inventory-selected remote model through the Desktop connection that owns it.
  * Mobile sees the stable inventory id, while the provider must receive its native model id. */
-function proxyToSelectedRemote(res: http.ServerResponse, body: Record<string, unknown>): boolean {
+function proxyToSelectedRemote(
+  res: http.ServerResponse,
+  body: Record<string, unknown>,
+  activity?: AIRequestHandle
+): boolean {
   const requested = typeof body.model === 'string' ? parseRemoteVisionModelId(body.model) : null
   if (!requested) return false
   const remote = getActiveRemoteVisionServer()
   if (!remote || requested.serverId !== remote.id || requested.modelId !== remote.model) {
+    activity?.finish(undefined, new Error('The selected remote model is not active.'))
     json(res, 400, errBody('The selected remote model is not active.', 'invalid_request_error'))
     return true
   }
@@ -301,6 +308,7 @@ function proxyToSelectedRemote(res: http.ServerResponse, body: Record<string, un
         : 'passthrough'
   })
   const payload = Buffer.from(JSON.stringify(forwarded))
+  activity?.update({ model: remote.model, backend: 'Remote', effectiveRequest: forwarded })
   const client = target.protocol === 'https:' ? https : http
   const proxyReq = client.request(
     target,
@@ -313,6 +321,7 @@ function proxyToSelectedRemote(res: http.ServerResponse, body: Record<string, un
       }
     },
     (proxyRes) => {
+      observeAIResponse(proxyRes, res, activity)
       const status = proxyRes.statusCode ?? 502
       let providerErrorBody = ''
       if (status >= 400) {
@@ -343,6 +352,7 @@ function proxyToSelectedRemote(res: http.ServerResponse, body: Record<string, un
     }
   )
   proxyReq.on('error', (error) => {
+    activity?.finish(undefined, error)
     const errorCode = (error as NodeJS.ErrnoException).code
     writeDiagnosticLog(
       'gateway',
@@ -597,7 +607,14 @@ async function handleChat(
   // A paired Mobile sends the stable remote inventory id advertised by Desktop.
   // Route that id through the configured remote server instead of llama-server.
   res.setHeader('X-Request-Id', rid)
-  if (proxyToSelectedRemote(res, body)) return
+  const activity = new AIRequestHandle({
+    modality: 'text',
+    source: 'API chat',
+    model: typeof body.model === 'string' ? body.model : undefined,
+    request: body
+  })
+  activity.update({ effectiveRequest: body, backend: llm.activeAccelerator() ?? 'Unknown' })
+  if (proxyToSelectedRemote(res, body, activity)) return
 
   // Async chat: run a non-streaming completion in the background and poll for it.
   if (isAsync(req, body)) {
@@ -608,7 +625,16 @@ async function handleChat(
       'chat',
       '/v1/chat/completions',
       true,
-      () => callLlamaJson(inlined, Date.now() + 45_000),
+      async () => {
+        try {
+          const result = await callLlamaJson(inlined, Date.now() + 45_000)
+          activity.finish(result)
+          return result
+        } catch (error) {
+          activity.finish(undefined, error)
+          throw error
+        }
+      },
       () => {}
     )
     return
@@ -616,7 +642,7 @@ async function handleChat(
 
   // Sync: stream straight through. Retry for up to 45s if llama-server is mid-reload
   // (e.g. just after an image generation freed and is respawning it, ~16s).
-  proxyToLlama(req, res, forward, Date.now() + 45_000)
+  proxyToLlama(req, res, forward, Date.now() + 45_000, activity)
 }
 
 // ─── Embeddings (local MiniLM) ───────────────────────────────────────────────
@@ -713,14 +739,8 @@ async function handleModelsList(
         // The Desktop gateway has already validated this OpenAI-compatible route.
         // Mobile must not probe the local llama /props endpoint for capabilities of
         // this remote model, because that reports the wrong active model.
-        capabilities: [
-          'vision',
-          'tools',
-          ...(supportsReasoning ? ['reasoning'] : [])
-        ],
-        ...(supportsReasoning
-          ? { reasoning: { mandatory: reasoning.mandatory === true } }
-          : {})
+        capabilities: ['vision', 'tools', ...(supportsReasoning ? ['reasoning'] : [])],
+        ...(supportsReasoning ? { reasoning: { mandatory: reasoning.mandatory === true } } : {})
       }
     ]
   }
@@ -788,15 +808,14 @@ async function handleModelsList(
     ?.split(',')
     .map((value) => value.trim())
     .filter(Boolean)
-  const visible = requested?.length && !requested.includes('all')
-    ? data.filter((entry) =>
-        requested.includes(
-          entry.kind === 'speech' || entry.kind === 'image'
-            ? entry.kind
-            : 'text'
+  const visible =
+    requested?.length && !requested.includes('all')
+      ? data.filter((entry) =>
+          requested.includes(
+            entry.kind === 'speech' || entry.kind === 'image' ? entry.kind : 'text'
+          )
         )
-      )
-    : data
+      : data
   // Mirror into the ollama-style `models` array some clients read, so both shapes
   // stay in sync.
   const models = ollamaMirror(visible)
@@ -993,13 +1012,14 @@ async function handleImageGeneration(
     'image',
     '/v1/images/generations',
     isAsync(req, payload),
-    () => executeImage(params, fmt, undefined, (progress) => {
-      const request = requests.get(rid)
-      if (request) {
-        request.progress = progress
-        request.updated_at = Date.now()
-      }
-    }),
+    () =>
+      executeImage(params, fmt, undefined, (progress) => {
+        const request = requests.get(rid)
+        if (request) {
+          request.progress = progress
+          request.updated_at = Date.now()
+        }
+      }),
     (r) => jsonWithId(res, rid, r)
   )
 }
@@ -1159,7 +1179,9 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
   if (server || startingGateway) return
   startingGateway = true
   try {
-    const availablePort = await pickFreePort(port, (candidate) => isPortFree(candidate, GATEWAY_BIND_HOST))
+    const availablePort = await pickFreePort(port, (candidate) =>
+      isPortFree(candidate, GATEWAY_BIND_HOST)
+    )
     if (availablePort === null) throw new Error(`No free gateway port on ${GATEWAY_BIND_HOST}.`)
     boundGatewayPort = availablePort
   } catch (error) {
@@ -1447,7 +1469,26 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
         new URLSearchParams(req.url?.split('?')[1]).get('output_modalities') ?? undefined
       )
 
-    // Everything else (completions/embeddings) -> llama-server.
+    // Raw completion clients bypass handleChat, but still belong in local AI history.
+    if (url === '/v1/completions' && method === 'POST') {
+      void (async () => {
+        try {
+          const bytes = await readBody(req, MAX_UPLOAD)
+          const body: unknown = JSON.parse(bytes.toString('utf8'))
+          const activity = new AIRequestHandle({
+            modality: 'text',
+            source: 'API completion',
+            request: body
+          })
+          activity.update({ backend: llm.activeAccelerator() ?? 'Unknown' })
+          proxyToLlama(req, res, bytes, 0, activity)
+        } catch {
+          json(res, 400, errBody('Invalid or oversized completion request.'))
+        }
+      })()
+      return
+    }
+    // Non-inference routes pass through without generating activity rows.
     proxyToLlama(req, res)
   })
 

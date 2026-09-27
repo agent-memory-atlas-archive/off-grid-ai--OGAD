@@ -9,6 +9,8 @@ import { selectLocalEngine } from '../llm/select-local-engine'
 import { isPortFree, pickFreePort } from '../free-port'
 import { reapOrphanProcessesOnPort } from '../kill-orphan-port'
 import { resolveComputerUseModelArtifact } from '../models-manager'
+import { offloadedGpuLayers } from '../llm/gpu-device-probe'
+import { acceleratorForEngine } from '../../shared/engine-accelerator'
 
 const GROUNDER_PORT = 8489
 
@@ -19,6 +21,7 @@ export class GrounderRuntime {
   private port = GROUNDER_PORT
   private modelId: string | null = null
   private stderr = ''
+  private backend: string | undefined
   private readonly mutex = new Mutex()
 
   get running(): boolean {
@@ -36,6 +39,7 @@ export class GrounderRuntime {
       provider: 'custom',
       endpoint: `http://127.0.0.1:${this.port}/v1`,
       model: modelId,
+      computeBackend: this.backend,
       apiKey: ''
     }
   }
@@ -57,6 +61,7 @@ export class GrounderRuntime {
     this.port = port
     this.modelId = modelId
     this.stderr = ''
+    this.backend = undefined
     const process = spawn(
       serverPath,
       buildLaunchArgs({
@@ -87,6 +92,14 @@ export class GrounderRuntime {
     this.process = process
     process.stderr!.on('data', (chunk) => {
       this.stderr = `${this.stderr}${String(chunk)}`.slice(-16_384)
+      const layers = offloadedGpuLayers(this.stderr)
+      if (layers !== null)
+        this.backend =
+          acceleratorForEngine({
+            platform: globalThis.process.platform,
+            serverPath,
+            gpuLayers: layers
+          }) ?? undefined
       console.log(`[Grounding runtime] ${String(chunk)}`)
     })
     process.once('close', () => {

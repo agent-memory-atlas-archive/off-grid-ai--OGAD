@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events'
-vi.mock('../../llm/gpu-device-probe', () => ({ gpuDeviceAvailable: vi.fn(async () => true) }))
+vi.mock('../../llm/gpu-device-probe', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../llm/gpu-device-probe')>(),
+  gpuDeviceAvailable: vi.fn(async () => true)
+}))
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -10,7 +13,9 @@ const mocks = vi.hoisted(() => ({
   spawn: vi.fn()
 }))
 
-vi.mock('node:child_process', () => ({ spawn: mocks.spawn }))
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(), spawn: mocks.spawn
+}))
 vi.mock('node:fs', () => ({ default: { existsSync: mocks.exists } }))
 vi.mock('../../llm/settings-math', () => ({ buildLaunchArgs: vi.fn(() => ['--ground']) }))
 vi.mock('../../llm/spawn-env', () => ({ engineSpawnEnv: vi.fn(() => ({ TEST_ENGINE: '1' })) }))

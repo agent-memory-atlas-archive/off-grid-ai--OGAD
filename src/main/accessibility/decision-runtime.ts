@@ -1,5 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
+import { currentAIRequest } from '../ai-request-log'
+import { offloadedGpuLayers } from '../llm/gpu-device-probe'
+import { acceleratorForEngine } from '../../shared/engine-accelerator'
 import { Mutex } from 'async-mutex'
 import { prepareModelMemory, registerModelEvictor } from '../model-memory'
 import {
@@ -46,6 +49,7 @@ export class DecisionRuntime {
   private startPromise: Promise<void> | null = null
   private modelId: string | null = null
   private stderr = ''
+  private backend: string | undefined
   readonly timing: DecisionRuntimeTiming = { coldStartMs: 0, warmDecisionMs: [] }
 
   get activePort(): number {
@@ -94,6 +98,7 @@ export class DecisionRuntime {
     this.port = port
     this.modelId = modelId
     this.stderr = ''
+    this.backend = undefined
     const args = buildLaunchArgs({
       modelPath: artifact.primaryPath,
       mmProjPath: artifact.projectorPath ?? '',
@@ -123,6 +128,14 @@ export class DecisionRuntime {
     this.process = process
     process.stderr!.on('data', (chunk) => {
       this.stderr = `${this.stderr}${String(chunk)}`.slice(-16_384)
+      const layers = offloadedGpuLayers(this.stderr)
+      if (layers !== null)
+        this.backend =
+          acceleratorForEngine({
+            platform: globalThis.process.platform,
+            serverPath,
+            gpuLayers: layers
+          }) ?? undefined
       console.log(`[Decision runtime] ${String(chunk)}`)
     })
     process.once('close', () => {
@@ -153,6 +166,7 @@ export class DecisionRuntime {
     this.port = port
     this.modelId = KEV_4B_ID
     this.stderr = ''
+    this.backend = undefined
     const startedAt = Date.now()
     const process = spawn(
       artifact.python,
@@ -172,8 +186,10 @@ export class DecisionRuntime {
     )
     this.process = process
     for (const stream of [process.stdout, process.stderr]) {
-      stream?.on('data', (chunk) => {
+      stream.on('data', (chunk) => {
         this.stderr = `${this.stderr}${String(chunk)}`.slice(-16_384)
+        const device = /\[Kev\] loaded: device=(cuda|mps|cpu)\b/.exec(this.stderr)?.[1]
+        if (device) this.backend = device === 'cuda' ? 'CUDA' : device === 'mps' ? 'Metal' : 'CPU'
         console.log(`[Kev runtime] ${String(chunk)}`)
       })
     }
@@ -221,6 +237,11 @@ export class DecisionRuntime {
       throw new DecisionRuntimeError('The Decision runtime is not running.', 'startup')
     return this.mutex.runExclusive(async () => {
       const startedAt = Date.now()
+      currentAIRequest()?.update({
+        model: this.modelId ?? undefined,
+        backend: this.backend ?? 'Unknown',
+        effectiveRequest: { context, question, options }
+      })
       if (this.modelId === KEV_4B_ID) {
         const response = await fetch(`http://127.0.0.1:${this.port}/v1/systemone`, {
           method: 'POST',
@@ -244,6 +265,7 @@ export class DecisionRuntime {
         const body = (await response.json()) as {
           answers?: { decision?: { choice?: string; probabilities?: Record<string, number> } }
         }
+        currentAIRequest()?.update({ response: body })
         const answer = body.answers?.decision
         const choice = options.findIndex((_, index) => answer?.choice === `option_${index}`)
         const probabilities = options.map((_, index) => answer?.probabilities?.[`option_${index}`])
@@ -265,6 +287,7 @@ export class DecisionRuntime {
       const prompt = buildDecisionPrompt(context, question, options)
       const body = JSON.stringify(buildDecisionRequest(prompt, options.length))
       const raw = await postCompletionOnce(this.port, body, undefined, signal, '/completion')
+      currentAIRequest()?.update({ effectiveRequest: JSON.parse(body), response: JSON.parse(raw) })
       this.timing.warmDecisionMs.push(Date.now() - startedAt)
       if (this.timing.warmDecisionMs.length > 200) this.timing.warmDecisionMs.shift()
       return parseOptionDecision(raw, options.length)

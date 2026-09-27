@@ -3,6 +3,7 @@ import { Mutex } from 'async-mutex'
 import { prepareModelMemory, registerModelEvictor } from './model-memory'
 import { callHook } from './bootstrap/hookRegistry'
 import path from 'path'
+import { recordAIRequest, currentAIRequest } from './ai-request-log'
 import * as fs from 'fs'
 import { modelsDir as getModelsDir, binRoots, isPackaged, exe } from './runtime-env'
 import { reapOrphanProcessesOnPort, type PortReapResult } from './kill-orphan-port'
@@ -1166,8 +1167,7 @@ export class LLMService {
       probing = false
       console.log('[LLMService] Vision server ready!')
       const engineDir = path.basename(binDir)
-      this.activeGpuLayers =
-        gpuLayers === 0 || engineDir.endsWith('-cpu') ? 0 : confirmedOffload
+      this.activeGpuLayers = gpuLayers === 0 || engineDir.endsWith('-cpu') ? 0 : confirmedOffload
       console.log(
         `[LLMService] model ready: engine=${engineDir}, GPU layers=${this.activeGpuLayers ?? 'unconfirmed'}`
       )
@@ -1352,24 +1352,45 @@ export class LLMService {
     screenshotPath?: string
   ): Promise<OptionDecision> {
     const prompt = buildDecisionPrompt(context, question, options)
-    await this.beginGeneration()
-    try {
-      this.assertImageInputSupported(screenshotPath ? [screenshotPath] : [])
-      await this.ensureReady()
-      return await this.chatMutex.runExclusive(async () => {
-        const image = screenshotPath ? readImages([screenshotPath])[0] : undefined
-        if (screenshotPath && !image) {
-          throw new Error('The Decision model screenshot could not be read.')
+    return recordAIRequest(
+      {
+        modality: 'text',
+        source: 'Decision model swap',
+        request: { context, question, options },
+        signal
+      },
+      async (log) => {
+        await this.beginGeneration()
+        try {
+          this.assertImageInputSupported(screenshotPath ? [screenshotPath] : [])
+          await this.ensureReady()
+          return await this.chatMutex.runExclusive(async () => {
+            const image = screenshotPath ? readImages([screenshotPath])[0] : undefined
+            if (screenshotPath && !image) {
+              throw new Error('The Decision model screenshot could not be read.')
+            }
+            const body = JSON.stringify(
+              buildDecisionRequest(
+                prompt,
+                options.length,
+                image?.base64,
+                this.mediaMarker ?? undefined
+              )
+            )
+            const raw = await postCompletionOnce(this.port, body, undefined, signal, '/completion')
+            log.update({
+              model: this.modelPath,
+              backend: this.activeAccelerator(),
+              effectiveRequest: JSON.parse(body),
+              response: JSON.parse(raw)
+            })
+            return parseOptionDecision(raw, options.length)
+          })
+        } finally {
+          this.finishGeneration()
         }
-        const body = JSON.stringify(
-          buildDecisionRequest(prompt, options.length, image?.base64, this.mediaMarker ?? undefined)
-        )
-        const raw = await postCompletionOnce(this.port, body, undefined, signal, '/completion')
-        return parseOptionDecision(raw, options.length)
-      })
-    } finally {
-      this.finishGeneration()
-    }
+      }
+    )
   }
 
   /** Resolve the selected text model once at request admission. Every text
@@ -1453,26 +1474,37 @@ export class LLMService {
     } = {}
   ): Promise<string> {
     const messages = buildMessages(message, readImages(images), this.systemPrompt)
-    const remote = this.activeRemoteTextModel()
-    if (remote) {
-      return (
-        await this.completeRemote(remote, messages, () => {}, {
-          timeoutMs,
-          maxTokens,
-          temperature: opts.temperature,
-          thinking: opts.disableThinking ? false : opts.enableThinking,
-          signal: opts.signal,
-          responseFormat: opts.responseFormat
-        })
-      ).content
-    }
-    await this.beginGeneration()
-    try {
-      this.assertImageInputSupported(images)
-      return await this.completeMessages(messages, timeoutMs, maxTokens, opts)
-    } finally {
-      this.finishGeneration()
-    }
+    return recordAIRequest(
+      {
+        modality: 'text',
+        source: 'Chat',
+        model: this.modelPath,
+        request: { messages, ...opts, maxTokens },
+        signal: opts.signal
+      },
+      async () => {
+        const remote = this.activeRemoteTextModel()
+        if (remote) {
+          return (
+            await this.completeRemote(remote, messages, () => {}, {
+              timeoutMs,
+              maxTokens,
+              temperature: opts.temperature,
+              thinking: opts.disableThinking ? false : opts.enableThinking,
+              signal: opts.signal,
+              responseFormat: opts.responseFormat
+            })
+          ).content
+        }
+        await this.beginGeneration()
+        try {
+          this.assertImageInputSupported(images)
+          return await this.completeMessages(messages, timeoutMs, maxTokens, opts)
+        } finally {
+          this.finishGeneration()
+        }
+      }
+    )
   }
 
   /** Send an exact OpenAI-style message history for model-family policy adapters. */
@@ -1495,31 +1527,42 @@ export class LLMService {
     } = {}
   ): Promise<string> {
     const remote = this.activeRemoteTextModel()
-    if (remote) {
-      return (
-        await this.completeRemote(remote, messages, () => {}, {
-          timeoutMs,
-          maxTokens,
-          temperature: opts.temperature,
-          topP: opts.topP,
-          thinking: opts.disableThinking ? false : opts.enableThinking,
-          signal: opts.signal,
-          responseFormat: opts.responseFormat
-        })
-      ).content
-    }
-    await this.beginGeneration()
-    try {
-      const hasImages = messages.some(
-        (message) =>
-          Array.isArray(message.content) &&
-          message.content.some((part) => part.type === 'image_url')
-      )
-      this.assertImageInputSupported(hasImages ? ['message-image'] : [])
-      return await this.completeMessages(messages, timeoutMs, maxTokens, opts)
-    } finally {
-      this.finishGeneration()
-    }
+    return recordAIRequest(
+      {
+        modality: 'text',
+        source: 'Messages',
+        model: remote?.model ?? this.modelPath,
+        request: { messages, ...opts, maxTokens },
+        signal: opts.signal
+      },
+      async () => {
+        if (remote) {
+          return (
+            await this.completeRemote(remote, messages, () => {}, {
+              timeoutMs,
+              maxTokens,
+              temperature: opts.temperature,
+              topP: opts.topP,
+              thinking: opts.disableThinking ? false : opts.enableThinking,
+              signal: opts.signal,
+              responseFormat: opts.responseFormat
+            })
+          ).content
+        }
+        await this.beginGeneration()
+        try {
+          const hasImages = messages.some(
+            (message) =>
+              Array.isArray(message.content) &&
+              message.content.some((part) => part.type === 'image_url')
+          )
+          this.assertImageInputSupported(hasImages ? ['message-image'] : [])
+          return await this.completeMessages(messages, timeoutMs, maxTokens, opts)
+        } finally {
+          this.finishGeneration()
+        }
+      }
+    )
   }
 
   private async completeMessages(
@@ -1562,10 +1605,7 @@ export class LLMService {
         // their official protocol. General models use the separated reasoning
         // channel so a long thought does not hide the final policy answer.
         if (opts.enableThinking !== undefined) {
-          Object.assign(
-            payload,
-            reasoningBudgetPayload(opts.enableThinking, this.reasoningBudget)
-          )
+          Object.assign(payload, reasoningBudgetPayload(opts.enableThinking, this.reasoningBudget))
           if (opts.separateReasoning) {
             Object.assign(payload, thinkingPayload(opts.enableThinking, this.thinkingDialect))
           } else {
@@ -1577,12 +1617,18 @@ export class LLMService {
           Object.assign(payload, thinkingPayload(false, this.thinkingDialect))
         }
         const body = JSON.stringify(payload)
+        currentAIRequest()?.update({
+          effectiveRequest: payload,
+          model: this.modelPath,
+          backend: this.activeAccelerator()
+        })
 
         console.log(
           `[LLMService] Starting LLM request (timeout: ${timeoutMs === undefined ? 'none' : `${timeoutMs / 1000}s`}, body: ${body.length} chars)...`
         )
 
         const raw = await this.httpPost(body, timeoutMs, opts.signal)
+        currentAIRequest()?.update({ response: JSON.parse(raw) })
         const data = JSON.parse(raw) as {
           usage?: { total_tokens?: number }
           choices?: { message?: { content?: string; reasoning_content?: string } }[]
@@ -1626,61 +1672,77 @@ export class LLMService {
     timeoutMs?: number
   ): Promise<ChatStreamResult> {
     const messages = buildMessages(message, readImages(images), this.systemPrompt)
-    const resolvedMaxTokens = resolveMaxTokens(maxTokens, this.maxTokens)
-    const remote = this.activeRemoteTextModel()
-    if (remote) {
-      const result = await this.completeRemote(remote, messages, onDelta, {
-        timeoutMs,
-        maxTokens: resolvedMaxTokens,
-        temperature: opts.temperature,
-        thinking: opts.thinking,
+    return recordAIRequest(
+      {
+        modality: 'text',
+        source: 'Chat stream',
+        model: this.modelPath,
+        request: { messages, ...opts, maxTokens },
         signal: opts.signal
-      })
-      return {
-        ...withContextMetrics(result, messages, {
-          contextWindowTokens: this.effectiveContextSize(),
-          computeBackend: 'Remote'
-        }),
-        maxTokens: resolvedMaxTokens
-      }
-    }
-    await this.beginGeneration()
-    try {
-      this.assertImageInputSupported(images)
-      await this.ensureReady()
-      const payload: Record<string, unknown> = {
-        messages,
-        max_tokens: maxTokensForWire(resolvedMaxTokens),
-        temperature: opts.temperature ?? this.temperature,
-        ...this.samplingPayload(),
-        stream: true,
-        // Ask for the token counts. Without this the final chunk carries no usage, so the app can
-        // report how long a generation took but never how many tokens it produced.
-        stream_options: { include_usage: true },
-        // Thinking control: when on, ask the template to emit reasoning and have
-        // llama.cpp split it into reasoning_content (deepseek-style); when off,
-        // suppress it so the token budget goes to the answer.
-        ...thinkingPayload(!!opts.thinking, this.thinkingDialect),
-        ...reasoningBudgetPayload(!!opts.thinking, this.reasoningBudget)
-      }
-      const body = JSON.stringify(payload)
+      },
+      async (log) => {
+        const resolvedMaxTokens = resolveMaxTokens(maxTokens, this.maxTokens)
+        const remote = this.activeRemoteTextModel()
+        if (remote) {
+          const result = await this.completeRemote(remote, messages, onDelta, {
+            timeoutMs,
+            maxTokens: resolvedMaxTokens,
+            temperature: opts.temperature,
+            thinking: opts.thinking,
+            signal: opts.signal
+          })
+          return {
+            ...withContextMetrics(result, messages, {
+              contextWindowTokens: this.effectiveContextSize(),
+              computeBackend: 'Remote'
+            }),
+            maxTokens: resolvedMaxTokens
+          }
+        }
+        await this.beginGeneration()
+        try {
+          this.assertImageInputSupported(images)
+          await this.ensureReady()
+          const payload: Record<string, unknown> = {
+            messages,
+            max_tokens: maxTokensForWire(resolvedMaxTokens),
+            temperature: opts.temperature ?? this.temperature,
+            ...this.samplingPayload(),
+            stream: true,
+            // Ask for the token counts. Without this the final chunk carries no usage, so the app can
+            // report how long a generation took but never how many tokens it produced.
+            stream_options: { include_usage: true },
+            // Thinking control: when on, ask the template to emit reasoning and have
+            // llama.cpp split it into reasoning_content (deepseek-style); when off,
+            // suppress it so the token budget goes to the answer.
+            ...thinkingPayload(!!opts.thinking, this.thinkingDialect),
+            ...reasoningBudgetPayload(!!opts.thinking, this.reasoningBudget)
+          }
+          const body = JSON.stringify(payload)
+          log.update({
+            effectiveRequest: payload,
+            model: this.modelPath,
+            backend: this.activeAccelerator()
+          })
 
-      // Single SSE transport (llm/stream.ts). The plain chat path sends no tools, so
-      // the returned toolCalls are always empty — take only the answer text.
-      const result = await streamCompletion(this.port, body, onDelta, {
-        signal: opts.signal,
-        timeoutMs
-      })
-      return {
-        ...withContextMetrics(result, messages, {
-          contextWindowTokens: this.effectiveContextSize(),
-          computeBackend: this.activeAccelerator()
-        }),
-        maxTokens: resolvedMaxTokens
+          // Single SSE transport (llm/stream.ts). The plain chat path sends no tools, so
+          // the returned toolCalls are always empty — take only the answer text.
+          const result = await streamCompletion(this.port, body, onDelta, {
+            signal: opts.signal,
+            timeoutMs
+          })
+          return {
+            ...withContextMetrics(result, messages, {
+              contextWindowTokens: this.effectiveContextSize(),
+              computeBackend: this.activeAccelerator()
+            }),
+            maxTokens: resolvedMaxTokens
+          }
+        } finally {
+          this.finishGeneration()
+        }
       }
-    } finally {
-      this.finishGeneration()
-    }
+    )
   }
 
   // Lower-level streaming turn over a RAW messages array with optional tool-calling.
@@ -1710,72 +1772,90 @@ export class LLMService {
     timeoutMs?: number
   ): Promise<StreamResult> {
     const remote = this.activeRemoteTextModel()
-    if (remote) {
-      const result = await this.completeRemote(remote, messages, onDelta, {
-        timeoutMs,
-        maxTokens: opts.maxTokens,
-        temperature: opts.temperature,
-        topP: opts.topP,
-        topK: opts.topK,
-        minP: opts.minP,
-        presencePenalty: opts.presencePenalty,
-        repeatPenalty: opts.repeatPenalty,
-        thinking: opts.thinking,
-        signal: opts.signal,
-        responseFormat: opts.responseFormat,
-        tools: opts.tools,
-        toolChoice: opts.toolChoice,
-        onToolCallStart: opts.onToolCallStart
-      })
-      return withContextMetrics(result, messages, {
-        contextWindowTokens: this.effectiveContextSize(),
-        tools: opts.tools,
-        computeBackend: 'Remote'
-      })
-    }
-    await this.beginGeneration()
-    try {
-      await this.ensureReady()
-      const payload: Record<string, unknown> = {
-        messages,
-        max_tokens: maxTokensForWire(resolveMaxTokens(opts.maxTokens, this.maxTokens)),
-        temperature: opts.temperature ?? this.temperature,
-        ...samplingPayload({
-          topP: opts.topP ?? this.topP,
-          topK: opts.topK ?? this.topK,
-          minP: opts.minP ?? this.minP,
-          repeatPenalty: opts.repeatPenalty ?? this.repeatPenalty
-        }),
-        ...(opts.presencePenalty === undefined ? {} : { presence_penalty: opts.presencePenalty }),
-        stream: true,
-        // Ask for the token counts. Without this the final chunk carries no usage, so the app can
-        // report how long a generation took but never how many tokens it produced.
-        stream_options: { include_usage: true },
-        ...thinkingPayload(!!opts.thinking, this.thinkingDialect),
-        ...reasoningBudgetPayload(!!opts.thinking, this.reasoningBudget)
-      }
-      if (opts.responseFormat) payload.response_format = opts.responseFormat
-      if (opts.tools && opts.tools.length) {
-        payload.tools = opts.tools
-        payload.tool_choice = opts.toolChoice ?? 'auto'
-      }
-      const body = JSON.stringify(payload)
+    return recordAIRequest(
+      {
+        modality: 'text',
+        source: 'Tool / task turn',
+        model: remote?.model ?? this.modelPath,
+        request: { messages, ...opts },
+        signal: opts.signal
+      },
+      async (log) => {
+        if (remote) {
+          const result = await this.completeRemote(remote, messages, onDelta, {
+            timeoutMs,
+            maxTokens: opts.maxTokens,
+            temperature: opts.temperature,
+            topP: opts.topP,
+            topK: opts.topK,
+            minP: opts.minP,
+            presencePenalty: opts.presencePenalty,
+            repeatPenalty: opts.repeatPenalty,
+            thinking: opts.thinking,
+            signal: opts.signal,
+            responseFormat: opts.responseFormat,
+            tools: opts.tools,
+            toolChoice: opts.toolChoice,
+            onToolCallStart: opts.onToolCallStart
+          })
+          return withContextMetrics(result, messages, {
+            contextWindowTokens: this.effectiveContextSize(),
+            tools: opts.tools,
+            computeBackend: 'Remote'
+          })
+        }
+        await this.beginGeneration()
+        try {
+          await this.ensureReady()
+          const payload: Record<string, unknown> = {
+            messages,
+            max_tokens: maxTokensForWire(resolveMaxTokens(opts.maxTokens, this.maxTokens)),
+            temperature: opts.temperature ?? this.temperature,
+            ...samplingPayload({
+              topP: opts.topP ?? this.topP,
+              topK: opts.topK ?? this.topK,
+              minP: opts.minP ?? this.minP,
+              repeatPenalty: opts.repeatPenalty ?? this.repeatPenalty
+            }),
+            ...(opts.presencePenalty === undefined
+              ? {}
+              : { presence_penalty: opts.presencePenalty }),
+            stream: true,
+            // Ask for the token counts. Without this the final chunk carries no usage, so the app can
+            // report how long a generation took but never how many tokens it produced.
+            stream_options: { include_usage: true },
+            ...thinkingPayload(!!opts.thinking, this.thinkingDialect),
+            ...reasoningBudgetPayload(!!opts.thinking, this.reasoningBudget)
+          }
+          if (opts.responseFormat) payload.response_format = opts.responseFormat
+          if (opts.tools && opts.tools.length) {
+            payload.tools = opts.tools
+            payload.tool_choice = opts.toolChoice ?? 'auto'
+          }
+          const body = JSON.stringify(payload)
+          log.update({
+            effectiveRequest: payload,
+            model: this.modelPath,
+            backend: this.activeAccelerator()
+          })
 
-      // Single SSE transport (llm/stream.ts) — same path as chatStream, but the
-      // assembled tool calls are surfaced too (this powers the agentic loop).
-      const result = await streamCompletion(this.port, body, onDelta, {
-        signal: opts.signal,
-        timeoutMs,
-        onToolCallStart: opts.onToolCallStart
-      })
-      return withContextMetrics(result, messages, {
-        contextWindowTokens: this.effectiveContextSize(),
-        tools: opts.tools,
-        computeBackend: this.activeAccelerator()
-      })
-    } finally {
-      this.finishGeneration()
-    }
+          // Single SSE transport (llm/stream.ts) — same path as chatStream, but the
+          // assembled tool calls are surfaced too (this powers the agentic loop).
+          const result = await streamCompletion(this.port, body, onDelta, {
+            signal: opts.signal,
+            timeoutMs,
+            onToolCallStart: opts.onToolCallStart
+          })
+          return withContextMetrics(result, messages, {
+            contextWindowTokens: this.effectiveContextSize(),
+            tools: opts.tools,
+            computeBackend: this.activeAccelerator()
+          })
+        } finally {
+          this.finishGeneration()
+        }
+      }
+    )
   }
 
   stop(): void {

@@ -1,4 +1,5 @@
 import { llm } from '../llm'
+import { recordAIRequest } from '../ai-request-log'
 import { getComputerUseSettings } from '../computer-use-settings'
 import { getWebUseSettings } from '../web-use-settings'
 import { DECIDER_2B, KEV_4B_ID, listInstalled, loadComputerUseModel } from '../models-manager'
@@ -199,51 +200,62 @@ export async function decideWithDecisionModel(
   options: readonly string[],
   signal?: AbortSignal
 ): Promise<OptionDecision> {
-  recordComputerUseMetric('deciderCalls')
-  const selected = selectedDecisionModelId()
-  const startedAt = Date.now()
-  const request = { context, question, options }
-  try {
-    let result: OptionDecision
-    if (parseRemoteVisionModelId(selected)) {
-      const remote = getRemoteVisionServerForModel(selected, 'decision')
-      if (!remote) throw new Error('The selected remote Decision model is not available.')
-      result = await decideWithRemoteModel(remote, context, question, options, signal)
-    } else if (decisionRuntime.running) {
-      result = await decisionRuntime.decide(context, question, options, signal)
-    } else if (swapFallbackActive) {
-      result = await llm.decideOptions(context, question, options, signal)
-    } else if (dedicatedSession?.modelId === selected && !signal?.aborted) {
-      await ensureDedicatedRuntime(dedicatedSession)
-      result = await decisionRuntime.decide(context, question, options, signal)
-    } else {
-      throw new DecisionRuntimeError(
-        'The dedicated Decision runtime stopped before selection.',
-        'startup'
-      )
+  return recordAIRequest(
+    {
+      modality: 'text',
+      source: 'Decision',
+      model: selectedDecisionModelId(),
+      request: { context, question, options },
+      signal
+    },
+    async () => {
+      recordComputerUseMetric('deciderCalls')
+      const selected = selectedDecisionModelId()
+      const startedAt = Date.now()
+      const request = { context, question, options }
+      try {
+        let result: OptionDecision
+        if (parseRemoteVisionModelId(selected)) {
+          const remote = getRemoteVisionServerForModel(selected, 'decision')
+          if (!remote) throw new Error('The selected remote Decision model is not available.')
+          result = await decideWithRemoteModel(remote, context, question, options, signal)
+        } else if (decisionRuntime.running) {
+          result = await decisionRuntime.decide(context, question, options, signal)
+        } else if (swapFallbackActive) {
+          result = await llm.decideOptions(context, question, options, signal)
+        } else if (dedicatedSession?.modelId === selected && !signal?.aborted) {
+          await ensureDedicatedRuntime(dedicatedSession)
+          result = await decisionRuntime.decide(context, question, options, signal)
+        } else {
+          throw new DecisionRuntimeError(
+            'The dedicated Decision runtime stopped before selection.',
+            'startup'
+          )
+        }
+        await recordComputerUseModelCall({
+          role: 'decider',
+          stage: 'structured_option_selection',
+          rail: 'ax',
+          model: selected,
+          request,
+          response: result,
+          startedAt
+        })
+        return result
+      } catch (error) {
+        await recordComputerUseModelCall({
+          role: 'decider',
+          stage: 'structured_option_selection',
+          rail: 'ax',
+          model: selected,
+          request,
+          error,
+          startedAt
+        })
+        throw error
+      }
     }
-    await recordComputerUseModelCall({
-      role: 'decider',
-      stage: 'structured_option_selection',
-      rail: 'ax',
-      model: selected,
-      request,
-      response: result,
-      startedAt
-    })
-    return result
-  } catch (error) {
-    await recordComputerUseModelCall({
-      role: 'decider',
-      stage: 'structured_option_selection',
-      rail: 'ax',
-      model: selected,
-      request,
-      error,
-      startedAt
-    })
-    throw error
-  }
+  )
 }
 
 /** Temporarily yield the shared llama.cpp process to the saved reasoning model

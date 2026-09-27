@@ -1,4 +1,5 @@
 import type { OptionDecision } from '../llm'
+import { currentAIRequest } from '../ai-request-log'
 import type {
   RemoteVisionCatalogModel,
   RemoteVisionProvider
@@ -62,7 +63,8 @@ export function parseOpenRouterDecisionResponse(
   body: unknown,
   optionCount: number
 ): OptionDecision {
-  const answer = (body as { answers?: { decision?: OpenRouterChoiceAnswer } })?.answers?.decision
+  const answer = (body as { answers?: { decision?: OpenRouterChoiceAnswer } } | null | undefined)
+    ?.answers?.decision
   const choiceKey = typeof answer?.choice === 'string' ? answer.choice : ''
   const match = /^option_(\d+)$/.exec(choiceKey)
   const choice = match ? Number(match[1]) : -1
@@ -104,6 +106,11 @@ export async function decideWithOpenRouter(
   options: readonly string[],
   signal?: AbortSignal
 ): Promise<OptionDecision> {
+  currentAIRequest()?.update({
+    model: remote.model,
+    backend: 'Remote',
+    effectiveRequest: buildOpenRouterDecisionRequest(remote.model, context, question, options)
+  })
   let response: Response
   try {
     response = await fetch(openRouterDecisionsEndpoint(remote.endpoint), {
@@ -123,6 +130,11 @@ export async function decideWithOpenRouter(
     throw new Error(`Remote Decision model connection failed: ${message}`)
   }
   const rawBody = await response.text()
+  try {
+    currentAIRequest()?.update({ response: JSON.parse(rawBody) })
+  } catch {
+    currentAIRequest()?.update({ response: rawBody })
+  }
   if (!response.ok) throw providerError(response.status, rawBody)
   try {
     return parseOpenRouterDecisionResponse(JSON.parse(rawBody), options.length)
