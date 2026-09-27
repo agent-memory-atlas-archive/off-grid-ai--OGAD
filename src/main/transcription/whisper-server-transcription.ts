@@ -1,4 +1,5 @@
 import fs from 'fs'
+import { recordAIRequest } from '../ai-request-log'
 import os from 'os'
 import path from 'path'
 import { decodeToWavArgs, DECODE_TIMEOUT_MS } from './ffmpeg-decode'
@@ -17,45 +18,57 @@ export class WhisperServerTranscription implements TranscriptionService {
   }
 
   async transcribe(input: { path: string }, opts: TranscribeOptions = {}): Promise<Transcript> {
-    opts.signal?.throwIfAborted()
-    const model =
-      opts.model && path.isAbsolute(opts.model) && fs.existsSync(opts.model)
-        ? opts.model
-        : whisperModel()
-    if (!model)
-      throw new Error('No transcription model found - download Whisper from Models first.')
+    return recordAIRequest(
+      {
+        modality: 'stt',
+        source: 'Resident Whisper',
+        request: { ...input, ...opts },
+        signal: opts.signal
+      },
+      async (log) => {
+        await log.inputFile(input.path)
+        opts.signal?.throwIfAborted()
+        const model =
+          opts.model && path.isAbsolute(opts.model) && fs.existsSync(opts.model)
+            ? opts.model
+            : whisperModel()
+        log.update({ model: model ?? undefined, backend: 'Unknown' })
+        if (!model)
+          throw new Error('No transcription model found - download Whisper from Models first.')
 
-    let wav = input.path
-    let tmp: string | null = null
-    if (!opts.alreadyWav16k) {
-      const ff = ffmpegBin()
-      if (!ff) throw new Error('ffmpeg is required to decode audio and was not found.')
-      tmp = path.join(os.tmpdir(), `offgrid-stt-srv-${Date.now()}-${process.pid}.wav`)
-      try {
-        await runNativeTranscriptionProcess(ff, decodeToWavArgs(input.path, tmp), {
-          timeout: DECODE_TIMEOUT_MS,
-          signal: opts.signal
-        })
-      } catch (error) {
-        fs.promises.unlink(tmp).catch(() => {})
-        throw error
-      }
-      wav = tmp
-    }
-
-    try {
-      return await this.svc.transcribe(
-        { modelPath: model },
-        {
-          wavPath: wav,
-          language: opts.language,
-          prompt: opts.prompt,
-          signal: opts.signal
+        let wav = input.path
+        let tmp: string | null = null
+        if (!opts.alreadyWav16k) {
+          const ff = ffmpegBin()
+          if (!ff) throw new Error('ffmpeg is required to decode audio and was not found.')
+          tmp = path.join(os.tmpdir(), `offgrid-stt-srv-${Date.now()}-${process.pid}.wav`)
+          try {
+            await runNativeTranscriptionProcess(ff, decodeToWavArgs(input.path, tmp), {
+              timeout: DECODE_TIMEOUT_MS,
+              signal: opts.signal
+            })
+          } catch (error) {
+            fs.promises.unlink(tmp).catch(() => {})
+            throw error
+          }
+          wav = tmp
         }
-      )
-    } finally {
-      if (tmp) fs.promises.unlink(tmp).catch(() => {})
-    }
+
+        try {
+          return await this.svc.transcribe(
+            { modelPath: model },
+            {
+              wavPath: wav,
+              language: opts.language,
+              prompt: opts.prompt,
+              signal: opts.signal
+            }
+          )
+        } finally {
+          if (tmp) fs.promises.unlink(tmp).catch(() => {})
+        }
+      }
+    )
   }
 }
 

@@ -5,6 +5,7 @@
 // ticks, final passes, file ingest, and meeting transcription alike.
 
 import fs from 'fs'
+import { recordAIRequest } from '../ai-request-log'
 import os from 'os'
 import path from 'path'
 import { getActiveModal } from '../active-models'
@@ -185,79 +186,101 @@ class WhisperCliTranscription implements TranscriptionService {
   }
 
   async transcribe(input: { path: string }, opts: TranscribeOptions = {}): Promise<Transcript> {
-    const bin = whisperBin()
-    if (!bin) throw new Error('Transcription runtime (whisper) is not installed.')
-    const model = resolveModel(opts.model)
-    if (!model)
-      throw new Error('No transcription model found — download Whisper from Models first.')
+    return recordAIRequest(
+      {
+        modality: 'stt',
+        source: 'Whisper transcription',
+        request: { ...input, ...opts },
+        signal: opts.signal
+      },
+      async (log) => {
+        await log.inputFile(input.path)
+        const bin = whisperBin()
+        if (!bin) throw new Error('Transcription runtime (whisper) is not installed.')
+        const model = resolveModel(opts.model)
+        log.update({ model: model ?? undefined, backend: 'Unknown' })
+        if (!model)
+          throw new Error('No transcription model found — download Whisper from Models first.')
 
-    const language = opts.language ?? 'auto'
-    const suppress = opts.suppressNonSpeech !== false
+        const language = opts.language ?? 'auto'
+        const suppress = opts.suppressNonSpeech !== false
 
-    let wav = input.path
-    let tmp: string | null = null
-    if (!opts.alreadyWav16k) {
-      const ff = ffmpegBin()
-      if (!ff) throw new Error('ffmpeg is required to decode audio and was not found.')
-      tmp = path.join(os.tmpdir(), `offgrid-stt-${Date.now()}-${process.pid}.wav`)
-      // 16 kHz mono PCM WAV; -vn drops any video track so A/V files work too.
-      // Cap the decode so a malformed/streaming input can't hang the process forever.
-      try {
-        await runNativeTranscriptionProcess(ff, decodeToWavArgs(input.path, tmp), {
-          timeout: DECODE_TIMEOUT_MS,
-          signal: opts.signal
-        })
-      } catch (e) {
-        fs.promises.unlink(tmp).catch(() => {})
-        throw e
-      }
-      wav = tmp
-    }
-
-    try {
-      // -nt strips timestamps (plain text). Keep them when the caller wants
-      // per-utterance segments (meetings interleave two speakers by time).
-      const args = ['-m', model, '-f', wav, '-l', language, '-np']
-      if (!opts.timestamps) args.push('-nt')
-      // -mc 0 + -sns: kill the repetition/hallucination loop + non-speech tokens.
-      if (suppress) args.push('-mc', '0', '-sns')
-      // Bias toward custom vocabulary (names/jargon) via the initial prompt.
-      const customPrompt = (opts.prompt ?? '').trim()
-      const prompt =
-        language === 'hi'
-          ? [HINDI_DEVANAGARI_PROMPT, customPrompt].filter(Boolean).join(' ')
-          : customPrompt
-      if (prompt) args.push('--prompt', prompt.slice(0, 800))
-      const stdout = await transcribeWithHindiQualityRetry({
-        language,
-        model,
-        modelFiles: whisperModelFiles(),
-        modelDir: modelsDir(),
-        run: async (modelPath) => {
-          const runArgs = [...args]
-          runArgs[1] = modelPath
-          const result = await runNativeTranscriptionProcess(bin, runArgs, {
-            maxBuffer: 64 * 1024 * 1024,
-            timeout: 30 * 60_000,
-            signal: opts.signal
-          })
-          return result.stdout
+        let wav = input.path
+        let tmp: string | null = null
+        if (!opts.alreadyWav16k) {
+          const ff = ffmpegBin()
+          if (!ff) throw new Error('ffmpeg is required to decode audio and was not found.')
+          tmp = path.join(os.tmpdir(), `offgrid-stt-${Date.now()}-${process.pid}.wav`)
+          // 16 kHz mono PCM WAV; -vn drops any video track so A/V files work too.
+          // Cap the decode so a malformed/streaming input can't hang the process forever.
+          try {
+            await runNativeTranscriptionProcess(ff, decodeToWavArgs(input.path, tmp), {
+              timeout: DECODE_TIMEOUT_MS,
+              signal: opts.signal
+            })
+          } catch (e) {
+            fs.promises.unlink(tmp).catch(() => {})
+            throw e
+          }
+          wav = tmp
         }
-      })
-      const lang = language === 'auto' ? undefined : language
-      if (!opts.timestamps) return { text: stdout.trim(), language: lang }
-      const segments = parseSegments(stdout)
-      return {
-        text: segments
-          .map((s) => s.text)
-          .join(' ')
-          .trim(),
-        segments,
-        language: lang
+
+        try {
+          // -nt strips timestamps (plain text). Keep them when the caller wants
+          // per-utterance segments (meetings interleave two speakers by time).
+          const args = ['-m', model, '-f', wav, '-l', language, '-np']
+          if (!opts.timestamps) args.push('-nt')
+          // -mc 0 + -sns: kill the repetition/hallucination loop + non-speech tokens.
+          if (suppress) args.push('-mc', '0', '-sns')
+          // Bias toward custom vocabulary (names/jargon) via the initial prompt.
+          const customPrompt = (opts.prompt ?? '').trim()
+          const prompt =
+            language === 'hi'
+              ? [HINDI_DEVANAGARI_PROMPT, customPrompt].filter(Boolean).join(' ')
+              : customPrompt
+          if (prompt) args.push('--prompt', prompt.slice(0, 800))
+          const stdout = await transcribeWithHindiQualityRetry({
+            language,
+            model,
+            modelFiles: whisperModelFiles(),
+            modelDir: modelsDir(),
+            run: async (modelPath) => {
+              const runArgs = [...args]
+              runArgs[1] = modelPath
+              const result = await recordAIRequest(
+                {
+                  modality: 'stt',
+                  source: 'Whisper attempt',
+                  model: modelPath,
+                  request: { args: runArgs },
+                  signal: opts.signal
+                },
+                async () =>
+                  runNativeTranscriptionProcess(bin, runArgs, {
+                    maxBuffer: 64 * 1024 * 1024,
+                    timeout: 30 * 60_000,
+                    signal: opts.signal
+                  })
+              )
+              return result.stdout
+            }
+          })
+          const lang = language === 'auto' ? undefined : language
+          if (!opts.timestamps) return { text: stdout.trim(), language: lang }
+          const segments = parseSegments(stdout)
+          return {
+            text: segments
+              .map((s) => s.text)
+              .join(' ')
+              .trim(),
+            segments,
+            language: lang
+          }
+        } finally {
+          if (tmp) fs.promises.unlink(tmp).catch(() => {})
+        }
       }
-    } finally {
-      if (tmp) fs.promises.unlink(tmp).catch(() => {})
-    }
+    )
   }
 }
 

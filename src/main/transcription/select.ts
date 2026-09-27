@@ -20,6 +20,7 @@ import { getSetting } from '../database'
 import { getActiveRemoteVisionServerForModality } from '../vision/remote-vision-server'
 import { remoteVisionModelId } from '../../shared/remote-vision-server'
 import { transcribeRemoteAudio } from '../remote-media-runtime'
+import { recordAIRequest } from '../ai-request-log'
 // The pure engine classifiers live in a LEAF module (classify.ts) so the CLIs can import
 // them without forming a load-time cycle back through select (which reads the CLI
 // singletons at module scope). Re-exported here so existing importers/tests keep working.
@@ -130,12 +131,26 @@ export function getActiveTranscription(
   if (remote) {
     return {
       isAvailable: () => true,
-      transcribe: (input, options) => transcribeRemoteAudio(
-        remote,
-        input.path,
-        options?.language ?? readSetting('sttLanguage', 'auto'),
-        options?.signal
-      )
+      transcribe: (input, options) =>
+        recordAIRequest(
+          {
+            modality: 'stt',
+            source: 'Remote transcription',
+            model: remote.selectedModel,
+            backend: 'Remote',
+            request: { ...input, ...options },
+            signal: options?.signal
+          },
+          async (log) => {
+            await log.inputFile(input.path)
+            return transcribeRemoteAudio(
+              remote,
+              input.path,
+              options?.language ?? readSetting('sttLanguage', 'auto'),
+              options?.signal
+            )
+          }
+        )
     }
   }
   const active = getActiveModal('transcription')
@@ -180,7 +195,10 @@ export function transcriptionActiveInfo(
   options: ReturnType<typeof transcriptionModelOptions>
 } {
   const activeEntry = installed.find((entry) => transcriptionEntryMatches(entry, info.modelId))
-  const languages = transcriptionLanguages(info.engine === 'remote' ? 'whisper' : info.engine, activeEntry?.familyId ?? info.modelId)
+  const languages = transcriptionLanguages(
+    info.engine === 'remote' ? 'whisper' : info.engine,
+    activeEntry?.familyId ?? info.modelId
+  )
   return {
     ...info,
     language: resolveConfiguredTranscriptionLanguage(configuredLanguage, languages),
@@ -231,11 +249,12 @@ export function transcriptionProvenance(
  *  label. Read from the same active-model source of truth the transcription path uses. */
 export function getActiveTranscriptionInfo(): ActiveTranscriptionInfo {
   const remote = getActiveRemoteVisionServerForModality('transcription')
-  if (remote) return {
-    engine: 'remote',
-    modelId: remoteVisionModelId(remote.id, remote.selectedModel),
-    label: `Remote · ${remote.selectedModel}`
-  }
+  if (remote)
+    return {
+      engine: 'remote',
+      modelId: remoteVisionModelId(remote.id, remote.selectedModel),
+      label: `Remote · ${remote.selectedModel}`
+    }
   const active = getActiveModal('transcription')
   const entries = modelsByKind('transcription')
   const engine = effectiveEngine(engineForActiveModel(active, entries))

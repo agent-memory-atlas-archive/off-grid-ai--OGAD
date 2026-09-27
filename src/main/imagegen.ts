@@ -6,6 +6,7 @@
 import { spawn, type ChildProcess } from 'child_process'
 import path from 'path'
 import fs from 'fs'
+import { recordAIRequest } from './ai-request-log'
 import os from 'os'
 import { randomUUID } from 'node:crypto'
 import { modalityQueue, IMAGE_JOB, CHAT_JOB } from './modality-queue/queue'
@@ -63,11 +64,7 @@ import {
   buildStandardArgs,
   DEFAULT_NEGATIVE
 } from './imagegen/args'
-import {
-  initialProgressState,
-  reduceProgress,
-  type ProgressEvent
-} from './imagegen/progress'
+import { initialProgressState, reduceProgress, type ProgressEvent } from './imagegen/progress'
 import {
   resolveExistingOwnedEntry,
   resolveExistingOwnedPath,
@@ -548,83 +545,114 @@ export async function generateImage(
   params: ImageGenParams,
   onUpdate?: (update: ImageGenerationPipelineUpdateContract) => void
 ): Promise<ImageGenOutput> {
-  // Prompt enhancement runs FIRST, while the chat model is still resident — the
-  // image job below evicts the LLM, so the text pass must precede it. Gated by a
-  // setting; failure/timeout silently keeps the original prompt.
-  const enhanced = await maybeEnhancePrompt(
-    params.prompt,
-    onUpdate,
-    params.enhancePrompt,
-    params.initImage ? [params.initImage] : []
-  )
-  const remote = getActiveRemoteVisionServerForModality('image')
-  const remoteId = remote ? remoteVisionModelId(remote.id, remote.selectedModel) : null
-  if (remote && (!params.model || params.model === remote.selectedModel || params.model === remoteId)) {
-    if (params.initImage) {
-      throw new Error('The selected remote image model does not support image editing. Select a local image model that supports an init image.')
-    }
-    if (remoteAbort) throw new Error('An image is already generating — please wait for it to finish.')
-    const controller = new AbortController()
-    remoteAbort = controller
-    onUpdate?.({ stage: 'preparing', enhancedPrompt: enhanced })
-    try {
-      const result = await generateRemoteImage(remote, enhanced, params.width, params.height, params.allowUnsafeMemoryOverride === true, controller.signal)
-      const extension = result.mime === 'image/jpeg' ? 'jpg' : result.mime === 'image/webp' ? 'webp' : 'png'
-      const directory = path.join(dataDir(), 'generated-images')
-      await fs.promises.mkdir(directory, { recursive: true })
-      const outputPath = path.join(directory, `remote-${Date.now()}-${randomUUID()}.${extension}`)
-      await fs.promises.writeFile(outputPath, result.bytes)
-      return {
-        dataUrl: `data:${result.mime};base64,${result.bytes.toString('base64')}`,
-        path: outputPath,
-        seed: params.seed ?? -1,
-        model:
-          remote.modelCatalog?.find(
-            (model) => model.id === remote.selectedModel && model.kind === 'image'
-          )?.name ?? remote.selectedModel,
-        prompt: enhanced,
-        computeBackend: 'Remote'
-      }
-    } finally {
-      remoteAbort = null
-    }
-  }
-  const selectedModel = params.model ?? activeImageModel()
-  const modelParameters = selectedModel
-    ? resolveImageParameters(
-        { id: selectedModel },
-        getSetting<ImageParameterStore>('imageParams', {})
+  return recordAIRequest(
+    {
+      modality: 'image',
+      source: 'Image generation',
+      model: params.model,
+      request: params,
+      isCancelled: (error) => error instanceof Error && error.message === IMAGE_CANCELLED_MESSAGE
+    },
+    async (log) => {
+      // Prompt enhancement runs FIRST, while the chat model is still resident — the
+      // image job below evicts the LLM, so the text pass must precede it. Gated by a
+      // setting; failure/timeout silently keeps the original prompt.
+      const enhanced = await maybeEnhancePrompt(
+        params.prompt,
+        onUpdate,
+        params.enhancePrompt,
+        params.initImage ? [params.initImage] : []
       )
-    : null
-  const effective = {
-    ...params,
-    prompt: enhanced,
-    steps: params.steps ?? modelParameters?.steps,
-    cfgScale: params.cfgScale ?? modelParameters?.cfgScale,
-    // The selected model size is authoritative for both txt2img and img2img.
-    // Only fall back to source dimensions when no model size can be resolved.
-    width: params.width ?? modelParameters?.size,
-    height: params.height ?? modelParameters?.size
-  }
-  onUpdate?.({ stage: 'preparing', enhancedPrompt: enhanced })
-  const progressObserver = onUpdate
-    ? (progress: ImageGenProgress & { preview?: string }) =>
-        onUpdate({
-          stage: progress.phase === 'decoding' ? 'decoding' : 'generating',
-          progress
-        })
-    : undefined
-  // The queue evicts 'llm' before this runs AND re-warms it (mode-aware) when the
-  // job finishes — so the image path no longer touches llm.pause/resume itself.
-  const output = await modalityQueue.run(IMAGE_JOB, () => runImageGen(effective, progressObserver))
-  return {
-    ...output,
-    prompt: effective.prompt,
-    width: effective.width,
-    height: effective.height,
-    steps: effective.steps,
-    cfgScale: effective.cfgScale
-  }
+      const remote = getActiveRemoteVisionServerForModality('image')
+      const remoteId = remote ? remoteVisionModelId(remote.id, remote.selectedModel) : null
+      if (
+        remote &&
+        (!params.model || params.model === remote.selectedModel || params.model === remoteId)
+      ) {
+        if (params.initImage) {
+          throw new Error(
+            'The selected remote image model does not support image editing. Select a local image model that supports an init image.'
+          )
+        }
+        if (remoteAbort)
+          throw new Error('An image is already generating — please wait for it to finish.')
+        const controller = new AbortController()
+        remoteAbort = controller
+        onUpdate?.({ stage: 'preparing', enhancedPrompt: enhanced })
+        try {
+          const result = await generateRemoteImage(
+            remote,
+            enhanced,
+            params.width,
+            params.height,
+            params.allowUnsafeMemoryOverride === true,
+            controller.signal
+          )
+          const extension =
+            result.mime === 'image/jpeg' ? 'jpg' : result.mime === 'image/webp' ? 'webp' : 'png'
+          const directory = path.join(dataDir(), 'generated-images')
+          await fs.promises.mkdir(directory, { recursive: true })
+          const outputPath = path.join(
+            directory,
+            `remote-${Date.now()}-${randomUUID()}.${extension}`
+          )
+          await fs.promises.writeFile(outputPath, result.bytes)
+          return {
+            dataUrl: `data:${result.mime};base64,${result.bytes.toString('base64')}`,
+            path: outputPath,
+            seed: params.seed ?? -1,
+            model:
+              remote.modelCatalog?.find(
+                (model) => model.id === remote.selectedModel && model.kind === 'image'
+              )?.name ?? remote.selectedModel,
+            prompt: enhanced,
+            computeBackend: 'Remote'
+          }
+        } finally {
+          remoteAbort = null
+        }
+      }
+      const selectedModel = params.model ?? activeImageModel()
+      const modelParameters = selectedModel
+        ? resolveImageParameters(
+            { id: selectedModel },
+            getSetting<ImageParameterStore>('imageParams', {})
+          )
+        : null
+      const effective = {
+        ...params,
+        prompt: enhanced,
+        steps: params.steps ?? modelParameters?.steps,
+        cfgScale: params.cfgScale ?? modelParameters?.cfgScale,
+        // The selected model size is authoritative for both txt2img and img2img.
+        // Only fall back to source dimensions when no model size can be resolved.
+        width: params.width ?? modelParameters?.size,
+        height: params.height ?? modelParameters?.size
+      }
+      log.update({ effectiveRequest: effective, model: selectedModel ?? undefined })
+      onUpdate?.({ stage: 'preparing', enhancedPrompt: enhanced })
+      const progressObserver = onUpdate
+        ? (progress: ImageGenProgress & { preview?: string }) =>
+            onUpdate({
+              stage: progress.phase === 'decoding' ? 'decoding' : 'generating',
+              progress
+            })
+        : undefined
+      // The queue evicts 'llm' before this runs AND re-warms it (mode-aware) when the
+      // job finishes — so the image path no longer touches llm.pause/resume itself.
+      const output = await modalityQueue.run(IMAGE_JOB, () =>
+        runImageGen(effective, progressObserver)
+      )
+      return {
+        ...output,
+        prompt: effective.prompt,
+        width: effective.width,
+        height: effective.height,
+        steps: effective.steps,
+        cfgScale: effective.cfgScale
+      }
+    }
+  )
 }
 
 /** Expand the user's prompt into a richer generation prompt via the local text
@@ -684,7 +712,9 @@ async function runImageGen(
   // module. Returns before the sd-cli path.
   if (isMfluxModelId(params.model)) {
     if (params.initImage) {
-      throw new Error('The selected MLX image model does not support image editing. Select a local image model that supports an init image.')
+      throw new Error(
+        'The selected MLX image model does not support image editing. Select a local image model that supports an init image.'
+      )
     }
     const def = getMfluxModel(params.model)!
     const outDir = path.join(dataDir(), 'generated-images')
@@ -1157,7 +1187,16 @@ async function runImageGen(
     let lastError: unknown
     for (const [index, runtime] of runtimes.entries()) {
       try {
-        await runNativeCli(runtime)
+        await recordAIRequest(
+          {
+            modality: 'image',
+            source: 'Image runtime attempt',
+            model: path.basename(model),
+            backend: imageBackendForRuntime(process.platform, runtime),
+            request: params
+          },
+          async () => runNativeCli(runtime)
+        )
         completedRuntime = runtime
         break
       } catch (error) {

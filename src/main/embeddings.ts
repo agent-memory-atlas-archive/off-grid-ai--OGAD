@@ -2,7 +2,8 @@ import path from 'path'
 import { existsSync } from 'fs'
 import { Worker } from 'worker_threads'
 import { modelsDir } from './runtime-env'
-import { embedText } from './embeddings-core'
+import { embedText, embeddingDevice } from './embeddings-core'
+import { recordAIRequest } from './ai-request-log'
 import type { EmbeddingRequest, EmbeddingResponse } from './embeddings-worker'
 import { writeDiagnosticLog } from './diagnostics-log'
 
@@ -82,23 +83,38 @@ class EmbeddingService {
   }
 
   async generateEmbedding(text: string): Promise<number[]> {
-    const run = (): Promise<number[]> => {
-      const entry = builtWorkerEntry()
-      // No built worker means we are running from source. Embed here rather than failing: a failed
-      // embedding silently demotes every search to the FTS fallback, which is a far worse outcome
-      // than briefly holding this thread in a context that has no UI to block.
-      if (!entry) return embedText(text, modelsDir())
-      return new Promise<number[]>((resolve, reject) => {
-        const worker = this.spawn(entry)
-        const id = this.nextId++
-        this.waiting.set(id, { resolve, reject })
-        worker.postMessage({ id, text } as EmbeddingRequest)
-      })
-    }
-    const result = this.queue.then(run, run)
-    // Keep the chain alive after a rejection, or one failure stalls every later request.
-    this.queue = result.catch(() => undefined)
-    return result
+    return recordAIRequest(
+      {
+        modality: 'embedding',
+        source: text ? 'Embedding' : 'Embedding warm-up',
+        model: 'Xenova/all-MiniLM-L6-v2',
+        request: { text, pooling: 'mean', normalize: true }
+      },
+      async (log) => {
+        const run = (): Promise<number[]> => {
+          const entry = builtWorkerEntry()
+          // No built worker means we are running from source. Embed here rather than failing: a failed
+          // embedding silently demotes every search to the FTS fallback, which is a far worse outcome
+          // than briefly holding this thread in a context that has no UI to block.
+          if (!entry) return embedText(text, modelsDir())
+          return new Promise<number[]>((resolve, reject) => {
+            const worker = this.spawn(entry)
+            const id = this.nextId++
+            this.waiting.set(id, { resolve, reject })
+            worker.postMessage({ id, text } as EmbeddingRequest)
+          })
+        }
+        const result = this.queue.then(run, run)
+        // Keep the chain alive after a rejection, or one failure stalls every later request.
+        this.queue = result.catch(() => undefined)
+        const vector = await result
+        log.update({
+          backend: this.reportedDevice ?? embeddingDevice() ?? 'Unknown',
+          metrics: { dimensions: vector.length }
+        })
+        return vector
+      }
+    )
   }
 }
 

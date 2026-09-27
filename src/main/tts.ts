@@ -10,6 +10,7 @@ import {
 } from '@offgrid/executorch-speech'
 import { kokoroVoiceLabel, speechLanguageLabel, type RuntimeSpeechVoice } from '@offgrid/speech'
 import fs from 'fs'
+import { recordAIRequest } from './ai-request-log'
 import os from 'os'
 import path from 'path'
 import { getActiveModal } from './active-models'
@@ -114,87 +115,114 @@ export async function synthesize(
   voice?: string,
   onProgress?: (progress: DownloadProgress) => void
 ): Promise<{ dataUrl: string }> {
-  const remote = getActiveRemoteVisionServerForModality('voice')
-  if (remote) {
-    if (remote.provider !== 'openrouter') return synthesizeRemoteVoice(remote, text, voice)
-    const voices = await listRemoteVoices(remote)
-    const chosenVoice = voices.find((candidate) => candidate.id === voice)?.id ?? voices[0]?.id
-    if (!chosenVoice) throw new Error('This remote model has no available speakers.')
-    return synthesizeRemoteVoice(remote, text, chosenVoice)
-  }
-  const selected = getActiveModal('speech')
-  const requestedVoice = chooseVoice(voice, selected) || DEFAULT_VOICE
-  // Older releases persisted Kokoro voices that the ExecuTorch catalogue does not contain.
-  // Keep those profiles able to speak after upgrade; the runtime manifest remains the voice SSOT.
-  const chosenVoice = SUPPORTED_VOICES.has(requestedVoice) ? requestedVoice : DEFAULT_VOICE
-  const input = (text || '').trim()
-  if (!input) throw new Error('Nothing to speak.')
-  if (busy) throw new Error('Already generating speech. Please wait.')
+  return recordAIRequest(
+    { modality: 'tts', source: 'Speech synthesis', request: { text, voice } },
+    async (log) => {
+      const remote = getActiveRemoteVisionServerForModality('voice')
+      if (remote) {
+        log.update({ model: remote.selectedModel, backend: 'Remote' })
+        if (remote.provider !== 'openrouter') return synthesizeRemoteVoice(remote, text, voice)
+        const voices = await listRemoteVoices(remote)
+        const chosenVoice = voices.find((candidate) => candidate.id === voice)?.id ?? voices[0]?.id
+        if (!chosenVoice) throw new Error('This remote model has no available speakers.')
+        log.update({ effectiveRequest: { text, voice: chosenVoice } })
+        return synthesizeRemoteVoice(remote, text, chosenVoice)
+      }
+      const selected = getActiveModal('speech')
+      const requestedVoice = chooseVoice(voice, selected) || DEFAULT_VOICE
+      // Older releases persisted Kokoro voices that the ExecuTorch catalogue does not contain.
+      // Keep those profiles able to speak after upgrade; the runtime manifest remains the voice SSOT.
+      const chosenVoice = SUPPORTED_VOICES.has(requestedVoice) ? requestedVoice : DEFAULT_VOICE
+      const input = (text || '').trim()
+      log.update({
+        model: selected ?? 'Kokoro',
+        effectiveRequest: { text: input.slice(0, 2000), voice: chosenVoice }
+      })
+      if (!input) throw new Error('Nothing to speak.')
+      if (busy) throw new Error('Already generating speech. Please wait.')
 
-  busy = true
-  const requestId = `speak-${process.pid}-${Date.now()}`
-  const outputPath = path.join(os.tmpdir(), `offgrid-tts-${requestId}.wav`)
-  const startedAt = Date.now()
-  writeDiagnosticLog('tts', 'request.started', {
-    requestId,
-    chars: input.length,
-    engine: ONNX_VOICES.has(chosenVoice) ? 'onnxruntime' : 'executorch'
-  })
+      busy = true
+      const requestId = `speak-${process.pid}-${Date.now()}`
+      const outputPath = path.join(os.tmpdir(), `offgrid-tts-${requestId}.wav`)
+      const startedAt = Date.now()
+      writeDiagnosticLog('tts', 'request.started', {
+        requestId,
+        chars: input.length,
+        engine: ONNX_VOICES.has(chosenVoice) ? 'onnxruntime' : 'executorch'
+      })
 
-  try {
-    let engine = 'executorch'
-    let device = 'cpu'
-    if (ONNX_VOICES.has(chosenVoice)) {
       try {
-        device = await onnxSpeech.synthesize({
-          text: input.slice(0, 2000),
-          voice: chosenVoice,
-          outputPath,
-          onProgress
+        let engine = 'executorch'
+        let device = 'cpu'
+        if (ONNX_VOICES.has(chosenVoice)) {
+          try {
+            device = await recordAIRequest(
+              {
+                modality: 'tts',
+                source: 'ONNX speech attempt',
+                model: selected ?? 'Kokoro',
+                request: { text: input.slice(0, 2000), voice: chosenVoice }
+              },
+              async (attempt) => {
+                const usedDevice = await onnxSpeech.synthesize({
+                  text: input.slice(0, 2000),
+                  voice: chosenVoice,
+                  outputPath,
+                  onProgress
+                })
+                attempt.update({ backend: usedDevice })
+                return usedDevice
+              }
+            )
+            engine = 'onnxruntime'
+          } catch (error) {
+            writeDiagnosticLog(
+              'tts',
+              'onnx.fallback',
+              { requestId, error: messageOf(error) },
+              'warn'
+            )
+            await runtime().synthesize({
+              text: input.slice(0, 2000),
+              voiceId: chosenVoice,
+              outputPath,
+              onDownloadProgress: onProgress
+            })
+          }
+        } else {
+          await runtime().synthesize({
+            text: input.slice(0, 2000),
+            voiceId: chosenVoice,
+            outputPath,
+            onDownloadProgress: onProgress
+          })
+        }
+        const wav = await fs.promises.readFile(outputPath)
+        log.update({
+          backend: device,
+          metrics: { engine, durationMs: Date.now() - startedAt, wavBytes: wav.length }
         })
-        engine = 'onnxruntime'
+        if (wav.length <= 44) throw new Error('The local voice runtime returned empty audio.')
+        writeDiagnosticLog('tts', 'request.completed', {
+          requestId,
+          durationMs: Date.now() - startedAt,
+          wavBytes: wav.length,
+          engine,
+          device
+        })
+        return { dataUrl: `data:audio/wav;base64,${wav.toString('base64')}` }
       } catch (error) {
         writeDiagnosticLog(
           'tts',
-          'onnx.fallback',
-          { requestId, error: messageOf(error) },
-          'warn'
+          'request.failed',
+          { requestId, durationMs: Date.now() - startedAt, error: messageOf(error) },
+          'error'
         )
-        await runtime().synthesize({
-          text: input.slice(0, 2000),
-          voiceId: chosenVoice,
-          outputPath,
-          onDownloadProgress: onProgress
-        })
+        throw error
+      } finally {
+        busy = false
+        void fs.promises.unlink(outputPath).catch(() => {})
       }
-    } else {
-      await runtime().synthesize({
-        text: input.slice(0, 2000),
-        voiceId: chosenVoice,
-        outputPath,
-        onDownloadProgress: onProgress
-      })
     }
-    const wav = await fs.promises.readFile(outputPath)
-    if (wav.length <= 44) throw new Error('The local voice runtime returned empty audio.')
-    writeDiagnosticLog('tts', 'request.completed', {
-      requestId,
-      durationMs: Date.now() - startedAt,
-      wavBytes: wav.length,
-      engine,
-      device
-    })
-    return { dataUrl: `data:audio/wav;base64,${wav.toString('base64')}` }
-  } catch (error) {
-    writeDiagnosticLog(
-      'tts',
-      'request.failed',
-      { requestId, durationMs: Date.now() - startedAt, error: messageOf(error) },
-      'error'
-    )
-    throw error
-  } finally {
-    busy = false
-    void fs.promises.unlink(outputPath).catch(() => {})
-  }
+  )
 }
