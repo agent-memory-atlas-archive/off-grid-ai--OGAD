@@ -1,0 +1,74 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+const host = vi.hoisted(() => ({
+  on: vi.fn(),
+  post: vi.fn(),
+  load: vi.fn(),
+  generate: vi.fn(),
+  save: vi.fn()
+}))
+vi.mock('node:worker_threads', () => ({
+  parentPort: { on: host.on, postMessage: host.post },
+  workerData: { modelsDir: '/synthetic/models' }
+}))
+vi.mock('kokoro-js', () => ({ KokoroTTS: { from_pretrained: host.load } }))
+vi.mock('../embeddings-env', () => ({ configureTransformersEnv: vi.fn() }))
+vi.mock('../onnx-device', () => ({
+  loadWithOnnxFallback: async (load: (device: string) => Promise<unknown>) => ({
+    runtime: await load('coreml'),
+    device: 'coreml'
+  })
+}))
+beforeEach(() => {
+  vi.resetModules()
+  for (const mock of Object.values(host)) mock.mockReset()
+  host.load.mockImplementation(async (_id, options) => {
+    options.progress_callback({
+      status: 'progress',
+      progress: 50,
+      loaded: 5,
+      total: 10,
+      file: 'model.onnx'
+    })
+    return { generate: host.generate }
+  })
+  host.generate.mockResolvedValue({ save: host.save })
+  host.save.mockResolvedValue(undefined)
+})
+describe('ONNX speech worker response evidence', () => {
+  it('reports the actual provider, emits progress and reuses its loaded runtime', async () => {
+    await import('../tts-onnx-worker')
+    const receive = host.on.mock.calls[0]![1]
+    receive({ id: 1, type: 'prepare', voice: 'af_heart' })
+    await vi.waitFor(() =>
+      expect(host.post).toHaveBeenCalledWith({ id: 1, type: 'complete', device: 'coreml' })
+    )
+    expect(host.post).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'progress', percentage: 50 })
+    )
+    receive({
+      id: 2,
+      type: 'synthesize',
+      text: 'Hello',
+      voice: 'af_heart',
+      outputPath: '/synthetic/out.wav'
+    })
+    await vi.waitFor(() =>
+      expect(host.post).toHaveBeenCalledWith({ id: 2, type: 'complete', device: 'coreml' })
+    )
+    expect(host.load).toHaveBeenCalledOnce()
+    expect(host.load.mock.calls[0]![1]).toMatchObject({ dtype: 'fp16', device: 'coreml' })
+    expect(host.save).toHaveBeenCalledWith('/synthetic/out.wav')
+  })
+  it('returns an error for incomplete synthesis without claiming completion', async () => {
+    await import('../tts-onnx-worker')
+    host.on.mock.calls[0]![1]({ id: 3, type: 'synthesize', voice: 'af_heart' })
+    await vi.waitFor(() =>
+      expect(host.post).toHaveBeenCalledWith({
+        id: 3,
+        type: 'error',
+        error: 'Speech request is incomplete.'
+      })
+    )
+    expect(host.generate).not.toHaveBeenCalled()
+  })
+})

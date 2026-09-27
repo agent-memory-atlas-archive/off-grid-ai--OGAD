@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>()
 }))
 vi.mock('electron', () => ({
+  app: { isPackaged: true },
   ipcMain: {
     handle: (name: string, handler: (...args: unknown[]) => unknown) =>
       state.handlers.set(name, handler)
@@ -74,9 +75,9 @@ describe('AI activity IPC and independent window', () => {
     })
     expect(window.focus).toHaveBeenCalledOnce()
     expect(window.restore).toHaveBeenCalledOnce()
-    expect(window.webContents.setWindowOpenHandler.mock.calls[0][0]()).toEqual({ action: 'deny' })
+    expect(window.webContents.setWindowOpenHandler.mock.calls[0]![0]()).toEqual({ action: 'deny' })
     const event = { preventDefault: vi.fn() }
-    window.webContents.on.mock.calls[0][1](event)
+    window.webContents.on.mock.calls[0]![1](event)
     expect(event.preventDefault).toHaveBeenCalledOnce()
     window.destroy()
     await openAIActivityWindow()

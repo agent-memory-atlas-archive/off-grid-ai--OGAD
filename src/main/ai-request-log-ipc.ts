@@ -1,5 +1,4 @@
-import { BrowserWindow, ipcMain } from 'electron'
-import { is } from '@electron-toolkit/utils'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { preloadPath } from './preload-path'
 import { rendererHtmlPath } from './renderer-path'
 import {
@@ -62,7 +61,7 @@ export async function openAIActivityWindow(): Promise<void> {
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => event.preventDefault())
   try {
-    if (is.dev && process.env.ELECTRON_RENDERER_URL) {
+    if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
       const url = new URL(process.env.ELECTRON_RENDERER_URL)
       url.hash = 'ai-activity'
       await window.loadURL(url.toString())
