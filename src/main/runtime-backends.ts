@@ -53,35 +53,39 @@ export function parseNativeBackend(
 ): Pick<RuntimeBackend, 'backend' | 'device'> | undefined {
   const explicit = /OFFGRID_BACKEND:(Core ML|Metal|CPU)\b/.exec(output)?.[1]
   if (explicit) return { backend: explicit }
-  const used = new Set<string>()
-  for (const match of output.matchAll(
-    /(?:using\s+(CUDA\d*|Vulkan\d*|Metal|CPU)\s+backend|\b(CUDA\d*|Vulkan\d*|Metal|CPU)\s+(?:total\s+)?(?:model\s+)?buffer\s+size\s*=\s*([\d.]+)|backend\s*=\s*(CUDA\d*|Vulkan\d*|Metal|CPU)\b)/gi
-  )) {
-    if (match[3] !== undefined && Number(match[3]) === 0) continue
-    const raw = (match[1] || match[2] || match[4] || '').toLowerCase()
-    used.add(
-      raw.startsWith('cuda')
-        ? 'CUDA'
-        : raw.startsWith('vulkan')
-          ? 'Vulkan'
-          : raw === 'metal'
-            ? 'Metal'
-            : 'CPU'
-    )
+  const allocated = new Set<string>()
+  const selected = new Set<string>()
+  const normalize = (raw: string): string => {
+    const name = raw.toLowerCase()
+    return name.startsWith('cuda')
+      ? 'CUDA'
+      : name.startsWith('vulkan')
+        ? 'Vulkan'
+        : name === 'metal'
+          ? 'Metal'
+          : 'CPU'
   }
+  for (const match of output.matchAll(
+    /\b(CUDA\d*|Vulkan\d*|Metal|CPU(?:_[A-Za-z]+)?)\s+(?:(?:total\s+)?(?:model\s+)?buffer|total)\s+size\s*=\s*([\d.]+)/gi
+  )) {
+    if (Number(match[2]) > 0) allocated.add(normalize(match[1]!))
+  }
+  for (const match of output.matchAll(
+    /offload params\s*\([^)]*\)\s*to runtime backend\s*\((CUDA\d*|Vulkan\d*|Metal|CPU)\)/gi
+  )) {
+    allocated.add(normalize(match[1]!))
+  }
+  if (/ggml_metal_add_buffer:\s*allocated\b/i.test(output)) allocated.add('Metal')
+  for (const match of output.matchAll(
+    /(?:using\s+(CUDA\d*|Vulkan\d*|Metal|CPU)\s+backend|backend\s*=\s*(CUDA\d*|Vulkan\d*|Metal|CPU)\b)/gi
+  )) {
+    selected.add(normalize(match[1] || match[2] || ''))
+  }
+  const used = allocated.size ? allocated : selected
   for (const failed of output.matchAll(
     /failed to initialize (CUDA\d*|Vulkan\d*|Metal|CPU) backend/gi
   )) {
-    const name = failed[1]!.toLowerCase()
-    used.delete(
-      name.startsWith('cuda')
-        ? 'CUDA'
-        : name.startsWith('vulkan')
-          ? 'Vulkan'
-          : name === 'metal'
-            ? 'Metal'
-            : 'CPU'
-    )
+    used.delete(normalize(failed[1]!))
   }
   if (!used.size) return undefined
   const backend = [...used]
