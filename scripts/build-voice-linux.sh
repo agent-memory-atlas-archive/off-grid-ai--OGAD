@@ -33,8 +33,11 @@ if ! docker info >/dev/null 2>&1; then DOCKER=(sudo docker); fi
   "$CUDA_BUILD_IMAGE" bash -euo pipefail -c '
     trap "chmod -R a+rwX /build" EXIT
     apt-get update -qq
-    apt-get install -y --no-install-recommends cmake build-essential
-    cmake -S /src -B /build -DCMAKE_BUILD_TYPE=Release \
+    apt-get install -y --no-install-recommends cmake build-essential git
+    # Whisper configures its JavaScript package in the source tree. Keep the
+    # host checkout read-only and give CMake a writable container-local copy.
+    cp -R /src /tmp/whisper-src
+    cmake -S /tmp/whisper-src -B /build -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF \
       -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF \
       -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89;90" \
