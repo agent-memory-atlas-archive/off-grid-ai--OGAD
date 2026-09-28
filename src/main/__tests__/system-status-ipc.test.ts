@@ -185,6 +185,7 @@ describe('registering the status channels', () => {
 
     expect([...handlers.keys()]).toEqual([
       'system:chat-health',
+      'system:runtime-backends',
       'system:health',
       'permissions:get-status'
     ])
