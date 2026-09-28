@@ -339,7 +339,7 @@ try {
     Step '7 of 8: Build OGAD and check CUDA'
     Push-Location $desktop
     try {
-        Run-Checked 'git.exe' @('lfs', 'install', '--local')
+        Run-Checked 'git.exe' @('lfs', 'install', '--local', '--skip-repo')
         Run-Checked 'git.exe' @('lfs', 'pull', '--include=resources/bin/kev-local-server.py', '--exclude=')
         Run-Checked 'npm.cmd' @('--prefix', $shared, 'ci')
         Run-Checked 'npm.cmd' @('--prefix', $shared, 'run', 'build')
