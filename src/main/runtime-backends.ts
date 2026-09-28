@@ -61,12 +61,12 @@ export function parseNativeBackend(
       ? 'CUDA'
       : name.startsWith('vulkan')
         ? 'Vulkan'
-        : name === 'metal'
+      : name === 'metal' || name.startsWith('mtl')
           ? 'Metal'
           : 'CPU'
   }
   for (const match of output.matchAll(
-    /\b(CUDA\d*|Vulkan\d*|Metal|CPU(?:_[A-Za-z]+)?)\s+(?:(?:total\s+)?(?:model\s+)?buffer|total)\s+size\s*=\s*([\d.]+)/gi
+    /\b(CUDA\d*(?:_[A-Za-z]+)?|Vulkan\d*(?:_[A-Za-z]+)?|MTL\d*(?:_[A-Za-z]+)?|Metal|CPU(?:_[A-Za-z]+)?)\s+(?:(?:total\s+)?(?:model\s+)?buffer|total)\s+size\s*=\s*([\d.]+)/gi
   )) {
     if (Number(match[2]) > 0) allocated.add(normalize(match[1]!))
   }
