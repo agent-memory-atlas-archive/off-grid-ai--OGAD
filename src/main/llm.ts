@@ -38,6 +38,7 @@ import { pickFreePort, isPortFree } from './free-port'
 import { postCompletionOnce } from './llm/http-post'
 import { engineSpawnEnv } from './llm/spawn-env'
 import { gpuDeviceAvailable, offloadedGpuLayers } from './llm/gpu-device-probe'
+import { cudaRequired, permitsEngine, permitsOffload } from './llm/gpu-policy'
 import { shouldAutoRecover } from './llm/crash-policy'
 import { streamCompletion, type StreamResult } from './llm/stream'
 import {
@@ -979,7 +980,11 @@ export class LLMService {
     if (generation !== this.launchGeneration) return
     if (await this.launchWithFallback(serverPaths, generation)) return
     if (generation !== this.launchGeneration) return
-    console.error('[LLMService] all llama-server engines failed to load the model')
+    this.lastErrorMsg = cudaRequired()
+      ? 'CUDA is required, but the model could not start on the GPU. Check the CUDA engine logs and free GPU memory. CPU fallback is disabled.'
+      : 'All model engines failed to load the model.'
+    this.invalidateHealth()
+    throw new Error(this.lastErrorMsg)
   }
 
   /** Try each engine at the selected context, with a CPU attempt after GPU OOM.
@@ -993,6 +998,7 @@ export class LLMService {
       if (generation !== this.launchGeneration) return false
       if (!serverPath) continue
       const engineDir = path.basename(path.dirname(serverPath))
+      if (!permitsEngine(serverPath, this.gpuLayers)) continue
       const backend = engineDir.endsWith('-cuda')
         ? 'CUDA'
         : engineDir === 'llama' || engineDir === 'llama-prism'
@@ -1010,7 +1016,7 @@ export class LLMService {
       for (let a = 0; a < attempts.length; a++) {
         if (generation !== this.launchGeneration) return false
         const at = attempts[a]
-        if (!at) continue
+        if (!at || (cudaRequired() && at.gpuLayers === 0)) continue
         if (a > 0) {
           console.warn(`[LLMService] out of memory — retrying load at ${at.reason}`)
         }
@@ -1141,7 +1147,7 @@ export class LLMService {
       this.initialized = false
       // If it died on its own (not our stop/swap), translate the stderr into a
       // human reason so the Health panel can say WHY instead of a blank "Down".
-      const deliberateClose = wasIntentional || signal === 'SIGKILL' || signal === 'SIGTERM'
+      const deliberateClose = wasIntentional
       if (!deliberateClose && !this.paused) {
         const failure = classifyLlamaError(this.stderrTail.join('\n'))
         if (failure) {
@@ -1152,11 +1158,12 @@ export class LLMService {
         }
       }
       this.invalidateHealth()
-      // Only recover from a genuine crash of an engine that WAS healthy. A deliberate
-      // kill stays dead (otherwise llama-server cannot be stopped without killing the
-      // app), and a launch-time failure belongs to launchWithFallback's ladder.
+      // Recover unexpected exits of a previously healthy engine, including OS kills.
+      // App stops and memory pauses stay stopped; launch failures use the engine ladder.
       if (shouldAutoRecover({ probing, wasIntentional, paused: this.paused, signal })) {
-        this.handleCrash(code ?? -1)
+        void this.handleCrash(code ?? -1).catch((error) => {
+          console.error('[LLMService] automatic recovery failed:', error)
+        })
       }
     })
 
@@ -1164,6 +1171,11 @@ export class LLMService {
       await this.waitForReady()
       if (this.server !== proc) throw new Error('Model load was cancelled')
       // Confirmed healthy: from here a close IS a crash worth recovering from.
+      if (!permitsOffload(serverPath, gpuLayers, confirmedOffload)) {
+        throw new Error(
+          'CUDA is required, but GPU layer offload was not confirmed. CPU fallback is disabled.'
+        )
+      }
       probing = false
       console.log('[LLMService] Vision server ready!')
       const engineDir = path.basename(binDir)
@@ -1252,19 +1264,29 @@ export class LLMService {
     // Prevents thrash-respawning a multi-GB process when the model is too heavy for
     // the machine (memory-pressure kills). Surface it; the user can pick a smaller
     // model / Conservative mode or hit Health → Restart.
+    const generation = this.launchGeneration
     const now = Date.now()
     this.restartTimes = this.restartTimes.filter((t) => now - t < 120_000)
     if (this.restartTimes.length >= 3) {
       console.error(
         `[LLMService] llama-server died ${this.restartTimes.length + 1}× in 2min (last code ${code}); NOT auto-restarting — likely memory pressure. Pick a smaller model or Conservative mode.`
       )
+      this.lastErrorMsg =
+        'Model server stopped repeatedly. Automatic restart limit reached. Check GPU memory and use Restart after fixing the cause.'
+      this.invalidateHealth()
       return
     }
     this.restartTimes.push(now)
     await new Promise((r) => setTimeout(r, 1000 * this.restartTimes.length))
-    if (this.paused || this.intentionalStop) return
+    if (this.paused || this.intentionalStop || generation !== this.launchGeneration || this.server)
+      return
     console.log(`[LLMService] auto-restarting llama-server (attempt ${this.restartTimes.length})`)
-    this.init().catch(() => {})
+    try {
+      await this.init()
+    } catch (error) {
+      console.error('[LLMService] recovery startup failed:', error)
+      if (generation === this.launchGeneration && !this.server) await this.handleCrash(code)
+    }
   }
 
   // Ready = the model is actually LOADED, not merely that the server answers.
