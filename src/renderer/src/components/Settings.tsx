@@ -184,8 +184,9 @@ export function Settings({
                   <span className="mr-2 text-[10px] uppercase tracking-wide text-emerald-500">
                     Pro
                   </span>
-                  Screen capture, backlog recovery, and proactive delivery are available with Pro on
-                  macOS.
+                  {currentPlatform() === 'linux'
+                    ? 'Pro capture controls are coming soon to Linux. Core processing controls work now.'
+                    : 'Screen capture, backlog recovery, and proactive delivery are available with Pro on Windows and macOS.'}
                 </div>
               )}
               <ProcessingControls />
@@ -208,13 +209,16 @@ export function Settings({
               (slot) => slot.id !== 'capture' && slot.id !== 'proactive'
             ).map((slot) => {
               const section = registeredSections.find((s) => s.id === slot.id)
-              if (section && proComingSoon && slot.macOnly) {
+              if (section && proComingSoon && slot.id !== 'pro-plan') {
                 return (
                   <ProPlaceholder
                     key={slot.id}
                     delay={slot.delay}
                     title={slot.placeholder?.title ?? slot.id}
-                    description={slot.comingSoonDescription ?? 'Support is coming soon.'}
+                    description={
+                      slot.comingSoonDescription ??
+                      'Pro features are coming soon to Linux. Core features work now.'
+                    }
                     variant="coming-soon"
                   />
                 )
@@ -229,7 +233,13 @@ export function Settings({
                   key={slot.id}
                   delay={slot.delay}
                   title={slot.placeholder.title}
-                  description={slot.placeholder.description}
+                  description={
+                    currentPlatform() === 'linux'
+                      ? (slot.comingSoonDescription ??
+                        'Pro features are coming soon to Linux. Core features work now.')
+                      : slot.placeholder.description
+                  }
+                  variant={currentPlatform() === 'linux' ? 'coming-soon' : 'pro'}
                 />
               )
             })}

@@ -150,4 +150,30 @@ describe('<App/> locked Pro navigation integration', () => {
     expect(screen.queryByRole('heading', { name: 'Today' })).toBeNull()
     await waitFor(() => expect(window.location.pathname).toBe('/day'))
   }, 30_000)
+
+  it('shows Linux Pro routes as coming soon without a purchase action', async () => {
+    window.history.replaceState(null, '', '/day')
+    const openExternal = vi.fn()
+    installAppBoundary({ platform: 'linux', isPro: false, openExternal })
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Day' })).toBeTruthy()
+    expect(screen.getByText(/Off Grid AI Pro · Coming soon/)).toBeTruthy()
+    expect(screen.getByText(/Pro features are coming soon to Linux/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Get Pro/ })).toBeNull()
+    expect(openExternal).not.toHaveBeenCalled()
+  }, 30_000)
+
+  it('marks Pro Settings cards as coming soon on Linux', async () => {
+    window.history.replaceState(null, '', '/settings')
+    installAppBoundary({ platform: 'linux', isPro: false })
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeTruthy()
+    expect(
+      screen.getAllByText('Pro features are coming soon to Linux. Core features work now.').length
+    ).toBeGreaterThan(0)
+  }, 30_000)
 })
