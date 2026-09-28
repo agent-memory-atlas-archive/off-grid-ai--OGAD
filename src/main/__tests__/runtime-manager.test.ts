@@ -65,7 +65,10 @@ describe('registerRuntime (single mode-aware seam, real queue)', () => {
       llm: 'resident',
       image: 'resident',
       stt: 'on-demand',
-      tts: 'on-demand'
+      tts: 'on-demand',
+      grounding: 'resident',
+      decision: 'on-demand',
+      embeddings: 'resident'
     }
     for (const modality of Object.keys(modes) as Modality[]) {
       const q = new ModalityQueue()
