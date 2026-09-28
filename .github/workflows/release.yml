@@ -14,12 +14,8 @@ on:
         options: [beta, stable]
         default: beta
       pro_ref:
-        # The pro checkout used to default to desktop-pro's DEFAULT branch with no ref,
-        # which silently pairs a core feature/integration branch with pro `main`. The
-        # build stays green and every pro-side change is simply absent — the failure mode
-        # this input exists to prevent. Leave empty for main; set it to the matching pro
-        # branch when releasing from a core integration branch.
-        description: 'desktop-pro branch/tag/sha to bundle (empty = its default branch)'
+        # Default to the Pro commit pinned by the selected Core source.
+        description: 'desktop-pro branch/tag/sha (empty = commit pinned by Core)'
         type: string
         required: false
         default: ''
@@ -203,14 +199,16 @@ jobs:
       # Private pro source into pro/ → __OFFGRID_PRO__ true. The checkout action
       # injects the token as an http.extraheader (never in a clone URL) and scrubs
       # it afterwards — safer than embedding ${TOKEN} in a git URL.
+      - name: Resolve pinned Pro source
+        id: pro_source
+        shell: bash
+        env:
+          PRO_BUILD_REF: ${{ inputs.pro_ref }}
+        run: bash scripts/resolve-build-pro-ref.sh
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: off-grid-ai/desktop-pro
-          # Empty = desktop-pro's default branch (checkout treats '' as unset), so the
-          # normal main-line release is unchanged. Set pro_ref when the core ref is an
-          # integration branch, or the build bundles pro `main` and every pro-side change
-          # goes missing with a green build.
-          ref: ${{ inputs.pro_ref }}
+          ref: ${{ steps.pro_source.outputs.ref }}
           token: ${{ secrets.PRO_REPO_TOKEN }}
           path: pro
           fetch-depth: 1
@@ -505,11 +503,17 @@ jobs:
             echo "::error::Kev server launcher is still an LFS pointer"
             exit 1
           fi
+      - name: Resolve pinned Pro source
+        id: pro_source
+        shell: bash
+        env:
+          PRO_BUILD_REF: ${{ inputs.pro_ref }}
+        run: bash scripts/resolve-build-pro-ref.sh
       - name: Check out private pro source into pro/
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: off-grid-ai/desktop-pro
-          ref: ${{ inputs.pro_ref }} # same pro ref as build-mac — one version, one pro tree
+          ref: ${{ steps.pro_source.outputs.ref }}
           token: ${{ secrets.PRO_REPO_TOKEN }}
           path: pro
           fetch-depth: 1
@@ -666,6 +670,24 @@ jobs:
           ref: ${{ needs.version.outputs.sha }}
           lfs: false # Tracked native binaries are macOS files; build Linux ELF below.
           persist-credentials: false
+      - name: Resolve pinned Pro source
+        id: pro_source
+        shell: bash
+        env:
+          PRO_BUILD_REF: ${{ inputs.pro_ref }}
+        run: bash scripts/resolve-build-pro-ref.sh
+      - name: Check out pinned Pro source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: off-grid-ai/desktop-pro
+          ref: ${{ steps.pro_source.outputs.ref }}
+          token: ${{ secrets.PRO_REPO_TOKEN }}
+          path: pro
+          persist-credentials: false
+      - name: Drop nested Pro Git metadata
+        shell: bash
+        run: rm -rf pro/.git
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
@@ -726,18 +748,20 @@ jobs:
           python3 -c 'import torchgen, yaml, jinja2'
       - name: Install Linux GPU runtime dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y libgomp1 libvulkan1 libvulkan-dev glslc spirv-headers unzip
-      - name: Typecheck core Linux main process
+      - name: Typecheck Linux main process
         env:
-          OFFGRID_FORCE_CORE: '1'
-        # Renderer integration tests import the absent private Pro checkout;
-        # electron-vite below validates the actual core renderer bundle.
+          OFFGRID_FORCE_CORE: '0'
         run: npm run typecheck:node
       - name: Stamp build version
         run: npm version "${{ needs.version.outputs.version }}" --no-git-tag-version --allow-same-version
-      - name: Build core Linux packages
+      - name: Build Linux packages
         env:
-          OFFGRID_FORCE_CORE: '1'
+          OFFGRID_FORCE_CORE: '0'
         run: npm run build:linux
+      - name: Verify packaged Kev runtime
+        run: |
+          test -f dist/linux-unpacked/resources/bin/kev-local-server.py
+          dist/linux-unpacked/resources/bin/kev-runtime/python/bin/python3 -c 'import kev, torch, uvicorn; assert torch.version.cuda'
       - name: Verify Linux package inputs
         run: |
           for variant in llama llama-cpu llama-prism llama-prism-cpu; do
