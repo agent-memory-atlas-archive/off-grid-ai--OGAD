@@ -65,11 +65,16 @@ async function runtime(id: number): Promise<{ runtime: KokoroRuntime; device: De
       progress_callback: (info) => reportProgress(id, info)
     })
     return runtime
-  }).then((value) => {
-    port.postMessage({ id, type: 'ready', device: value.device, fallbackReason: value.fallbackReason } satisfies TtsWorkerResponse)
-    loaded = value
-    return value
   })
+    .then((value) => {
+      port.postMessage({ id, type: 'ready', device: value.device, fallbackReason: value.fallbackReason } satisfies TtsWorkerResponse)
+      loaded = value
+      return value
+    })
+    .catch((error) => {
+      loading = null
+      throw error
+    })
   return loading
 }
 

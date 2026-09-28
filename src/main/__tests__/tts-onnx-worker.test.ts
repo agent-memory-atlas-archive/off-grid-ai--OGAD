@@ -71,4 +71,19 @@ describe('ONNX speech worker response evidence', () => {
     )
     expect(host.generate).not.toHaveBeenCalled()
   })
+
+  it('retries model loading after a provider failure', async () => {
+    host.load.mockRejectedValueOnce(new Error('provider unavailable'))
+    await import('../tts-onnx-worker')
+    const receive = host.on.mock.calls[0]![1]
+    receive({ id: 4, type: 'prepare', voice: 'af_heart' })
+    await vi.waitFor(() =>
+      expect(host.post).toHaveBeenCalledWith({ id: 4, type: 'error', error: 'provider unavailable' })
+    )
+    receive({ id: 5, type: 'prepare', voice: 'af_heart' })
+    await vi.waitFor(() =>
+      expect(host.post).toHaveBeenCalledWith({ id: 5, type: 'complete', device: 'coreml' })
+    )
+    expect(host.load).toHaveBeenCalledTimes(2)
+  })
 })
