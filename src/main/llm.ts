@@ -1,3 +1,5 @@
+import type { RuntimeBackend } from '../shared/runtime-backends'
+import { parseNativeBackend } from './runtime-backends'
 import { spawn, execSync, ChildProcess } from 'child_process'
 import { Mutex } from 'async-mutex'
 import { prepareModelMemory, registerModelEvictor } from './model-memory'
@@ -220,6 +222,10 @@ export class LLMService {
   // ONLY through activeAccelerator(), which gates it on `initialized` — that flag stays the
   // single authority on whether an engine is up, rather than a second flag kept in step.
   private activeEnginePath = ''
+  private backendOutput = ''
+  private backendModelPath = ''
+  private backendPlacement: ReturnType<typeof parseNativeBackend>
+  private backendFallbackReason: string | undefined
   private activeGpuLayers: number | null = 0
   // A model selection is durable as soon as the manager writes active-model.json, but
   // replacing llama-server while it is answering destroys the user's in-flight turn.
@@ -432,6 +438,17 @@ export class LLMService {
   /** The accelerator the RUNNING engine offloads to, or null when none is up (or when the
    *  platform ships no engine of ours to name). The UI renders this instead of assuming
    *  Metal, which is what made a Windows box claim a Metal GPU. */
+  runtimeBackend(): RuntimeBackend {
+    const placement = this.initialized ? this.backendPlacement : undefined
+    return {
+      id: 'chat', model: this.backendModelPath,
+      state: this.initialized ? 'loaded' : this.isStarting() ? 'loading' : this.lastError() ? 'error' : 'stopped',
+      backend: this.initialized ? placement?.backend ?? this.activeAccelerator() ?? undefined : undefined,
+      device: placement?.device,
+      detail: this.lastError() ?? this.backendFallbackReason
+    }
+  }
+
   activeAccelerator(): EngineAccelerator | null {
     if (!this.initialized) return null
     return acceleratorForEngine({
@@ -990,6 +1007,7 @@ export class LLMService {
     serverPaths: string[],
     generation = this.launchGeneration
   ): Promise<boolean> {
+    this.backendFallbackReason = undefined
     const ordered = [...serverPaths].sort((a, b) => enginePriority(a) - enginePriority(b))
     const candidates = [
       ...ordered.map((serverPath) => ({ serverPath, cpuOnly: false })),
@@ -1013,6 +1031,7 @@ export class LLMService {
       if (!cpuOnly && (process.platform === 'win32' || process.platform === 'linux') && backend) {
         if (this.gpuLayers === 0) continue
         if (!(await gpuDeviceAvailable(serverPath, backend, process.platform))) {
+          this.backendFallbackReason = `${backend} did not report a usable device. Another engine was selected.`
           console.warn(
             `[LLMService] no usable ${backend} device for ${serverPath}; trying next engine`
           )
@@ -1035,6 +1054,7 @@ export class LLMService {
         }
         if (generation !== this.launchGeneration) return false
         const failure = classifyLlamaError(this.stderrTail.join('\n'))
+        this.backendFallbackReason = failure?.reason ?? 'The previous engine could not load the model.'
         if (failure?.code === 'speculation_unsupported') {
           console.warn(
             `[LLMService] ${failure.reason} Retrying the selected model with speculative decoding off.`
@@ -1113,6 +1133,9 @@ export class LLMService {
     this.intentionalStop = false
     this.server = proc
     this.activeEnginePath = serverPath
+    this.backendOutput = ''
+    this.backendModelPath = this.modelPath
+    this.backendPlacement = undefined
     this.stderrTail = []
     let confirmedOffload: number | null = null
     let offloadLogTail = ''
@@ -1133,6 +1156,7 @@ export class LLMService {
     proc.stderr?.on('data', (data) => {
       const text = String(data)
       console.log(`[llama-server] ${text}`)
+      if (this.server === proc) this.backendOutput = (this.backendOutput + text).slice(-65536)
       const offloadLog = offloadLogTail + text
       const count = offloadedGpuLayers(offloadLog)
       if (count !== null) confirmedOffload = count
@@ -1156,6 +1180,7 @@ export class LLMService {
       const deliberateClose = wasIntentional
       if (!deliberateClose && !this.paused) {
         const failure = classifyLlamaError(this.stderrTail.join('\n'))
+        this.backendFallbackReason = failure?.reason ?? 'The previous engine could not load the model.'
         if (failure) {
           this.lastErrorMsg = failure.reason
           console.error(
@@ -1184,6 +1209,7 @@ export class LLMService {
       console.log(
         `[LLMService] model ready: engine=${engineDir}, GPU layers=${this.activeGpuLayers ?? 'unconfirmed'}`
       )
+      this.backendPlacement = parseNativeBackend(this.backendOutput)
       this.initialized = true
       this.lastErrorMsg = null // healthy again — clear any prior failure reason
       this.invalidateHealth()
@@ -1400,6 +1426,7 @@ export class LLMService {
                 this.mediaMarker ?? undefined
               )
             )
+            log.useRuntime(this.runtimeBackend())
             const raw = await postCompletionOnce(this.port, body, undefined, signal, '/completion')
             log.update({
               model: this.modelPath,
@@ -1640,6 +1667,7 @@ export class LLMService {
           Object.assign(payload, thinkingPayload(false, this.thinkingDialect))
         }
         const body = JSON.stringify(payload)
+        currentAIRequest()?.useRuntime(this.runtimeBackend())
         currentAIRequest()?.update({
           effectiveRequest: payload,
           model: this.modelPath,
@@ -1750,6 +1778,7 @@ export class LLMService {
 
           // Single SSE transport (llm/stream.ts). The plain chat path sends no tools, so
           // the returned toolCalls are always empty — take only the answer text.
+          log.useRuntime(this.runtimeBackend())
           const result = await streamCompletion(this.port, body, onDelta, {
             signal: opts.signal,
             timeoutMs
@@ -1864,6 +1893,7 @@ export class LLMService {
 
           // Single SSE transport (llm/stream.ts) — same path as chatStream, but the
           // assembled tool calls are surfaced too (this powers the agentic loop).
+          log.useRuntime(this.runtimeBackend())
           const result = await streamCompletion(this.port, body, onDelta, {
             signal: opts.signal,
             timeoutMs,

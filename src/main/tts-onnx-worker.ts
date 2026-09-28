@@ -22,8 +22,9 @@ interface TtsWorkerRequest {
 
 export interface TtsWorkerResponse {
   id: number
-  type: 'progress' | 'complete' | 'error'
+  type: 'progress' | 'ready' | 'complete' | 'error'
   device?: string
+  fallbackReason?: string
   downloadedBytes?: number
   totalBytes?: number | null
   percentage?: number | null
@@ -65,6 +66,7 @@ async function runtime(id: number): Promise<{ runtime: KokoroRuntime; device: De
     })
     return runtime
   }).then((value) => {
+    port.postMessage({ id, type: 'ready', device: value.device, fallbackReason: value.fallbackReason } satisfies TtsWorkerResponse)
     loaded = value
     return value
   })

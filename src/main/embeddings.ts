@@ -1,9 +1,10 @@
+import { beginRuntimeBackend, providerLabel } from './runtime-backends'
 import path from 'path'
 import { existsSync } from 'fs'
 import { Worker } from 'worker_threads'
 import { modelsDir } from './runtime-env'
 import { embedText, embeddingDevice } from './embeddings-core'
-import { recordAIRequest } from './ai-request-log'
+import { recordAIRequest, type AIRequestHandle } from './ai-request-log'
 import type { EmbeddingRequest, EmbeddingResponse } from './embeddings-worker'
 import { writeDiagnosticLog } from './diagnostics-log'
 
@@ -34,7 +35,7 @@ class EmbeddingService {
   private nextId = 1
   private readonly waiting = new Map<
     number,
-    { resolve: (v: number[]) => void; reject: (e: Error) => void }
+    { resolve: (v: number[]) => void; reject: (e: Error) => void; log: AIRequestHandle }
   >()
   /** Serializes requests: the tail of the queue, not a list, so memory does not grow with it. */
   private queue: Promise<unknown> = Promise.resolve()
@@ -46,11 +47,18 @@ class EmbeddingService {
     // run-from-source context have only the .ts next to this file. Resolve whichever EXISTS rather
     // than assuming the built layout: assuming it made every embedding fail outside a packaged
     // build, which silently demoted vector search to the FTS fallback instead of erroring.
+    const backendState = beginRuntimeBackend('embeddings', 'Xenova/all-MiniLM-L6-v2')
     const worker = new Worker(entry, { workerData: { modelsDir: modelsDir() } })
     worker.on('message', (response: EmbeddingResponse) => {
+      if (response.ready && response.device) {
+        backendState.ready(providerLabel(response.device), undefined, response.fallbackReason)
+        this.reportedDevice = response.device
+        return
+      }
       const pending = this.waiting.get(response.id)
       if (!pending) return
       this.waiting.delete(response.id)
+      backendState.recordRequest(pending.log)
       if (response.device && response.device !== this.reportedDevice) {
         this.reportedDevice = response.device
         writeDiagnosticLog('embeddings', 'runtime.ready', {
@@ -63,12 +71,18 @@ class EmbeddingService {
     })
     // A dead worker must not strand callers, and the next request should get a fresh one.
     const fail = (error: Error): void => {
+      backendState.fail(error)
+      if (this.worker !== worker) return
+      this.reportedDevice = null
       this.worker = null
       for (const [, pending] of this.waiting) pending.reject(error)
       this.waiting.clear()
     }
     worker.on('error', fail)
     worker.on('exit', (code) => {
+      backendState.stop()
+      if (this.worker !== worker) return
+      this.reportedDevice = null
       if (code !== 0) fail(new Error(`Embedding worker exited with code ${code}`))
       else this.worker = null
     })
@@ -96,11 +110,13 @@ class EmbeddingService {
           // No built worker means we are running from source. Embed here rather than failing: a failed
           // embedding silently demotes every search to the FTS fallback, which is a far worse outcome
           // than briefly holding this thread in a context that has no UI to block.
-          if (!entry) return embedText(text, modelsDir())
+          if (!entry) return embedText(text, modelsDir(), (device, reason) => {
+            beginRuntimeBackend('embeddings', 'Xenova/all-MiniLM-L6-v2').ready(providerLabel(device), undefined, reason)
+          })
           return new Promise<number[]>((resolve, reject) => {
             const worker = this.spawn(entry)
             const id = this.nextId++
-            this.waiting.set(id, { resolve, reject })
+            this.waiting.set(id, { resolve, reject, log })
             worker.postMessage({ id, text } as EmbeddingRequest)
           })
         }

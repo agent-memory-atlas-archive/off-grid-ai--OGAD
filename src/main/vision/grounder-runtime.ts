@@ -1,3 +1,4 @@
+import { beginRuntimeBackend } from '../runtime-backends'
 import { spawn, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { Mutex } from 'async-mutex'
@@ -22,6 +23,7 @@ export class GrounderRuntime {
   private modelId: string | null = null
   private stderr = ''
   private backend: string | undefined
+  private backendState?: ReturnType<typeof beginRuntimeBackend>
   private readonly mutex = new Mutex()
 
   get running(): boolean {
@@ -32,6 +34,7 @@ export class GrounderRuntime {
     await prepareModelMemory('grounding')
     await this.mutex.runExclusive(async () => {
       if (!this.running || this.modelId !== modelId) await this.start(modelId)
+      this.backendState?.recordRequest()
     })
     return {
       id: `local-grounder:${modelId}`,
@@ -62,6 +65,8 @@ export class GrounderRuntime {
     this.modelId = modelId
     this.stderr = ''
     this.backend = undefined
+    const backendState = beginRuntimeBackend('grounding', this.modelId!)
+    this.backendState = backendState
     const process = spawn(
       serverPath,
       buildLaunchArgs({
@@ -100,14 +105,17 @@ export class GrounderRuntime {
             serverPath,
             gpuLayers: layers
           }) ?? undefined
+      backendState.observe(String(chunk))
       console.log(`[Grounding runtime] ${String(chunk)}`)
     })
     process.once('close', () => {
+      backendState.stop()
       if (this.process === process) this.process = null
     })
 
     try {
       await this.waitUntilReady()
+      backendState.ready(this.backend)
     } catch (error) {
       await this.shutdown()
       const detail = /out of memory|cannot allocate|metal.*alloc/i.test(this.stderr)
@@ -133,6 +141,7 @@ export class GrounderRuntime {
   }
 
   async shutdown(): Promise<void> {
+    this.backendState?.stop()
     const process = this.process
     this.process = null
     this.modelId = null

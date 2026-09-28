@@ -1,3 +1,4 @@
+import { beginRuntimeBackend } from './runtime-backends'
 // On-device image generation via stable-diffusion.cpp (the bundled `sd-cli`).
 // Mirrors the llm.ts pattern: resolve the binary from resources/bin, pick a
 // Stable Diffusion model from the userData models dir, spawn one-shot txt2img/
@@ -1112,6 +1113,7 @@ async function runImageGen(
             `[imagegen:native] backend=${imageBackendForRuntime(process.platform, runtime)} runtime=${runtime}`
           )
         }
+        const backendState = beginRuntimeBackend('image', model)
         currentChild = child
         let log = ''
         // Pure progress reducer owns the seed parse + the denoise->decode phase
@@ -1143,6 +1145,7 @@ async function runImageGen(
         const capture = (stream: 'stdout' | 'stderr', d: Buffer): void => {
           const s = d.toString()
           log += s
+          backendState.observe(s, true)
           if (debugNativeLogs) {
             const destination = stream === 'stdout' ? process.stdout : process.stderr
             destination.write(`[sd-cli:${stream}] ${s}`)
@@ -1161,10 +1164,12 @@ async function runImageGen(
         child.stdout.on('data', (data: Buffer) => capture('stdout', data))
         child.stderr.on('data', (data: Buffer) => capture('stderr', data))
         child.on('error', (error) => {
+          backendState.fail(error)
           clearInterval(previewPoll)
           reject(error)
         })
         child.on('close', (code) => {
+          backendState.stop()
           const preview = readPreview()
           if (onProgress && latestProgressEvent && preview) {
             onProgress({ ...latestProgressEvent, preview })

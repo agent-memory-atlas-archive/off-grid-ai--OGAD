@@ -1,3 +1,4 @@
+import { beginRuntimeBackend } from './runtime-backends'
 // Local text-to-speech through the pinned React Native ExecuTorch Kokoro runtime.
 // The runtime lives in its own repository and runs as a child process, so it does
 // not add another native inference engine to Electron's main process.
@@ -61,6 +62,19 @@ function bundledCacheDirectory(): string | undefined {
 
 function runtime(): ExecutorchSpeechRuntime {
   return new ExecutorchSpeechRuntime(cacheDirectory(), executablePath(), bundledCacheDirectory())
+}
+
+async function synthesizeExecutorch(input: Parameters<ExecutorchSpeechRuntime['synthesize']>[0]): Promise<void> {
+  await onnxSpeech.close()
+  const status = beginRuntimeBackend('speech', 'Kokoro')
+  try {
+    // This bundled native target links the XNNPACK CPU backend only.
+    status.ready('CPU (ExecuTorch)')
+    await runtime().synthesize(input)
+  } catch (error) {
+    status.fail(error)
+    throw error
+  } finally { status.stop() }
 }
 
 let busy = false
@@ -182,7 +196,7 @@ export async function synthesize(
               { requestId, error: messageOf(error) },
               'warn'
             )
-            await runtime().synthesize({
+            await synthesizeExecutorch({
               text: input.slice(0, 2000),
               voiceId: chosenVoice,
               outputPath,
@@ -190,7 +204,7 @@ export async function synthesize(
             })
           }
         } else {
-          await runtime().synthesize({
+          await synthesizeExecutorch({
             text: input.slice(0, 2000),
             voiceId: chosenVoice,
             outputPath,

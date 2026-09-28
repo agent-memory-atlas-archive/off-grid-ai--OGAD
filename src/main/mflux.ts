@@ -1,3 +1,4 @@
+import { beginRuntimeBackend } from './runtime-backends'
 // MLX image runtime (mflux) — Apple-Silicon-native FLUX / FLUX.2 / Z-Image with
 // LoRA. This is the second image runtime alongside sd-cli (stable-diffusion.cpp).
 // It exists because sd.cpp cannot merge a LoRA into our quantized GGUF models
@@ -248,11 +249,15 @@ export function runMflux(
   if (!py) throw new Error('MLX runtime (mflux) not installed — run scripts/build-mflux-env.sh.')
   if (process.arch !== 'arm64') throw new Error('MLX image generation requires Apple Silicon.')
 
-  const args = buildMfluxArgs(params, outPath)
+  const cliArgs = buildMfluxArgs(params, outPath)
+  const args = ['-c',
+    "import runpy,sys,mlx.core as mx; print('OFFGRID_BACKEND:' + ('Metal' if mx.default_device().type == mx.gpu else 'CPU'), flush=True); runpy.run_module(sys.argv.pop(1), run_name='__main__')",
+    ...cliArgs.slice(1)]
   const threads = String(Math.max(1, os.cpus().length - 2))
   cancelled = false
 
   return new Promise<string>((resolve, reject) => {
+    const backendState = beginRuntimeBackend('image', params.model)
     proc = spawn(py, args, {
       cwd: path.dirname(py),
       env: { ...mfluxEnv(), OMP_NUM_THREADS: threads }
@@ -261,6 +266,8 @@ export function runMflux(
     const capture = (d: Buffer): void => {
       const s = d.toString()
       log += s
+      backendState.observe(s)
+      if (parseMfluxProgress(s)) backendState.ready()
       if (onProgress) {
         const p = parseMfluxProgress(s)
         if (p) onProgress(p)
@@ -269,10 +276,12 @@ export function runMflux(
     proc.stdout?.on('data', capture)
     proc.stderr?.on('data', capture) // tqdm writes to stderr
     proc.on('error', (e) => {
+      backendState.fail(e)
       proc = null
       reject(e)
     })
     proc.on('close', (code) => {
+      backendState.stop()
       proc = null
       if (cancelled) return reject(new Error('cancelled'))
       if (code === 0 && fs.existsSync(outPath)) return resolve(outPath)

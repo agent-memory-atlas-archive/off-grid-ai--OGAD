@@ -24,12 +24,13 @@ export function embeddingDevice(): DeviceType | null {
   return activeDevice
 }
 
-export async function embedText(text: string, modelsDir: string): Promise<number[]> {
+export async function embedText(text: string, modelsDir: string, onReady?: (device: string, reason?: string) => void): Promise<number[]> {
   if (!pipe) {
     configureTransformersEnv(modelsDir)
     loading ??= loadWithOnnxFallback((device) =>
       pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { device })
-    ).then(({ runtime, device }) => {
+    ).then(({ runtime, device, fallbackReason }) => {
+      onReady?.(device, fallbackReason)
       activeDevice = device
       return runtime
     })

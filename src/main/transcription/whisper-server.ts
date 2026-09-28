@@ -1,3 +1,4 @@
+import { beginRuntimeBackend } from '../runtime-backends'
 // Resident whisper.cpp HTTP server (the bundled `whisper-server`).
 //
 // Unlike the one-shot whisper-cli in whisper-cli.ts (which spawns, RELOADS the
@@ -119,6 +120,7 @@ export function parseInferenceResponse(body: unknown): { text: string } {
 /** The resident whisper server. One instance (the exported `whisperServer`). */
 export class WhisperServerService {
   private server: ChildProcess | null = null
+  private backendState?: ReturnType<typeof beginRuntimeBackend>
   private readonly inferenceMutex = new Mutex()
   private activeKey: string | null = null // whisperContextKey of the loaded model, null when down
   private startPromise: Promise<void> | null = null
@@ -195,21 +197,31 @@ export class WhisperServerService {
         ...nativeLibraryEnv(process.platform, binDir, process.env)
       }
     })
+    const backendState = beginRuntimeBackend('transcription', ctx.modelPath)
+    this.backendState = backendState
     this.server = proc
     this.stderrTail = []
     const capture = (d: Buffer): void => {
+      backendState.observe(String(d))
       for (const line of String(d).split(/\r?\n/)) if (line.trim()) this.stderrTail.push(line)
       if (this.stderrTail.length > 50) this.stderrTail = this.stderrTail.slice(-50)
     }
     proc.stdout.on('data', capture)
     proc.stderr.on('data', capture)
     proc.on('close', () => {
+      backendState.stop()
       if (this.server !== proc) return // an already-replaced instance
       this.server = null
       this.activeKey = null
     })
 
-    await this.waitForReady()
+    try {
+      await this.waitForReady()
+      backendState.ready()
+    } catch (error) {
+      backendState.fail(error)
+      throw error
+    }
     this.activeKey = key
   }
 
@@ -247,6 +259,7 @@ export class WhisperServerService {
         req.signal?.throwIfAborted()
         await this.ensureUp(ctx)
         req.signal?.throwIfAborted()
+        this.backendState?.recordRequest()
         return await this.inference(req)
       } finally {
         req.signal?.removeEventListener('abort', cancelNativeInference)
@@ -289,6 +302,7 @@ export class WhisperServerService {
   }
 
   private stopProcess(): void {
+    this.backendState?.stop()
     if (this.server) {
       try {
         this.server.kill('SIGKILL')

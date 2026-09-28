@@ -228,7 +228,7 @@ class WhisperCliTranscription implements TranscriptionService {
         try {
           // -nt strips timestamps (plain text). Keep them when the caller wants
           // per-utterance segments (meetings interleave two speakers by time).
-          const args = ['-m', model, '-f', wav, '-l', language, '-np']
+          const args = ['-m', model, '-f', wav, '-l', language]
           if (!opts.timestamps) args.push('-nt')
           // -mc 0 + -sns: kill the repetition/hallucination loop + non-speech tokens.
           if (suppress) args.push('-mc', '0', '-sns')
@@ -257,6 +257,7 @@ class WhisperCliTranscription implements TranscriptionService {
                 },
                 async () =>
                   runNativeTranscriptionProcess(bin, runArgs, {
+                    runtimeModel: modelPath,
                     maxBuffer: 64 * 1024 * 1024,
                     timeout: 30 * 60_000,
                     signal: opts.signal

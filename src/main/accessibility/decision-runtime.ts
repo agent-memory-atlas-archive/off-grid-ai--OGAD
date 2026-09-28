@@ -1,3 +1,4 @@
+import { beginRuntimeBackend } from '../runtime-backends'
 import { spawn, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { currentAIRequest } from '../ai-request-log'
@@ -50,6 +51,7 @@ export class DecisionRuntime {
   private modelId: string | null = null
   private stderr = ''
   private backend: string | undefined
+  private backendState?: ReturnType<typeof beginRuntimeBackend>
   readonly timing: DecisionRuntimeTiming = { coldStartMs: 0, warmDecisionMs: [] }
 
   get activePort(): number {
@@ -99,6 +101,8 @@ export class DecisionRuntime {
     this.modelId = modelId
     this.stderr = ''
     this.backend = undefined
+    const backendState = beginRuntimeBackend('decision', this.modelId!)
+    this.backendState = backendState
     const args = buildLaunchArgs({
       modelPath: artifact.primaryPath,
       mmProjPath: artifact.projectorPath ?? '',
@@ -136,13 +140,16 @@ export class DecisionRuntime {
             serverPath,
             gpuLayers: layers
           }) ?? undefined
+      backendState.observe(String(chunk))
       console.log(`[Decision runtime] ${String(chunk)}`)
     })
     process.once('close', () => {
+      backendState.stop()
       if (this.process === process) this.process = null
     })
     try {
       await this.waitUntilReady(startedAt)
+      backendState.ready(this.backend)
       this.timing.coldStartMs = Date.now() - startedAt
     } catch (error) {
       await this.shutdown()
@@ -167,6 +174,8 @@ export class DecisionRuntime {
     this.modelId = KEV_4B_ID
     this.stderr = ''
     this.backend = undefined
+    const backendState = beginRuntimeBackend('decision', this.modelId!)
+    this.backendState = backendState
     const startedAt = Date.now()
     const process = spawn(
       artifact.python,
@@ -189,15 +198,20 @@ export class DecisionRuntime {
       stream.on('data', (chunk) => {
         this.stderr = `${this.stderr}${String(chunk)}`.slice(-16_384)
         const device = /\[Kev\] loaded: device=(cuda|mps|cpu)\b/.exec(this.stderr)?.[1]
-        if (device) this.backend = device === 'cuda' ? 'CUDA' : device === 'mps' ? 'Metal' : 'CPU'
+        if (device) {
+          this.backend = device === 'cuda' ? 'CUDA' : device === 'mps' ? 'Metal' : 'CPU'
+          backendState.ready(this.backend)
+        }
         console.log(`[Kev runtime] ${String(chunk)}`)
       })
     }
     process.once('close', () => {
+      backendState.stop()
       if (this.process === process) this.process = null
     })
     try {
       await this.waitUntilReady(startedAt)
+      backendState.ready(this.backend)
       this.timing.coldStartMs = Date.now() - startedAt
     } catch (error) {
       await this.shutdown()
@@ -236,6 +250,7 @@ export class DecisionRuntime {
     if (!this.running)
       throw new DecisionRuntimeError('The Decision runtime is not running.', 'startup')
     return this.mutex.runExclusive(async () => {
+      this.backendState?.recordRequest()
       const startedAt = Date.now()
       currentAIRequest()?.update({
         model: this.modelId ?? undefined,
@@ -305,6 +320,7 @@ export class DecisionRuntime {
   }
 
   async shutdown(): Promise<void> {
+    this.backendState?.stop()
     const process = this.process
     this.process = null
     this.modelId = null

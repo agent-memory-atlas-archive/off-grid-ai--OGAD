@@ -28,6 +28,8 @@ export interface EmbeddingRequest {
 export interface EmbeddingResponse {
   id: number
   vector?: number[]
+  ready?: boolean
+  fallbackReason?: string
   device?: string
   error?: string
 }
@@ -35,7 +37,9 @@ export interface EmbeddingResponse {
 port.on('message', (request: EmbeddingRequest) => {
   void (async () => {
     try {
-      const vector = await embedText(request.text, modelsDir)
+      const vector = await embedText(request.text, modelsDir, (device, fallbackReason) => {
+        port.postMessage({ id: request.id, ready: true, device, fallbackReason } satisfies EmbeddingResponse)
+      })
       port.postMessage({ id: request.id, vector, device: embeddingDevice() ?? undefined } as EmbeddingResponse)
     } catch (error) {
       port.postMessage({

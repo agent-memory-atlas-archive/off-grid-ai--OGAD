@@ -223,6 +223,7 @@ class ParakeetCliTranscription implements TranscriptionService {
             bin,
             buildParakeetArgs(model, wav),
             {
+              runtimeModel: model.encoder,
               maxBuffer: 64 * 1024 * 1024,
               timeout: 30 * 60_000,
               signal: opts.signal

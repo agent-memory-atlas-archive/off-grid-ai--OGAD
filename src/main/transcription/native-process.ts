@@ -1,7 +1,9 @@
+import { beginRuntimeBackend } from '../runtime-backends'
 /** One abortable child-process boundary for native transcription adapters. */
 import { execFile, type ExecFileOptionsWithStringEncoding } from 'child_process'
 
 export interface NativeProcessOptions {
+  runtimeModel?: string
   timeout: number
   maxBuffer?: number
   signal?: AbortSignal
@@ -19,9 +21,14 @@ export function runNativeTranscriptionProcess(
       ...(options.maxBuffer !== undefined ? { maxBuffer: options.maxBuffer } : {}),
       ...(options.signal ? { signal: options.signal } : {})
     }
-    execFile(file, [...args], execOptions, (error, stdout, stderr) => {
+    const backendState = options.runtimeModel ? beginRuntimeBackend('transcription', options.runtimeModel) : undefined
+    const child = execFile(file, [...args], execOptions, (error, stdout, stderr) => {
+      if (error) backendState?.fail(error)
+      else backendState?.stop()
       if (error) reject(error)
       else resolve({ stdout, stderr })
     })
+    child.stdout?.on('data', (chunk) => backendState?.observe(String(chunk), true))
+    child.stderr?.on('data', (chunk) => backendState?.observe(String(chunk), true))
   })
 }
