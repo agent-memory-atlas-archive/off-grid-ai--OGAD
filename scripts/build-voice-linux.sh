@@ -54,7 +54,7 @@ if [ -n "${OFFGRID_FFMPEG_ARCHIVE_CACHE_DIR:-}" ] &&
   cp "$OFFGRID_FFMPEG_ARCHIVE_CACHE_DIR/$FFMPEG_ARCHIVE" "$WORK/$FFMPEG_ARCHIVE"
 else
   curl --fail --location --retry 3 --silent --show-error \
-    "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-24-14-14/$FFMPEG_ARCHIVE" \
+    "https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/$FFMPEG_ARCHIVE" \
     --output "$WORK/$FFMPEG_ARCHIVE"
 fi
 printf '%s  %s\n' "$FFMPEG_SHA256" "$WORK/$FFMPEG_ARCHIVE" | sha256sum --check --status
