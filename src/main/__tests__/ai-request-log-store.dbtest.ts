@@ -38,6 +38,19 @@ afterAll(async () => {
 })
 
 describe('local AI activity storage', () => {
+  it('keeps mixed GPU execution and unknown backends out of CPU-only results', async () => {
+    for (const backend of ['CPU', 'CPU (WASM)', 'CUDA + CPU', 'Metal + CPU', 'Unknown', 'Remote']) {
+      await recordAIRequest({ modality: 'text', source: backend, backend }, async () => 'done')
+    }
+    await flushAIRequestLogs()
+    expect(
+      listAIRequestLogs({ hardware: 'cpu' })
+        .rows.map((row) => row.backend)
+        .sort()
+    ).toEqual(['CPU', 'CPU (WASM)'])
+    expect(listAIRequestLogs({ hardware: 'gpu' }).total).toBe(2)
+    expect(listAIRequestLogs({ hardware: 'unknown' }).total).toBe(1)
+  })
   it('persists real requests and supports filters, sorting and literal search', async () => {
     await recordAIRequest(
       {
@@ -49,6 +62,9 @@ describe('local AI activity storage', () => {
       },
       async () => 'response'
     )
+    // This assertion tests chronological order, not SQLite's order for equal
+    // millisecond timestamps. Give the second request a later start time.
+    await new Promise((resolve) => setTimeout(resolve, 5))
     await recordAIRequest(
       { modality: 'embedding', source: 'Index', backend: 'CPU', request: 'note' },
       async () => [1, 2]

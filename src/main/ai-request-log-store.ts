@@ -269,7 +269,12 @@ export function listAIRequestLogs(query: AILogQuery = {}): AILogPage {
         .slice(0, 300)
         .replace(/[\\%_]/g, '\\$&')}%`
     )
-  if (query.hardware === 'cpu') clauses.push("lower(backend) LIKE '%cpu%'")
+  // Mixed execution belongs in GPU results, not the CPU-only filter. Unknown
+  // providers must never become CPU evidence just because GPU evidence is absent.
+  if (query.hardware === 'cpu')
+    clauses.push(
+      "lower(trim(backend)) IN ('cpu', 'cpu (wasm)', 'wasm', 'xnnpack', 'cpu (xnnpack)')"
+    )
   if (query.hardware === 'gpu')
     clauses.push(
       "(lower(backend) LIKE '%cuda%' OR lower(backend) LIKE '%metal%' OR lower(backend) LIKE '%vulkan%' OR lower(backend) LIKE '%webgpu%' OR lower(backend) LIKE '%directml%')"
