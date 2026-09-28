@@ -901,6 +901,7 @@ async function runImageGen(
         diffusionFa: true,
         taesdPath: taesd ?? undefined
       })
+      const residentBinary = sdServer.getBinaryPath() ?? cli
       generationLifecycle.throwIfCancelled()
       const { png, seed: usedSeed } = await sdServer.generate({
         prompt: params.prompt,
@@ -919,7 +920,7 @@ async function runImageGen(
         path: outPath,
         seed: usedSeed,
         model: base,
-        computeBackend: imageBackendForRuntime(process.platform, cli)
+        computeBackend: imageBackendForRuntime(process.platform, residentBinary)
       }
     } finally {
       generationLifecycle.finish()
