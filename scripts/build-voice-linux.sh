@@ -28,7 +28,9 @@ test "$(git -C "$WORK/whisper" rev-parse HEAD)" = "$WHISPER_COMMIT"
 mkdir -p "$WORK/whisper-build-cuda"
 DOCKER=(docker)
 if ! docker info >/dev/null 2>&1; then DOCKER=(sudo docker); fi
+CUDA_ARCHITECTURES="${OFFGRID_CUDA_ARCHITECTURES:-61;70;75;80;86;89;90}"
 "${DOCKER[@]}" run --rm --platform linux/amd64 \
+  -e CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES" \
   -v "$WORK/whisper:/src:ro" -v "$WORK/whisper-build-cuda:/build" \
   "$CUDA_BUILD_IMAGE" bash -euo pipefail -c '
     trap "chmod -R a+rwX /build" EXIT
@@ -40,7 +42,7 @@ if ! docker info >/dev/null 2>&1; then DOCKER=(sudo docker); fi
     cmake -S /tmp/whisper-src -B /build -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF \
       -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF \
-      -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89;90" \
+      -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES" \
       -DGGML_CUDA=ON -DGGML_VULKAN=OFF \
       -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON \
       -DWHISPER_BUILD_SERVER=OFF

@@ -44,6 +44,15 @@ driver_major=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader |
 [[ $driver_major =~ ^[0-9]+$ && $driver_major -ge 580 ]] || {
   echo 'NVIDIA driver 580 or newer is required for ONNX CUDA 13.' >&2; exit 1;
 }
+if [[ -z ${OFFGRID_CUDA_ARCHITECTURES:-} ]]; then
+  gpu_arches=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader |
+    sed 's/\.//g' | sort -u | paste -sd ';' -)
+  [[ $gpu_arches =~ ^[0-9]+(\;[0-9]+)*$ ]] || {
+    echo 'Could not read the NVIDIA GPU compute capability.' >&2; exit 1;
+  }
+  export OFFGRID_CUDA_ARCHITECTURES=$gpu_arches
+fi
+echo "Building Whisper CUDA for GPU architecture: $OFFGRID_CUDA_ARCHITECTURES"
 
 if ! command -v node >/dev/null || [[ $(node -p 'process.versions.node.split(".")[0]') != 22 ]]; then
   echo 'Installing Node 22 from nodejs.org.'
