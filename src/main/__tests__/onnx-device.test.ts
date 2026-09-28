@@ -16,7 +16,8 @@ describe('ONNX accelerator selection', () => {
 
     await expect(loadWithOnnxFallback(load, ['coreml', 'cpu'])).resolves.toEqual({
       runtime: 'runtime:cpu',
-      device: 'cpu'
+      device: 'cpu',
+      fallbackReason: 'coreml: provider unavailable'
     })
     expect(load.mock.calls).toEqual([['coreml'], ['cpu']])
   })
