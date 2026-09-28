@@ -1,3 +1,4 @@
+import { beginRuntimeBackend } from './runtime-backends'
 // Persistent stable-diffusion.cpp server (the bundled `sd-server`).
 //
 // Unlike the one-shot `sd-cli` in imagegen.ts (which spawns, loads the whole
@@ -21,8 +22,9 @@ import { spawn, type ChildProcess, execSync } from 'child_process'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
-import { binRoots, isPackaged, exe } from './runtime-env'
+import { isPackaged } from './runtime-env'
 import { killOrphansOnPort as reapOrphansOnPort } from './kill-orphan-port'
+import { findSdBinary, sdRuntimeLibraryEnv } from './imagegen/sd-runtime'
 
 /** Off the LLM's 8439 so both engines can bind (they never run at once, but a
  *  lingering LLM shouldn't block the image server's port either). */
@@ -177,6 +179,7 @@ class SdServerService {
   private evictionHook: (() => void) | null = null
   private stderrTail: string[] = []
   private currentJobId: string | null = null
+  private backendState?: ReturnType<typeof beginRuntimeBackend>
 
   /** Called after the server self-evicts on idle (or is stopped), so the caller
    *  can warm the LLM back up now that the image model's memory is freed. */
@@ -209,11 +212,7 @@ class SdServerService {
   }
 
   private findBinary(): string | null {
-    for (const r of binRoots()) {
-      const p = path.join(r, 'sd', exe('sd-server'))
-      if (fs.existsSync(p)) return p
-    }
-    return null
+    return findSdBinary('sd-server')
   }
 
   /** Ensure a server is up with EXACTLY this context; restart on a model/flag
@@ -257,27 +256,34 @@ class SdServerService {
       cwd: binDir,
       env: {
         ...process.env,
-        DYLD_LIBRARY_PATH: binDir,
-        ...(process.platform === 'win32'
-          ? { PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}` }
-          : {})
+        ...sdRuntimeLibraryEnv(process.platform, bin, process.env)
       }
     })
+    const backendState = beginRuntimeBackend('image', ctx.modelPath)
+    this.backendState = backendState
     this.server = proc
     this.stderrTail = []
     const capture = (d: Buffer): void => {
+      backendState.observe(String(d))
       for (const line of String(d).split(/\r?\n/)) if (line.trim()) this.stderrTail.push(line)
       if (this.stderrTail.length > 50) this.stderrTail = this.stderrTail.slice(-50)
     }
     proc.stdout.on('data', capture)
     proc.stderr.on('data', capture)
     proc.on('close', () => {
+      backendState.stop()
       if (this.server !== proc) return // an already-replaced instance
       this.server = null
       this.activeKey = null
     })
 
-    await this.waitForReady()
+    try {
+      await this.waitForReady()
+      backendState.ready()
+    } catch (error) {
+      backendState.fail(error)
+      throw error
+    }
     this.activeKey = key
   }
 
@@ -303,6 +309,7 @@ class SdServerService {
     req: SdGenRequest,
     onProgress?: (p: SdGenProgress) => void
   ): Promise<{ png: Buffer; seed: number }> {
+    this.backendState?.recordRequest()
     this.clearIdleTimer()
     const total = req.steps ?? 4
     try {
@@ -363,6 +370,7 @@ class SdServerService {
   /** Kill the process without firing the eviction hook (used on internal swaps
    *  where a new spawn follows immediately). */
   private stopProcess(): void {
+    this.backendState?.stop()
     if (this.server) {
       try {
         this.server.kill('SIGKILL')

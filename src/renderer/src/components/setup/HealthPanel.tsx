@@ -1,3 +1,5 @@
+import { useRuntimeBackends } from '../../hooks/useRuntimeBackends'
+import { runtimeBackendLabel } from '../../../../shared/runtime-backends'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   CheckCircle,
@@ -18,6 +20,7 @@ import {
 // through opacity tiers + icon shape, never a status color palette.
 const STATUS_TEXT: Record<SystemHealthComponentStatusContract, string> = {
   ready: 'text-green-500',
+  idle: 'text-neutral-500',
   starting: 'text-neutral-400',
   down: 'text-neutral-300',
   not_installed: 'text-neutral-500',
@@ -48,6 +51,7 @@ function StatusIcon({
  * refresh it after they finish. A timer here made an idle app repeat the full native probe forever.
  */
 export function HealthPanel(): React.ReactElement {
+  const backends = useRuntimeBackends()
   const api = window.api
   const [health, setHealth] = useState<SystemHealthContract | null>(null)
   const [restarting, setRestarting] = useState<string | null>(null)
@@ -149,6 +153,17 @@ export function HealthPanel(): React.ReactElement {
       ) : (
         <div className="grid grid-cols-1 gap-1.5 p-3 sm:grid-cols-2 lg:grid-cols-3">
           {health.components.map((c) => {
+            const runtimeId = c.id === 'vision' ? 'chat' : c.id
+            const isModel = [
+              'chat',
+              'image',
+              'speech',
+              'transcription',
+              'embeddings',
+              'grounding',
+              'decision'
+            ].includes(runtimeId)
+            const backend = backends.find((value) => value.id === runtimeId)
             const canRestart = c.canRestart && (c.status === 'down' || c.status === 'ready')
             return (
               <div
@@ -160,6 +175,15 @@ export function HealthPanel(): React.ReactElement {
                 <StatusIcon status={c.status} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-mono text-[11px] text-neutral-200">{c.label}</div>
+                  {isModel && (
+                    <div
+                      className="break-words text-[10px] text-neutral-500"
+                      title={backend?.detail}
+                    >
+                      {runtimeBackendLabel(backend)}
+                      {backend?.detail && <span className="block">{backend.detail}</span>}
+                    </div>
+                  )}
                   {c.detail && (
                     <div className="truncate text-[10px] text-neutral-600">{c.detail}</div>
                   )}
@@ -186,7 +210,10 @@ export function HealthPanel(): React.ReactElement {
       )}
 
       {restartError && (
-        <div role="alert" className="border-t border-neutral-800/60 px-4 py-2 text-[10px] text-neutral-300">
+        <div
+          role="alert"
+          className="border-t border-neutral-800/60 px-4 py-2 text-[10px] text-neutral-300"
+        >
           {restartError}
         </div>
       )}
@@ -202,7 +229,8 @@ export function HealthPanel(): React.ReactElement {
 
       {health && (
         <div className="border-t border-neutral-800/60 px-4 py-2 text-[10px] text-neutral-600">
-          {health.ramGb} GB RAM{health.activeModel ? ` · active: ${resolveModelName([], health.activeModel)}` : ''}
+          {health.ramGb} GB RAM
+          {health.activeModel ? ` · active: ${resolveModelName([], health.activeModel)}` : ''}
         </div>
       )}
     </div>

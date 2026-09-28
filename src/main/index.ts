@@ -17,6 +17,7 @@ protocol.registerSchemesAsPrivileged([
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { setupIPC } from './ipc' // IMPORT FROM IPC ONLY
+import { initializeAIRequestLogs } from './ai-request-log-store'
 import { setupRagIPC } from './rag-ipc'
 import { setupMcpIpc } from './mcp-ipc'
 import { registerToolExtension } from './tools'
@@ -276,6 +277,7 @@ if (!windowPresentation.showWindow) {
 
 app.whenReady().then(async () => {
   restoreCanonicalProductName()
+  initializeAIRequestLogs()
 
   // Server-only (headless) mode: boot just the multimodal gateway + LLM runtime,
   // no window / tray / capture / CRM loops. Lets the gateway be deployed on its

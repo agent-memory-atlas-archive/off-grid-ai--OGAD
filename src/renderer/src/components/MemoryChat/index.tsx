@@ -1697,7 +1697,11 @@ export function MemoryChat({
         }
         const imageMetrics: GenerationMetrics | undefined =
           typeof img.durationMs === 'number'
-            ? { modelName: img.model, totalSeconds: img.durationMs / 1000 }
+            ? {
+                computeBackend: img.computeBackend,
+                modelName: img.model,
+                totalSeconds: img.durationMs / 1000
+              }
             : undefined
         const completedImage = completedImageMessage(
           `Generated for: ${trimmed}`,
@@ -1806,19 +1810,37 @@ export function MemoryChat({
         let comicTitle = comicPageTotal
           ? (comicBookTitle(modelQuery) ?? 'Comic Book')
           : 'Comic Book'
-        const comicReaderMessageId = `comic-reader-${toolStreamId}`
+        let comicReaderMessageId = `comic-reader-${toolStreamId}`
+        const comicReaderPersistence = { saved: false }
         let comicArtifactId: string | null = null
         const updateComicReader = async (): Promise<void> => {
           if (!comicPageTotal) return
           const html = buildComicBookReader(comicPages, comicPageTotal, comicTitle)
+          const previousMessageId = comicReaderMessageId
           const content = `Comic book reader: ${comicPages.length} of ${comicPageTotal} pages ready.\n\n\`\`\`html\n${html}\n\`\`\``
+          // The card must exist in chat storage before a conversation refresh or
+          // renderer remount. The artifact gallery alone cannot restore a chat row.
+          try {
+            if (comicReaderPersistence.saved) {
+              const updated = await window.api.updateRagMessage(convId, comicReaderMessageId, content)
+              if (!updated) throw new Error('Comic reader message was not found')
+            } else {
+              const stored = await window.api.addRagMessage(convId, 'assistant', content)
+              comicReaderMessageId = stored.uuid
+              comicReaderPersistence.saved = true
+            }
+          } catch (error) {
+            console.error('Failed to save the comic reader message:', error)
+          }
           setConvMessages(convId, (previous) => {
             const reader: ChatMessage = {
               id: comicReaderMessageId,
               role: 'assistant',
               content
             }
-            const existing = previous.findIndex((message) => message.id === comicReaderMessageId)
+            const existing = previous.findIndex((message) =>
+              message.id === comicReaderMessageId || message.id === previousMessageId
+            )
             return existing === -1
               ? [...previous, reader]
               : previous.map((message, index) => (index === existing ? reader : message))
@@ -2039,7 +2061,11 @@ export function MemoryChat({
                     : undefined
                 const imageMetrics: GenerationMetrics | undefined =
                   typeof img.durationMs === 'number'
-                    ? { modelName: img.model, totalSeconds: img.durationMs / 1000 }
+                    ? {
+                        computeBackend: img.computeBackend,
+                        modelName: img.model,
+                        totalSeconds: img.durationMs / 1000
+                      }
                     : undefined
                 if (!comicPageTotal) {
                   const ownsToolTurn = generatedImageCount === 0
@@ -2140,18 +2166,19 @@ export function MemoryChat({
               const finalHtml = buildComicBookReader(comicPages, comicPageTotal, comicTitle)
               const finalContent = `Comic book reader: ${comicPages.length} of ${comicPageTotal} pages ready.\n\n\`\`\`html\n${finalHtml}\n\`\`\``
               try {
-                const stored = await window.api.addRagMessage(
-                  convId,
-                  'assistant',
-                  finalContent,
-                  toolCtxWithReasoning
-                )
+                const stored = comicReaderPersistence.saved
+                  ? await window.api.updateRagMessage(
+                    convId, comicReaderMessageId, finalContent, toolCtxWithReasoning
+                  )
+                  : await window.api.addRagMessage(convId, 'assistant', finalContent, toolCtxWithReasoning)
+                if (!stored) throw new Error('Comic reader message was not found')
+                const savedReaderId = stored === true ? comicReaderMessageId : stored.uuid
                 setConvMessages(convId, (previous) => [
                   ...previous.filter(
-                    (message) => message.id !== toolStreamId && message.id !== comicReaderMessageId
+                    (message) => message.id !== toolStreamId && message.id !== comicReaderMessageId && message.id !== savedReaderId
                   ),
                   {
-                    id: stored.uuid,
+                    id: savedReaderId,
                     role: 'assistant',
                     content: finalContent,
                     context,
@@ -2187,18 +2214,18 @@ export function MemoryChat({
           if (generatedImageCount === 0) {
             let restoredMessageId = toolStreamId
             try {
-              const stored = await window.api.addRagMessage(
-                convId,
-                'assistant',
-                answer,
-                toolCtxWithReasoning
-              )
-              restoredMessageId = stored.uuid
+              const stored = comicReaderPersistence.saved
+                ? await window.api.updateRagMessage(
+                  convId, comicReaderMessageId, answer, toolCtxWithReasoning
+                )
+                : await window.api.addRagMessage(convId, 'assistant', answer, toolCtxWithReasoning)
+              if (!stored) throw new Error('Comic reader message was not found')
+              restoredMessageId = stored === true ? comicReaderMessageId : stored.uuid
             } catch {
               /* The completed text answer remains visible if persistence fails. */
             }
             setConvMessages(convId, (previous) => [
-              ...previous.filter((message) => message.id !== toolStreamId),
+              ...previous.filter((message) => message.id !== toolStreamId && message.id !== restoredMessageId && message.id !== comicReaderMessageId),
               {
                 id: restoredMessageId,
                 role: 'assistant',

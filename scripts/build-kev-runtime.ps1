@@ -24,14 +24,17 @@ try {
   Move-Item (Join-Path $Temp "python") (Join-Path $Dest "python")
 
   $Python = Join-Path $Dest "python/python.exe"
-  & $Python -m pip install --disable-pip-version-check torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+  & $Python -m pip install --disable-pip-version-check "torch==2.8.0+cu128" --index-url https://download.pytorch.org/whl/cu128
   if ($LASTEXITCODE -ne 0) { throw "Could not install the Kev Torch runtime" }
   & $Python -m pip install --disable-pip-version-check "kev[serve] @ git+https://github.com/jaredpalmer/kev.git@$KevRef"
   if ($LASTEXITCODE -ne 0) { throw "Could not install the Kev server" }
 
   # The Torch wheel carries extension-build headers and CMake metadata. Kev only
   # needs the runtime, and packaging these files makes signing needlessly expensive.
-  $SitePackages = (& $Python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])').Trim()
+  # Pass Python source through stdin so Windows PowerShell 5.1 keeps quotes.
+  $SitePackages = 'import sysconfig; print(sysconfig.get_paths()["purelib"])' | & $Python -
+  if ($LASTEXITCODE -ne 0 -or -not $SitePackages) { throw "Could not locate the Kev site-packages directory" }
+  $SitePackages = ($SitePackages | Out-String).Trim()
   Remove-Item -Recurse -Force (Join-Path $SitePackages "torch/include") -ErrorAction SilentlyContinue
   Remove-Item -Recurse -Force (Join-Path $SitePackages "torch/share/cmake") -ErrorAction SilentlyContinue
 
@@ -41,7 +44,8 @@ try {
   Get-ChildItem $Dest -File -Recurse -Force -Include *.pyc,*.pyo |
     Remove-Item -Force -ErrorAction SilentlyContinue
 
-  & $Python -c 'import kev, torch, uvicorn; print("Kev Windows runtime ready")'
+  # CI need not have a physical GPU, but the installed wheel must contain CUDA.
+  'import kev, torch, uvicorn; assert torch.version.cuda, "CPU-only PyTorch is not allowed in the Windows Kev runtime"; print("Kev Windows CUDA runtime ready:", torch.version.cuda)' | & $Python -
   if ($LASTEXITCODE -ne 0) { throw "The staged Kev runtime failed its import check" }
   & $Python (Join-Path $Root "resources/bin/kev-local-server.py") --help | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "The staged Kev server failed its launch check" }

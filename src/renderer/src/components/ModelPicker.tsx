@@ -1,3 +1,9 @@
+import { useRuntimeBackends } from '../hooks/useRuntimeBackends'
+import {
+  modelRuntimeBackend,
+  runtimeBackendLabel,
+  type RuntimeId
+} from '../../../shared/runtime-backends'
 import { useCallback, useEffect, useState } from 'react'
 import { IconLoader2, IconCheck, IconCpu, IconPower } from '@tabler/icons-react'
 import { X } from '@phosphor-icons/react'
@@ -67,7 +73,9 @@ function primaryVariant(m: ModelEntry): string | null {
 }
 
 function isGroundingSpecialist(model: ModelEntry): boolean {
-  return model.grounder === true || (model.kind === 'computer_use' && !model.tags?.includes('Decision'))
+  return (
+    model.grounder === true || (model.kind === 'computer_use' && !model.tags?.includes('Decision'))
+  )
 }
 
 function isDecisionModel(model: ModelEntry): boolean {
@@ -80,6 +88,9 @@ function openSettings(onClose: () => void): void {
 }
 
 export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactElement {
+  const backends = useRuntimeBackends()
+  const backendFor = (id: RuntimeId, modelIds: string[]): string =>
+    runtimeBackendLabel(modelRuntimeBackend(backends, id, modelIds))
   const [models, setModels] = useState<ModelEntry[]>([])
   const [installed, setInstalled] = useState<string[]>([])
   // The active selection per modality: id for text, filename for image/STT.
@@ -302,8 +313,21 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                       Remote
                     </span>
                   ) : (
-                    <span className="shrink-0 text-[9px] uppercase tracking-wide text-neutral-600">
-                      On device
+                    <span className="max-w-[45%] text-right text-[9px] text-neutral-500">
+                      On device ·{' '}
+                      {backendFor(
+                        model.role === 'reasoner'
+                          ? 'chat'
+                          : model.role === 'decision'
+                            ? 'decision'
+                            : 'grounding',
+                        [
+                          model.modelId,
+                          ...(models.find((m) => m.id === model.modelId)?.files ?? []).map(
+                            (f) => f.name
+                          )
+                        ]
+                      )}
                     </span>
                   )}
                 </div>
@@ -377,8 +401,21 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                       Remote
                     </span>
                   ) : (
-                    <span className="shrink-0 text-[9px] uppercase tracking-wide text-neutral-600">
-                      On device
+                    <span className="max-w-[45%] text-right text-[9px] text-neutral-500">
+                      On device ·{' '}
+                      {backendFor(
+                        model.role === 'reasoner'
+                          ? 'chat'
+                          : model.role === 'decision'
+                            ? 'decision'
+                            : 'grounding',
+                        [
+                          model.modelId,
+                          ...(models.find((m) => m.id === model.modelId)?.files ?? []).map(
+                            (f) => f.name
+                          )
+                        ]
+                      )}
                     </span>
                   )}
                 </div>
@@ -453,7 +490,18 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                       }`}
                     >
                       <span className="flex min-w-0 items-center gap-2">
-                        <span className="truncate">{m.name}</span>
+                        <span className="min-w-0">
+                          <span className="block truncate">{m.name}</span>
+                          {!m.remoteServerId && (
+                            <span className="block whitespace-normal text-[10px] text-neutral-500">
+                              {backendFor(mode === 'text' ? 'chat' : mode, [
+                                m.id,
+                                primaryFile(m),
+                                ...(mode === 'speech' ? ['Kokoro'] : [])
+                              ])}
+                            </span>
+                          )}
+                        </span>
                         {duplicateNames.has(m.name) && primaryVariant(m) ? (
                           <span
                             className="shrink-0 text-[10px] text-neutral-500"
@@ -486,6 +534,15 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
             </div>
           )
         })}
+        <section aria-label="Embeddings">
+          <div className="mb-1.5 text-[10px] uppercase tracking-wide text-neutral-600">Embeddings</div>
+          <div className="rounded-md border border-neutral-800 px-3 py-2 text-xs text-neutral-300">
+            <span className="block">Search and RAG</span>
+            <span className="block text-[10px] text-neutral-500">
+              {runtimeBackendLabel(backends.find((value) => value.id === 'embeddings'))}
+            </span>
+          </div>
+        </section>
         <p className="px-1 pt-1 text-[10px] leading-relaxed text-neutral-600">
           Your selected Text &amp; Vision model handles chat and supported vision work. Image,
           Voice, and Transcription use their selected models.

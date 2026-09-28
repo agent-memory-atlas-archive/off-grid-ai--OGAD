@@ -68,7 +68,15 @@ afterAll(() => {
 describe('getActionsRuntime', () => {
   it('composes once (lazy singleton) and drives a real action end to end', async () => {
     const { getActionsRuntime } = await import('../actions/use-runtime')
-    const runtime = getActionsRuntime()
+    // This journey supplies the macOS native-helper boundary, regardless of the CI host.
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    let runtime: ReturnType<typeof getActionsRuntime>
+    try {
+      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+      runtime = getActionsRuntime()
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+    }
     expect(getActionsRuntime()).toBe(runtime)
 
     // The renderer feed: onOutcome fans out every outcome enriched with

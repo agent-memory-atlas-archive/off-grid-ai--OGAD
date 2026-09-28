@@ -4,7 +4,7 @@ import path from 'node:path'
 import { app } from 'electron'
 import type { ComputerUseModelStrategy } from '../../shared/computer-use-settings'
 import type { ScreenTaskKind } from '../../shared/remote-screen-privacy'
-import type { RemoteTextModelConnection } from '../llm/remote-chat'
+import type { RemoteTextModelConnection } from '../llm/remote-chat-types'
 
 export type ComputerUseRunMetric =
   | 'axSteps'
@@ -34,6 +34,7 @@ export interface ComputerUseRunTelemetry {
 
 export interface RemoteScreenTaskSession {
   taskKind: ScreenTaskKind
+  modelRole?: 'reasoning' | 'decider' | 'grounding'
   modelStrategy: ComputerUseModelStrategy
   activeServer: RemoteTextModelConnection | null
   telemetry?: ComputerUseRunTelemetry
@@ -56,6 +57,24 @@ export function runWithRemoteScreenTaskSession<T>(
 
 export function currentRemoteScreenTaskSession(): Readonly<RemoteScreenTaskSession> | undefined {
   return sessions.getStore()
+}
+
+/** Label actual task context, never infer a task or role from prompt text. */
+export function screenTaskRequestSource(
+  fallback: string,
+  role?: RemoteScreenTaskSession['modelRole']
+): string {
+  const session = sessions.getStore()
+  if (!session) return fallback
+  const task = session.taskKind === 'web_use' ? 'Web Use' : 'Computer Use'
+  const modelRole = role ?? session.modelRole ?? 'reasoning'
+  const label =
+    modelRole === 'decider'
+      ? 'Decider'
+      : modelRole === 'grounding'
+        ? 'Grounding specialist'
+        : 'Reasoning'
+  return `${task} - ${label}`
 }
 
 function modelName(server: RemoteTextModelConnection | null): string {

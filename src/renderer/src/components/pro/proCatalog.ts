@@ -59,9 +59,9 @@ export const PRO_FEATURES: ProFeature[] = [
     icon: Robot,
     tagline: 'Start a prepared run.',
     description:
-      'Choose a workflow, add its details, and start it in Chat. The work stays on this Mac.',
+      'Choose a workflow, add its details, and start it in Chat. The work stays on your device.',
     highlights: ['Prepared workflows', 'One intake before the run', 'Starts in your local Chat'],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'tasks',
@@ -71,7 +71,7 @@ export const PRO_FEATURES: ProFeature[] = [
     description:
       'Track running and completed work, open its live view, and respond when a task needs attention.',
     highlights: ['Live task status', 'Saved task history', 'Attention requests in one place'],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'day',
@@ -85,7 +85,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'Per-meeting prep: who’s in it and your open items',
       'Priorities surfaced from what you actually did'
     ],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'reflect',
@@ -99,7 +99,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'Focus vs. distraction trends',
       'All computed locally — never uploaded'
     ],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'replay',
@@ -132,7 +132,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'On-device transcription',
       'Searchable transcripts & summaries'
     ],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'actions',
@@ -146,7 +146,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'Secretary-proposed actions',
       'Approval-gated — you’re always in control'
     ],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'entities',
@@ -160,7 +160,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'Cross-source narrative summaries',
       'Relationship graph'
     ],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'search',
@@ -170,7 +170,7 @@ export const PRO_FEATURES: ProFeature[] = [
     description:
       'One search bar across your captured activity, meetings, entities, and connectors — semantic + keyword, all on-device.',
     highlights: ['Unified semantic search', 'Across capture, meetings & connectors', 'Fully local'],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'notifications',
@@ -184,7 +184,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'Approval queue for actions',
       'Auto-extracted to-dos'
     ],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'voice',
@@ -197,7 +197,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'Paste-at-cursor + a searchable recordings library',
       'Transcribe any audio/video file, all on-device'
     ],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'vault',
@@ -238,7 +238,7 @@ export const PRO_FEATURES: ProFeature[] = [
     icon: DevicesIcon,
     tagline: 'Your chats and settings, on every device.',
     description:
-      'Pair your Mac and phone over your local network to keep chats, projects and model settings in step. Data moves through a direct encrypted connection between your devices. Nothing is uploaded to an Off Grid AI server.',
+      'Pair your computer and phone over your local network to keep chats, projects and model settings in step. Data moves through a direct encrypted connection between your devices. Nothing is uploaded to an Off Grid AI server.',
     highlights: [
       'Chats, projects and model settings stay in step across devices',
       'Known devices reconnect when they return to the network',
@@ -260,12 +260,8 @@ export function getProFeature(route: string): ProFeature | undefined {
 /**
  * Whether a single Pro feature is tested + supported on a platform. This is the
  * per-feature seam: read a feature's `platforms` list (its single source of truth)
- * rather than a blanket `!isMac` rule, so features go live on a new platform ONE AT
- * A TIME as each is ported and verified. Pure + unit-testable.
- *
- * macOS is the reference platform and is always supported, even if a `platforms`
- * list somehow omits it — so a data typo can never dark-out a feature on Mac (the
- * only platform where the whole Pro tier is known-good today).
+ * rather than a blanket platform rule. Pure + unit-testable.
+ * macOS remains supported even if a data entry omits it.
  */
 export function featureSupportsPlatform(feature: ProFeature, platform: DevicePlatform): boolean {
   return isMac(platform) || feature.platforms.includes(platform)
@@ -274,14 +270,13 @@ export function featureSupportsPlatform(feature: ProFeature, platform: DevicePla
 /**
  * The baseline rule for Pro surfaces that don't (yet) have their own per-feature
  * `platforms` declaration — today just the pro Settings sections (proactive
- * delivery, learned prefs), which aren't catalog routes. Pro runtime features are
- * macOS-tested only on those, so a Pro subscriber off macOS sees a "coming soon"
- * placeholder; free users are unaffected (they get the upsell). Catalog ROUTES use
+ * delivery, learned prefs), which aren't catalog routes. Linux subscribers see
+ * a "coming soon" placeholder; free users see the upgrade screen. Catalog routes use
  * the per-feature `featureSupportsPlatform` seam via `proFeatureComingSoon`
  * instead — prefer that for anything backed by a ProFeature.
  */
 export function proComingSoonHere(platform: DevicePlatform, isPro: boolean): boolean {
-  return isPro && !isMac(platform)
+  return isPro && platform !== 'darwin' && platform !== 'win32'
 }
 
 /**

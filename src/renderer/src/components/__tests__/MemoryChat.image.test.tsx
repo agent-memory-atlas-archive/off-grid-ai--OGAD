@@ -160,6 +160,7 @@ type InstalledApi = {
   >
   exportGeneratedImage: Mock<(...args: unknown[]) => Promise<void>>
   addRagMessage: Mock<(...args: unknown[]) => Promise<{ id: number; uuid: string }>>
+  updateRagMessage: Mock<(...args: unknown[]) => Promise<boolean>>
   imageGenConversationPersisted: Mock<(...args: unknown[]) => Promise<void>>
   getRagMessages: Mock<(id: string) => Promise<unknown[]>>
   cancelImageGen: Mock<() => void>
@@ -237,6 +238,7 @@ function installApi(opts: InstallApiOptions): InstalledApi {
     const id = nextStoredMessageId++
     return { id, uuid: `stored-message-${id}` }
   })
+  const updateRagMessage = vi.fn(async () => true)
   const imageGenConversationPersisted = vi.fn(async () => { })
   // Timestamps are filled in where a seed omitted one. The renderer projects each row through
   // projectSyncedMessageTurn, which returns null for a message it cannot order, so an untimestamped
@@ -322,6 +324,7 @@ function installApi(opts: InstallApiOptions): InstalledApi {
       messages.set(id, [])
     }),
     addRagMessage,
+    updateRagMessage,
     imageGenConversationPersisted,
     pickImageForGen: vi.fn(async () => '/uploads/reference.png'),
     keepInitImage: vi.fn(async () => ({ id: 'kept-init', path: '/kept/reference.png' })),
@@ -350,6 +353,7 @@ function installApi(opts: InstallApiOptions): InstalledApi {
     exportGeneratedImage,
     getRagMessages,
     addRagMessage,
+    updateRagMessage,
     imageGenConversationPersisted,
     cancelImageGen,
     chatVisionAvailable,
@@ -1095,9 +1099,9 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
       prompt: 'Page 1, finished comic page.'
     })
     await waitFor(() =>
-      expect(boundary.addRagMessage).toHaveBeenCalledWith(
+      expect(boundary.updateRagMessage).toHaveBeenCalledWith(
         expect.any(String),
-        'assistant',
+        expect.any(String),
         expect.stringContaining('Comic book reader: 1 of 10 pages ready.'),
         expect.objectContaining({
           toolCalls: [
@@ -1123,6 +1127,7 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
         height: 768,
         steps: 17,
         cfgScale: 5.5,
+        computeBackend: 'Vulkan',
         durationMs: 117_600
       },
       {
@@ -1136,6 +1141,7 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
         height: 768,
         steps: 17,
         cfgScale: 5.5,
+        computeBackend: 'Vulkan',
         durationMs: 90_000
       }
     ]
@@ -1182,6 +1188,7 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
     const generationDetails = screen.getAllByRole('button', { name: 'Generation details' })
     expect(generationDetails).toHaveLength(1)
     await user.click(generationDetails[0]!)
+    expect(screen.getAllByTestId('generation-metrics')[0]!.textContent).toContain('Vulkan')
     expect(screen.getAllByTestId('generation-metrics')[0]!.textContent).toContain('90.0s total')
     act(() => {
       boundary.emitIncomingFiles([

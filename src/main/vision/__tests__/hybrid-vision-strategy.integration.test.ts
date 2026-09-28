@@ -498,11 +498,14 @@ describe('Text + Specialist visual task journey', () => {
         return { result: await task() }
       },
       activeSpecialistAdapter: () => uiTarsAdapter,
-      selectStructuredAction: async (_context, _question, options) => ({
-        choice: options.length - 1,
-        confidence: 0.9,
-        probabilities: options.map((_, index) => (index === options.length - 1 ? 0.9 : 0.1))
-      }),
+      selectStructuredAction: async (_context, _question, options) => {
+        const choice = options[0] === 'Use the proposed action.' ? 0 : options.length - 1
+        return {
+          choice,
+          confidence: 0.9,
+          probabilities: options.map((_, index) => (index === choice ? 0.9 : 0.1))
+        }
+      },
       withReasoning: async (task) => {
         reasoningRecoveries += 1
         return task()

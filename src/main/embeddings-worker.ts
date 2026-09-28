@@ -12,7 +12,7 @@
  * text-in / vector-out service.
  */
 import { parentPort, workerData } from 'worker_threads'
-import { embedText } from './embeddings-core'
+import { embedText, embeddingDevice } from './embeddings-core'
 
 if (!parentPort) throw new Error('embeddings-worker must be started as a worker thread')
 const port = parentPort
@@ -28,14 +28,19 @@ export interface EmbeddingRequest {
 export interface EmbeddingResponse {
   id: number
   vector?: number[]
+  ready?: boolean
+  fallbackReason?: string
+  device?: string
   error?: string
 }
 
 port.on('message', (request: EmbeddingRequest) => {
   void (async () => {
     try {
-      const vector = await embedText(request.text, modelsDir)
-      port.postMessage({ id: request.id, vector } as EmbeddingResponse)
+      const vector = await embedText(request.text, modelsDir, (device, fallbackReason) => {
+        port.postMessage({ id: request.id, ready: true, device, fallbackReason } satisfies EmbeddingResponse)
+      })
+      port.postMessage({ id: request.id, vector, device: embeddingDevice() ?? undefined } as EmbeddingResponse)
     } catch (error) {
       port.postMessage({
         id: request.id,

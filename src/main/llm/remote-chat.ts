@@ -1,5 +1,5 @@
 import { REASONING_BUDGET_AUTO, openRouterReasoningPayload } from '@offgrid/models'
-import type { RemoteVisionProvider } from '../../shared/remote-vision-server'
+import type { RemoteTextModelConnection } from './remote-chat-types'
 import { detectThinkingDialect, type ThinkingDialect } from './thinking-dialect'
 import {
   createCompletionStreamAccumulator,
@@ -7,15 +7,10 @@ import {
   type StreamResult
 } from './stream'
 import { writeDiagnosticLog } from '../diagnostics-log'
+import { currentAIRequest } from '../ai-request-log'
+import { screenTaskRequestSource } from '../actions/remote-screen-session'
 
-export interface RemoteTextModelConnection {
-  id: string
-  name: string
-  provider: Exclude<RemoteVisionProvider, 'local'>
-  endpoint: string
-  model: string
-  apiKey: string
-}
+export type { RemoteTextModelConnection } from './remote-chat-types'
 
 export interface RemoteChatRequest {
   messages: unknown[]
@@ -109,7 +104,7 @@ export function remoteNativeToolCapability(
 ): Promise<RemoteNativeToolCapability> {
   const key = capabilityKey(remote)
   const cached = nativeToolCapabilities.get(key)
-  if (cached) return cached
+  if (cached !== undefined) return cached
   const discovered = discoverRemoteNativeToolCapability(remote)
   nativeToolCapabilities.set(key, discovered)
   return discovered
@@ -121,7 +116,7 @@ export async function remoteReasoningCapability(
 ): Promise<RemoteReasoningCapability> {
   const key = capabilityKey(remote)
   const cached = reasoningCapabilities.get(key)
-  if (cached) return cached
+  if (cached !== undefined) return cached
   const discovered = (async (): Promise<RemoteReasoningCapability> => {
     if (remote.provider === 'openrouter') {
       const response = await fetch(`${remote.endpoint}/models`, {
@@ -359,7 +354,19 @@ export async function streamRemoteChatCompletion(input: {
   options: RemoteChatOptions
 }): Promise<StreamResult> {
   const { remote, request, options } = input
-  const accumulator = createCompletionStreamAccumulator(input.onDelta, options.onToolCallStart)
+  const log = currentAIRequest()
+  log?.update({
+    model: remote.model,
+    backend:
+      remote.computeBackend ?? (remote.id.startsWith('local-grounder:') ? 'Unknown' : 'Remote'),
+    ...(remote.id.startsWith('local-grounder:')
+      ? { source: screenTaskRequestSource('Grounding specialist', 'grounding') }
+      : {})
+  })
+  const accumulator = createCompletionStreamAccumulator((text, kind) => {
+    log?.delta(text, kind)
+    input.onDelta(text, kind)
+  }, options.onToolCallStart)
   if (options.signal?.aborted) return accumulator.finish()
 
   if (request.tools?.length) {
@@ -379,13 +386,15 @@ export async function streamRemoteChatCompletion(input: {
       request.thinking === undefined
         ? { control: 'none' as const }
         : await remoteReasoningCapability(remote)
+    const body = completionRequestBody(remote, request, reasoning)
+    log?.update({ effectiveRequest: JSON.parse(body) })
     const response = await fetch(`${remote.endpoint}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(remote.apiKey ? { Authorization: `Bearer ${remote.apiKey}` } : {})
       },
-      body: completionRequestBody(remote, request, reasoning),
+      body,
       signal: watchdog.signal
     })
     watchdog.arm()
@@ -396,6 +405,7 @@ export async function streamRemoteChatCompletion(input: {
     if (!response.body) throw new Error('Remote text model returned an empty response stream.')
     await drainCompletionStream(response.body, accumulator, watchdog.arm)
     const result = accumulator.finish()
+    log?.update({ response: result, metrics: { ...result.metrics } })
     writeDiagnosticLog('remote_chat', 'request.completed', {
       provider: remote.provider,
       model: remote.model

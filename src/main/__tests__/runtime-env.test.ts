@@ -91,8 +91,13 @@ describe('runtime-env', () => {
       expect(binRoots()).toEqual(['/env/bin'])
     })
 
-    it('falls back to resources/bin under cwd when nothing is set', () => {
-      expect(binRoots()).toEqual([path.join(process.cwd(), 'resources', 'bin')])
+    it('uses development binary roots for the current platform', () => {
+      const root = process.cwd()
+      expect(binRoots()).toEqual(
+        process.platform === 'linux'
+          ? [path.join(root, 'build', 'linux-bin'), path.join(root, 'resources', 'bin')]
+          : [path.join(root, 'resources', 'bin')]
+      )
     })
   })
 

@@ -6,6 +6,7 @@
 // hand the JSON body to streamCompletion, which returns the answer text plus any
 // assembled tool calls (empty for the plain chat path, which sends no tools).
 import http from 'http'
+import { currentAIRequest } from '../ai-request-log'
 import {
   parseSseLine,
   displayableReasoningDelta,
@@ -155,7 +156,11 @@ export function streamCompletion(
   return new Promise<StreamResult>((resolve, reject) => {
     let timedOut = false
     let aborted = false
-    const accumulator = createCompletionStreamAccumulator(onDelta, opts.onToolCallStart)
+    const log = currentAIRequest()
+    const accumulator = createCompletionStreamAccumulator((text, kind) => {
+      log?.delta(text, kind)
+      onDelta(text, kind)
+    }, opts.onToolCallStart)
     // opts.signal is REUSED across the whole tool loop, so every completed stream
     // must detach its abort listener — otherwise handlers accumulate on the shared
     // signal for the loop's lifetime. cleanup() runs on every terminal path.

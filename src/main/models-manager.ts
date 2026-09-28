@@ -266,7 +266,11 @@ export interface KevRuntimeArtifact {
 /** Resolve the packaged server runtime and the model downloaded from the Models screen. */
 export function resolveKevRuntimeArtifact(): KevRuntimeArtifact | null {
   if (
-    !((process.platform === 'darwin' && process.arch === 'arm64') || process.platform === 'win32')
+    !(
+      (process.platform === 'darwin' && process.arch === 'arm64') ||
+      process.platform === 'win32' ||
+      (process.platform === 'linux' && process.arch === 'x64')
+    )
   ) {
     return null
   }

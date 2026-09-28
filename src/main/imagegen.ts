@@ -1,3 +1,4 @@
+import { beginRuntimeBackend } from './runtime-backends'
 // On-device image generation via stable-diffusion.cpp (the bundled `sd-cli`).
 // Mirrors the llm.ts pattern: resolve the binary from resources/bin, pick a
 // Stable Diffusion model from the userData models dir, spawn one-shot txt2img/
@@ -6,6 +7,7 @@
 import { spawn, type ChildProcess } from 'child_process'
 import path from 'path'
 import fs from 'fs'
+import { recordAIRequest } from './ai-request-log'
 import os from 'os'
 import { randomUUID } from 'node:crypto'
 import { modalityQueue, IMAGE_JOB, CHAT_JOB } from './modality-queue/queue'
@@ -33,8 +35,14 @@ import { getActiveModal } from './active-models'
 import { getActiveRemoteVisionServerForModality } from './vision/remote-vision-server'
 import { generateRemoteImage } from './remote-media-runtime'
 import { remoteVisionModelId } from '../shared/remote-vision-server'
-import { binRoots, dataDir, modelsDir, resourceDirs, exe } from './runtime-env'
+import { binRoots, dataDir, modelsDir, resourceDirs } from './runtime-env'
 import { sdServer } from './sd-server'
+import {
+  findSdBinaries,
+  findSdBinary,
+  imageBackendForRuntime,
+  sdRuntimeLibraryEnv
+} from './imagegen/sd-runtime'
 import { standardModelDefaults, taesdFilename } from '../shared/image-defaults'
 import { defaultImageModelFilename } from './image-default'
 import {
@@ -57,11 +65,7 @@ import {
   buildStandardArgs,
   DEFAULT_NEGATIVE
 } from './imagegen/args'
-import {
-  initialProgressState,
-  reduceProgress,
-  type ProgressEvent
-} from './imagegen/progress'
+import { initialProgressState, reduceProgress, type ProgressEvent } from './imagegen/progress'
 import {
   resolveExistingOwnedEntry,
   resolveExistingOwnedPath,
@@ -76,11 +80,7 @@ import {
 } from '../shared/image-generation-contract'
 
 function findSdCli(): string | null {
-  for (const r of binRoots()) {
-    const p = path.join(r, 'sd', exe('sd-cli'))
-    if (fs.existsSync(p)) return p
-  }
-  return null
+  return findSdBinary('sd-cli')
 }
 
 /** The Core ML (ANE) image-gen Swift helper, if bundled. */
@@ -546,82 +546,114 @@ export async function generateImage(
   params: ImageGenParams,
   onUpdate?: (update: ImageGenerationPipelineUpdateContract) => void
 ): Promise<ImageGenOutput> {
-  // Prompt enhancement runs FIRST, while the chat model is still resident — the
-  // image job below evicts the LLM, so the text pass must precede it. Gated by a
-  // setting; failure/timeout silently keeps the original prompt.
-  const enhanced = await maybeEnhancePrompt(
-    params.prompt,
-    onUpdate,
-    params.enhancePrompt,
-    params.initImage ? [params.initImage] : []
-  )
-  const remote = getActiveRemoteVisionServerForModality('image')
-  const remoteId = remote ? remoteVisionModelId(remote.id, remote.selectedModel) : null
-  if (remote && (!params.model || params.model === remote.selectedModel || params.model === remoteId)) {
-    if (params.initImage) {
-      throw new Error('The selected remote image model does not support image editing. Select a local image model that supports an init image.')
-    }
-    if (remoteAbort) throw new Error('An image is already generating — please wait for it to finish.')
-    const controller = new AbortController()
-    remoteAbort = controller
-    onUpdate?.({ stage: 'preparing', enhancedPrompt: enhanced })
-    try {
-      const result = await generateRemoteImage(remote, enhanced, params.width, params.height, params.allowUnsafeMemoryOverride === true, controller.signal)
-      const extension = result.mime === 'image/jpeg' ? 'jpg' : result.mime === 'image/webp' ? 'webp' : 'png'
-      const directory = path.join(dataDir(), 'generated-images')
-      await fs.promises.mkdir(directory, { recursive: true })
-      const outputPath = path.join(directory, `remote-${Date.now()}-${randomUUID()}.${extension}`)
-      await fs.promises.writeFile(outputPath, result.bytes)
-      return {
-        dataUrl: `data:${result.mime};base64,${result.bytes.toString('base64')}`,
-        path: outputPath,
-        seed: params.seed ?? -1,
-        model:
-          remote.modelCatalog?.find(
-            (model) => model.id === remote.selectedModel && model.kind === 'image'
-          )?.name ?? remote.selectedModel,
-        prompt: enhanced
-      }
-    } finally {
-      remoteAbort = null
-    }
-  }
-  const selectedModel = params.model ?? activeImageModel()
-  const modelParameters = selectedModel
-    ? resolveImageParameters(
-        { id: selectedModel },
-        getSetting<ImageParameterStore>('imageParams', {})
+  return recordAIRequest(
+    {
+      modality: 'image',
+      source: 'Image generation',
+      model: params.model,
+      request: params,
+      isCancelled: (error) => error instanceof Error && error.message === IMAGE_CANCELLED_MESSAGE
+    },
+    async (log) => {
+      // Prompt enhancement runs FIRST, while the chat model is still resident — the
+      // image job below evicts the LLM, so the text pass must precede it. Gated by a
+      // setting; failure/timeout silently keeps the original prompt.
+      const enhanced = await maybeEnhancePrompt(
+        params.prompt,
+        onUpdate,
+        params.enhancePrompt,
+        params.initImage ? [params.initImage] : []
       )
-    : null
-  const effective = {
-    ...params,
-    prompt: enhanced,
-    steps: params.steps ?? modelParameters?.steps,
-    cfgScale: params.cfgScale ?? modelParameters?.cfgScale,
-    // The selected model size is authoritative for both txt2img and img2img.
-    // Only fall back to source dimensions when no model size can be resolved.
-    width: params.width ?? modelParameters?.size,
-    height: params.height ?? modelParameters?.size
-  }
-  onUpdate?.({ stage: 'preparing', enhancedPrompt: enhanced })
-  const progressObserver = onUpdate
-    ? (progress: ImageGenProgress & { preview?: string }) =>
-        onUpdate({
-          stage: progress.phase === 'decoding' ? 'decoding' : 'generating',
-          progress
-        })
-    : undefined
-  // The queue evicts 'llm' before this runs AND re-warms it (mode-aware) when the
-  // job finishes — so the image path no longer touches llm.pause/resume itself.
-  const output = await modalityQueue.run(IMAGE_JOB, () => runImageGen(effective, progressObserver))
-  return {
-    ...output,
-    prompt: effective.prompt,
-    width: effective.width,
-    height: effective.height,
-    steps: effective.steps,
-    cfgScale: effective.cfgScale
-  }
+      const remote = getActiveRemoteVisionServerForModality('image')
+      const remoteId = remote ? remoteVisionModelId(remote.id, remote.selectedModel) : null
+      if (
+        remote &&
+        (!params.model || params.model === remote.selectedModel || params.model === remoteId)
+      ) {
+        if (params.initImage) {
+          throw new Error(
+            'The selected remote image model does not support image editing. Select a local image model that supports an init image.'
+          )
+        }
+        if (remoteAbort)
+          throw new Error('An image is already generating — please wait for it to finish.')
+        const controller = new AbortController()
+        remoteAbort = controller
+        onUpdate?.({ stage: 'preparing', enhancedPrompt: enhanced })
+        try {
+          const result = await generateRemoteImage(
+            remote,
+            enhanced,
+            params.width,
+            params.height,
+            params.allowUnsafeMemoryOverride === true,
+            controller.signal
+          )
+          const extension =
+            result.mime === 'image/jpeg' ? 'jpg' : result.mime === 'image/webp' ? 'webp' : 'png'
+          const directory = path.join(dataDir(), 'generated-images')
+          await fs.promises.mkdir(directory, { recursive: true })
+          const outputPath = path.join(
+            directory,
+            `remote-${Date.now()}-${randomUUID()}.${extension}`
+          )
+          await fs.promises.writeFile(outputPath, result.bytes)
+          return {
+            dataUrl: `data:${result.mime};base64,${result.bytes.toString('base64')}`,
+            path: outputPath,
+            seed: params.seed ?? -1,
+            model:
+              remote.modelCatalog?.find(
+                (model) => model.id === remote.selectedModel && model.kind === 'image'
+              )?.name ?? remote.selectedModel,
+            prompt: enhanced,
+            computeBackend: 'Remote'
+          }
+        } finally {
+          remoteAbort = null
+        }
+      }
+      const selectedModel = params.model ?? activeImageModel()
+      const modelParameters = selectedModel
+        ? resolveImageParameters(
+            { id: selectedModel },
+            getSetting<ImageParameterStore>('imageParams', {})
+          )
+        : null
+      const effective = {
+        ...params,
+        prompt: enhanced,
+        steps: params.steps ?? modelParameters?.steps,
+        cfgScale: params.cfgScale ?? modelParameters?.cfgScale,
+        // The selected model size is authoritative for both txt2img and img2img.
+        // Only fall back to source dimensions when no model size can be resolved.
+        width: params.width ?? modelParameters?.size,
+        height: params.height ?? modelParameters?.size
+      }
+      log.update({ effectiveRequest: effective, model: selectedModel ?? undefined })
+      onUpdate?.({ stage: 'preparing', enhancedPrompt: enhanced })
+      const progressObserver = onUpdate
+        ? (progress: ImageGenProgress & { preview?: string }) =>
+            onUpdate({
+              stage: progress.phase === 'decoding' ? 'decoding' : 'generating',
+              progress
+            })
+        : undefined
+      // The queue evicts 'llm' before this runs AND re-warms it (mode-aware) when the
+      // job finishes — so the image path no longer touches llm.pause/resume itself.
+      const output = await modalityQueue.run(IMAGE_JOB, () =>
+        runImageGen(effective, progressObserver)
+      )
+      return {
+        ...output,
+        prompt: effective.prompt,
+        width: effective.width,
+        height: effective.height,
+        steps: effective.steps,
+        cfgScale: effective.cfgScale
+      }
+    }
+  )
 }
 
 /** Expand the user's prompt into a richer generation prompt via the local text
@@ -681,7 +713,9 @@ async function runImageGen(
   // module. Returns before the sd-cli path.
   if (isMfluxModelId(params.model)) {
     if (params.initImage) {
-      throw new Error('The selected MLX image model does not support image editing. Select a local image model that supports an init image.')
+      throw new Error(
+        'The selected MLX image model does not support image editing. Select a local image model that supports an init image.'
+      )
     }
     const def = getMfluxModel(params.model)!
     const outDir = path.join(dataDir(), 'generated-images')
@@ -717,7 +751,8 @@ async function runImageGen(
         dataUrl: `data:image/png;base64,${b64}`,
         path: outPath,
         seed: params.seed ?? -1,
-        model: def.label
+        model: def.label,
+        computeBackend: 'Metal'
       }
     } finally {
       generationLifecycle.finish()
@@ -883,7 +918,8 @@ async function runImageGen(
         dataUrl: `data:image/png;base64,${png.toString('base64')}`,
         path: outPath,
         seed: usedSeed,
-        model: base
+        model: base,
+        computeBackend: imageBackendForRuntime(process.platform, cli)
       }
     } finally {
       generationLifecycle.finish()
@@ -1063,74 +1099,122 @@ async function runImageGen(
   // model's load spike — otherwise the brief overlap causes a short stutter.
   try {
     await generationLifecycle.waitForMemoryReclaim()
-    await new Promise<void>((resolve, reject) => {
-      // cwd at the binary dir so @executable_path rpath resolves libstable-diffusion.dylib.
-      const child = spawn(cli, args, { cwd: path.dirname(cli) })
-      currentChild = child
-      let log = ''
-      // Pure progress reducer owns the seed parse + the denoise->decode phase
-      // transition; the shell only handles the preview PNG read + the callback.
-      let progress = initialProgressState(seed)
-      let progressBuffer = ''
-      let latestProgressEvent: ProgressEvent | undefined
-      let previewVersion = ''
-      const readPreview = (): string | undefined => {
-        try {
-          if (!fs.existsSync(previewPath)) return undefined
-          const stat = fs.statSync(previewPath)
-          const version = `${stat.mtimeMs}:${stat.size}`
-          if (version === previewVersion) return undefined
-          previewVersion = version
-          return `data:image/png;base64,${fs.readFileSync(previewPath).toString('base64')}`
-        } catch {
-          return undefined
+    const runNativeCli = (runtime: string): Promise<void> =>
+      new Promise<void>((resolve, reject) => {
+        // cwd at the binary dir so @executable_path rpath resolves libstable-diffusion.dylib.
+        const binDir = path.dirname(runtime)
+        const child = spawn(runtime, args, {
+          cwd: binDir,
+          env: { ...process.env, ...sdRuntimeLibraryEnv(process.platform, runtime, process.env) }
+        })
+        const debugNativeLogs = process.env.OFFGRID_NATIVE_LOGS === '1'
+        if (debugNativeLogs) {
+          console.info(
+            `[imagegen:native] backend=${imageBackendForRuntime(process.platform, runtime)} runtime=${runtime}`
+          )
         }
-      }
-      // sd-cli prints a step before its preview PNG has finished writing. Poll
-      // the file independently so the final step cannot leave the previous
-      // preview on screen while the final VAE decode is still running.
-      const previewPoll = setInterval(() => {
-        if (!onProgress || !latestProgressEvent) return
-        const preview = readPreview()
-        if (preview) onProgress({ ...latestProgressEvent, preview })
-      }, 250)
-      const capture = (d: Buffer): void => {
-        const s = d.toString()
-        log += s
-        // Terminal progress lines can arrive across multiple data chunks. Keep a
-        // short rolling buffer so "12/" and "42" still become step 12 of 42.
-        progressBuffer = `${progressBuffer}${s}`.slice(-2048)
-        const { state, event } = reduceProgress(progress, progressBuffer, params.steps)
-        progress = state
-        if (onProgress && event) {
-          latestProgressEvent = event
+        const backendState = beginRuntimeBackend('image', model)
+        currentChild = child
+        let log = ''
+        // Pure progress reducer owns the seed parse + the denoise->decode phase
+        // transition; the shell only handles the preview PNG read + the callback.
+        let progress = initialProgressState(seed)
+        let progressBuffer = ''
+        let latestProgressEvent: ProgressEvent | undefined
+        let previewVersion = ''
+        const readPreview = (): string | undefined => {
+          try {
+            if (!fs.existsSync(previewPath)) return undefined
+            const stat = fs.statSync(previewPath)
+            const version = `${stat.mtimeMs}:${stat.size}`
+            if (version === previewVersion) return undefined
+            previewVersion = version
+            return `data:image/png;base64,${fs.readFileSync(previewPath).toString('base64')}`
+          } catch {
+            return undefined
+          }
+        }
+        // sd-cli prints a step before its preview PNG has finished writing. Poll
+        // the file independently so the final step cannot leave the previous
+        // preview on screen while the final VAE decode is still running.
+        const previewPoll = setInterval(() => {
+          if (!onProgress || !latestProgressEvent) return
           const preview = readPreview()
-          onProgress({ ...event, preview })
+          if (preview) onProgress({ ...latestProgressEvent, preview })
+        }, 250)
+        const capture = (stream: 'stdout' | 'stderr', d: Buffer): void => {
+          const s = d.toString()
+          log += s
+          backendState.observe(s, true)
+          if (debugNativeLogs) {
+            const destination = stream === 'stdout' ? process.stdout : process.stderr
+            destination.write(`[sd-cli:${stream}] ${s}`)
+          }
+          // Terminal progress lines can arrive across multiple data chunks. Keep a
+          // short rolling buffer so "12/" and "42" still become step 12 of 42.
+          progressBuffer = `${progressBuffer}${s}`.slice(-2048)
+          const { state, event } = reduceProgress(progress, progressBuffer, params.steps)
+          progress = state
+          if (onProgress && event) {
+            latestProgressEvent = event
+            const preview = readPreview()
+            onProgress({ ...event, preview })
+          }
         }
+        child.stdout.on('data', (data: Buffer) => capture('stdout', data))
+        child.stderr.on('data', (data: Buffer) => capture('stderr', data))
+        child.on('error', (error) => {
+          backendState.fail(error)
+          clearInterval(previewPoll)
+          reject(error)
+        })
+        child.on('close', (code) => {
+          backendState.stop()
+          const preview = readPreview()
+          if (onProgress && latestProgressEvent && preview) {
+            onProgress({ ...latestProgressEvent, preview })
+          }
+          clearInterval(previewPoll)
+          if (generationLifecycle.isCancelled()) {
+            reject(new Error(IMAGE_CANCELLED_MESSAGE))
+          } else if (code === 0) {
+            // stash the resolved seed for the caller via closure
+            ;(params as ImageGenParams & { _seed?: number })._seed = progress.resolvedSeed
+            resolve()
+          } else {
+            reject(new Error(`Image generation failed (exit ${String(code)}): ${log.slice(-400)}`))
+          }
+        })
+      })
+
+    const runtimes = coreml ? [cli] : findSdBinaries('sd-cli')
+    let completedRuntime: string | undefined
+    let lastError: unknown
+    for (const [index, runtime] of runtimes.entries()) {
+      try {
+        await recordAIRequest(
+          {
+            modality: 'image',
+            source: 'Image runtime attempt',
+            model: path.basename(model),
+            backend: imageBackendForRuntime(process.platform, runtime),
+            request: params
+          },
+          async () => runNativeCli(runtime)
+        )
+        completedRuntime = runtime
+        break
+      } catch (error) {
+        lastError = error
+        const next = runtimes[index + 1]
+        if (!next || generationLifecycle.isCancelled()) throw error
+        console.warn(
+          `[imagegen] ${imageBackendForRuntime(process.platform, runtime)} runtime failed; retrying with ${imageBackendForRuntime(process.platform, next)}`,
+          error
+        )
       }
-      child.stdout.on('data', capture)
-      child.stderr.on('data', capture)
-      child.on('error', (error) => {
-        clearInterval(previewPoll)
-        reject(error)
-      })
-      child.on('close', (code) => {
-        const preview = readPreview()
-        if (onProgress && latestProgressEvent && preview) {
-          onProgress({ ...latestProgressEvent, preview })
-        }
-        clearInterval(previewPoll)
-        if (generationLifecycle.isCancelled()) {
-          reject(new Error(IMAGE_CANCELLED_MESSAGE))
-        } else if (code === 0) {
-          // stash the resolved seed for the caller via closure
-          ;(params as ImageGenParams & { _seed?: number })._seed = progress.resolvedSeed
-          resolve()
-        } else {
-          reject(new Error(`Image generation failed (exit ${String(code)}): ${log.slice(-400)}`))
-        }
-      })
-    })
+    }
+    if (!completedRuntime) throw lastError
 
     if (!fs.existsSync(outPath)) throw new Error('Image generation produced no output file.')
     const b64 = fs.readFileSync(outPath).toString('base64')
@@ -1139,7 +1223,10 @@ async function runImageGen(
       dataUrl: `data:image/png;base64,${b64}`,
       path: outPath,
       seed: finalSeed,
-      model: path.basename(model)
+      model: path.basename(model),
+      computeBackend: coreml
+        ? 'Core ML (ANE)'
+        : imageBackendForRuntime(process.platform, completedRuntime)
     }
   } finally {
     generationLifecycle.finish()

@@ -16,6 +16,7 @@
 import { getSetting, saveSetting } from './database'
 import {
   isResidencyLocked,
+  MODALITIES,
   normalizeResidency,
   type Modality,
   type ResidencyMode
@@ -40,6 +41,9 @@ export function setResidencyMode(
   modality: Modality,
   mode: ResidencyMode
 ): Record<Modality, ResidencyMode> {
+  if (!MODALITIES.includes(modality) || (mode !== 'resident' && mode !== 'on-demand')) {
+    throw new Error('Invalid model memory setting')
+  }
   const effective = isResidencyLocked(modality) ? 'resident' : mode
   const next = { ...getResidency(), [modality]: effective }
   saveSetting(SETTING_KEY, next)

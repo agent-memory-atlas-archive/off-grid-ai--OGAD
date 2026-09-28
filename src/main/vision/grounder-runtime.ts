@@ -1,11 +1,12 @@
+import { beginRuntimeBackend, parseNativeBackend } from '../runtime-backends'
 import { spawn, type ChildProcess } from 'node:child_process'
-import fs from 'node:fs'
 import path from 'node:path'
 import { Mutex } from 'async-mutex'
+import { prepareModelMemory, registerModelEvictor } from '../model-memory'
 import type { RemoteTextModelConnection } from '../llm/remote-chat'
 import { buildLaunchArgs } from '../llm/settings-math'
 import { engineSpawnEnv } from '../llm/spawn-env'
-import { binRoots, exe } from '../runtime-env'
+import { selectLocalEngine } from '../llm/select-local-engine'
 import { isPortFree, pickFreePort } from '../free-port'
 import { reapOrphanProcessesOnPort } from '../kill-orphan-port'
 import { resolveComputerUseModelArtifact } from '../models-manager'
@@ -19,6 +20,9 @@ export class GrounderRuntime {
   private port = GROUNDER_PORT
   private modelId: string | null = null
   private stderr = ''
+  private backendOutput = ''
+  private backend: string | undefined
+  private backendState?: ReturnType<typeof beginRuntimeBackend>
   private readonly mutex = new Mutex()
 
   get running(): boolean {
@@ -26,8 +30,10 @@ export class GrounderRuntime {
   }
 
   async connection(modelId: string): Promise<RemoteTextModelConnection> {
+    await prepareModelMemory('grounding')
     await this.mutex.runExclusive(async () => {
       if (!this.running || this.modelId !== modelId) await this.start(modelId)
+      this.backendState?.recordRequest()
     })
     return {
       id: `local-grounder:${modelId}`,
@@ -35,6 +41,7 @@ export class GrounderRuntime {
       provider: 'custom',
       endpoint: `http://127.0.0.1:${this.port}/v1`,
       model: modelId,
+      computeBackend: this.backend,
       apiKey: ''
     }
   }
@@ -50,18 +57,16 @@ export class GrounderRuntime {
     )
     const port = await pickFreePort(GROUNDER_PORT, isPortFree, 20)
     if (port === null) throw new Error('No private port is available for the grounding runtime.')
-    const serverPath = binRoots()
-      .flatMap((root) => [
-        path.join(root, 'llama', exe('llama-server')),
-        path.join(root, 'llama-cpu', exe('llama-server')),
-        path.join(root, exe('llama-server'))
-      ])
-      .find((candidate) => fs.existsSync(candidate))
+    const serverPath = await selectLocalEngine()
     if (!serverPath) throw new Error('The bundled grounding engine is missing.')
 
     this.port = port
     this.modelId = modelId
     this.stderr = ''
+    this.backendOutput = ''
+    this.backend = undefined
+    const backendState = beginRuntimeBackend('grounding', this.modelId!)
+    this.backendState = backendState
     const process = spawn(
       serverPath,
       buildLaunchArgs({
@@ -75,7 +80,8 @@ export class GrounderRuntime {
         speculativeDecoding: 'off',
         threads: undefined,
         batchSize: 1_024,
-        imageMinTokens: 1_024
+        imageMinTokens: 1_024,
+        reportModelPlacement: true
       }),
       {
         env: {
@@ -90,15 +96,26 @@ export class GrounderRuntime {
       }
     )
     this.process = process
+    let loading = true
     process.stderr!.on('data', (chunk) => {
-      this.stderr = `${this.stderr}${String(chunk)}`.slice(-16_384)
+      if (loading) {
+        const output = String(chunk)
+        this.stderr = `${this.stderr}${output}`.slice(-16_384)
+        this.backendOutput = `${this.backendOutput}${output}`.slice(-65_536)
+        backendState.observe(output)
+        console.log(`[Grounding runtime] ${output}`)
+      }
     })
     process.once('close', () => {
+      backendState.stop()
       if (this.process === process) this.process = null
     })
 
     try {
       await this.waitUntilReady()
+      loading = false // Level 4 can contain request data after startup.
+      this.backend = parseNativeBackend(this.backendOutput)?.backend
+      backendState.ready(this.backend)
     } catch (error) {
       await this.shutdown()
       const detail = /out of memory|cannot allocate|metal.*alloc/i.test(this.stderr)
@@ -124,6 +141,7 @@ export class GrounderRuntime {
   }
 
   async shutdown(): Promise<void> {
+    this.backendState?.stop()
     const process = this.process
     this.process = null
     this.modelId = null
@@ -144,4 +162,4 @@ export class GrounderRuntime {
 }
 
 export const grounderRuntime = new GrounderRuntime()
-
+registerModelEvictor('grounding', () => grounderRuntime.shutdown())

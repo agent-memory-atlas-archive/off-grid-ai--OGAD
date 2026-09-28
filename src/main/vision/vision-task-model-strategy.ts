@@ -1,7 +1,12 @@
 import { llm } from '../llm'
 import { getComputerUseSettings } from '../computer-use-settings'
 import { getWebUseSettings } from '../web-use-settings'
-import { getActiveModel, resolveModelIdentity, type ModelIdentity } from '../models-manager'
+import {
+  DECIDER_2B,
+  getActiveModel,
+  resolveModelIdentity,
+  type ModelIdentity
+} from '../models-manager'
 import type {
   ComputerUseActiveModel,
   ComputerUseActiveModelProjection,
@@ -9,7 +14,11 @@ import type {
 } from '../../shared/computer-use-settings'
 import { parseRemoteVisionModelId, remoteVisionModelId } from '../../shared/remote-vision-server'
 import { withGrounder, selectedGrounderModelId } from './grounder-loader'
-import { createHybridVisionGrounder, productionHybridReasoner } from './hybrid-vision-grounder'
+import {
+  createHybridVisionGrounder,
+  productionHybridReasoner,
+  reviewVisualAction
+} from './hybrid-vision-grounder'
 import { matchVisionModelAdapter, resolveVisionModelAdapterForStrategy } from './model-adapters'
 import {
   bonsaiVisionOperatorAdapter,
@@ -203,7 +212,7 @@ export function getWebUseActiveModelProjection(): Promise<ComputerUseActiveModel
     ...productionDependencies,
     strategy: () =>
       currentRemoteScreenTaskSession()?.modelStrategy ?? getWebUseSettings().modelStrategy,
-    selectedDecisionId: () => getWebUseSettings().decisionModelId ?? selectedDecisionModelId()
+    selectedDecisionId: () => getWebUseSettings().decisionModelId ?? DECIDER_2B.id
   })
 }
 
@@ -378,7 +387,22 @@ export async function withVisionTaskModelStrategy<T>(
     return task(await directSession(environment, activeChatSelection(dependencies), dependencies))
   }
   if (strategy === 'decision_plus_reasoning') {
-    return task(await directSession(environment, activeChatSelection(dependencies), dependencies))
+    const session = await directSession(
+      environment,
+      activeChatSelection(dependencies),
+      dependencies
+    )
+    return task({
+      ...session,
+      decide: async (input) => {
+        const result = await session.decide(input)
+        if (result.decision?.kind !== 'actions') return result
+        // Acquire the decider only after the reasoner releases its model lease.
+        return dependencies.withDecision(() =>
+          reviewVisualAction(input, result, dependencies.decideOptions)
+        )
+      }
+    })
   }
   const { result } = await dependencies.withSpecialist(async () => {
     return task(

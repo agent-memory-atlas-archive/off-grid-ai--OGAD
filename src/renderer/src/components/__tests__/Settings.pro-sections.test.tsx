@@ -81,7 +81,7 @@ describe('Settings pro-section registry seam (D31)', () => {
       await screen.findByText(/screen capture, backlog recovery, and proactive delivery/i)
     ).toBeTruthy()
     expect(screen.getByText('Processing priority')).toBeTruthy()
-    expect(screen.getByText('Chat and capture model')).toBeTruthy()
+    expect(screen.getByText('Text, vision, and reasoning')).toBeTruthy()
     expect(screen.queryByTestId('fake-capture')).toBeNull()
   })
 
@@ -113,7 +113,7 @@ describe('Settings pro-section registry seam (D31)', () => {
     await user.click(screen.getByText('Capture & processing'))
     await waitFor(() => expect(screen.getByTestId('fake-capture')).toBeTruthy())
     expect(screen.getByText('Processing priority')).toBeTruthy()
-    expect(screen.getByText('Chat and capture model')).toBeTruthy()
+    expect(screen.getByText('Text, vision, and reasoning')).toBeTruthy()
     expect(
       screen.queryByText(/screen capture, backlog recovery, and proactive delivery/i)
     ).toBeNull()
@@ -133,7 +133,7 @@ describe('Settings pro-section registry seam (D31)', () => {
     await waitFor(() => expect(consumed).toHaveBeenCalledOnce())
   })
 
-  it('Windows Pro build withholds native capture while keeping account sections available', async () => {
+  it('Windows Pro build shows capture and account sections', async () => {
     vi.resetModules()
     stubApi('win32')
     const { registerSettingsSection } = await import('../../bootstrap/sectionRegistry')
@@ -152,10 +152,7 @@ describe('Settings pro-section registry seam (D31)', () => {
 
     await waitFor(() => expect(screen.getByTestId('fake-identity')).toBeTruthy())
     await user.click(screen.getByText('Capture & processing'))
-    expect(screen.queryByTestId('fake-capture')).toBeNull()
-    expect(
-      screen.getByText(/screen capture, backlog recovery, and proactive delivery/i)
-    ).toBeTruthy()
+    expect(screen.getByTestId('fake-capture')).toBeTruthy()
     expect(screen.getByText('Processing priority')).toBeTruthy()
   })
 })

@@ -7,7 +7,7 @@
 // owner. Outside-Chat proposals enter the engine through the Actions surface, whose gate
 // remains responsible for approval. Reads and navigation stay inline.
 
-import { shell } from 'electron'
+import { app, shell } from 'electron'
 import type { ToolCallStatus, ToolContext, ToolExtension, ToolResult } from '../tools'
 import type { ProposeOutcome, TickOutcome } from '@offgrid/use'
 import { shouldGate } from '../actions/approval'
@@ -77,8 +77,8 @@ function engineResult(
 }
 
 // The inline (non-engine) runner, picked by platform in exactly one place:
-// mac runs the Swift helper; Windows opens links through the shell and
-// refuses everything else honestly (reads are not exposed there yet).
+// mac runs the Swift helper; Windows and Linux open links through the shell.
+// Linux still refuses native actions that have no platform implementation.
 // Exported so both arms are testable without faking process.platform.
 export function inlineRunnerForPlatform(
   platform: NodeJS.Platform
@@ -88,7 +88,21 @@ export function inlineRunnerForPlatform(
       await shell.openExternal(url)
     }, runPowerShell)
   }
-  return runNativeAction
+  if (platform === 'linux') {
+    return async (cmd) => {
+      if (cmd.command !== 'system.openURL') {
+        return { ok: false, error: 'native actions are not available on this platform' }
+      }
+      try {
+        await shell.openExternal(String(cmd.args.url ?? ''))
+        return { ok: true, result: {} }
+      } catch (error) {
+        return { ok: false, error: `could not open the link: ${(error as Error).message}` }
+      }
+    }
+  }
+  if (platform === 'darwin') return runNativeAction
+  return async () => ({ ok: false, error: 'native actions are not available on this platform' })
 }
 
 const inlineRun = inlineRunnerForPlatform(process.platform)
@@ -131,13 +145,18 @@ export class NativeActionToolExtension implements ToolExtension {
    *  available in every agentic turn, not gated behind Connectors. */
   category = 'tool' as const
 
+  private get linuxTaskUse(): boolean {
+    return this.platform === 'linux' && app.isPackaged === false &&
+      process.env.OFFGRID_LINUX_TASK_USE === '1'
+  }
+
   constructor(
     private readonly boundary: NativeActionToolBoundary = productionBoundary,
     private readonly platform: NodeJS.Platform = process.platform
   ) {}
 
   schemas(): unknown[] {
-    return buildNativeToolSchemas(specsForPlatform(this.platform, this.boundary.taskUseEnabled()))
+    return buildNativeToolSchemas(specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse))
   }
 
   /** What the Tools settings tab lists and toggles. A getter, not a field: the set depends on the
@@ -146,20 +165,20 @@ export class NativeActionToolExtension implements ToolExtension {
    *  which is why every native action - web_use and computer_use included - was invisible and
    *  untoggleable in Settings even while the model could call it. */
   get settings(): readonly { name: string; description: string }[] {
-    return specsForPlatform(this.platform, this.boundary.taskUseEnabled()).map((spec) => ({
+    return specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse).map((spec) => ({
       name: spec.name,
       description: spec.description
     }))
   }
 
   canHandle(name: string): boolean {
-    return specsForPlatform(this.platform, this.boundary.taskUseEnabled()).some(
+    return specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse).some(
       (spec) => spec.name === name
     )
   }
 
   systemHint(): string {
-    return systemHintForPlatform(this.platform, this.boundary.taskUseEnabled())
+    return systemHintForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse)
   }
 
   async execute(
@@ -334,10 +353,7 @@ export class NativeActionToolExtension implements ToolExtension {
 
 export const nativeActionToolExtension = new NativeActionToolExtension()
 
-/** Register the native-action tools where the platform exposes any: macOS (the
- *  Swift helper, the full set) and Windows (the Outlook rail's engine-routed
- *  subset). Elsewhere the spec list is empty, so registration is skipped and
- *  the tools stay out of the grammar budget where they cannot work. */
+/** Register only the tools that have a working platform path. */
 export function registerNativeActionTools(
   register: (ext: ToolExtension) => void,
   platform: NodeJS.Platform = process.platform

@@ -1,4 +1,8 @@
 import { EventEmitter } from 'node:events'
+vi.mock('../../llm/gpu-device-probe', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../llm/gpu-device-probe')>(),
+  gpuDeviceAvailable: vi.fn(async () => true)
+}))
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -9,7 +13,9 @@ const mocks = vi.hoisted(() => ({
   spawn: vi.fn()
 }))
 
-vi.mock('node:child_process', () => ({ spawn: mocks.spawn }))
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(), spawn: mocks.spawn
+}))
 vi.mock('node:fs', () => ({ default: { existsSync: mocks.exists } }))
 vi.mock('../../llm/settings-math', () => ({ buildLaunchArgs: vi.fn(() => ['--ground']) }))
 vi.mock('../../llm/spawn-env', () => ({ engineSpawnEnv: vi.fn(() => ({ TEST_ENGINE: '1' })) }))
@@ -38,7 +44,7 @@ beforeEach(() => {
     primaryPath: '/models/grounder.gguf',
     projectorPath: '/models/mmproj.gguf'
   })
-  mocks.exists.mockReturnValue(true)
+  mocks.exists.mockImplementation((candidate: string) => !candidate.includes('llama-cuda'))
   mocks.pickPort.mockResolvedValue(8490)
   mocks.spawn.mockImplementation(() => new FakeProcess())
   vi.stubGlobal(
@@ -84,7 +90,7 @@ describe('GrounderRuntime', () => {
     mocks.pickPort.mockResolvedValueOnce(null)
     await expect(runtime.connection('no-port')).rejects.toThrow('No private port')
 
-    mocks.exists.mockReturnValueOnce(false).mockReturnValueOnce(false).mockReturnValueOnce(false)
+    mocks.exists.mockReturnValue(false)
     await expect(runtime.connection('no-engine')).rejects.toThrow('engine is missing')
   })
 

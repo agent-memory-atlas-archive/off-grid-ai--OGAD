@@ -1,3 +1,4 @@
+import { beginRuntimeBackend } from '../runtime-backends'
 // Resident whisper.cpp HTTP server (the bundled `whisper-server`).
 //
 // Unlike the one-shot whisper-cli in whisper-cli.ts (which spawns, RELOADS the
@@ -20,8 +21,9 @@ import { spawn, type ChildProcess, execSync } from 'child_process'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
-import { binRoots, isPackaged, exe } from '../runtime-env'
-import { existing } from './bin-resolution'
+import { isPackaged } from '../runtime-env'
+import { nativeLibraryEnv } from '../native-library-env'
+import { findWhisperBinary } from './whisper-runtime'
 import type { Transcript } from './types'
 import { killOrphansOnPort as reapOrphansOnPort } from '../kill-orphan-port'
 import { Mutex } from 'async-mutex'
@@ -118,6 +120,7 @@ export function parseInferenceResponse(body: unknown): { text: string } {
 /** The resident whisper server. One instance (the exported `whisperServer`). */
 export class WhisperServerService {
   private server: ChildProcess | null = null
+  private backendState?: ReturnType<typeof beginRuntimeBackend>
   private readonly inferenceMutex = new Mutex()
   private activeKey: string | null = null // whisperContextKey of the loaded model, null when down
   private startPromise: Promise<void> | null = null
@@ -142,9 +145,7 @@ export class WhisperServerService {
 
   /** Resolve the bundled whisper-server binary across dev / packaged layouts. */
   findBinary(): string | null {
-    // Shared first-existing-path resolver (bin-resolution), instead of a hand-rolled
-    // existsSync loop that duplicated it. exe() adds the .exe suffix on Windows.
-    return existing(binRoots().map((r) => path.join(r, 'whisper-server', exe('whisper-server'))))
+    return findWhisperBinary('whisper-server')
   }
 
   /** Ensure a server is up with EXACTLY this context; restart on a model/thread
@@ -193,27 +194,34 @@ export class WhisperServerService {
       // the ggml/whisper DLLs next to the exe resolve.
       env: {
         ...process.env,
-        DYLD_LIBRARY_PATH: binDir,
-        ...(process.platform === 'win32'
-          ? { PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}` }
-          : {})
+        ...nativeLibraryEnv(process.platform, binDir, process.env)
       }
     })
+    const backendState = beginRuntimeBackend('transcription', ctx.modelPath)
+    this.backendState = backendState
     this.server = proc
     this.stderrTail = []
     const capture = (d: Buffer): void => {
+      backendState.observe(String(d))
       for (const line of String(d).split(/\r?\n/)) if (line.trim()) this.stderrTail.push(line)
       if (this.stderrTail.length > 50) this.stderrTail = this.stderrTail.slice(-50)
     }
     proc.stdout.on('data', capture)
     proc.stderr.on('data', capture)
     proc.on('close', () => {
+      backendState.stop()
       if (this.server !== proc) return // an already-replaced instance
       this.server = null
       this.activeKey = null
     })
 
-    await this.waitForReady()
+    try {
+      await this.waitForReady()
+      backendState.ready()
+    } catch (error) {
+      backendState.fail(error)
+      throw error
+    }
     this.activeKey = key
   }
 
@@ -251,6 +259,7 @@ export class WhisperServerService {
         req.signal?.throwIfAborted()
         await this.ensureUp(ctx)
         req.signal?.throwIfAborted()
+        this.backendState?.recordRequest()
         return await this.inference(req)
       } finally {
         req.signal?.removeEventListener('abort', cancelNativeInference)
@@ -293,6 +302,7 @@ export class WhisperServerService {
   }
 
   private stopProcess(): void {
+    this.backendState?.stop()
     if (this.server) {
       try {
         this.server.kill('SIGKILL')

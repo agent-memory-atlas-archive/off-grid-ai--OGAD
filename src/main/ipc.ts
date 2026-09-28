@@ -1,4 +1,5 @@
 import { ipcMain, BrowserWindow, app, clipboard } from 'electron'
+import { setupAIRequestLogIPC } from './ai-request-log-ipc'
 import { setupArtifactPreviewIpc } from './artifact-preview-ipc'
 import {
   getDB,
@@ -574,6 +575,7 @@ export async function summarizeSession(sessionId: string): Promise<string | null
 }
 
 export function setupIPC() {
+  setupAIRequestLogIPC()
   setupVoiceTranscriptionIpc()
   const db = getDB()
   setupTtsIpc()
@@ -1664,7 +1666,10 @@ export function setupIPC() {
     const { downloadModel } = await import('./models-manager')
     return downloadModel(
       modelId,
-      (p) => BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('model:download-progress', p)),
+      (p) =>
+        BrowserWindow.getAllWindows().forEach((w) =>
+          w.webContents.send('model:download-progress', p)
+        ),
       fileName
     )
   })

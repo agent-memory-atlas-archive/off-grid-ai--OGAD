@@ -1030,6 +1030,56 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
     expect(boundary.calls[0]!.conversationId).toBe('conversation-a')
   })
 
+  it('restores the comic artifact card from chat storage while generation is still running', async () => {
+    const boundary = new ChatBoundary()
+    installBoundary(boundary)
+    const user = userEvent.setup()
+    const view = renderChat({ conversationId: 'conversation-a' })
+
+    await send('<!-- offgrid-action:comic-book -->\nQ: Story length\nA: 10 distinct images', user)
+    await waitFor(() => expect(boundary.calls).toHaveLength(1))
+    expect(await screen.findByRole('button', { name: /click to open in the canvas/i })).toBeTruthy()
+
+    view.rerender(<TooltipProvider><MemoryChat openTarget={{ conversationId: 'conversation-b' }} /></TooltipProvider>)
+    await waitFor(() => expect(screen.queryByRole('button', { name: /click to open in the canvas/i })).toBeNull())
+    view.rerender(<TooltipProvider><MemoryChat openTarget={{ conversationId: 'conversation-a' }} /></TooltipProvider>)
+    expect(await screen.findByRole('button', { name: /click to open in the canvas/i })).toBeTruthy()
+
+    view.unmount()
+    renderChat({ conversationId: 'conversation-a' })
+    await user.click(await screen.findByRole('button', { name: /click to open in the canvas/i }))
+    expect(await screen.findByTitle('artifact')).toBeTruthy()
+    expect(boundary.messages['conversation-a']!.filter((message) => message.content.startsWith('Comic book reader:'))).toHaveLength(1)
+  })
+
+  it.each([false, true])('keeps one saved comic message after image completion (failed: %s)', async (failed) => {
+    const boundary = new ChatBoundary()
+    installBoundary(boundary)
+    window.api.generateImage = async () => {
+      if (failed) throw new Error('Image runtime unavailable')
+      return { path: '/tmp/comic-page.png', dataUrl: 'data:image/png;base64,AA==', seed: 1, syncId: 'comic-page', model: 'test-image', prompt: 'A tree' }
+    }
+    window.api.deleteArtifact = async () => true
+    const user = userEvent.setup()
+    const view = renderChat({ conversationId: 'conversation-a' })
+    await send('<!-- offgrid-action:comic-book -->\nQ: Story length\nA: 10 distinct images', user)
+    await waitFor(() => expect(boundary.calls).toHaveLength(1))
+    boundary.resolve(0, 'Comic response', { imageRequests: [{ prompt: 'PAGE STORY: A test page\nILLUSTRATION: A tree' }] })
+    await waitFor(() => {
+      const saved = boundary.messages['conversation-a']!.filter((message) => message.role === 'assistant')
+      expect(saved).toHaveLength(1)
+      expect(saved[0]!.content).toContain(failed ? 'Comic response' : '1 of 10 pages ready')
+    })
+    view.unmount()
+    renderChat({ conversationId: 'conversation-a' })
+    if (failed) {
+      expect(await screen.findByText('Comic response')).toBeTruthy()
+      expect(screen.queryByRole('button', { name: /click to open in the canvas/i })).toBeNull()
+    } else {
+      expect(await screen.findByRole('button', { name: /click to open in the canvas/i })).toBeTruthy()
+    }
+  })
+
   it('keeps a result and its artifact attributed to the project captured at send time (#42)', async () => {
     const boundary = new ChatBoundary()
     installBoundary(boundary)

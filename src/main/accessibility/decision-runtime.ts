@@ -1,7 +1,9 @@
+import { beginRuntimeBackend, parseNativeBackend } from '../runtime-backends'
 import { spawn, type ChildProcess } from 'node:child_process'
-import fs from 'node:fs'
 import path from 'node:path'
+import { currentAIRequest } from '../ai-request-log'
 import { Mutex } from 'async-mutex'
+import { prepareModelMemory, registerModelEvictor } from '../model-memory'
 import {
   buildDecisionPrompt,
   buildDecisionRequest,
@@ -11,7 +13,7 @@ import {
 import { postCompletionOnce } from '../llm/http-post'
 import { buildLaunchArgs } from '../llm/settings-math'
 import { engineSpawnEnv } from '../llm/spawn-env'
-import { binRoots, exe } from '../runtime-env'
+import { selectLocalEngine } from '../llm/select-local-engine'
 import { isPortFree, pickFreePort } from '../free-port'
 import { reapOrphanProcessesOnPort } from '../kill-orphan-port'
 import {
@@ -39,12 +41,16 @@ export class DecisionRuntimeError extends Error {
 }
 
 export class DecisionRuntime {
+  memoryEvicted = false
   private process: ChildProcess | null = null
   private port = DECIDER_PORT
   private readonly mutex = new Mutex()
   private startPromise: Promise<void> | null = null
   private modelId: string | null = null
   private stderr = ''
+  private backendOutput = ''
+  private backend: string | undefined
+  private backendState?: ReturnType<typeof beginRuntimeBackend>
   readonly timing: DecisionRuntimeTiming = { coldStartMs: 0, warmDecisionMs: [] }
 
   get activePort(): number {
@@ -61,7 +67,7 @@ export class DecisionRuntime {
 
   async start(modelId: string): Promise<void> {
     if (this.running && this.modelId === modelId) return
-    if (this.startPromise) return this.startPromise
+    if (this.startPromise !== null) return this.startPromise
     this.startPromise = this.startInternal(modelId).finally(() => {
       this.startPromise = null
     })
@@ -69,6 +75,8 @@ export class DecisionRuntime {
   }
 
   private async startInternal(modelId: string): Promise<void> {
+    await prepareModelMemory('decision')
+    this.memoryEvicted = false
     await this.shutdown()
     if (modelId === KEV_4B_ID) return this.startKev()
     const artifact = await resolveComputerUseModelArtifact(modelId)
@@ -85,18 +93,16 @@ export class DecisionRuntime {
         'No private port is available for the Decision runtime.',
         'startup'
       )
-    const serverPath = binRoots()
-      .flatMap((root) => [
-        path.join(root, 'llama', exe('llama-server')),
-        path.join(root, 'llama-cpu', exe('llama-server')),
-        path.join(root, exe('llama-server'))
-      ])
-      .find((candidate) => fs.existsSync(candidate))
+    const serverPath = await selectLocalEngine()
     if (!serverPath)
       throw new DecisionRuntimeError('The bundled Decision engine is missing.', 'startup')
     this.port = port
     this.modelId = modelId
     this.stderr = ''
+    this.backendOutput = ''
+    this.backend = undefined
+    const backendState = beginRuntimeBackend('decision', this.modelId!)
+    this.backendState = backendState
     const args = buildLaunchArgs({
       modelPath: artifact.primaryPath,
       mmProjPath: artifact.projectorPath ?? '',
@@ -109,7 +115,8 @@ export class DecisionRuntime {
       kvCacheType: 'q8_0',
       speculativeDecoding: 'off',
       threads: undefined,
-      batchSize: 128
+      batchSize: 128,
+      reportModelPlacement: true
     })
     const startedAt = Date.now()
     const process = spawn(serverPath, args, {
@@ -124,14 +131,25 @@ export class DecisionRuntime {
       stdio: ['ignore', 'ignore', 'pipe']
     })
     this.process = process
+    let loading = true
     process.stderr!.on('data', (chunk) => {
-      this.stderr = `${this.stderr}${String(chunk)}`.slice(-16_384)
+      if (loading) {
+        const output = String(chunk)
+        this.stderr = `${this.stderr}${output}`.slice(-16_384)
+        this.backendOutput = `${this.backendOutput}${output}`.slice(-65_536)
+        backendState.observe(output)
+        console.log(`[Decision runtime] ${output}`)
+      }
     })
     process.once('close', () => {
+      backendState.stop()
       if (this.process === process) this.process = null
     })
     try {
       await this.waitUntilReady(startedAt)
+      loading = false // Level 4 can contain request data after startup.
+      this.backend = parseNativeBackend(this.backendOutput)?.backend
+      backendState.ready(this.backend)
       this.timing.coldStartMs = Date.now() - startedAt
     } catch (error) {
       await this.shutdown()
@@ -155,6 +173,9 @@ export class DecisionRuntime {
     this.port = port
     this.modelId = KEV_4B_ID
     this.stderr = ''
+    this.backend = undefined
+    const backendState = beginRuntimeBackend('decision', this.modelId!)
+    this.backendState = backendState
     const startedAt = Date.now()
     const process = spawn(
       artifact.python,
@@ -174,15 +195,23 @@ export class DecisionRuntime {
     )
     this.process = process
     for (const stream of [process.stdout, process.stderr]) {
-      stream?.on('data', (chunk) => {
+      stream.on('data', (chunk) => {
         this.stderr = `${this.stderr}${String(chunk)}`.slice(-16_384)
+        const device = /\[Kev\] loaded: device=(cuda|mps|cpu)\b/.exec(this.stderr)?.[1]
+        if (device) {
+          this.backend = device === 'cuda' ? 'CUDA' : device === 'mps' ? 'Metal' : 'CPU'
+          backendState.ready(this.backend)
+        }
+        console.log(`[Kev runtime] ${String(chunk)}`)
       })
     }
     process.once('close', () => {
+      backendState.stop()
       if (this.process === process) this.process = null
     })
     try {
       await this.waitUntilReady(startedAt)
+      backendState.ready(this.backend)
       this.timing.coldStartMs = Date.now() - startedAt
     } catch (error) {
       await this.shutdown()
@@ -221,7 +250,13 @@ export class DecisionRuntime {
     if (!this.running)
       throw new DecisionRuntimeError('The Decision runtime is not running.', 'startup')
     return this.mutex.runExclusive(async () => {
+      this.backendState?.recordRequest()
       const startedAt = Date.now()
+      currentAIRequest()?.update({
+        model: this.modelId ?? undefined,
+        backend: this.backend ?? 'Unknown',
+        effectiveRequest: { context, question, options }
+      })
       if (this.modelId === KEV_4B_ID) {
         const response = await fetch(`http://127.0.0.1:${this.port}/v1/systemone`, {
           method: 'POST',
@@ -233,7 +268,9 @@ export class DecisionRuntime {
               decision: {
                 type: 'choice',
                 instructions: question,
-                criteria: Object.fromEntries(options.map((option, index) => [`option_${index}`, option]))
+                criteria: Object.fromEntries(
+                  options.map((option, index) => [`option_${index}`, option])
+                )
               }
             }
           }),
@@ -243,12 +280,15 @@ export class DecisionRuntime {
         const body = (await response.json()) as {
           answers?: { decision?: { choice?: string; probabilities?: Record<string, number> } }
         }
+        currentAIRequest()?.update({ response: body })
         const answer = body.answers?.decision
         const choice = options.findIndex((_, index) => answer?.choice === `option_${index}`)
         const probabilities = options.map((_, index) => answer?.probabilities?.[`option_${index}`])
         if (
           choice < 0 ||
-          probabilities.some((value) => typeof value !== 'number' || !Number.isFinite(value) || value < 0)
+          probabilities.some(
+            (value) => typeof value !== 'number' || !Number.isFinite(value) || value < 0
+          )
         ) {
           throw new Error('Kev returned an invalid Decision response.')
         }
@@ -262,6 +302,7 @@ export class DecisionRuntime {
       const prompt = buildDecisionPrompt(context, question, options)
       const body = JSON.stringify(buildDecisionRequest(prompt, options.length))
       const raw = await postCompletionOnce(this.port, body, undefined, signal, '/completion')
+      currentAIRequest()?.update({ effectiveRequest: JSON.parse(body), response: JSON.parse(raw) })
       this.timing.warmDecisionMs.push(Date.now() - startedAt)
       if (this.timing.warmDecisionMs.length > 200) this.timing.warmDecisionMs.shift()
       return parseOptionDecision(raw, options.length)
@@ -279,6 +320,7 @@ export class DecisionRuntime {
   }
 
   async shutdown(): Promise<void> {
+    this.backendState?.stop()
     const process = this.process
     this.process = null
     this.modelId = null
@@ -299,3 +341,9 @@ export class DecisionRuntime {
 }
 
 export const decisionRuntime = new DecisionRuntime()
+registerModelEvictor('decision', async () => {
+  if (decisionRuntime.running) {
+    decisionRuntime.memoryEvicted = true
+    await decisionRuntime.shutdown()
+  }
+})

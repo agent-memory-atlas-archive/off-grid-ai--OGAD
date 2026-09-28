@@ -1,9 +1,13 @@
+import { beginRuntimeBackend, providerLabel } from './runtime-backends'
 import path from 'path'
 import { existsSync } from 'fs'
 import { Worker } from 'worker_threads'
 import { modelsDir } from './runtime-env'
-import { embedText } from './embeddings-core'
+import { embedText, embeddingDevice, disposeEmbeddingModel } from './embeddings-core'
+import { getResidencyMode } from './runtime-residency'
+import { recordAIRequest, type AIRequestHandle } from './ai-request-log'
 import type { EmbeddingRequest, EmbeddingResponse } from './embeddings-worker'
+import { writeDiagnosticLog } from './diagnostics-log'
 
 /**
  * The built worker, when there is one.
@@ -32,10 +36,11 @@ class EmbeddingService {
   private nextId = 1
   private readonly waiting = new Map<
     number,
-    { resolve: (v: number[]) => void; reject: (e: Error) => void }
+    { resolve: (v: number[]) => void; reject: (e: Error) => void; log: AIRequestHandle }
   >()
   /** Serializes requests: the tail of the queue, not a list, so memory does not grow with it. */
   private queue: Promise<unknown> = Promise.resolve()
+  private reportedDevice: string | null = null
 
   private spawn(entry: string): Worker {
     if (this.worker) return this.worker
@@ -43,22 +48,42 @@ class EmbeddingService {
     // run-from-source context have only the .ts next to this file. Resolve whichever EXISTS rather
     // than assuming the built layout: assuming it made every embedding fail outside a packaged
     // build, which silently demoted vector search to the FTS fallback instead of erroring.
+    const backendState = beginRuntimeBackend('embeddings', 'Xenova/all-MiniLM-L6-v2')
     const worker = new Worker(entry, { workerData: { modelsDir: modelsDir() } })
     worker.on('message', (response: EmbeddingResponse) => {
+      if (response.ready && response.device) {
+        backendState.ready(providerLabel(response.device), undefined, response.fallbackReason)
+        this.reportedDevice = response.device
+        return
+      }
       const pending = this.waiting.get(response.id)
       if (!pending) return
       this.waiting.delete(response.id)
+      backendState.recordRequest(pending.log)
+      if (response.device && response.device !== this.reportedDevice) {
+        this.reportedDevice = response.device
+        writeDiagnosticLog('embeddings', 'runtime.ready', {
+          backend: 'onnxruntime',
+          device: response.device
+        })
+      }
       if (response.error) pending.reject(new Error(response.error))
       else pending.resolve(response.vector ?? [])
     })
     // A dead worker must not strand callers, and the next request should get a fresh one.
     const fail = (error: Error): void => {
+      backendState.fail(error)
+      if (this.worker !== worker) return
+      this.reportedDevice = null
       this.worker = null
       for (const [, pending] of this.waiting) pending.reject(error)
       this.waiting.clear()
     }
     worker.on('error', fail)
     worker.on('exit', (code) => {
+      backendState.stop()
+      if (this.worker !== worker) return
+      this.reportedDevice = null
       if (code !== 0) fail(new Error(`Embedding worker exited with code ${code}`))
       else this.worker = null
     })
@@ -73,23 +98,58 @@ class EmbeddingService {
   }
 
   async generateEmbedding(text: string): Promise<number[]> {
-    const run = (): Promise<number[]> => {
-      const entry = builtWorkerEntry()
-      // No built worker means we are running from source. Embed here rather than failing: a failed
-      // embedding silently demotes every search to the FTS fallback, which is a far worse outcome
-      // than briefly holding this thread in a context that has no UI to block.
-      if (!entry) return embedText(text, modelsDir())
-      return new Promise<number[]>((resolve, reject) => {
-        const worker = this.spawn(entry)
-        const id = this.nextId++
-        this.waiting.set(id, { resolve, reject })
-        worker.postMessage({ id, text } as EmbeddingRequest)
-      })
-    }
-    const result = this.queue.then(run, run)
-    // Keep the chain alive after a rejection, or one failure stalls every later request.
-    this.queue = result.catch(() => undefined)
-    return result
+    return recordAIRequest(
+      {
+        modality: 'embedding',
+        source: text ? 'Embedding' : 'Embedding warm-up',
+        model: 'Xenova/all-MiniLM-L6-v2',
+        request: { text, pooling: 'mean', normalize: true }
+      },
+      async (log) => {
+        const run = (): Promise<number[]> => {
+          const entry = builtWorkerEntry()
+          // No built worker means we are running from source. Embed here rather than failing: a failed
+          // embedding silently demotes every search to the FTS fallback, which is a far worse outcome
+          // than briefly holding this thread in a context that has no UI to block.
+          if (!entry)
+            return embedText(text, modelsDir(), (device, reason) => {
+              beginRuntimeBackend('embeddings', 'Xenova/all-MiniLM-L6-v2').ready(
+                providerLabel(device),
+                undefined,
+                reason
+              )
+            })
+          return new Promise<number[]>((resolve, reject) => {
+            const worker = this.spawn(entry)
+            const id = this.nextId++
+            this.waiting.set(id, { resolve, reject, log })
+            worker.postMessage({ id, text } as EmbeddingRequest)
+          })
+        }
+        const runWithResidency = async (): Promise<number[]> => {
+          try {
+            return await run()
+          } finally {
+            if (getResidencyMode('embeddings') === 'on-demand') {
+              const worker = this.worker
+              this.worker = null
+              if (worker) await worker.terminate()
+              else await disposeEmbeddingModel()
+              this.reportedDevice = null
+            }
+          }
+        }
+        const result = this.queue.then(runWithResidency, runWithResidency)
+        // Keep the chain alive after a rejection, or one failure stalls every later request.
+        this.queue = result.catch(() => undefined)
+        const vector = await result
+        log.update({
+          backend: this.reportedDevice ?? embeddingDevice() ?? 'Unknown',
+          metrics: { dimensions: vector.length }
+        })
+        return vector
+      }
+    )
   }
 }
 

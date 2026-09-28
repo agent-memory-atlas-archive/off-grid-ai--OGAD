@@ -47,6 +47,7 @@ import { withRemoteScreenGate } from './remote-screen-gate'
 import { getTaskExecutionDevice, getTaskRun, recordTaskRun } from '../tasks/task-history'
 import { taskLaunchFromActionArgs } from '../tasks/task-launch-identity'
 import { taskKindForActionType } from '../tools/nativeActionToolExtension-logic'
+import { withTaskModelMemory } from '../model-memory'
 import { getComputerUseSettings } from '../computer-use-settings'
 
 export interface ActionsRuntime {
@@ -130,10 +131,11 @@ export function buildRegistry(run: typeof runNativeAction): HandlerRegistry {
   return registry
 }
 
-/** The one place a platform picks an implementation - exported so both arms
- *  are testable without faking process.platform. */
-export function pickByPlatform<T>(platform: NodeJS.Platform, win: T, mac: T): T {
-  return platform === 'win32' ? win : mac
+/** Select only an implementation that exists on the target platform. */
+export function pickByPlatform<T>(platform: NodeJS.Platform, win: T, mac: T, unsupported: T): T {
+  if (platform === 'win32') return win
+  if (platform === 'darwin') return mac
+  return unsupported
 }
 
 function recordAuthenticatedTaskLaunch(
@@ -232,7 +234,12 @@ export function getActionsRuntime(): ActionsRuntime {
   // The platform decides which semantic rail implements the port - the one
   // concrete choice, made once here; nothing above it branches on an OS.
   const registry = buildRegistry(
-    pickByPlatform(process.platform, makeOutlookNativeReader(runPowerShell), runNativeAction)
+    pickByPlatform(
+      process.platform,
+      makeOutlookNativeReader(runPowerShell),
+      runNativeAction,
+      async () => ({ ok: false, error: 'native actions are not available on this platform' })
+    )
   )
   const semanticExecute = pickByPlatform(
     process.platform,
@@ -243,7 +250,8 @@ export function getActionsRuntime(): ActionsRuntime {
         return { ok: true as const, result: {} }
       }
     }),
-    makeSemanticRailExecutor(runNativeAction)
+    makeSemanticRailExecutor(runNativeAction),
+    async () => ({ ok: false, detail: 'native actions are not available on this platform' })
   )
   // The browser rail's live host (WebContentsView + CDP + model + watched
   // pane) is created lazily on first web_use so a session that never runs one
@@ -254,7 +262,9 @@ export function getActionsRuntime(): ActionsRuntime {
   // BrowserHost owns the Web Use model lifecycle. It resolves the adapter and
   // records the model identity only after the specialist swap completes. A
   // second wrapper here caused nested swaps and restored Chat too early.
-  const browserExecute = withRemoteScreenGate('web_use', rawBrowserExecute)
+  const browserExecute = withRemoteScreenGate('web_use', (action) =>
+    withTaskModelMemory(() => rawBrowserExecute(action))
+  )
   const connectorExecute = makeConnectorRailExecutor(callConnectorTool)
   // The vision rail's live host (screen capture + actuation + grounding model),
   // created lazily on first computer_use.
@@ -302,8 +312,7 @@ export function getActionsRuntime(): ActionsRuntime {
         settings.modelStrategy === 'decision_plus_reasoning'
           ? ['ax', ...settings.enabledRails.filter((rail) => rail !== 'ax')]
           : settings.enabledRails,
-      preferVisionGraph:
-        settings.modelStrategy === 'text_plus_specialist'
+      preferVisionGraph: settings.modelStrategy === 'text_plus_specialist'
     })(action)
   })
   const engine = new UseEngine({
@@ -327,7 +336,7 @@ export function getActionsRuntime(): ActionsRuntime {
         if (rail === 'vision') {
           recordAuthenticatedTaskLaunch(action, 'computer_use')
           // computer_use: accessibility-first, vision as the fallback tier.
-          return computerTaskExecute(action)
+          return withTaskModelMemory(() => computerTaskExecute(action))
         }
         return { ok: false, detail: `the '${rail}' rail is not built yet` }
       }
