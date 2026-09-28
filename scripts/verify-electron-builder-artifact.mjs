@@ -18,7 +18,12 @@ export default async function verifyElectronBuilderArtifact(event) {
     return
   }
 
-  const appOutDir = event.packager.computeAppOutDir(event.target.outDir, event.arch)
+  // nsis-web stores its payload in dist/nsis-web, while the staged app stays in
+  // dist/win-unpacked. The target output directory is not the app directory.
+  const packageOutDir = event.target.name === 'nsis-web'
+    ? path.dirname(event.target.outDir)
+    : event.target.outDir
+  const appOutDir = event.packager.computeAppOutDir(packageOutDir, event.arch)
   if (asarOnlyArtifact) {
     assertAsarArchiveInventory(path.join(appOutDir, 'resources', 'app.asar'))
     const executable = artifact.endsWith('.exe') ? 'llama-server.exe' : 'llama-server'
