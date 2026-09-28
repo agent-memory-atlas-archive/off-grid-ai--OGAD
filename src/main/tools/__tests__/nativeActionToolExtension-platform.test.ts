@@ -4,6 +4,7 @@
  * facing hint never promises a tool the platform does not expose.
  */
 import { describe, expect, it, vi } from 'vitest'
+vi.mock('electron', () => ({ app: { isPackaged: false }, shell: { openExternal: vi.fn() } }))
 import {
   NATIVE_TOOL_SPECS,
   specsForPlatform,
