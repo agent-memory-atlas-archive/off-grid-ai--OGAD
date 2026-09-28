@@ -54,6 +54,7 @@ vi.mock('../../../shared/remote-vision-server', () => ({
 }))
 vi.mock('../../actions/remote-screen-session', () => ({
   currentRemoteScreenTaskSession: mocks.session,
+  screenTaskRequestSource: (fallback: string) => fallback,
   runWithRemoteScreenTaskSession: vi.fn(async (_session, task) => task()),
   recordComputerUseMetric: mocks.recordMetric,
   recordComputerUseModelCall: mocks.recordCall
