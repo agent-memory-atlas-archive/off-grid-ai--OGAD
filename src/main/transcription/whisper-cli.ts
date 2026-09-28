@@ -17,7 +17,7 @@ import { decodeToWavArgs, DECODE_TIMEOUT_MS } from './ffmpeg-decode'
 import type { TranscriptionService, Transcript, TranscribeOptions, Seg } from './types'
 import { runNativeTranscriptionProcess } from './native-process'
 import { HINDI_SCRIPT_RECOVERY_MESSAGE } from '../../shared/transcription-recovery'
-import { findWhisperBinary, findWhisperBinaries } from './whisper-runtime'
+import { findWhisperBinary, findWhisperBinaries, whisperRuntimeLibraryEnv } from './whisper-runtime'
 
 const HINDI_DEVANAGARI_PROMPT = 'यह ऑडियो हिंदी में है। हिंदी को केवल देवनागरी लिपि में लिखें।'
 
@@ -263,7 +263,11 @@ class WhisperCliTranscription implements TranscriptionService {
                         runtimeModel: modelPath,
                         maxBuffer: 64 * 1024 * 1024,
                         timeout: 30 * 60_000,
-                        signal: opts.signal
+                        signal: opts.signal,
+                        env: {
+                          ...process.env,
+                          ...whisperRuntimeLibraryEnv(process.platform, binary, process.env)
+                        }
                       })
                   )
                   return result.stdout

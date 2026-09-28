@@ -22,8 +22,7 @@ import path from 'path'
 import fs from 'fs'
 import os from 'os'
 import { isPackaged } from '../runtime-env'
-import { nativeLibraryEnv } from '../native-library-env'
-import { findWhisperBinary } from './whisper-runtime'
+import { findWhisperBinary, whisperRuntimeLibraryEnv } from './whisper-runtime'
 import type { Transcript } from './types'
 import { killOrphansOnPort as reapOrphansOnPort } from '../kill-orphan-port'
 import { Mutex } from 'async-mutex'
@@ -194,7 +193,7 @@ export class WhisperServerService {
       // the ggml/whisper DLLs next to the exe resolve.
       env: {
         ...process.env,
-        ...nativeLibraryEnv(process.platform, binDir, process.env)
+        ...whisperRuntimeLibraryEnv(process.platform, bin, process.env)
       }
     })
     const backendState = beginRuntimeBackend('transcription', ctx.modelPath)
