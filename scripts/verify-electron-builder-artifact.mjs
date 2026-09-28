@@ -68,17 +68,22 @@ export default async function verifyElectronBuilderArtifact(event) {
       }
     }
     if (artifact.endsWith('.appimage') || artifact.endsWith('.deb')) {
-      const libvips = path.join(
+      const libvipsDir = path.join(
         appOutDir,
         'resources',
         'app.asar.unpacked',
         'node_modules',
         '@img',
         'sharp-libvips-linux-x64',
-        'lib',
-        'libvips-cpp.so.8.18.3'
+        'lib'
       )
-      if (!fs.existsSync(libvips) || !fs.statSync(libvips).isFile()) {
+      const hasLibvips =
+        fs.existsSync(libvipsDir) &&
+        fs.readdirSync(libvipsDir).some((name) => {
+          const file = path.join(libvipsDir, name)
+          return name.startsWith('libvips-cpp.so') && fs.statSync(file).isFile()
+        })
+      if (!hasLibvips) {
         throw new Error('installer input is missing the unpacked Sharp libvips library')
       }
     }

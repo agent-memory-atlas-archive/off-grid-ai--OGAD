@@ -380,7 +380,7 @@ describe('macOS artifact integrity', () => {
       '@img',
       'sharp-libvips-linux-x64',
       'lib',
-      'libvips-cpp.so.8.18.3'
+      'libvips-cpp.so.9.0.0'
     )
     fs.mkdirSync(path.dirname(libvips), { recursive: true })
     fs.writeFileSync(libvips, 'fixture')
