@@ -113,7 +113,7 @@ export function remoteNativeToolCapability(
 ): Promise<RemoteNativeToolCapability> {
   const key = capabilityKey(remote)
   const cached = nativeToolCapabilities.get(key)
-  if (cached) return cached
+  if (cached !== undefined) return cached
   const discovered = discoverRemoteNativeToolCapability(remote)
   nativeToolCapabilities.set(key, discovered)
   return discovered
@@ -125,7 +125,7 @@ export async function remoteReasoningCapability(
 ): Promise<RemoteReasoningCapability> {
   const key = capabilityKey(remote)
   const cached = reasoningCapabilities.get(key)
-  if (cached) return cached
+  if (cached !== undefined) return cached
   const discovered = (async (): Promise<RemoteReasoningCapability> => {
     if (remote.provider === 'openrouter') {
       const response = await fetch(`${remote.endpoint}/models`, {
