@@ -20,7 +20,7 @@ import {
   normalizeMaxToolCalls
 } from '../shared/llm-defaults'
 import { REASONING_BUDGET_AUTO, reasoningBudgetPayload } from '@offgrid/models'
-import { acceleratorForEngine, type EngineAccelerator } from '../shared/engine-accelerator'
+import type { EngineAccelerator } from '../shared/engine-accelerator'
 import {
   applyModePreset,
   samplingPayload,
@@ -39,7 +39,7 @@ import { dflashFileName, primaryFileName, type CatalogEntry } from './models/cat
 import { pickFreePort, isPortFree } from './free-port'
 import { postCompletionOnce } from './llm/http-post'
 import { engineSpawnEnv } from './llm/spawn-env'
-import { gpuDeviceAvailable, offloadedGpuLayers } from './llm/gpu-device-probe'
+import { gpuDeviceAvailable } from './llm/gpu-device-probe'
 import { shouldAutoRecover } from './llm/crash-policy'
 import { enginePriority } from './llm/engine-priority'
 import { streamCompletion, type StreamResult } from './llm/stream'
@@ -217,16 +217,10 @@ export class LLMService {
   private modelMaxCtx: number | null = null
   private modelMaxCtxFor = ''
   private initialized = false
-  // Which engine binary the last spawn used. Windows ships a Vulkan build and a CPU-only
-  // fallback, so the path is the only record of which one actually took the model. Read
-  // ONLY through activeAccelerator(), which gates it on `initialized` — that flag stays the
-  // single authority on whether an engine is up, rather than a second flag kept in step.
-  private activeEnginePath = ''
   private backendOutput = ''
   private backendModelPath = ''
   private backendPlacement: ReturnType<typeof parseNativeBackend>
   private backendFallbackReason: string | undefined
-  private activeGpuLayers: number | null = 0
   // A model selection is durable as soon as the manager writes active-model.json, but
   // replacing llama-server while it is answering destroys the user's in-flight turn.
   // LLMService owns that process, so it also owns the handoff: admitted generations
@@ -443,7 +437,7 @@ export class LLMService {
     return {
       id: 'chat', model: this.backendModelPath,
       state: this.initialized ? 'loaded' : this.isStarting() ? 'loading' : this.lastError() ? 'error' : 'stopped',
-      backend: this.initialized ? placement?.backend ?? this.activeAccelerator() ?? undefined : undefined,
+      backend: placement?.backend,
       device: placement?.device,
       detail: this.lastError() ?? this.backendFallbackReason
     }
@@ -451,11 +445,12 @@ export class LLMService {
 
   activeAccelerator(): EngineAccelerator | null {
     if (!this.initialized) return null
-    return acceleratorForEngine({
-      platform: process.platform,
-      serverPath: this.activeEnginePath,
-      gpuLayers: this.activeGpuLayers
-    })
+    const backend = this.backendPlacement?.backend
+    if (!backend) return null
+    if (backend.includes('CUDA')) return 'CUDA'
+    if (backend.includes('Vulkan')) return 'Vulkan'
+    if (backend.includes('Metal')) return 'Metal'
+    return backend === 'CPU' ? 'CPU' : null
   }
 
   getSettings(): LlmSettings {
@@ -515,7 +510,8 @@ export class LLMService {
       batchSize: this.batchSize,
       speculativeDecoding: useSelectedModelSpeculation ? this.speculativeDecoding : 'off',
       draftModelPath: useSelectedModelSpeculation ? this.draftModelPath() : undefined,
-      imageMinTokens: this.imageMinTokensForModel()
+      imageMinTokens: this.imageMinTokensForModel(),
+      reportModelPlacement: true
     })
   }
 
@@ -1046,7 +1042,7 @@ export class LLMService {
           console.warn(`[LLMService] out of memory — retrying load at ${at.reason}`)
         }
         const args = this.launchArgsFor(at.ctxSize, at.gpuLayers)
-        if (await this.launchServer(serverPath, args, at.gpuLayers)) {
+        if (await this.launchServer(serverPath, args)) {
           if (a > 0) {
             console.warn(`[LLMService] model loaded via fallback: ${at.reason}`)
           }
@@ -1068,11 +1064,7 @@ export class LLMService {
           await this.prepareModelPort()
           if (generation !== this.launchGeneration) return false
           if (
-            await this.launchServer(
-              serverPath,
-              this.launchArgsFor(at.ctxSize, at.gpuLayers),
-              at.gpuLayers
-            )
+            await this.launchServer(serverPath, this.launchArgsFor(at.ctxSize, at.gpuLayers))
           ) {
             return true
           }
@@ -1090,11 +1082,7 @@ export class LLMService {
    *  true when it's ready, false when it fails to start — so _doInit can fall
    *  through to the next engine (Windows Vulkan -> CPU). A failed process is torn
    *  down with its close handler neutralized so it can't trigger a crash-restart. */
-  private async launchServer(
-    serverPath: string,
-    args: string[],
-    gpuLayers: number
-  ): Promise<boolean> {
+  private async launchServer(serverPath: string, args: string[]): Promise<boolean> {
     const binDir = path.dirname(serverPath)
     console.log(`[LLMService] Starting llama-server from ${serverPath}`)
     // Strip macOS quarantine attributes on production builds (downloaded DMGs get quarantined)
@@ -1132,13 +1120,10 @@ export class LLMService {
     // deliberate and auto-recovery is skipped.
     this.intentionalStop = false
     this.server = proc
-    this.activeEnginePath = serverPath
     this.backendOutput = ''
     this.backendModelPath = this.modelPath
     this.backendPlacement = undefined
     this.stderrTail = []
-    let confirmedOffload: number | null = null
-    let offloadLogTail = ''
     this.invalidateHealth()
     let abandoned = false // set when we give up on this proc so its close handler is inert
     // True until waitForReady() confirms THIS engine. A close while probing is a failed
@@ -1155,12 +1140,11 @@ export class LLMService {
 
     proc.stderr?.on('data', (data) => {
       const text = String(data)
+      // Verbosity 4 also emits request traces. Read and log it only during model
+      // load so user prompts cannot enter the app log or its diagnostic tail.
+      if (!probing || this.server !== proc) return
       console.log(`[llama-server] ${text}`)
-      if (this.server === proc) this.backendOutput = (this.backendOutput + text).slice(-65536)
-      const offloadLog = offloadLogTail + text
-      const count = offloadedGpuLayers(offloadLog)
-      if (count !== null) confirmedOffload = count
-      offloadLogTail = offloadLog.slice(-128)
+      this.backendOutput = (this.backendOutput + text).slice(-65536)
       // Keep a rolling tail so we can classify a load failure after it exits.
       for (const line of text.split(/\r?\n/)) if (line.trim()) this.stderrTail.push(line)
       if (this.stderrTail.length > 50) this.stderrTail = this.stderrTail.slice(-50)
@@ -1203,13 +1187,13 @@ export class LLMService {
       if (this.server !== proc) throw new Error('Model load was cancelled')
       // Confirmed healthy: from here a close IS a crash worth recovering from.
       probing = false
+      this.stderrTail = []
       console.log('[LLMService] Vision server ready!')
       const engineDir = path.basename(binDir)
-      this.activeGpuLayers = gpuLayers === 0 || engineDir.endsWith('-cpu') ? 0 : confirmedOffload
-      console.log(
-        `[LLMService] model ready: engine=${engineDir}, GPU layers=${this.activeGpuLayers ?? 'unconfirmed'}`
-      )
       this.backendPlacement = parseNativeBackend(this.backendOutput)
+      console.log(
+        `[LLMService] model ready: engine=${engineDir}, backend=${this.backendPlacement?.backend ?? 'unconfirmed'}`
+      )
       this.initialized = true
       this.lastErrorMsg = null // healthy again — clear any prior failure reason
       this.invalidateHealth()

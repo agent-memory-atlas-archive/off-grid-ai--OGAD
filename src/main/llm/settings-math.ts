@@ -111,6 +111,8 @@ export interface LaunchArgsInput {
   // Floor on image tokens. GUI-grounding (Qwen-VL / UI-TARS) models need >=1024
   // or they ground inaccurately (llama.cpp warns); undefined = engine default.
   imageMinTokens?: number
+  /** Request llama.cpp's model-allocation report for a caller that filters request traces. */
+  reportModelPlacement?: boolean
 }
 
 /** Build the exact argv passed to `llama-server`. Pure: same inputs → same args, no I/O.
@@ -134,6 +136,8 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
     '-ngl',
     String(i.gpuLayers)
   )
+  // llama.cpp maps its model-allocation INFO messages to verbosity 4.
+  if (i.reportModelPlacement) args.push('-lv', '4')
   // FlashAttention: faster + lower memory. Required for a quantized KV cache.
   if (i.flashAttn || i.kvCacheType !== 'f16') {
     args.push('--flash-attn', 'on')
