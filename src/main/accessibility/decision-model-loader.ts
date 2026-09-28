@@ -11,6 +11,7 @@ import type { OptionDecision } from '../llm'
 import { parseRemoteVisionModelId } from '../../shared/remote-vision-server'
 import {
   currentRemoteScreenTaskSession,
+  screenTaskRequestSource,
   runWithRemoteScreenTaskSession
 } from '../actions/remote-screen-session'
 import { getRemoteVisionServerForModel } from '../vision/remote-vision-server'
@@ -166,7 +167,8 @@ async function decideWithRemoteModel(
     {
       taskKind: session?.taskKind ?? 'computer_use',
       modelStrategy: session?.modelStrategy ?? getComputerUseSettings().modelStrategy,
-      activeServer: remote
+      activeServer: remote,
+      modelRole: 'decider'
     },
     async () => {
       const content = await llm.chatMessages(
@@ -204,7 +206,7 @@ export async function decideWithDecisionModel(
   return recordAIRequest(
     {
       modality: 'text',
-      source: 'Decision',
+      source: screenTaskRequestSource('Decision', 'decider'),
       model: selectedDecisionModelId(),
       request: { context, question, options },
       signal

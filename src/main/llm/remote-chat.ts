@@ -8,6 +8,7 @@ import {
 } from './stream'
 import { writeDiagnosticLog } from '../diagnostics-log'
 import { currentAIRequest } from '../ai-request-log'
+import { screenTaskRequestSource } from '../actions/remote-screen-session'
 
 export interface RemoteTextModelConnection {
   id: string
@@ -367,7 +368,9 @@ export async function streamRemoteChatCompletion(input: {
     model: remote.model,
     backend:
       remote.computeBackend ?? (remote.id.startsWith('local-grounder:') ? 'Unknown' : 'Remote'),
-    ...(remote.id.startsWith('local-grounder:') ? { source: 'Grounding specialist' } : {})
+    ...(remote.id.startsWith('local-grounder:')
+      ? { source: screenTaskRequestSource('Grounding specialist', 'grounding') }
+      : {})
   })
   const accumulator = createCompletionStreamAccumulator((text, kind) => {
     log?.delta(text, kind)

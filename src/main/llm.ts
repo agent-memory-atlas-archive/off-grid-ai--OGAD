@@ -58,7 +58,10 @@ import { emitChangedLlmSettings } from './sync-mutation'
 import { loadGatedVisionModelAdapter } from './vision/model-adapters/registry'
 import type { VisionModelArtifacts } from './vision/model-adapters/types'
 import { getActiveRemoteVisionServer } from './vision/remote-vision-server'
-import { currentRemoteScreenTaskSession } from './actions/remote-screen-session'
+import {
+  currentRemoteScreenTaskSession,
+  screenTaskRequestSource
+} from './actions/remote-screen-session'
 
 export type { KvCacheType, PerformanceMode, SpeculativeDecodingMode }
 
@@ -1388,7 +1391,7 @@ export class LLMService {
     return recordAIRequest(
       {
         modality: 'text',
-        source: 'Decision model swap',
+        source: screenTaskRequestSource('Decision model swap', 'decider'),
         request: { context, question, options },
         signal
       },
@@ -1511,7 +1514,7 @@ export class LLMService {
     return recordAIRequest(
       {
         modality: 'text',
-        source: 'Chat',
+        source: screenTaskRequestSource('Chat'),
         model: this.modelPath,
         request: { messages, ...opts, maxTokens },
         signal: opts.signal
@@ -1564,7 +1567,7 @@ export class LLMService {
     return recordAIRequest(
       {
         modality: 'text',
-        source: 'Messages',
+        source: screenTaskRequestSource('Messages'),
         model: remote?.model ?? this.modelPath,
         request: { messages, ...opts, maxTokens },
         signal: opts.signal
@@ -1710,7 +1713,7 @@ export class LLMService {
     return recordAIRequest(
       {
         modality: 'text',
-        source: 'Chat stream',
+        source: screenTaskRequestSource('Chat stream'),
         model: this.modelPath,
         request: { messages, ...opts, maxTokens },
         signal: opts.signal
@@ -1811,7 +1814,7 @@ export class LLMService {
     return recordAIRequest(
       {
         modality: 'text',
-        source: 'Tool / task turn',
+        source: screenTaskRequestSource('Tool / task turn'),
         model: remote?.model ?? this.modelPath,
         request: { messages, ...opts },
         signal: opts.signal

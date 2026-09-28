@@ -142,7 +142,8 @@ export async function withGrounder<T>(
       {
         taskKind: screenTask?.taskKind ?? 'computer_use',
         modelStrategy: screenTask?.modelStrategy ?? getComputerUseSettings().modelStrategy,
-        activeServer: remoteGrounder
+        activeServer: remoteGrounder,
+        modelRole: 'grounding'
       },
       () => directRun(task, now)
     )
@@ -152,7 +153,8 @@ export async function withGrounder<T>(
     {
       taskKind: screenTask?.taskKind ?? 'computer_use',
       modelStrategy: screenTask?.modelStrategy ?? getComputerUseSettings().modelStrategy,
-      activeServer: localGrounder
+      activeServer: localGrounder,
+      modelRole: 'grounding'
     },
     () => directRun(task, now)
   )
