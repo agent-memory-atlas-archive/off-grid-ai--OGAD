@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { open } from 'node:fs/promises'
 import type { AIRequestRecord, AIModality } from '../shared/ai-request-log'
 import { AI_LOG_POLICY } from '../shared/ai-request-log'
+import type { RuntimeBackend } from '../shared/runtime-backends'
 
 type Metadata = {
   modality: AIModality
@@ -85,6 +86,8 @@ export class AIRequestHandle {
   private done = false
   private content = ''
   private reasoning = ''
+  private runtime?: RuntimeBackend
+  private readonly parent = context.getStore()
   private record: AIRequestRecord
   constructor(meta: Metadata) {
     const parent = context.getStore()
@@ -117,6 +120,21 @@ export class AIRequestHandle {
     } catch {
       /* best effort */
     }
+  }
+  /** Keep request evidence separate from the live state, which is cleared on unload. */
+  useRuntime(runtime: RuntimeBackend): void {
+    if (!this.enabled || this.done || runtime.state !== 'loaded' || !runtime.backend) return
+    if (
+      this.runtime?.id === runtime.id &&
+      this.runtime.model === runtime.model &&
+      this.runtime.backend === runtime.backend &&
+      this.runtime.device === runtime.device &&
+      this.runtime.detail === runtime.detail
+    )
+      return
+    this.runtime = { ...runtime }
+    this.record.backend = runtime.backend
+    this.publish()
   }
   delta(text: string, kind: 'content' | 'reasoning'): void {
     if (!this.enabled) return
@@ -161,7 +179,8 @@ export class AIRequestHandle {
           this.record.error = String(error instanceof Error ? error.message : error).slice(0, 4096)
         if (result && typeof result === 'object') {
           const output = result as Record<string, unknown>
-          if (typeof output.computeBackend === 'string') this.record.backend = output.computeBackend
+          if (!this.runtime && typeof output.computeBackend === 'string')
+            this.record.backend = output.computeBackend
           if (typeof output.model === 'string') this.record.model = output.model
           if (output.metrics && typeof output.metrics === 'object')
             this.record.metrics = snapshotAIValue({
@@ -174,6 +193,22 @@ export class AIRequestHandle {
         )
         if (this.reasoning)
           this.record.response = { result: this.record.response, reasoning: this.reasoning }
+        if (this.runtime) {
+          this.record.backend = this.runtime.backend
+          this.record.metrics = {
+            ...this.record.metrics,
+            computeBackend: this.runtime.backend,
+            runtime: { ...this.runtime }
+          }
+          // A successful retry owns the parent result. Failed attempts retain
+          // their own evidence without labelling the eventual fallback result.
+          if (
+            this.record.status === 'completed' &&
+            this.record.modality !== 'text' &&
+            this.parent?.record.modality === this.record.modality
+          )
+            this.parent.useRuntime(this.runtime)
+        }
       }
     } catch {
       /* A malformed payload must not change the inference result. */
