@@ -1,3 +1,4 @@
+import { runtimeBackendSnapshot } from './runtime-backends'
 // Unified setup + system-health surface. Two jobs:
 //   1. getSystemHealth() — one aggregated snapshot of every local component
 //      (chat LLM / gateway / vision / embeddings / STT / TTS / image gen) so the
@@ -167,6 +168,11 @@ export async function getSystemHealth(): Promise<SystemHealth> {
       status: image.available ? 'ready' : 'not_installed',
       detail: image.available ? undefined : (image.reason ?? 'No image model installed')
     },
+    ...(['grounding', 'decision'] as const).map((id): HealthComponent => {
+      const runtime = runtimeBackendSnapshot().find((entry) => entry.id === id)
+      return { id, label: id === 'grounding' ? 'Computer Use grounding' : 'Computer / Web Use decision',
+        status: runtime?.state === 'loaded' ? 'ready' : runtime?.state === 'loading' ? 'starting' : 'down' }
+    }),
     ...getNativeHelperHealth()
   ]
 

@@ -1,3 +1,4 @@
+import { runtimeBackendSnapshot } from './runtime-backends'
 import type { PermissionStatusContract, SystemHealthContract } from '../shared/ipc-contracts'
 import { llm } from './llm'
 import { getPermissionStatus } from './permissions'
@@ -90,6 +91,7 @@ export function setupSystemStatusIpc(
   target.handle('system:chat-health', () =>
     import('./setup').then((module) => module.getChatHealth())
   )
+  target.handle('system:runtime-backends', () => [llm.runtimeBackend(), ...runtimeBackendSnapshot()])
   target.handle('system:health', () => getRenderedSystemHealth())
   target.handle('permissions:get-status', () => getPermissionStatus())
 
