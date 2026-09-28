@@ -67,7 +67,7 @@ export class DecisionRuntime {
 
   async start(modelId: string): Promise<void> {
     if (this.running && this.modelId === modelId) return
-    if (this.startPromise) return this.startPromise
+    if (this.startPromise !== null) return this.startPromise
     this.startPromise = this.startInternal(modelId).finally(() => {
       this.startPromise = null
     })
