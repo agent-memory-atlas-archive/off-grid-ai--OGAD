@@ -61,6 +61,7 @@ import { evaluateMemoryGuard } from './imagegen/memory-guard'
 import {
   buildCoreMLArgs,
   buildQwenImage21Args,
+  qwenImageArgsForBackend,
   buildZImageArgs,
   buildStandardArgs,
   DEFAULT_NEGATIVE
@@ -1104,7 +1105,12 @@ async function runImageGen(
       new Promise<void>((resolve, reject) => {
         // cwd at the binary dir so @executable_path rpath resolves libstable-diffusion.dylib.
         const binDir = path.dirname(runtime)
-        const child = spawn(runtime, args, {
+        // Qwen needs the model on the L40S for CUDA inference. Keep CPU offload
+        // for other runtimes, including a fallback after CUDA startup fails.
+        const runtimeArgs = isQwenImage21
+          ? qwenImageArgsForBackend(args, imageBackendForRuntime(process.platform, runtime))
+          : args
+        const child = spawn(runtime, runtimeArgs, {
           cwd: binDir,
           env: { ...process.env, ...sdRuntimeLibraryEnv(process.platform, runtime, process.env) }
         })
