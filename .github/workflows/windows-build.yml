@@ -209,7 +209,7 @@ jobs:
       - name: Build (typecheck + bundle)
         run: npm run build
 
-      - name: Package Windows installer (NSIS)
+      - name: Package Windows web installer and payload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Optional Windows code signing (no-op if absent → unsigned; SmartScreen
@@ -224,7 +224,7 @@ jobs:
           name: off-grid-ai-windows
           path: |
             dist/*.exe
-            dist/*.zip
+            dist/*.7z
           if-no-files-found: error
 
   build-linux:

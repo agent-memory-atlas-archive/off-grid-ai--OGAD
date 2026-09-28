@@ -610,7 +610,7 @@ jobs:
         run: npm version "${{ needs.version.outputs.version }}" --no-git-tag-version --allow-same-version
       - name: Stage native files and bundle
         run: node scripts/stage-native.mjs && npx electron-vite build
-      - name: Package & publish (NSIS installer + auto-update metadata)
+      - name: Package and publish Windows web installer, payload, and update metadata
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
