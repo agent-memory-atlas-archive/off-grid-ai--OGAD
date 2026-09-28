@@ -345,7 +345,7 @@ jobs:
             test -x "$engine"
             file "$engine" | grep -q 'ELF 64-bit.*x86-64'
             LD_LIBRARY_PATH="$(dirname "$engine")" ldd "$engine" | tee "$RUNNER_TEMP/$variant-ldd.txt"
-            ! grep -q 'not found' "$RUNNER_TEMP/$variant-ldd.txt"
+            if grep -q 'not found' "$RUNNER_TEMP/$variant-ldd.txt"; then exit 1; fi
             LD_LIBRARY_PATH="$(dirname "$engine")" "$engine" --version
           done
           for variant in llama-cuda llama-prism-cuda; do

@@ -769,7 +769,7 @@ jobs:
             test -x "$engine"
             file "$engine" | grep -q 'ELF 64-bit.*x86-64'
             LD_LIBRARY_PATH="$(dirname "$engine")" ldd "$engine" | tee "$RUNNER_TEMP/$variant-ldd.txt"
-            ! grep -q 'not found' "$RUNNER_TEMP/$variant-ldd.txt"
+            if grep -q 'not found' "$RUNNER_TEMP/$variant-ldd.txt"; then exit 1; fi
             LD_LIBRARY_PATH="$(dirname "$engine")" "$engine" --version
           done
           for variant in llama llama-prism; do
@@ -787,7 +787,7 @@ jobs:
             test -x "$binary"
             file "$binary" | grep -q 'ELF 64-bit.*x86-64'
             ldd "$binary" | tee "$RUNNER_TEMP/$(basename "$binary")-ldd.txt"
-            ! grep -q 'not found' "$RUNNER_TEMP/$(basename "$binary")-ldd.txt"
+            if grep -q 'not found' "$RUNNER_TEMP/$(basename "$binary")-ldd.txt"; then exit 1; fi
           done
           dist/linux-unpacked/resources/bin/ffmpeg -version >/dev/null
           dist/linux-unpacked/resources/bin/whisper/whisper-cli --help >/dev/null 2>&1
@@ -797,7 +797,7 @@ jobs:
             test -x "$binary"
             file "$binary" | grep -q 'ELF 64-bit.*x86-64'
             LD_LIBRARY_PATH="$(dirname "$binary")" ldd "$binary" | tee "$RUNNER_TEMP/$(basename "$binary")-ldd.txt"
-            ! grep -q 'not found' "$RUNNER_TEMP/$(basename "$binary")-ldd.txt"
+            if grep -q 'not found' "$RUNNER_TEMP/$(basename "$binary")-ldd.txt"; then exit 1; fi
           done
           LD_LIBRARY_PATH=dist/linux-unpacked/resources/bin/sd \
             dist/linux-unpacked/resources/bin/sd/sd-cli --list-devices | grep -q '^CPU'
