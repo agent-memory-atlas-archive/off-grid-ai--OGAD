@@ -182,7 +182,7 @@ function enqueue(record: AIRequestRecord): void {
     }
     pending.set(record.id, json)
     queuedBytes = size
-    if (!scheduled && !draining) {
+    if (!scheduled && draining === undefined) {
       scheduled = true
       setImmediate(() => {
         scheduled = false
@@ -195,7 +195,7 @@ function enqueue(record: AIRequestRecord): void {
 }
 
 export async function flushAIRequestLogs(): Promise<void> {
-  if (draining) return draining
+  if (draining !== undefined) return draining
   draining = (async () => {
     while (pending.size) {
       const [id, json] = pending.entries().next().value!
