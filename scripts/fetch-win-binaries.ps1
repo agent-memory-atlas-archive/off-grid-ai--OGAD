@@ -98,15 +98,36 @@ function Copy-Runtime($srcDir, $destName) {
 # The version has ONE owner: package.json's offgrid.llamaRef, shared with build-llama.sh. Hardcoding it in
 # both is how the macOS build and the Windows binaries drift apart within a single release.
 $PackageJson = Join-Path (Split-Path $PSScriptRoot -Parent) 'package.json'
-$LlamaRef = if ($env:LLAMA_REF) { $env:LLAMA_REF } else { (Get-Content $PackageJson -Raw | ConvertFrom-Json).offgrid.llamaRef }
+$DefaultLlamaRef = (Get-Content $PackageJson -Raw | ConvertFrom-Json).offgrid.llamaRef
+$LlamaRef = if ($env:LLAMA_REF) { $env:LLAMA_REF } else { $DefaultLlamaRef }
+$LlamaHashes = @{
+  cuda = 'cb6e838cad17e9920b99ab8496ca9aa7cdc3d3c218128957179bb1fbe0772c4c'
+  cudart = '8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6'
+  vulkan = 'b7b5ef4a1f47542635a3a5e3e471cbfcbaee057aa0c962f9573329ddd9168c5a'
+  cpu = 'a2668a200ca7271e66af0a54fd4376aaf8ae0b2a562cf7a63c41d8fd2a8245fa'
+}
+if ($LlamaRef -ne $DefaultLlamaRef) {
+  $overrideHashes = @{
+    cuda = $env:LLAMA_CUDA_SHA256
+    cudart = $env:LLAMA_CUDART_SHA256
+    vulkan = $env:LLAMA_VULKAN_SHA256
+    cpu = $env:LLAMA_CPU_SHA256
+  }
+  foreach ($name in $overrideHashes.Keys) {
+    if ($overrideHashes[$name] -notmatch '^[0-9a-fA-F]{64}$') {
+      throw "LLAMA_REF override requires LLAMA_${name}_SHA256 (64 hex characters) before any downloads"
+    }
+  }
+  $LlamaHashes = $overrideHashes
+}
 Write-Host "== llama.cpp (pinned $LlamaRef): CUDA + Vulkan + CPU =="
-$x = Expand-Asset 'ggml-org/llama.cpp' '^llama-.+-bin-win-cuda-12\.4-x64\.zip$' $LlamaRef 'cb6e838cad17e9920b99ab8496ca9aa7cdc3d3c218128957179bb1fbe0772c4c'
+$x = Expand-Asset 'ggml-org/llama.cpp' '^llama-.+-bin-win-cuda-12\.4-x64\.zip$' $LlamaRef $LlamaHashes.cuda
 Copy-Runtime $x 'llama-cuda' | Out-Null
-$x = Expand-Asset 'ggml-org/llama.cpp' '^cudart-llama-bin-win-cuda-12\.4-x64\.zip$' $LlamaRef '8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6'
+$x = Expand-Asset 'ggml-org/llama.cpp' '^cudart-llama-bin-win-cuda-12\.4-x64\.zip$' $LlamaRef $LlamaHashes.cudart
 Copy-Runtime $x 'cuda-runtime' | Out-Null
-$x = Expand-Asset 'ggml-org/llama.cpp' 'bin-win-vulkan-x64\.zip$' $LlamaRef 'b7b5ef4a1f47542635a3a5e3e471cbfcbaee057aa0c962f9573329ddd9168c5a'
+$x = Expand-Asset 'ggml-org/llama.cpp' 'bin-win-vulkan-x64\.zip$' $LlamaRef $LlamaHashes.vulkan
 Copy-Runtime $x 'llama' | Out-Null
-$x = Expand-Asset 'ggml-org/llama.cpp' 'bin-win-cpu-x64\.zip$' $LlamaRef 'a2668a200ca7271e66af0a54fd4376aaf8ae0b2a562cf7a63c41d8fd2a8245fa'
+$x = Expand-Asset 'ggml-org/llama.cpp' 'bin-win-cpu-x64\.zip$' $LlamaRef $LlamaHashes.cpu
 Copy-Runtime $x 'llama-cpu' | Out-Null
 
 # Bonsai 2 uses packed ternary weights that require PrismML's llama.cpp fork.
