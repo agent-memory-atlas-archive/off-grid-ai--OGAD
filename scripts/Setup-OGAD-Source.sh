@@ -63,7 +63,7 @@ if ! gh auth status --hostname github.com >/dev/null 2>&1; then
 fi
 gh auth setup-git --hostname github.com
 gh api user --jq .login
-for repo in OGAD shared executorch-speech; do
+for repo in OGAD shared desktop-pro executorch-speech; do
   gh repo view "off-grid-ai/$repo" --json nameWithOwner --jq .nameWithOwner
 done
 
@@ -90,6 +90,7 @@ sync_repo() {
 }
 sync_repo off-grid-ai/OGAD "$workspace/desktop" "$branch"
 sync_repo off-grid-ai/shared "$workspace/shared" "$branch"
+GIT_LFS_SKIP_SMUDGE=1 git -C "$workspace/desktop" submodule update --init pro
 if [[ ! -e $workspace/executorch-speech ]]; then
   GIT_LFS_SKIP_SMUDGE=1 gh repo clone off-grid-ai/executorch-speech "$workspace/executorch-speech"
 fi
@@ -127,9 +128,9 @@ python3 -m venv "$workspace/build-python"
   --extra-index-url https://pypi.org/simple
 "$workspace/build-python/bin/python" -c 'import torchgen, yaml, jinja2'
 
-step '5 of 6: Build Linux core app'
+step '5 of 6: Build Linux app'
 export PATH="$workspace/build-python/bin:$PATH"
-export OFFGRID_FORCE_CORE=1
+export OFFGRID_FORCE_CORE=0
 npm run typecheck:node
 npm run build:linux
 for executable in build/linux-bin/llama-cuda/llama-server \
@@ -146,5 +147,5 @@ if [[ -n ${DISPLAY:-} && ${1:-} != --setup-only ]]; then
   read -r -p 'Press Enter to start OGAD. Keep this terminal open. ' _
   npm run dev
 else
-  echo "To start from the Linux desktop terminal: cd '$workspace/desktop' && OFFGRID_FORCE_CORE=1 npm run dev"
+  echo "To start from the Linux desktop terminal: cd '$workspace/desktop' && OFFGRID_FORCE_CORE=0 npm run dev"
 fi

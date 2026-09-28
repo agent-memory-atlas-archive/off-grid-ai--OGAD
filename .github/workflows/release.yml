@@ -64,7 +64,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Resolve channel + version
         id: bump
         run: |
@@ -216,7 +216,7 @@ jobs:
         run: rm -rf pro/.git # don't nest a repo inside the build tree
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
       # Shared packages are file: dependencies on the shared monorepo, so it must sit BESIDE this
       # checkout before `npm ci` runs - an install cannot resolve a path that does not exist, and the
@@ -523,7 +523,7 @@ jobs:
         run: rm -rf pro/.git # don't nest a repo inside the build tree
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
       # node-gyp (better-sqlite3-multiple-ciphers) fails on Python 3.13+; pin 3.12.
       - uses: actions/setup-python@v5

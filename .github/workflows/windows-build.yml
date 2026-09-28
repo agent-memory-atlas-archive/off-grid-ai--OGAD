@@ -61,6 +61,17 @@ jobs:
           ref: ${{ inputs.build_ref || github.ref }}
           persist-credentials: false # don't leave the token in .git/config for npm postinstall scripts
           lfs: false # pull only the cross-platform Kev launcher below, not ~235 MB of macOS binaries
+      - name: Check Windows source setup script syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/Setup-OGAD-Source.ps1').Path,
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
       - name: Pull the Kev server launcher from LFS
         shell: bash
         run: |
@@ -99,7 +110,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       # node-gyp (better-sqlite3-multiple-ciphers) fails on Python 3.13+; pin 3.12.
@@ -227,6 +238,8 @@ jobs:
           ref: ${{ inputs.build_ref || github.ref }}
           lfs: false # Tracked native binaries are macOS files; build Linux ELF below.
           persist-credentials: false
+      - name: Check Linux source setup script syntax
+        run: bash -n scripts/Setup-OGAD-Source.sh
 
       - name: Resolve pinned Pro source
         if: env.HAS_PRO_TOKEN == 'true'
