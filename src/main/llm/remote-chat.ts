@@ -1,5 +1,5 @@
 import { REASONING_BUDGET_AUTO, openRouterReasoningPayload } from '@offgrid/models'
-import type { RemoteVisionProvider } from '../../shared/remote-vision-server'
+import type { RemoteTextModelConnection } from './remote-chat-types'
 import { detectThinkingDialect, type ThinkingDialect } from './thinking-dialect'
 import {
   createCompletionStreamAccumulator,
@@ -10,16 +10,7 @@ import { writeDiagnosticLog } from '../diagnostics-log'
 import { currentAIRequest } from '../ai-request-log'
 import { screenTaskRequestSource } from '../actions/remote-screen-session'
 
-export interface RemoteTextModelConnection {
-  id: string
-  name: string
-  provider: Exclude<RemoteVisionProvider, 'local'>
-  endpoint: string
-  model: string
-  apiKey: string
-  /** Set only by a local runtime after it reports its execution backend. */
-  computeBackend?: string
-}
+export type { RemoteTextModelConnection } from './remote-chat-types'
 
 export interface RemoteChatRequest {
   messages: unknown[]

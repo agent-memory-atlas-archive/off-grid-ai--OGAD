@@ -4,7 +4,7 @@ import path from 'node:path'
 import { app } from 'electron'
 import type { ComputerUseModelStrategy } from '../../shared/computer-use-settings'
 import type { ScreenTaskKind } from '../../shared/remote-screen-privacy'
-import type { RemoteTextModelConnection } from '../llm/remote-chat'
+import type { RemoteTextModelConnection } from '../llm/remote-chat-types'
 
 export type ComputerUseRunMetric =
   | 'axSteps'
