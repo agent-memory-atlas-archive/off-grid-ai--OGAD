@@ -1,9 +1,7 @@
-import { beginRuntimeBackend } from '../runtime-backends'
+import { beginRuntimeBackend, parseNativeBackend } from '../runtime-backends'
 import { spawn, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { currentAIRequest } from '../ai-request-log'
-import { offloadedGpuLayers } from '../llm/gpu-device-probe'
-import { acceleratorForEngine } from '../../shared/engine-accelerator'
 import { Mutex } from 'async-mutex'
 import { prepareModelMemory, registerModelEvictor } from '../model-memory'
 import {
@@ -50,6 +48,7 @@ export class DecisionRuntime {
   private startPromise: Promise<void> | null = null
   private modelId: string | null = null
   private stderr = ''
+  private backendOutput = ''
   private backend: string | undefined
   private backendState?: ReturnType<typeof beginRuntimeBackend>
   readonly timing: DecisionRuntimeTiming = { coldStartMs: 0, warmDecisionMs: [] }
@@ -100,6 +99,7 @@ export class DecisionRuntime {
     this.port = port
     this.modelId = modelId
     this.stderr = ''
+    this.backendOutput = ''
     this.backend = undefined
     const backendState = beginRuntimeBackend('decision', this.modelId!)
     this.backendState = backendState
@@ -115,7 +115,8 @@ export class DecisionRuntime {
       kvCacheType: 'q8_0',
       speculativeDecoding: 'off',
       threads: undefined,
-      batchSize: 128
+      batchSize: 128,
+      reportModelPlacement: true
     })
     const startedAt = Date.now()
     const process = spawn(serverPath, args, {
@@ -130,18 +131,15 @@ export class DecisionRuntime {
       stdio: ['ignore', 'ignore', 'pipe']
     })
     this.process = process
+    let loading = true
     process.stderr!.on('data', (chunk) => {
-      this.stderr = `${this.stderr}${String(chunk)}`.slice(-16_384)
-      const layers = offloadedGpuLayers(this.stderr)
-      if (layers !== null)
-        this.backend =
-          acceleratorForEngine({
-            platform: globalThis.process.platform,
-            serverPath,
-            gpuLayers: layers
-          }) ?? undefined
-      backendState.observe(String(chunk))
-      console.log(`[Decision runtime] ${String(chunk)}`)
+      if (loading) {
+        const output = String(chunk)
+        this.stderr = `${this.stderr}${output}`.slice(-16_384)
+        this.backendOutput = `${this.backendOutput}${output}`.slice(-65_536)
+        backendState.observe(output)
+        console.log(`[Decision runtime] ${output}`)
+      }
     })
     process.once('close', () => {
       backendState.stop()
@@ -149,6 +147,8 @@ export class DecisionRuntime {
     })
     try {
       await this.waitUntilReady(startedAt)
+      loading = false // Level 4 can contain request data after startup.
+      this.backend = parseNativeBackend(this.backendOutput)?.backend
       backendState.ready(this.backend)
       this.timing.coldStartMs = Date.now() - startedAt
     } catch (error) {

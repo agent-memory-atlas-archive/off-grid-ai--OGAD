@@ -1,4 +1,4 @@
-import { beginRuntimeBackend } from '../runtime-backends'
+import { beginRuntimeBackend, parseNativeBackend } from '../runtime-backends'
 import { spawn, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { Mutex } from 'async-mutex'
@@ -10,8 +10,6 @@ import { selectLocalEngine } from '../llm/select-local-engine'
 import { isPortFree, pickFreePort } from '../free-port'
 import { reapOrphanProcessesOnPort } from '../kill-orphan-port'
 import { resolveComputerUseModelArtifact } from '../models-manager'
-import { offloadedGpuLayers } from '../llm/gpu-device-probe'
-import { acceleratorForEngine } from '../../shared/engine-accelerator'
 
 const GROUNDER_PORT = 8489
 
@@ -22,6 +20,7 @@ export class GrounderRuntime {
   private port = GROUNDER_PORT
   private modelId: string | null = null
   private stderr = ''
+  private backendOutput = ''
   private backend: string | undefined
   private backendState?: ReturnType<typeof beginRuntimeBackend>
   private readonly mutex = new Mutex()
@@ -64,6 +63,7 @@ export class GrounderRuntime {
     this.port = port
     this.modelId = modelId
     this.stderr = ''
+    this.backendOutput = ''
     this.backend = undefined
     const backendState = beginRuntimeBackend('grounding', this.modelId!)
     this.backendState = backendState
@@ -80,7 +80,8 @@ export class GrounderRuntime {
         speculativeDecoding: 'off',
         threads: undefined,
         batchSize: 1_024,
-        imageMinTokens: 1_024
+        imageMinTokens: 1_024,
+        reportModelPlacement: true
       }),
       {
         env: {
@@ -95,18 +96,15 @@ export class GrounderRuntime {
       }
     )
     this.process = process
+    let loading = true
     process.stderr!.on('data', (chunk) => {
-      this.stderr = `${this.stderr}${String(chunk)}`.slice(-16_384)
-      const layers = offloadedGpuLayers(this.stderr)
-      if (layers !== null)
-        this.backend =
-          acceleratorForEngine({
-            platform: globalThis.process.platform,
-            serverPath,
-            gpuLayers: layers
-          }) ?? undefined
-      backendState.observe(String(chunk))
-      console.log(`[Grounding runtime] ${String(chunk)}`)
+      if (loading) {
+        const output = String(chunk)
+        this.stderr = `${this.stderr}${output}`.slice(-16_384)
+        this.backendOutput = `${this.backendOutput}${output}`.slice(-65_536)
+        backendState.observe(output)
+        console.log(`[Grounding runtime] ${output}`)
+      }
     })
     process.once('close', () => {
       backendState.stop()
@@ -115,6 +113,8 @@ export class GrounderRuntime {
 
     try {
       await this.waitUntilReady()
+      loading = false // Level 4 can contain request data after startup.
+      this.backend = parseNativeBackend(this.backendOutput)?.backend
       backendState.ready(this.backend)
     } catch (error) {
       await this.shutdown()
