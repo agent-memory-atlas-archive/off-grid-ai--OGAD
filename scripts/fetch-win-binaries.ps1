@@ -164,13 +164,15 @@ try {
   $cli = Join-Path $dest 'sd-cli.exe'
   $sd = Join-Path $dest 'sd.exe'
   if (-not (Test-Path $cli) -and (Test-Path $sd)) { Copy-Item $sd $cli -Force }
+} catch { Write-Warning "stable-diffusion.cpp Vulkan fetch failed: $_" }
 
+try {
   $x = Expand-Asset 'leejet/stable-diffusion.cpp' 'bin-win-cpu-x64\.zip$' $SdRef '10fc73b25bd97fb071c6bb6ba2a18e8811e6dd421c32bead98c18c84cd305d7f'
   $dest = Copy-Runtime $x 'sd-cpu'
   $cli = Join-Path $dest 'sd-cli.exe'
   $sd = Join-Path $dest 'sd.exe'
   if (-not (Test-Path $cli) -and (Test-Path $sd)) { Copy-Item $sd $cli -Force }
-} catch { Write-Warning "stable-diffusion.cpp fetch failed: $_" }
+} catch { Write-Warning "stable-diffusion.cpp CPU fetch failed: $_" }
 
 # --- ffmpeg (GPL, win64) — single ffmpeg.exe flat in resources/bin -----------
 Write-Host '== ffmpeg =='
