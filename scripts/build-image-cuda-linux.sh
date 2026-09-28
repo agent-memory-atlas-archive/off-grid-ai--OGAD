@@ -20,7 +20,9 @@ test "$(git -C "$WORK/src" rev-parse HEAD)" = "$SD_COMMIT"
 mkdir -p "$WORK/build"
 DOCKER=(docker)
 if ! docker info >/dev/null 2>&1; then DOCKER=(sudo docker); fi
+CUDA_ARCHITECTURES="${OFFGRID_CUDA_ARCHITECTURES:-61;70;75;80;86;89;90}"
 "${DOCKER[@]}" run --rm --platform linux/amd64 \
+  -e CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES" \
   -v "$WORK/src:/src:ro" -v "$WORK/build:/build" \
   "$CUDA_BUILD_IMAGE" bash -euo pipefail -c '
     trap "chmod -R a+rwX /build" EXIT
@@ -30,7 +32,7 @@ if ! docker info >/dev/null 2>&1; then DOCKER=(sudo docker); fi
       -DSD_CUDA=ON -DSD_VULKAN=OFF -DSD_BUILD_EXAMPLES=ON -DSD_SERVER_BUILD_FRONTEND=OFF \
       -DSD_BUILD_SHARED_LIBS=OFF -DSD_BUILD_SHARED_GGML_LIB=OFF \
       -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF \
-      -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89;90"
+      -DGGML_CUDA_NCCL=OFF -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES"
     cmake --build /build --config Release --parallel 4 --target sd-cli sd-server
   '
 

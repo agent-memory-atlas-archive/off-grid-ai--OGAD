@@ -16,6 +16,19 @@ if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
   echo '[build-voice-linux] Linux x64 is required' >&2
   exit 1
 fi
+if [ "${OFFGRID_REUSE_STAGED_VOICE:-0}" = 1 ]; then
+  for binary in "$ROOT/build/linux-bin/whisper-cuda/whisper-cli" \
+    "$ROOT/build/linux-bin/whisper/whisper-cli" \
+    "$ROOT/build/linux-bin/whisper-cpu/whisper-cli" \
+    "$ROOT/build/linux-bin/ffmpeg"; do
+    test -x "$binary"
+  done
+  dependencies="$(LD_LIBRARY_PATH="$ROOT/build/linux-bin/cuda-runtime" \
+    ldd "$ROOT/build/linux-bin/whisper-cuda/whisper-cli")"
+  test -z "$(printf '%s\n' "$dependencies" | grep 'not found' | grep -v 'libcuda.so.1' || true)"
+  echo '[build-voice-linux] reusing verified staged Whisper and FFmpeg'
+  exit 0
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf -- "$WORK"' EXIT
