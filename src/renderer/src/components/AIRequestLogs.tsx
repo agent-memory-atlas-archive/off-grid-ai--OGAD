@@ -718,6 +718,7 @@ export function AIRequestLogs({
                   <span className="flex justify-between gap-2 text-[11px] text-muted-foreground">
                     <span>
                       {labels[row.modality]}
+                      {row.source ? ` · ${row.source}` : ''}
                       {row.parentId ? ' · Attempt / child' : ''}
                     </span>
                     <time>{new Date(row.startedAt).toLocaleTimeString()}</time>
