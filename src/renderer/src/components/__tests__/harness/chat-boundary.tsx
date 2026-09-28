@@ -20,6 +20,7 @@ export type ThinkSplitterFactory = (
   emit: (event: { text: string; kind: 'content' | 'reasoning' }) => void
 ) => ThinkSplitter
 type RagResult = RagChatResultContract & {
+  imageRequests?: Array<{ prompt: string; enhancePrompt?: boolean }>
   unified?: unknown[]
   toolCalls?: Array<{
     name: string
@@ -239,8 +240,18 @@ export class ChatBoundary {
       if (conversation) conversation.project_id = projectId
     }),
     addRagMessage: this.addRagMessage,
+    updateRagMessage: async (conversationId: string, messageId: string, content: string, context?: unknown) => {
+      const message = this.messages[conversationId]?.find((entry) => entry.id === messageId)
+      if (!message) return false
+      message.content = content
+      if (context !== undefined) message.context = context
+      return true
+    },
     truncateRagMessages: this.truncateRagMessages,
     saveArtifact: this.saveArtifact,
+    artifactRuntime: async () => ({}),
+    createArtifactPreview: async (html: string) => `data:text/html,${encodeURIComponent(html)}`,
+    revokeArtifactPreview: async () => true,
     speak: vi.fn(() => {
       const turn = deferred<{ dataUrl: string }>()
       this.speechTurns.push(turn)
