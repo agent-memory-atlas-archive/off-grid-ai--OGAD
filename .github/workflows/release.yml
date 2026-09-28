@@ -789,6 +789,7 @@ jobs:
             ldd "$binary" | tee "$RUNNER_TEMP/$(basename "$binary")-ldd.txt"
             if grep -q 'not found' "$RUNNER_TEMP/$(basename "$binary")-ldd.txt"; then exit 1; fi
           done
+          test -x dist/linux-unpacked/resources/bin/whisper-cuda/whisper-cli
           dist/linux-unpacked/resources/bin/ffmpeg -version >/dev/null
           dist/linux-unpacked/resources/bin/whisper/whisper-cli --help >/dev/null 2>&1
           dist/linux-unpacked/resources/bin/whisper-cpu/whisper-cli --help >/dev/null 2>&1
@@ -828,6 +829,13 @@ jobs:
                 "/engines/$variant/llama-server" --list-devices
               fi
             done
+            for binary in whisper-cuda/whisper-cli sd-cuda/sd-cli sd-cuda/sd-server; do
+              test -x "/engines/$binary"
+              export LD_LIBRARY_PATH="/engines/$(dirname "$binary"):/engines/cuda-runtime"
+              dependencies="$(ldd "/engines/$binary")"
+              missing="$(printf "%s\n" "$dependencies" | grep "not found" | grep -v "libcuda.so.1" || true)"
+              test -z "$missing" || { printf "%s\n" "$missing" >&2; exit 1; }
+            done
           '
       - name: Verify packaged Linux native modules
         run: |
@@ -861,7 +869,7 @@ jobs:
             test -n "$bundled"
             cmp "dist/linux-unpacked/resources/bin/$variant/llama-server" "$bundled"
           done
-          for helper in whisper/whisper-cli whisper-cpu/whisper-cli whisper/LICENSE ffmpeg licenses/ffmpeg.txt sd/sd-cli sd/sd-server sd/libggml-vulkan.so sd/libgomp.so.1 sd/libvulkan.so.1 executorch-speech licenses/libgomp1.txt licenses/libvulkan1.txt; do
+          for helper in sd-cuda/sd-cli sd-cuda/sd-server whisper-cuda/whisper-cli whisper/whisper-cli whisper-cpu/whisper-cli whisper/LICENSE ffmpeg licenses/ffmpeg.txt sd/sd-cli sd/sd-server sd/libggml-vulkan.so sd/libgomp.so.1 sd/libvulkan.so.1 executorch-speech licenses/libgomp1.txt licenses/libvulkan1.txt; do
             bundled="$(find "$extraction/squashfs-root" -path "*/resources/bin/$helper" -type f -print -quit)"
             test -n "$bundled"
             cmp "dist/linux-unpacked/resources/bin/$helper" "$bundled"
@@ -882,7 +890,7 @@ jobs:
             test -n "$bundled"
             cmp "dist/linux-unpacked/resources/bin/$variant/llama-server" "$bundled"
           done
-          for helper in whisper/whisper-cli whisper-cpu/whisper-cli whisper/LICENSE ffmpeg licenses/ffmpeg.txt sd/sd-cli sd/sd-server sd/libggml-vulkan.so sd/libgomp.so.1 sd/libvulkan.so.1 executorch-speech licenses/libgomp1.txt licenses/libvulkan1.txt; do
+          for helper in sd-cuda/sd-cli sd-cuda/sd-server whisper-cuda/whisper-cli whisper/whisper-cli whisper-cpu/whisper-cli whisper/LICENSE ffmpeg licenses/ffmpeg.txt sd/sd-cli sd/sd-server sd/libggml-vulkan.so sd/libgomp.so.1 sd/libvulkan.so.1 executorch-speech licenses/libgomp1.txt licenses/libvulkan1.txt; do
             bundled="$(find "$extraction/deb" -path "*/resources/bin/$helper" -type f -print -quit)"
             test -n "$bundled"
             cmp "dist/linux-unpacked/resources/bin/$helper" "$bundled"

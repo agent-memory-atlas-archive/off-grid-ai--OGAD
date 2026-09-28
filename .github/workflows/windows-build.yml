@@ -355,7 +355,7 @@ jobs:
           for library in libcudart.so.12 libcublas.so.12 libcublasLt.so.12; do
             test -f "dist/linux-unpacked/resources/bin/cuda-runtime/$library"
           done
-          for helper in whisper/whisper-cli whisper-cpu/whisper-cli; do
+          for helper in whisper-cuda/whisper-cli whisper/whisper-cli whisper-cpu/whisper-cli; do
             test -x "dist/linux-unpacked/resources/bin/$helper"
           done
           test -n "$(find dist -maxdepth 1 -name '*.AppImage' -print -quit)"
@@ -381,6 +381,13 @@ jobs:
                 "/engines/$variant/llama-server" --version
                 "/engines/$variant/llama-server" --list-devices
               fi
+            done
+            for binary in whisper-cuda/whisper-cli sd-cuda/sd-cli sd-cuda/sd-server; do
+              test -x "/engines/$binary"
+              export LD_LIBRARY_PATH="/engines/$(dirname "$binary"):/engines/cuda-runtime"
+              dependencies="$(ldd "/engines/$binary")"
+              missing="$(printf "%s\n" "$dependencies" | grep "not found" | grep -v "libcuda.so.1" || true)"
+              test -z "$missing" || { printf "%s\n" "$missing" >&2; exit 1; }
             done
           '
 

@@ -23,10 +23,11 @@ step '1 of 6: Check host tools and NVIDIA GPU'
 sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   build-essential cmake ninja-build pkg-config git git-lfs gh curl ca-certificates \
-  unzip xz-utils python3 python3-venv python3-dev file \
+  unzip xz-utils python3 python3-venv python3-dev file docker.io \
   libgomp1 libvulkan1 libvulkan-dev glslc spirv-headers \
   libx11-dev libxext-dev libxfixes-dev libxi-dev libxtst-dev libxrandr-dev \
   libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libsecret-1-0 ubuntu-drivers-common
+sudo systemctl start docker
 if ! command -v nvidia-smi >/dev/null || ! nvidia-smi >/dev/null 2>&1; then
   echo 'Installing the Ubuntu NVIDIA compute driver. A reboot is needed after this step.'
   sudo ubuntu-drivers install --gpgpu
@@ -133,6 +134,8 @@ npm run typecheck:node
 npm run build:linux
 for executable in build/linux-bin/llama-cuda/llama-server \
   build/linux-bin/llama-prism-cuda/llama-server \
+  build/linux-bin/whisper-cuda/whisper-cli \
+  build/linux-bin/sd-cuda/sd-cli \
   build/linux-bin/whisper/whisper-cli; do
   test -x "$executable"
 done

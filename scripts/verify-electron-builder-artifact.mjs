@@ -47,6 +47,8 @@ export default async function verifyElectronBuilderArtifact(event) {
     if (artifact.endsWith('.appimage') || artifact.endsWith('.deb')) {
       required.push(
         path.join('bin', 'whisper', 'whisper-cli'),
+        path.join('bin', 'whisper-cuda', 'whisper-cli'),
+        path.join('bin', 'whisper-cpu', 'whisper-cli'),
         path.join('bin', 'whisper', 'LICENSE'),
         path.join('bin', 'ffmpeg'),
         path.join('bin', 'licenses', 'ffmpeg.txt'),
@@ -55,6 +57,8 @@ export default async function verifyElectronBuilderArtifact(event) {
         path.join('bin', 'sd', 'libggml-vulkan.so'),
         path.join('bin', 'sd', 'libgomp.so.1'),
         path.join('bin', 'sd', 'libvulkan.so.1'),
+        path.join('bin', 'sd-cuda', 'sd-cli'),
+        path.join('bin', 'sd-cuda', 'sd-server'),
         path.join('bin', 'licenses', 'libgomp1.txt'),
         path.join('bin', 'licenses', 'libvulkan1.txt'),
         path.join('bin', 'executorch-speech'),

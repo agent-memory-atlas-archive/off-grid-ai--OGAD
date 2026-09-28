@@ -335,6 +335,18 @@ describe('macOS artifact integrity', () => {
     const whisper = path.join(resources, 'bin', 'whisper', 'whisper-cli')
     fs.mkdirSync(path.dirname(whisper), { recursive: true })
     fs.writeFileSync(whisper, 'fixture')
+    await expect(verifyElectronBuilderArtifact(event)).rejects.toThrow(
+      'installer input is missing required runtime: bin/whisper-cuda/whisper-cli'
+    )
+    const whisperCuda = path.join(resources, 'bin', 'whisper-cuda', 'whisper-cli')
+    fs.mkdirSync(path.dirname(whisperCuda), { recursive: true })
+    fs.writeFileSync(whisperCuda, 'fixture')
+    await expect(verifyElectronBuilderArtifact(event)).rejects.toThrow(
+      'installer input is missing required runtime: bin/whisper-cpu/whisper-cli'
+    )
+    const whisperCpu = path.join(resources, 'bin', 'whisper-cpu', 'whisper-cli')
+    fs.mkdirSync(path.dirname(whisperCpu), { recursive: true })
+    fs.writeFileSync(whisperCpu, 'fixture')
     fs.writeFileSync(path.join(resources, 'bin', 'whisper', 'LICENSE'), 'fixture')
     await expect(verifyElectronBuilderArtifact(event)).rejects.toThrow(
       'installer input is missing required runtime: bin/ffmpeg'
@@ -353,6 +365,8 @@ describe('macOS artifact integrity', () => {
       'bin/sd/libggml-vulkan.so',
       'bin/sd/libgomp.so.1',
       'bin/sd/libvulkan.so.1',
+      'bin/sd-cuda/sd-cli',
+      'bin/sd-cuda/sd-server',
       'bin/licenses/libgomp1.txt',
       'bin/licenses/libvulkan1.txt'
     ]) {
