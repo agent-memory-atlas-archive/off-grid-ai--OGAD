@@ -170,8 +170,15 @@ export async function getSystemHealth(): Promise<SystemHealth> {
     },
     ...(['grounding', 'decision'] as const).map((id): HealthComponent => {
       const runtime = runtimeBackendSnapshot().find((entry) => entry.id === id)
-      return { id, label: id === 'grounding' ? 'Computer Use grounding' : 'Computer / Web Use decision',
-        status: runtime?.state === 'loaded' ? 'ready' : runtime?.state === 'loading' ? 'starting' : 'down' }
+      return {
+        id,
+        label: id === 'grounding' ? 'Computer Use grounding' : 'Computer / Web Use decision',
+        status:
+          runtime?.state === 'loaded' ? 'ready'
+            : runtime?.state === 'loading' ? 'starting'
+              : runtime?.state === 'error' ? 'down' : 'idle',
+        detail: runtime?.state === 'error' ? runtime.detail : undefined
+      }
     }),
     ...getNativeHelperHealth()
   ]

@@ -89,6 +89,7 @@ export interface PermissionStatusContract {
  * processes. */
 export type SystemHealthComponentStatusContract =
   | 'ready'
+  | 'idle'
   | 'starting'
   | 'down'
   | 'not_installed'
@@ -100,6 +101,7 @@ export type SystemHealthComponentStatusContract =
  * independently reinterpret the same status record. */
 export const SYSTEM_HEALTH_STATUS_LABELS: Record<SystemHealthComponentStatusContract, string> = {
   ready: 'Running',
+  idle: 'Not loaded',
   starting: 'Starting',
   down: 'Error',
   not_installed: 'Not set up',

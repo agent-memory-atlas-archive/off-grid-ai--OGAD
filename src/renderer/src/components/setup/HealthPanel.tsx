@@ -20,6 +20,7 @@ import {
 // through opacity tiers + icon shape, never a status color palette.
 const STATUS_TEXT: Record<SystemHealthComponentStatusContract, string> = {
   ready: 'text-green-500',
+  idle: 'text-neutral-500',
   starting: 'text-neutral-400',
   down: 'text-neutral-300',
   not_installed: 'text-neutral-500',
