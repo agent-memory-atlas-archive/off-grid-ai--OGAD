@@ -223,8 +223,8 @@ jobs:
         with:
           name: off-grid-ai-windows
           path: |
-            dist/*.exe
-            dist/*.7z
+            dist/nsis-web/*.exe
+            dist/nsis-web/*.7z
           if-no-files-found: error
 
   build-linux:
