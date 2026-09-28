@@ -7,7 +7,7 @@
 // owner. Outside-Chat proposals enter the engine through the Actions surface, whose gate
 // remains responsible for approval. Reads and navigation stay inline.
 
-import { shell } from 'electron'
+import { app, shell } from 'electron'
 import type { ToolCallStatus, ToolContext, ToolExtension, ToolResult } from '../tools'
 import type { ProposeOutcome, TickOutcome } from '@offgrid/use'
 import { shouldGate } from '../actions/approval'
@@ -145,13 +145,18 @@ export class NativeActionToolExtension implements ToolExtension {
    *  available in every agentic turn, not gated behind Connectors. */
   category = 'tool' as const
 
+  private get linuxTaskUse(): boolean {
+    return this.platform === 'linux' && app.isPackaged === false &&
+      process.env.OFFGRID_LINUX_TASK_USE === '1'
+  }
+
   constructor(
     private readonly boundary: NativeActionToolBoundary = productionBoundary,
     private readonly platform: NodeJS.Platform = process.platform
   ) {}
 
   schemas(): unknown[] {
-    return buildNativeToolSchemas(specsForPlatform(this.platform, this.boundary.taskUseEnabled()))
+    return buildNativeToolSchemas(specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse))
   }
 
   /** What the Tools settings tab lists and toggles. A getter, not a field: the set depends on the
@@ -160,20 +165,20 @@ export class NativeActionToolExtension implements ToolExtension {
    *  which is why every native action - web_use and computer_use included - was invisible and
    *  untoggleable in Settings even while the model could call it. */
   get settings(): readonly { name: string; description: string }[] {
-    return specsForPlatform(this.platform, this.boundary.taskUseEnabled()).map((spec) => ({
+    return specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse).map((spec) => ({
       name: spec.name,
       description: spec.description
     }))
   }
 
   canHandle(name: string): boolean {
-    return specsForPlatform(this.platform, this.boundary.taskUseEnabled()).some(
+    return specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse).some(
       (spec) => spec.name === name
     )
   }
 
   systemHint(): string {
-    return systemHintForPlatform(this.platform, this.boundary.taskUseEnabled())
+    return systemHintForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse)
   }
 
   async execute(
