@@ -293,7 +293,11 @@ try {
             if ($LASTEXITCODE -ne 0 -or $remote -notmatch ([regex]::Escape($Repo) + '(\.git)?$')) { throw "Unexpected repository at $Destination. Use another -Workspace folder." }
             $dirty = & git.exe -C $Destination status --porcelain
             if ($LASTEXITCODE -ne 0) { throw "Cannot read source status at $Destination." }
-            if ($dirty) { throw "There are local changes at $Destination. Save or commit them, then run setup again. No files were reset." }
+            if ($dirty) {
+                Write-Warning "Local changes found at $Destination. Keeping this checkout and skipping its source update."
+                Write-Host 'Setup will continue using the files already in this folder.'
+                return
+            }
             Run-Checked 'git.exe' @('-C', $Destination, 'fetch', 'origin', $Ref)
             Run-Checked 'git.exe' @('-C', $Destination, 'switch', $Ref)
             Run-Checked 'git.exe' @('-C', $Destination, 'pull', '--ff-only', 'origin', $Ref)
