@@ -29,16 +29,14 @@ export function targetOnnxRuntime(context) {
 }
 
 export default async function pruneOnnxRuntime(context) {
-  const runtimeRoot = path.join(
-    packagedResourcesDir(context),
-    'app.asar.unpacked',
-    'node_modules',
-    'onnxruntime-node',
-    'bin',
-    'napi-v6'
-  )
-  if (!fs.existsSync(runtimeRoot)) {
-    throw new Error(`Packaged ONNX Runtime directory is missing: ${runtimeRoot}`)
+  const nodeModules = path.join(packagedResourcesDir(context), 'app.asar.unpacked', 'node_modules')
+  const runtimeRoots = [
+    path.join(nodeModules, 'onnxruntime-node', 'bin', 'napi-v6'),
+    path.join(nodeModules, '@huggingface', 'transformers', 'node_modules', 'onnxruntime-node', 'bin', 'napi-v6')
+  ]
+  const runtimeRoot = runtimeRoots.find((candidate) => fs.existsSync(candidate))
+  if (!runtimeRoot) {
+    throw new Error(`Packaged ONNX Runtime directory is missing: ${runtimeRoots.join(' or ')}`)
   }
 
   const target = targetOnnxRuntime(context)
