@@ -154,13 +154,15 @@ try {
   $wc = Join-Path $dest 'whisper-cli.exe'
   $mn = Join-Path $dest 'main.exe'
   if (-not (Test-Path $wc) -and (Test-Path $mn)) { Copy-Item $mn $wc -Force }
+} catch { Write-Warning "whisper.cpp CUDA fetch failed: $_" }
 
+try {
   $x = Expand-Asset 'ggml-org/whisper.cpp' '^whisper-bin-x64\.zip$' $WhisperRef 'f9ec6c52a2e949b62ab51fa21d0d497958f9e41c3010c157c4e42932d5316f3c'
   $dest = Copy-Runtime $x 'whisper-cpu'
   $wc = Join-Path $dest 'whisper-cli.exe'
   $mn = Join-Path $dest 'main.exe'
   if (-not (Test-Path $wc) -and (Test-Path $mn)) { Copy-Item $mn $wc -Force }
-} catch { Write-Warning "whisper.cpp fetch failed: $_" }
+} catch { Write-Warning "whisper.cpp CPU fetch failed: $_" }
 
 # --- stable-diffusion.cpp (image gen): CUDA, Vulkan, then CPU -------------------
 # The CUDA engine reuses bin/cuda-runtime from llama.cpp. Do not fetch the
