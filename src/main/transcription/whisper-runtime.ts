@@ -1,7 +1,6 @@
 import fs from 'fs'
 import path from 'path'
 import { binRoots, exe } from '../runtime-env'
-import { existing } from './bin-resolution'
 
 /** NVIDIA's Windows display driver installs this API library. */
 export function hasWindowsNvidiaDriver(
@@ -22,6 +21,11 @@ export function hasLinuxGpuDevice(): boolean {
 
 /** Prefer accelerated Whisper, with a separate CPU runtime as the safe fallback. */
 export function findWhisperBinary(name: 'whisper-cli' | 'whisper-server'): string | null {
+  return findWhisperBinaries(name)[0] ?? null
+}
+
+/** Keep the CPU binary available when a present GPU driver cannot start Whisper. */
+export function findWhisperBinaries(name: 'whisper-cli' | 'whisper-server'): string[] {
   const gpuAvailable =
     process.platform === 'win32'
       ? hasWindowsNvidiaDriver()
@@ -31,9 +35,9 @@ export function findWhisperBinary(name: 'whisper-cli' | 'whisper-server'): strin
   const accelerated = gpuAvailable ? ['whisper', 'whisper-cpu'] : ['whisper-cpu', 'whisper']
   // macOS and older packages keep the resident binary in its own directory.
   const directories = name === 'whisper-server' ? ['whisper-server', ...accelerated] : accelerated
-  return existing(
-    binRoots().flatMap((root) =>
-      directories.map((directory) => path.join(root, directory, exe(name)))
-    )
+  return directories.flatMap((directory) =>
+    binRoots()
+      .map((root) => path.join(root, directory, exe(name)))
+      .filter((candidate) => fs.existsSync(candidate))
   )
 }

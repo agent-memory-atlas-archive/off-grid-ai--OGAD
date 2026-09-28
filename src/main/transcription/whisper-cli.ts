@@ -17,7 +17,7 @@ import { decodeToWavArgs, DECODE_TIMEOUT_MS } from './ffmpeg-decode'
 import type { TranscriptionService, Transcript, TranscribeOptions, Seg } from './types'
 import { runNativeTranscriptionProcess } from './native-process'
 import { HINDI_SCRIPT_RECOVERY_MESSAGE } from '../../shared/transcription-recovery'
-import { findWhisperBinary } from './whisper-runtime'
+import { findWhisperBinary, findWhisperBinaries } from './whisper-runtime'
 
 const HINDI_DEVANAGARI_PROMPT = 'यह ऑडियो हिंदी में है। हिंदी को केवल देवनागरी लिपि में लिखें।'
 
@@ -195,8 +195,8 @@ class WhisperCliTranscription implements TranscriptionService {
       },
       async (log) => {
         await log.inputFile(input.path)
-        const bin = whisperBin()
-        if (!bin) throw new Error('Transcription runtime (whisper) is not installed.')
+        const binaries = findWhisperBinaries('whisper-cli')
+        if (binaries.length === 0) throw new Error('Transcription runtime (whisper) is not installed.')
         const model = resolveModel(opts.model)
         log.update({ model: model ?? undefined, backend: 'Unknown' })
         if (!model)
@@ -247,23 +247,33 @@ class WhisperCliTranscription implements TranscriptionService {
             run: async (modelPath) => {
               const runArgs = [...args]
               runArgs[1] = modelPath
-              const result = await recordAIRequest(
-                {
-                  modality: 'stt',
-                  source: 'Whisper attempt',
-                  model: modelPath,
-                  request: { args: runArgs },
-                  signal: opts.signal
-                },
-                async () =>
-                  runNativeTranscriptionProcess(bin, runArgs, {
-                    runtimeModel: modelPath,
-                    maxBuffer: 64 * 1024 * 1024,
-                    timeout: 30 * 60_000,
-                    signal: opts.signal
-                  })
-              )
-              return result.stdout
+              let lastError: unknown
+              for (const [index, binary] of binaries.entries()) {
+                try {
+                  const result = await recordAIRequest(
+                    {
+                      modality: 'stt',
+                      source: 'Whisper attempt',
+                      model: modelPath,
+                      request: { args: runArgs, binary },
+                      signal: opts.signal
+                    },
+                    async () =>
+                      runNativeTranscriptionProcess(binary, runArgs, {
+                        runtimeModel: modelPath,
+                        maxBuffer: 64 * 1024 * 1024,
+                        timeout: 30 * 60_000,
+                        signal: opts.signal
+                      })
+                  )
+                  return result.stdout
+                } catch (error) {
+                  lastError = error
+                  if (opts.signal?.aborted || index === binaries.length - 1) throw error
+                  console.warn(`[transcription] Whisper runtime failed; retrying ${binaries[index + 1]}`, error)
+                }
+              }
+              throw lastError
             }
           })
           const lang = language === 'auto' ? undefined : language
