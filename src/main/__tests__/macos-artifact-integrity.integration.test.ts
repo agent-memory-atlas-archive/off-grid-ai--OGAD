@@ -383,6 +383,10 @@ describe('macOS artifact integrity', () => {
       'libvips-cpp.so.9.0.0'
     )
     fs.mkdirSync(path.dirname(libvips), { recursive: true })
+    fs.writeFileSync(`${libvips}.backup`, 'fixture')
+    await expect(verifyElectronBuilderArtifact(event)).rejects.toThrow(
+      'installer input is missing the unpacked Sharp libvips library'
+    )
     fs.writeFileSync(libvips, 'fixture')
     await expect(verifyElectronBuilderArtifact(event)).resolves.toBeUndefined()
   })

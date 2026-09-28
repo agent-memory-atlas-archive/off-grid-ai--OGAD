@@ -81,7 +81,7 @@ export default async function verifyElectronBuilderArtifact(event) {
         fs.existsSync(libvipsDir) &&
         fs.readdirSync(libvipsDir).some((name) => {
           const file = path.join(libvipsDir, name)
-          return name.startsWith('libvips-cpp.so') && fs.statSync(file).isFile()
+          return /^libvips-cpp\.so\.\d+(?:\.\d+)*$/.test(name) && fs.statSync(file).isFile()
         })
       if (!hasLibvips) {
         throw new Error('installer input is missing the unpacked Sharp libvips library')
