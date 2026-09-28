@@ -39,6 +39,11 @@ if ! command -v nvidia-smi >/dev/null || ! nvidia-smi >/dev/null 2>&1; then
   exit 0
 fi
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+driver_major=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader |
+  head -n 1 | cut -d. -f1)
+[[ $driver_major =~ ^[0-9]+$ && $driver_major -ge 580 ]] || {
+  echo 'NVIDIA driver 580 or newer is required for ONNX CUDA 13.' >&2; exit 1;
+}
 
 if ! command -v node >/dev/null || [[ $(node -p 'process.versions.node.split(".")[0]') != 22 ]]; then
   echo 'Installing Node 22 from nodejs.org.'
@@ -127,6 +132,9 @@ python3 -m venv "$workspace/build-python"
   --index-url https://download.pytorch.org/whl/cpu \
   --extra-index-url https://pypi.org/simple
 "$workspace/build-python/bin/python" -c 'import torchgen, yaml, jinja2'
+"$workspace/build-python/bin/pip" install --no-cache-dir --no-deps \
+  'nvidia-cuda-runtime==13.2.86' 'nvidia-cublas==13.2.2.2' \
+  'nvidia-curand==10.4.2.66' 'nvidia-cudnn-cu13==9.23.1.3'
 
 step '5 of 6: Build Linux app'
 export PATH="$workspace/build-python/bin:$PATH"
@@ -155,7 +163,7 @@ echo "Build complete: $workspace/desktop/dist"
 step '6 of 6: Start from source'
 if [[ -n ${DISPLAY:-} && ${1:-} != --setup-only ]]; then
   read -r -p 'Press Enter to start OGAD. Keep this terminal open. ' _
-  npm run dev
+  bash scripts/start-linux-gpu.sh
 else
-  echo "To start from the Linux desktop terminal: cd '$workspace/desktop' && OFFGRID_FORCE_CORE=0 npm run dev"
+  echo "To start from the Linux desktop terminal: cd '$workspace/desktop' && bash scripts/start-linux-gpu.sh"
 fi
