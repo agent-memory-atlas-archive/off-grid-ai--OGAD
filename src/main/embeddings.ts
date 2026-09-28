@@ -3,7 +3,8 @@ import path from 'path'
 import { existsSync } from 'fs'
 import { Worker } from 'worker_threads'
 import { modelsDir } from './runtime-env'
-import { embedText, embeddingDevice } from './embeddings-core'
+import { embedText, embeddingDevice, disposeEmbeddingModel } from './embeddings-core'
+import { getResidencyMode } from './runtime-residency'
 import { recordAIRequest, type AIRequestHandle } from './ai-request-log'
 import type { EmbeddingRequest, EmbeddingResponse } from './embeddings-worker'
 import { writeDiagnosticLog } from './diagnostics-log'
@@ -110,9 +111,14 @@ class EmbeddingService {
           // No built worker means we are running from source. Embed here rather than failing: a failed
           // embedding silently demotes every search to the FTS fallback, which is a far worse outcome
           // than briefly holding this thread in a context that has no UI to block.
-          if (!entry) return embedText(text, modelsDir(), (device, reason) => {
-            beginRuntimeBackend('embeddings', 'Xenova/all-MiniLM-L6-v2').ready(providerLabel(device), undefined, reason)
-          })
+          if (!entry)
+            return embedText(text, modelsDir(), (device, reason) => {
+              beginRuntimeBackend('embeddings', 'Xenova/all-MiniLM-L6-v2').ready(
+                providerLabel(device),
+                undefined,
+                reason
+              )
+            })
           return new Promise<number[]>((resolve, reject) => {
             const worker = this.spawn(entry)
             const id = this.nextId++
@@ -120,7 +126,20 @@ class EmbeddingService {
             worker.postMessage({ id, text } as EmbeddingRequest)
           })
         }
-        const result = this.queue.then(run, run)
+        const runWithResidency = async (): Promise<number[]> => {
+          try {
+            return await run()
+          } finally {
+            if (getResidencyMode('embeddings') === 'on-demand') {
+              const worker = this.worker
+              this.worker = null
+              if (worker) await worker.terminate()
+              else await disposeEmbeddingModel()
+              this.reportedDevice = null
+            }
+          }
+        }
+        const result = this.queue.then(runWithResidency, runWithResidency)
         // Keep the chain alive after a rejection, or one failure stalls every later request.
         this.queue = result.catch(() => undefined)
         const vector = await result

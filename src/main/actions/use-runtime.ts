@@ -47,6 +47,7 @@ import { withRemoteScreenGate } from './remote-screen-gate'
 import { getTaskExecutionDevice, getTaskRun, recordTaskRun } from '../tasks/task-history'
 import { taskLaunchFromActionArgs } from '../tasks/task-launch-identity'
 import { taskKindForActionType } from '../tools/nativeActionToolExtension-logic'
+import { withTaskModelMemory } from '../model-memory'
 import { getComputerUseSettings } from '../computer-use-settings'
 
 export interface ActionsRuntime {
@@ -261,7 +262,9 @@ export function getActionsRuntime(): ActionsRuntime {
   // BrowserHost owns the Web Use model lifecycle. It resolves the adapter and
   // records the model identity only after the specialist swap completes. A
   // second wrapper here caused nested swaps and restored Chat too early.
-  const browserExecute = withRemoteScreenGate('web_use', rawBrowserExecute)
+  const browserExecute = withRemoteScreenGate('web_use', (action) =>
+    withTaskModelMemory(() => rawBrowserExecute(action))
+  )
   const connectorExecute = makeConnectorRailExecutor(callConnectorTool)
   // The vision rail's live host (screen capture + actuation + grounding model),
   // created lazily on first computer_use.
@@ -309,8 +312,7 @@ export function getActionsRuntime(): ActionsRuntime {
         settings.modelStrategy === 'decision_plus_reasoning'
           ? ['ax', ...settings.enabledRails.filter((rail) => rail !== 'ax')]
           : settings.enabledRails,
-      preferVisionGraph:
-        settings.modelStrategy === 'text_plus_specialist'
+      preferVisionGraph: settings.modelStrategy === 'text_plus_specialist'
     })(action)
   })
   const engine = new UseEngine({
@@ -334,7 +336,7 @@ export function getActionsRuntime(): ActionsRuntime {
         if (rail === 'vision') {
           recordAuthenticatedTaskLaunch(action, 'computer_use')
           // computer_use: accessibility-first, vision as the fallback tier.
-          return computerTaskExecute(action)
+          return withTaskModelMemory(() => computerTaskExecute(action))
         }
         return { ok: false, detail: `the '${rail}' rail is not built yet` }
       }

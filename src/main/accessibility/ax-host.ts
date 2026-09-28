@@ -99,6 +99,7 @@ import { fuseCandidates } from './ax-ranking'
 import { runBoxedOCR } from '../ocr'
 import { runWindowsOCR } from './windows-ocr'
 import { decisionRuntime, DecisionRuntimeError } from './decision-runtime'
+import { getResidencyMode } from '../runtime-residency'
 import { selectedGrounderModelId } from '../vision/grounder-loader'
 import { getRemoteVisionServerForModel } from '../vision/remote-vision-server'
 import { continuationFromTaskSteps } from '../vision/model-adapters/continuation-capsule'
@@ -1283,7 +1284,11 @@ class AxRailHost {
         ? { ok: true, summary, steps: [] }
         : { ok: false, summary, steps: [] }
     } finally {
-      if (usesDecisionRuntime && !parseRemoteVisionModelId(decisionModelId)) {
+      if (
+        usesDecisionRuntime &&
+        !parseRemoteVisionModelId(decisionModelId) &&
+        getResidencyMode('decision') === 'on-demand'
+      ) {
         await decisionRuntime.shutdown()
       }
       releaseGuidance()

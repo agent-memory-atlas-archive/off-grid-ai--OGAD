@@ -9,7 +9,7 @@
 // stopped matching anything. Deriving both sides from here makes a rename fail a test
 // instead of orphaning one.
 
-export type ResidencyModality = 'llm' | 'image' | 'stt' | 'tts'
+export type ResidencyModality = import('../../../main/runtime-residency-logic').Modality
 
 export interface ResidencyRow {
   modality: ResidencyModality
@@ -22,9 +22,9 @@ export interface ResidencyRow {
 export const RESIDENCY_ROWS: ResidencyRow[] = [
   {
     modality: 'llm',
-    label: 'Chat and capture model',
+    label: 'Text, vision, and reasoning',
     locked: true,
-    hint: 'Kept in memory because Replay analyzes captures continuously. It is freed briefly when image generation needs the memory.'
+    hint: 'Shared by Chat, capture, and Computer Use / Web Use reasoning. Other models can free this memory temporarily.'
   },
   {
     modality: 'image',
@@ -33,13 +33,28 @@ export const RESIDENCY_ROWS: ResidencyRow[] = [
   },
   {
     modality: 'stt',
-    label: 'Dictation',
+    label: 'Transcription and dictation',
     hint: 'In-memory keeps Whisper ready for live speech. Parakeet loads per use.'
   },
   {
     modality: 'tts',
     label: 'Text-to-speech',
     hint: 'In-memory keeps the voice model ready; on-demand frees about 330MB.'
+  },
+  {
+    modality: 'grounding',
+    label: 'Computer Use / Web Use grounding',
+    hint: 'Keeps the local specialist ready between tasks. On demand frees it after the last active task.'
+  },
+  {
+    modality: 'decision',
+    label: 'Computer Use / Web Use decider',
+    hint: 'Keeps the local decision model ready between tasks. Low-memory tasks can still unload it.'
+  },
+  {
+    modality: 'embeddings',
+    label: 'Embeddings (search and RAG)',
+    hint: 'Keeps the search model ready. On demand frees it after each embedding request.'
   }
 ]
 

@@ -1,4 +1,5 @@
 import { llm } from '../llm'
+import { getResidencyMode } from '../runtime-residency'
 import { recordAIRequest } from '../ai-request-log'
 import { getComputerUseSettings } from '../computer-use-settings'
 import { getWebUseSettings } from '../web-use-settings'
@@ -118,7 +119,7 @@ async function runWithDecisionModel<T>(task: () => Promise<T>, modelId: string):
   } finally {
     session.depth -= 1
     if (dedicatedSession === session) dedicatedSession = null
-    await decisionRuntime.shutdown()
+    if (getResidencyMode('decision') === 'on-demand') await decisionRuntime.shutdown()
   }
 }
 

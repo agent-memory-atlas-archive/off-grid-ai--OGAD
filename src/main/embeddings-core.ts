@@ -24,7 +24,20 @@ export function embeddingDevice(): DeviceType | null {
   return activeDevice
 }
 
-export async function embedText(text: string, modelsDir: string, onReady?: (device: string, reason?: string) => void): Promise<number[]> {
+/** Called after serialized inference when the model is configured on demand. */
+export async function disposeEmbeddingModel(): Promise<void> {
+  const previous = pipe
+  pipe = null
+  loading = null
+  activeDevice = null
+  await previous?.dispose()
+}
+
+export async function embedText(
+  text: string,
+  modelsDir: string,
+  onReady?: (device: string, reason?: string) => void
+): Promise<number[]> {
   if (!pipe) {
     configureTransformersEnv(modelsDir)
     loading ??= loadWithOnnxFallback((device) =>

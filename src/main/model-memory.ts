@@ -1,8 +1,30 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { getResidencyMode } from './runtime-residency'
 
 type ModelRole = 'chat' | 'decision' | 'grounding'
 const evictors = new Map<ModelRole, () => Promise<void>>()
 const exclusive = new AsyncLocalStorage<boolean>()
+let activeTasks = 0
+let taskCleanup: Promise<void> = Promise.resolve()
+
+/** Keep specialists available for all steps, then release on-demand models. */
+export async function withTaskModelMemory<T>(task: () => Promise<T>): Promise<T> {
+  await taskCleanup
+  activeTasks += 1
+  try {
+    return await task()
+  } finally {
+    activeTasks -= 1
+    if (activeTasks === 0) {
+      taskCleanup = (async () => {
+        for (const role of ['grounding', 'decision'] as const) {
+          if (getResidencyMode(role) === 'on-demand') await evictors.get(role)?.()
+        }
+      })().catch((error) => console.error('[model-memory] Task cleanup failed:', error))
+      await taskCleanup
+    }
+  }
+}
 
 /** A low-memory task shares one model slot. Other tasks retain their residency policy. */
 export function withExclusiveModelMemory<T>(task: () => Promise<T>): Promise<T> {
