@@ -1,4 +1,6 @@
-export type Modality = 'llm' | 'image' | 'stt' | 'tts' | 'grounding' | 'decision' | 'embeddings'
+import type { Modality } from '../shared/runtime-residency-types'
+
+export type { Modality } from '../shared/runtime-residency-types'
 export type ResidencyMode = 'resident' | 'on-demand'
 
 export const MODALITIES: readonly Modality[] = [

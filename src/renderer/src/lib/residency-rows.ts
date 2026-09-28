@@ -9,7 +9,7 @@
 // stopped matching anything. Deriving both sides from here makes a rename fail a test
 // instead of orphaning one.
 
-export type ResidencyModality = import('../../../main/runtime-residency-logic').Modality
+export type ResidencyModality = import('../../../shared/runtime-residency-types').Modality
 
 export interface ResidencyRow {
   modality: ResidencyModality
