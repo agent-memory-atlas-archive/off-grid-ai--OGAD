@@ -13,12 +13,15 @@ describe('normalizeResidency', () => {
     expect(normalizeResidency('nope')).toEqual(DEFAULT_RESIDENCY)
   })
 
-  it('defaults match today: llm resident, everything else on-demand', () => {
+  it('defaults keep reasoning and search models resident', () => {
     expect(DEFAULT_RESIDENCY).toEqual({
       llm: 'resident',
       image: 'on-demand',
       stt: 'on-demand',
-      tts: 'on-demand'
+      tts: 'on-demand',
+      grounding: 'resident',
+      decision: 'on-demand',
+      embeddings: 'resident'
     })
   })
 
@@ -27,7 +30,10 @@ describe('normalizeResidency', () => {
       llm: 'resident',
       image: 'resident',
       stt: 'resident',
-      tts: 'on-demand'
+      tts: 'on-demand',
+      grounding: 'resident',
+      decision: 'on-demand',
+      embeddings: 'resident'
     })
   })
 
