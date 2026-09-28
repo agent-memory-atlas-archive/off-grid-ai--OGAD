@@ -140,6 +140,16 @@ for executable in build/linux-bin/llama-cuda/llama-server \
   build/linux-bin/whisper/whisper-cli; do
   test -x "$executable"
 done
+for executable in dist/linux-unpacked/resources/bin/llama-cuda/llama-server \
+  dist/linux-unpacked/resources/bin/whisper-cuda/whisper-cli \
+  dist/linux-unpacked/resources/bin/sd-cuda/sd-cli; do
+  test -x "$executable"
+done
+for library in libcudart.so.12 libcublas.so.12 libcublasLt.so.12; do
+  test -f "dist/linux-unpacked/resources/bin/cuda-runtime/$library"
+done
+test -n "$(find dist -maxdepth 1 -name '*.AppImage' -print -quit)"
+test -n "$(find dist -maxdepth 1 -name '*.deb' -print -quit)"
 echo "Build complete: $workspace/desktop/dist"
 
 step '6 of 6: Start from source'

@@ -365,6 +365,7 @@ try {
         }
         Run-KevScript 'scripts\enable-win-kev-gpu.ps1'
         Run-Checked $runtimePython @('resources\bin\kev-local-server.py', '--help')
+        Run-Checked 'npm.cmd' @('run', 'build')
         Set-Content $runtimeStamp $runtimeHash
         Write-Host 'Dependencies, Kev server check, and CUDA operation passed. Model inference still needs an app test.' -ForegroundColor Green
 
