@@ -42,11 +42,16 @@ export async function embedText(
     configureTransformersEnv(modelsDir)
     loading ??= loadWithOnnxFallback((device) =>
       pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { device })
-    ).then(({ runtime, device, fallbackReason }) => {
-      onReady?.(device, fallbackReason)
-      activeDevice = device
-      return runtime
-    })
+    )
+      .then(({ runtime, device, fallbackReason }) => {
+        onReady?.(device, fallbackReason)
+        activeDevice = device
+        return runtime
+      })
+      .catch((error) => {
+        loading = null
+        throw error
+      })
     pipe = await loading
   }
   const output = await pipe(text, { pooling: 'mean', normalize: true })
