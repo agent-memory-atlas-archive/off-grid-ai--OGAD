@@ -245,7 +245,7 @@ Grab the latest build from [Releases](https://github.com/off-grid-ai/OGAD/releas
 
 ```bash
 git clone https://github.com/off-grid-ai/OGAD.git
-cd desktop
+cd OGAD
 git lfs install && git lfs pull   # pull the bundled native binaries (LFS) - REQUIRED
 npm install
 npm run dev          # full app
@@ -265,7 +265,7 @@ must compile there - cross-building from macOS is not supported):
 
 ```powershell
 git clone https://github.com/off-grid-ai/OGAD.git
-cd desktop
+cd OGAD
 npm install
 ./scripts/fetch-win-binaries.ps1   # pull win64 llama/whisper/sd/ffmpeg into resources/bin
 npm run dev                         # run locally, or:
