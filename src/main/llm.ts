@@ -38,8 +38,8 @@ import { pickFreePort, isPortFree } from './free-port'
 import { postCompletionOnce } from './llm/http-post'
 import { engineSpawnEnv } from './llm/spawn-env'
 import { gpuDeviceAvailable, offloadedGpuLayers } from './llm/gpu-device-probe'
-import { cudaRequired, permitsEngine, permitsOffload } from './llm/gpu-policy'
 import { shouldAutoRecover } from './llm/crash-policy'
+import { enginePriority } from './llm/engine-priority'
 import { streamCompletion, type StreamResult } from './llm/stream'
 import {
   nativeToolPlannerUnavailableMessage,
@@ -980,31 +980,37 @@ export class LLMService {
     if (generation !== this.launchGeneration) return
     if (await this.launchWithFallback(serverPaths, generation)) return
     if (generation !== this.launchGeneration) return
-    this.lastErrorMsg = cudaRequired()
-      ? 'CUDA is required, but the model could not start on the GPU. Check the CUDA engine logs and free GPU memory. CPU fallback is disabled.'
-      : 'All model engines failed to load the model.'
+    this.lastErrorMsg = 'All model engines failed to load the model.'
     this.invalidateHealth()
     throw new Error(this.lastErrorMsg)
   }
 
-  /** Try each engine at the selected context, with a CPU attempt after GPU OOM.
-   *  For other failures, try the next engine. Every attempt uses `buildLaunchArgs`. */
+  /** Try all accelerated engines before CPU at the selected context. */
   private async launchWithFallback(
     serverPaths: string[],
     generation = this.launchGeneration
   ): Promise<boolean> {
-    const attempts = loadAttempts(this.ctxSize, this.gpuLayers)
-    for (const serverPath of serverPaths) {
+    const ordered = [...serverPaths].sort((a, b) => enginePriority(a) - enginePriority(b))
+    const candidates = [
+      ...ordered.map((serverPath) => ({ serverPath, cpuOnly: false })),
+      ...ordered
+        .filter((p) => !p.includes('llama-cpu') && !p.includes('llama-prism-cpu'))
+        .map((serverPath) => ({ serverPath, cpuOnly: true }))
+    ]
+    for (const { serverPath, cpuOnly } of candidates) {
+      const attempts = loadAttempts(
+        this.ctxSize,
+        cpuOnly || enginePriority(serverPath) === 2 ? 0 : this.gpuLayers
+      ).slice(0, 1)
       if (generation !== this.launchGeneration) return false
       if (!serverPath) continue
       const engineDir = path.basename(path.dirname(serverPath))
-      if (!permitsEngine(serverPath, this.gpuLayers)) continue
       const backend = engineDir.endsWith('-cuda')
         ? 'CUDA'
         : engineDir === 'llama' || engineDir === 'llama-prism'
           ? 'Vulkan'
           : null
-      if ((process.platform === 'win32' || process.platform === 'linux') && backend) {
+      if (!cpuOnly && (process.platform === 'win32' || process.platform === 'linux') && backend) {
         if (this.gpuLayers === 0) continue
         if (!(await gpuDeviceAvailable(serverPath, backend, process.platform))) {
           console.warn(
@@ -1016,7 +1022,7 @@ export class LLMService {
       for (let a = 0; a < attempts.length; a++) {
         if (generation !== this.launchGeneration) return false
         const at = attempts[a]
-        if (!at || (cudaRequired() && at.gpuLayers === 0)) continue
+        if (!at) continue
         if (a > 0) {
           console.warn(`[LLMService] out of memory — retrying load at ${at.reason}`)
         }
@@ -1171,11 +1177,6 @@ export class LLMService {
       await this.waitForReady()
       if (this.server !== proc) throw new Error('Model load was cancelled')
       // Confirmed healthy: from here a close IS a crash worth recovering from.
-      if (!permitsOffload(serverPath, gpuLayers, confirmedOffload)) {
-        throw new Error(
-          'CUDA is required, but GPU layer offload was not confirmed. CPU fallback is disabled.'
-        )
-      }
       probing = false
       console.log('[LLMService] Vision server ready!')
       const engineDir = path.basename(binDir)

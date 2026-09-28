@@ -10,7 +10,7 @@ export function onnxDeviceCandidates(platform = process.platform): DeviceType[] 
     platform === 'darwin'
       ? ['coreml', 'webgpu']
       : platform === 'win32'
-        ? ['dml', 'webgpu']
+        ? ['cuda', 'dml', 'webgpu']
         : platform === 'linux'
           ? ['cuda', 'webgpu']
           : ['webgpu']
@@ -30,10 +30,13 @@ export async function loadWithOnnxFallback<T>(
   const failures: string[] = []
   for (const device of candidates) {
     try {
-      return { runtime: await load(device), device }
+      const runtime = await load(device)
+      console.log(`[ONNX] selected provider=${device}`)
+      return { runtime, device }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       failures.push(`${device}: ${message}`)
+      console.warn(`[ONNX] provider ${device} failed; trying next provider: ${message}`)
     }
   }
   throw new Error(`No ONNX Runtime provider could start. ${failures.join(' | ')}`)

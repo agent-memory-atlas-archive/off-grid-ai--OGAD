@@ -27,15 +27,15 @@ export function hasWindowsVulkanLoader(
  * their existing `sd` runtime; the Linux Vulkan build contains CPU kernels too.
  */
 export function findSdBinaries(name: 'sd-cli' | 'sd-server'): string[] {
-  let directories = ['sd', 'sd-cpu']
+  let directories = process.platform === 'linux' ? ['sd-cuda', 'sd', 'sd-cpu'] : ['sd', 'sd-cpu']
   if (process.platform === 'win32') {
     directories = hasWindowsVulkanLoader()
       ? ['sd-cuda', 'sd', 'sd-cpu']
       : ['sd-cuda', 'sd-cpu', 'sd']
   }
   const matches: string[] = []
-  for (const root of binRoots()) {
-    for (const directory of directories) {
+  for (const directory of directories) {
+    for (const root of binRoots()) {
       const candidate = path.join(root, directory, exe(name))
       if (fs.existsSync(candidate) && !matches.includes(candidate)) matches.push(candidate)
     }

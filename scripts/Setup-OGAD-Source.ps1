@@ -366,13 +366,9 @@ try {
         Set-Content $runtimeStamp $runtimeHash
         Write-Host 'Dependencies, Kev server check, and CUDA operation passed. Model inference still needs an app test.' -ForegroundColor Green
 
-        if (-not (Test-Path (Join-Path $desktop 'src/main/llm/gpu-policy.ts'))) {
-            throw 'This checkout is too old to enforce CUDA. Save local changes and update the desktop branch, then run setup again.'
-        }
-        # Persist the GPU requirement for future terminals as well as this launch.
-        [Environment]::SetEnvironmentVariable('OFFGRID_REQUIRE_CUDA', '1', 'User')
-        $env:OFFGRID_REQUIRE_CUDA = '1'
-        Write-Host 'CUDA is required for chat. CPU fallback is disabled.'
+        # Remove the previous VM-only requirement; the app selects a supported backend.
+        [Environment]::SetEnvironmentVariable('OFFGRID_REQUIRE_CUDA', $null, 'User')
+        Remove-Item Env:OFFGRID_REQUIRE_CUDA -ErrorAction SilentlyContinue
 
         Step '8 of 8: Start OGAD from source'
         Write-Host "Source folder: $desktop"

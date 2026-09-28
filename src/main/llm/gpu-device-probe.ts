@@ -33,15 +33,17 @@ export async function gpuDeviceAvailable(
   inherited: NodeJS.ProcessEnv = process.env
 ): Promise<boolean> {
   const binDir = path.dirname(serverPath)
-  try {
-    const { stdout, stderr } = await execFileAsync(serverPath, ['--list-devices'], {
-      timeout: 10_000,
-      maxBuffer: 512 * 1024,
-      env: { ...inherited, ...engineSpawnEnv({ platform, binDir, currentEnv: inherited }) }
-    })
-    return hasGpuDevice(`${stdout}\n${stderr}`, backend)
-  } catch (error) {
-    console.warn(`[LLMService] ${backend} device probe failed for ${serverPath}:`, error)
-    return false
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { stdout, stderr } = await execFileAsync(serverPath, ['--list-devices'], {
+        timeout: 30_000,
+        maxBuffer: 512 * 1024,
+        env: { ...inherited, ...engineSpawnEnv({ platform, binDir, currentEnv: inherited }) }
+      })
+      return hasGpuDevice(`${stdout}\n${stderr}`, backend)
+    } catch (error) {
+      console.warn(`[LLMService] ${backend} device probe failed for ${serverPath}:`, error)
+    }
   }
+  return false
 }
