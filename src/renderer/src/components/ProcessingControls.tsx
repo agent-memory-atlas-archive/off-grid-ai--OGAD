@@ -235,10 +235,10 @@ export function BackendPreferencesSection({ modalities }: {
       }
     }
     poll()
-    if (api.performancePack) {
+    if (typeof api.performancePack?.status === 'function') {
       void api.performancePack.status().then(setPackStatus).catch(() => {})
     }
-    const stopPackUpdates = api.performancePack?.onChanged(setPackStatus)
+    const stopPackUpdates = api.performancePack?.onChanged?.(setPackStatus)
     const timer = setInterval(poll, 3_000)
     return () => {
       clearInterval(timer)
