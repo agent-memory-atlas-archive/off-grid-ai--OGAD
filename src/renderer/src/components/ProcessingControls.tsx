@@ -9,6 +9,7 @@ import {
   type BackendPreferences
 } from '../../../shared/backend-preferences'
 import { runtimeBackendLabel, type RuntimeBackend, type RuntimeId } from '../../../shared/runtime-backends'
+import type { PerformancePackStatus } from '../../../shared/performance-pack'
 import { persistToggle } from '@renderer/lib/persist-toggle'
 import {
   RESIDENCY_ROWS,
@@ -217,6 +218,7 @@ export function BackendPreferencesSection({ modalities }: {
   const platform: string = api.platform ?? 'linux'
   const [preferences, setPreferences] = useState<BackendPreferences>(() => normalizeBackendPreferences({}, platform))
   const [running, setRunning] = useState<RuntimeBackend[]>([])
+  const [packStatus, setPackStatus] = useState<PerformancePackStatus | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -233,8 +235,15 @@ export function BackendPreferencesSection({ modalities }: {
       }
     }
     poll()
+    if (api.performancePack) {
+      void api.performancePack.status().then(setPackStatus).catch(() => {})
+    }
+    const stopPackUpdates = api.performancePack?.onChanged(setPackStatus)
     const timer = setInterval(poll, 3_000)
-    return () => clearInterval(timer)
+    return () => {
+      clearInterval(timer)
+      stopPackUpdates?.()
+    }
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [])
 
@@ -254,18 +263,27 @@ export function BackendPreferencesSection({ modalities }: {
       {modalities.map((modality) => {
         const runtime = running.find((entry) => entry.id === RUNTIME_IDS[modality])
         const label = `${BACKEND_ROW_LABELS[modality]} backend`
+        const packOwnsCuda = ['llm', 'image', 'stt', 'grounding', 'decision'].includes(modality)
+        const cudaNeedsPack = packOwnsCuda && packStatus !== null &&
+          ['available', 'downloading', 'paused', 'failed', 'not-needed'].includes(packStatus.phase)
         return (
           <SettingsRow
             key={modality}
             label={label}
             controlId={`backend-${modality}`}
-            hint={`Now: ${runtimeBackendLabel(runtime)}. Auto tries the best available backend. Changes when the model next loads.`}
+            hint={cudaNeedsPack
+              ? `Now: ${runtimeBackendLabel(runtime)}. CUDA needs the optional NVIDIA download in Setup & health. Other available backends can still run.`
+              : `Now: ${runtimeBackendLabel(runtime)}. Auto tries the best available backend. Changes when the model next loads.`}
           >
             <SettingsSelect
               id={`backend-${modality}`}
               label={label}
               value={preferences[modality]}
-              options={backendChoices(modality, platform).map((value) => ({ value, label: BACKEND_LABELS[value] }))}
+              options={backendChoices(modality, platform).map((value) => ({
+                value,
+                label: value === 'cuda' && cudaNeedsPack ? 'CUDA (download required)' : BACKEND_LABELS[value],
+                disabled: value === 'cuda' && cudaNeedsPack
+              }))}
               onValueChange={(value) => change(modality, value)}
             />
           </SettingsRow>

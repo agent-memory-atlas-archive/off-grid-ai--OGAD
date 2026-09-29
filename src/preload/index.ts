@@ -1,4 +1,5 @@
 import type { RuntimeBackend } from '../shared/runtime-backends'
+import type { PerformancePackStatus } from '../shared/performance-pack'
 import { contextBridge, ipcRenderer } from 'electron'
 import {
   CACHE_CLEANUP_CHANNEL,
@@ -567,6 +568,17 @@ const offGridApi = {
     return unsubscribe('system:chat-health-changed', subscription)
   },
   runtimeBackends: (): Promise<RuntimeBackend[]> => ipcRenderer.invoke('system:runtime-backends'),
+  performancePack: {
+    status: (): Promise<PerformancePackStatus> => ipcRenderer.invoke('performance-pack:status'),
+    start: (): Promise<PerformancePackStatus> => ipcRenderer.invoke('performance-pack:start'),
+    pause: (): Promise<PerformancePackStatus> => ipcRenderer.invoke('performance-pack:pause'),
+    restart: (): Promise<void> => ipcRenderer.invoke('performance-pack:restart'),
+    onChanged: (callback: (status: PerformancePackStatus) => void): (() => void) => {
+      const subscription = (_event: unknown, status: PerformancePackStatus): void => callback(status)
+      ipcRenderer.on('performance-pack:changed', subscription)
+      return unsubscribe('performance-pack:changed', subscription)
+    }
+  },
   systemHealth: (): Promise<SystemHealthContract> => ipcRenderer.invoke('system:health'),
   setupRecommendation: (mode?: string) => ipcRenderer.invoke('setup:recommendation', mode),
   setupPlan: (mode?: string) => ipcRenderer.invoke('setup:plan', mode),

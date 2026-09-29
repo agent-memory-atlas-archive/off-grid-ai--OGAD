@@ -69,6 +69,13 @@ import {
   appNameLikeClause
 } from './ipc-query-logic'
 import { requestApplicationRelaunch } from './shutdown'
+import {
+  activateInstalledPerformancePack,
+  onPerformancePackChanged,
+  pausePerformancePack,
+  performancePackStatus,
+  startPerformancePack
+} from './performance-pack'
 import { sampleProgressRate, type ProgressRateSample } from '@offgrid/ui'
 import { notifyRagConversationChanged } from './rag-conversation-events'
 import { parseRemoteVisionModelId, remoteVisionModelId } from '../shared/remote-vision-server'
@@ -577,6 +584,16 @@ export async function summarizeSession(sessionId: string): Promise<string | null
 }
 
 export function setupIPC() {
+  activateInstalledPerformancePack()
+  onPerformancePackChanged((status) => {
+    BrowserWindow.getAllWindows().forEach((window) =>
+      window.webContents.send('performance-pack:changed', status)
+    )
+  })
+  ipcMain.handle('performance-pack:status', performancePackStatus)
+  ipcMain.handle('performance-pack:start', startPerformancePack)
+  ipcMain.handle('performance-pack:pause', pausePerformancePack)
+  ipcMain.handle('performance-pack:restart', () => requestApplicationRelaunch(app))
   setupAIRequestLogIPC()
   setupVoiceTranscriptionIpc()
   const db = getDB()

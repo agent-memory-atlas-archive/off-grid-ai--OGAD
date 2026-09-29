@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { motion } from 'motion/react'
 import { ProgressiveBlur } from './ui/progressive-blur'
 import { SetupPanel } from './setup/SetupPanel'
+import { PerformancePackPanel } from './setup/PerformancePackPanel'
 import { StoragePanel } from './setup/StoragePanel'
 import { DataPrivacyPanel } from './setup/DataPrivacyPanel'
 import { getRegisteredSettingsSections } from '../bootstrap/sectionRegistry'
@@ -159,6 +160,9 @@ export function Settings({
               delay={0.13}
             >
               <SetupPanel />
+              <div className="mt-4">
+                <PerformancePackPanel />
+              </div>
               <div className="mt-4">
                 <StoragePanel />
               </div>
