@@ -74,6 +74,21 @@ export function activateInstalledPerformancePack(): void {
   else delete process.env.OFFGRID_PERFORMANCE_PACK_BIN
 }
 
+/** ONNX loads CUDA with dlopen, so Linux must see these libraries at process start. */
+export function prepareInstalledOnnxCudaLibraries(): boolean {
+  if (process.platform !== 'linux') return false
+  const asset = manifestAsset()
+  const bin = asset && installedBin(asset)
+  if (!bin) return false
+  const libraries = path.join(bin, 'onnx-cuda')
+  if (!fs.existsSync(path.join(libraries, 'libcublasLt.so.13')) ||
+      !fs.existsSync(path.join(libraries, 'libcudnn.so.9'))) return false
+  const current = (process.env.LD_LIBRARY_PATH ?? '').split(':').filter(Boolean)
+  if (current.includes(libraries)) return false
+  process.env.LD_LIBRARY_PATH = [libraries, ...current].join(':')
+  return true
+}
+
 export function performancePackStatus(): PerformancePackStatus {
   const asset = manifestAsset()
   if (!asset) return { phase: 'unavailable', bytes: 0, downloadedBytes: 0 }
@@ -168,6 +183,11 @@ async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Prom
     const server = path.join(bin, 'llama-cuda', process.platform === 'win32' ? 'llama-server.exe' : 'llama-server')
     if (!fs.statSync(bin).isDirectory() || !fs.statSync(server).isFile()) {
       throw new Error('The performance pack is missing its CUDA chat engine.')
+    }
+    if (process.platform === 'linux' &&
+        (!fs.existsSync(path.join(bin, 'onnx-cuda', 'libcublasLt.so.13')) ||
+         !fs.existsSync(path.join(bin, 'onnx-cuda', 'libcudnn.so.9')))) {
+      throw new Error('The performance pack is missing its CUDA speech libraries.')
     }
     fs.writeFileSync(path.join(staging, 'verified.sha256'), `${asset.sha256.toLowerCase()}\n`)
     fs.rmSync(root, { recursive: true, force: true })
