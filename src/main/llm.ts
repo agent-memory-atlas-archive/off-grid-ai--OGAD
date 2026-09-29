@@ -42,6 +42,7 @@ import { engineSpawnEnv } from './llm/spawn-env'
 import { gpuDeviceAvailable } from './llm/gpu-device-probe'
 import { shouldAutoRecover } from './llm/crash-policy'
 import { enginePriority } from './llm/engine-priority'
+import { modelStartupTimeout } from './llm/startup-timeout'
 import { getBackendPreference } from './backend-preferences'
 import { prioritizeBackend, type BackendPreference } from '../shared/backend-preferences'
 import { streamCompletion, type StreamResult } from './llm/stream'
@@ -1203,7 +1204,7 @@ export class LLMService {
       // A cold CUDA load can spend over a minute on model weights and CLIP
       // initialization while the server is still healthy. Do not kill it and
       // fall back to CPU at the normal one-minute deadline.
-      await this.waitForReady(path.basename(binDir).endsWith('-cuda') ? 180_000 : 60_000)
+      await this.waitForReady(modelStartupTimeout(path.basename(binDir)))
       if (this.server !== proc) throw new Error('Model load was cancelled')
       // Confirmed healthy: from here a close IS a crash worth recovering from.
       probing = false
@@ -1377,7 +1378,7 @@ export class LLMService {
       } catch {
         /* not up yet */
       }
-      await new Promise((r) => setTimeout(r, 500))
+      await new Promise((r) => setTimeout(r, 500)) // NOSONAR: wait between sequential startup probes.
     }
     throw new Error('Server started but no model was loaded within the timeout')
   }
@@ -1971,7 +1972,7 @@ export class LLMService {
     )
   }
 
-  async unload(): Promise<{ outcome: TeardownOutcome; portFree: boolean }> {
+  async unload(keepPaused = false): Promise<{ outcome: TeardownOutcome; portFree: boolean }> {
     this.launchGeneration++
     this.paused = true // stop the on-demand respawn path from warming a new server mid-teardown
     let outcome: TeardownOutcome = 'already-dead'
@@ -1993,7 +1994,7 @@ export class LLMService {
       if (pending === null) {
         break // no in-flight init to race with — done
       }
-      await pending.catch(() => {}) // let the in-flight spawn finish, then loop to kill it
+      await pending.catch(() => {}) // NOSONAR: finish this spawn before checking for another process.
     }
     this.initialized = false
     // Safety net: reap any llama-server WE own still holding the port (a forked/stuck child).
@@ -2001,7 +2002,7 @@ export class LLMService {
     const reap = this.reapOrphansOnPort(this.port)
     // Leave the engine down but allow a future explicit start; releasePause clears the block
     // without warming a server (on-demand — the next chat/tool turn respawns).
-    this.paused = false
+    if (!keepPaused) this.paused = false
     this.invalidateHealth()
     return { outcome, portFree: outcome !== 'stuck' && reap.liveOwners.length === 0 }
   }
@@ -2018,6 +2019,15 @@ export class LLMService {
   pause(): void {
     this.paused = true
     this.stop()
+  }
+
+  /** Eviction must finish before a competing model starts. pause() only signals the
+   *  child, while unload() waits for exit and handles an in-flight init. */
+  private async pauseAndWait(): Promise<void> {
+    const { portFree } = await this.unload(true)
+    if (!portFree) {
+      throw new Error('The chat model port is still occupied; image generation cannot start safely.')
+    }
   }
 
   /** Resume after image generation and warm the server back up (resident mode). */
@@ -2038,13 +2048,7 @@ export class LLMService {
   get runtime(): ManagedRuntime {
     return {
       modality: 'llm',
-      evict: () => {
-        try {
-          this.pause()
-        } catch {
-          /* ignore */
-        }
-      },
+      evict: () => this.pauseAndWait(),
       warm: () => {
         this.resume()
       },
