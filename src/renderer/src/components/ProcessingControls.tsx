@@ -1,4 +1,13 @@
 import { useEffect, useState } from 'react'
+import { SettingsSelect } from './SettingsSelect'
+import {
+  backendChoices,
+  normalizeBackendPreferences,
+  type BackendModality,
+  type BackendPreference,
+  type BackendPreferences
+} from '../../../shared/backend-preferences'
+import { runtimeBackendLabel, type RuntimeBackend, type RuntimeId } from '../../../shared/runtime-backends'
 import { persistToggle } from '@renderer/lib/persist-toggle'
 import {
   RESIDENCY_ROWS,
@@ -184,11 +193,98 @@ export function ModelPipelineSection(): React.ReactElement {
   )
 }
 
+const BACKEND_LABELS: Record<BackendPreference, string> = {
+  auto: 'Auto', cuda: 'CUDA', vulkan: 'Vulkan', metal: 'Metal',
+  webgpu: 'WebGPU', directml: 'DirectML', cpu: 'CPU'
+}
+
+const RUNTIME_IDS: Record<BackendModality, RuntimeId> = {
+  llm: 'chat', image: 'image', stt: 'transcription', tts: 'speech',
+  grounding: 'grounding', decision: 'decision', embeddings: 'embeddings'
+}
+
+const BACKEND_ROW_LABELS: Record<BackendModality, string> = {
+  llm: 'Chat and vision', image: 'Images', stt: 'Transcription', tts: 'Speech',
+  grounding: 'Grounding', decision: 'Decider', embeddings: 'Search embeddings'
+}
+
+export function BackendPreferencesSection(): React.ReactElement {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const api = (window as any).api
+  const platform: string = api.platform ?? 'linux'
+  const [preferences, setPreferences] = useState<BackendPreferences>(() => normalizeBackendPreferences({}, platform))
+  const [running, setRunning] = useState<RuntimeBackend[]>([])
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    void api.backendPreferencesGet?.().then((value: unknown) => {
+      setPreferences(normalizeBackendPreferences(value, platform))
+    }).catch(() => setError('Backend settings could not load.'))
+    const poll = (): void => {
+      void api.runtimeBackends?.().then((value: unknown) => {
+        setRunning(Array.isArray(value) ? value : [])
+      }).catch(() => {})
+    }
+    poll()
+    const timer = setInterval(poll, 3_000)
+    return () => clearInterval(timer)
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [])
+
+  const change = (modality: BackendModality, preference: BackendPreference): void => {
+    const previous = preferences
+    setPreferences({ ...preferences, [modality]: preference })
+    setError('')
+    void api.backendPreferenceSet(modality, preference).then(setPreferences).catch(() => {
+      setPreferences(previous)
+      setError('Backend setting could not be saved.')
+    })
+  }
+
+  return (
+    <section aria-labelledby="model-backend-heading" className="xl:col-span-2">
+      <h4 id="model-backend-heading" className="mb-1 text-[11px] uppercase tracking-wide text-neutral-500">
+        Model backends
+      </h4>
+      <p className="mb-3 text-xs text-neutral-600">
+        Choose the first backend to try for each model type. Auto uses the best available backend.
+        Other GPU backends can be used if your choice cannot start. CPU uses the CPU only.
+        A loaded model changes backend when it next loads.
+      </p>
+      {error && <p role="alert" className="mb-2 text-xs text-red-400">{error}</p>}
+      <div className="grid grid-cols-1 gap-x-6 xl:grid-cols-2">
+        {RESIDENCY_ROWS.map((row) => {
+          const modality = row.modality
+          const runtime = running.find((entry) => entry.id === RUNTIME_IDS[modality])
+          return (
+            <div key={modality} className="flex items-center justify-between gap-4 border-t border-neutral-800/70 py-2.5">
+              <div className="min-w-0">
+                <div className="text-sm text-neutral-200">{BACKEND_ROW_LABELS[modality]}</div>
+                <div className="text-xs text-neutral-600">Now: {runtimeBackendLabel(runtime)}</div>
+              </div>
+              <div className="w-32 shrink-0">
+                <SettingsSelect
+                  id={`backend-${modality}`}
+                  label={`${row.label} backend`}
+                  value={preferences[modality]}
+                  options={backendChoices(modality, platform).map((value) => ({ value, label: BACKEND_LABELS[value] }))}
+                  onValueChange={(value) => change(modality, value)}
+                />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
 export function ProcessingControls(): React.ReactElement {
   return (
     <div className="grid grid-cols-1 gap-6 border-t border-neutral-800/70 pt-5 xl:grid-cols-2">
       <ModelPipelineSection />
       <RuntimeResidencySection />
+      <BackendPreferencesSection />
     </div>
   )
 }

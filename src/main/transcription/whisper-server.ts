@@ -23,6 +23,7 @@ import fs from 'fs'
 import os from 'os'
 import { isPackaged } from '../runtime-env'
 import { findWhisperBinary, whisperRuntimeLibraryEnv } from './whisper-runtime'
+import { getBackendPreference } from '../backend-preferences'
 import type { Transcript } from './types'
 import { killOrphansOnPort as reapOrphansOnPort } from '../kill-orphan-port'
 import { Mutex } from 'async-mutex'
@@ -144,7 +145,7 @@ export class WhisperServerService {
 
   /** Resolve the bundled whisper-server binary across dev / packaged layouts. */
   findBinary(): string | null {
-    return findWhisperBinary('whisper-server')
+    return findWhisperBinary('whisper-server', getBackendPreference('stt'))
   }
 
   /** Ensure a server is up with EXACTLY this context; restart on a model/thread

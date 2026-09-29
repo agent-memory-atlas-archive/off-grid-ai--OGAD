@@ -8,6 +8,7 @@ const { spawnMock, findBinariesMock } = vi.hoisted(() => ({
 vi.mock('child_process', () => ({ spawn: spawnMock, execSync: vi.fn() }))
 vi.mock('fs', () => ({ default: { existsSync: () => true } }))
 vi.mock('../runtime-env', () => ({ isPackaged: () => false }))
+vi.mock('../backend-preferences', () => ({ getBackendPreference: () => 'auto' }))
 vi.mock('../kill-orphan-port', () => ({ killOrphansOnPort: vi.fn() }))
 vi.mock('../imagegen/sd-runtime', () => ({
   findSdBinaries: findBinariesMock,

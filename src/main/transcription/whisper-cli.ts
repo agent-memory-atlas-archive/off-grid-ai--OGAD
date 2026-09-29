@@ -18,6 +18,7 @@ import type { TranscriptionService, Transcript, TranscribeOptions, Seg } from '.
 import { runNativeTranscriptionProcess } from './native-process'
 import { HINDI_SCRIPT_RECOVERY_MESSAGE } from '../../shared/transcription-recovery'
 import { findWhisperBinary, findWhisperBinaries, whisperRuntimeLibraryEnv } from './whisper-runtime'
+import { getBackendPreference } from '../backend-preferences'
 
 const HINDI_DEVANAGARI_PROMPT = 'यह ऑडियो हिंदी में है। हिंदी को केवल देवनागरी लिपि में लिखें।'
 
@@ -25,7 +26,7 @@ const HINDI_DEVANAGARI_PROMPT = 'यह ऑडियो हिंदी मे�
  * reuses this exact runtime resolver so its Installed claim cannot drift from
  * the executable the transcription service will actually launch. */
 export function whisperBin(): string | null {
-  return findWhisperBinary('whisper-cli')
+  return findWhisperBinary('whisper-cli', getBackendPreference('stt'))
 }
 
 /** Resolve ffmpeg: bundled first, then common system locations. */
@@ -195,7 +196,7 @@ class WhisperCliTranscription implements TranscriptionService {
       },
       async (log) => {
         await log.inputFile(input.path)
-        const binaries = findWhisperBinaries('whisper-cli')
+        const binaries = findWhisperBinaries('whisper-cli', getBackendPreference('stt'))
         if (binaries.length === 0) throw new Error('Transcription runtime (whisper) is not installed.')
         const model = resolveModel(opts.model)
         log.update({ model: model ?? undefined, backend: 'Unknown' })

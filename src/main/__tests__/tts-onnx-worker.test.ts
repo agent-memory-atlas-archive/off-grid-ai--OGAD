@@ -14,6 +14,7 @@ vi.mock('kokoro-js', () => ({ KokoroTTS: { from_pretrained: host.load } }))
 vi.mock('node:fs/promises', () => ({ writeFile: host.write }))
 vi.mock('../embeddings-env', () => ({ configureTransformersEnv: vi.fn() }))
 vi.mock('../onnx-device', () => ({
+  onnxDeviceCandidates: () => ['coreml', 'cpu'],
   loadWithOnnxFallback: async (load: (device: string) => Promise<unknown>) => ({
     runtime: await load('coreml'),
     device: 'coreml'
@@ -78,6 +79,18 @@ describe('ONNX speech worker response evidence', () => {
       })
     )
     expect(host.generate).not.toHaveBeenCalled()
+  })
+
+  it('does not write a silent voice reply', async () => {
+    host.generate.mockResolvedValue({ data: new Float32Array(2400), sampling_rate: 24000 })
+    await import('../tts-onnx-worker')
+    host.on.mock.calls[0]![1]({
+      id: 6, type: 'synthesize', text: 'Hello', voice: 'af_heart', outputPath: '/synthetic/out.wav'
+    })
+    await vi.waitFor(() => expect(host.post).toHaveBeenCalledWith(expect.objectContaining({
+      id: 6, type: 'error', error: expect.stringContaining('silent audio')
+    })))
+    expect(host.write).not.toHaveBeenCalled()
   })
 
   it('retries model loading after a provider failure', async () => {

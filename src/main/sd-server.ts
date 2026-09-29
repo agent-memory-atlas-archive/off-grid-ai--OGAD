@@ -25,6 +25,7 @@ import os from 'os'
 import { isPackaged } from './runtime-env'
 import { killOrphansOnPort as reapOrphansOnPort } from './kill-orphan-port'
 import { findSdBinaries, sdRuntimeLibraryEnv } from './imagegen/sd-runtime'
+import { getBackendPreference } from './backend-preferences'
 
 /** Off the LLM's 8439 so both engines can bind (they never run at once, but a
  *  lingering LLM shouldn't block the image server's port either). */
@@ -233,7 +234,7 @@ class SdServerService {
   }
 
   private async startWithFallback(ctx: SdServerContext, key: string, epoch: number): Promise<void> {
-    const binaries = findSdBinaries('sd-server')
+    const binaries = findSdBinaries('sd-server', getBackendPreference('image'))
     if (!binaries.length) throw new Error('Image server binary (sd-server) not found in resources/bin/sd.')
     for (const [index, binary] of binaries.entries()) {
       if (epoch !== this.startEpoch) throw new Error('Image server startup canceled.')
@@ -434,7 +435,7 @@ class SdServerService {
     // used to lack (a crashed sd-server would keep holding the port after a restart).
     // posix matches our OWN bundled binary by FULL PATH (a user's separately-run sd-server
     // is left untouched); win32's tasklist only exposes the image name, so match that.
-    const ownBins = findSdBinaries('sd-server')
+    const ownBins = findSdBinaries('sd-server', getBackendPreference('image'))
     if (!ownBins.length) return
     reapOrphansOnPort(
       this.port,

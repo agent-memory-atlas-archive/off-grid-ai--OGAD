@@ -43,6 +43,8 @@ import {
   type Modality,
   type ResidencyMode
 } from './runtime-residency'
+import { getBackendPreferences, setBackendPreference } from './backend-preferences'
+import type { BackendModality, BackendPreference } from '../shared/backend-preferences'
 import {
   requestAccessibilityPermission,
   requestScreenRecordingPermission,
@@ -1335,6 +1337,12 @@ export function setupIPC() {
   ipcMain.handle('runtime:residency:set', (_e, modality: Modality, mode: ResidencyMode) =>
     setResidencyMode(modality, mode)
   )
+  ipcMain.handle('runtime:backend:get', () => getBackendPreferences())
+  ipcMain.handle('runtime:backend:set', async (_e, modality: BackendModality, preference: BackendPreference) => {
+    const next = setBackendPreference(modality, preference)
+    // A loaded engine keeps its present backend until its next load. The UI says so.
+    return next
+  })
   // Unload one modality's model from memory now (the "free RAM" button). Goes through
   // the same evict() seam as residency/shutdown; the engine reloads on next use.
   ipcMain.handle('runtime:unload', async (_e, modality: Modality) => {

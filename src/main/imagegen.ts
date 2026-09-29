@@ -43,6 +43,7 @@ import {
   imageBackendForRuntime,
   sdRuntimeLibraryEnv
 } from './imagegen/sd-runtime'
+import { getBackendPreference } from './backend-preferences'
 import { standardModelDefaults, taesdFilename } from '../shared/image-defaults'
 import { defaultImageModelFilename } from './image-default'
 import {
@@ -1194,7 +1195,7 @@ async function runImageGen(
         })
       })
 
-    const runtimes = coreml ? [cli] : findSdBinaries('sd-cli')
+    const runtimes = coreml ? [cli] : findSdBinaries('sd-cli', getBackendPreference('image'))
     let completedRuntime: string | undefined
     let lastError: unknown
     for (const [index, runtime] of runtimes.entries()) {

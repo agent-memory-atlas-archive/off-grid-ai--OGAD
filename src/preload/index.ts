@@ -388,6 +388,9 @@ const offGridApi = {
   residencyGet: () => ipcRenderer.invoke('runtime:residency:get'),
   residencySet: (modality: string, mode: string) =>
     ipcRenderer.invoke('runtime:residency:set', modality, mode),
+  backendPreferencesGet: () => ipcRenderer.invoke('runtime:backend:get'),
+  backendPreferenceSet: (modality: string, preference: string) =>
+    ipcRenderer.invoke('runtime:backend:set', modality, preference),
   // Unload a modality's model from memory now (free RAM); reloads on next use.
   unloadRuntime: (modality: string) => ipcRenderer.invoke('runtime:unload', modality),
   // Pipeline queue config (serialize heavy jobs; let speech coexist) + live state.
@@ -741,6 +744,8 @@ const offGridApi = {
     return unsubscribe('tts:voice-progress', listener)
   },
   speak: (text: string, voice?: string) => ipcRenderer.invoke('tts:speak', text, voice),
+  saveVoiceRecording: (audio: Uint8Array, extension: string): Promise<string> =>
+    ipcRenderer.invoke('voice:save-recording', audio, extension),
 
   // --- On-device image generation (stable-diffusion.cpp) ---
   imageGenStatus: () => ipcRenderer.invoke('imagegen:status'),

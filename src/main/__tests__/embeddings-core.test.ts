@@ -4,6 +4,7 @@ const host = vi.hoisted(() => ({ pipeline: vi.fn() }))
 vi.mock('@huggingface/transformers', () => ({ pipeline: host.pipeline }))
 vi.mock('../embeddings-env', () => ({ configureTransformersEnv: vi.fn() }))
 vi.mock('../onnx-device', () => ({
+  onnxDeviceCandidates: () => ['cpu'],
   loadWithOnnxFallback: async (load: (device: string) => Promise<unknown>) => ({
     runtime: await load('cpu'),
     device: 'cpu'
