@@ -776,27 +776,17 @@ jobs:
         run: |
           test -f _executorch_speech/package.json
           mv _executorch_speech ../executorch-speech
-      - name: Restore Linux speech binary
-        id: linux_tts_cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: build/cached-executorch-speech
-          key: linux-tts-x64-e3b471e6-${{ hashFiles('scripts/build-tts-linux.sh') }}
-      - name: Stage cached Linux speech binary
-        if: steps.linux_tts_cache.outputs.cache-hit == 'true'
+      - name: Stage pinned Linux native engines
         run: |
-          install -Dm755 build/cached-executorch-speech ../executorch-speech/native/bin/executorch-speech
+          curl -fL --retry 3 -o "$RUNNER_TEMP/linux-native.tar.gz" \
+            'https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/ogad-linux-native-2026-09-x64-v1.tar.gz'
+          echo '11f57bddc8b7b4c5efa4b4c298b8a000aaf0f203567f6c18953a6aff7a4e4b54  '"$RUNNER_TEMP/linux-native.tar.gz" | sha256sum -c -
+          mkdir -p build/linux-bin
+          tar -xzf "$RUNNER_TEMP/linux-native.tar.gz" -C build/linux-bin
+          install -Dm755 build/linux-bin/executorch-speech \
+            ../executorch-speech/native/bin/executorch-speech
       - name: Install dependencies
         run: npm ci
-      - name: Install Linux local voice build dependency
-        if: steps.linux_tts_cache.outputs.cache-hit != 'true'
-        run: |
-          # ExecuTorch 1.2 code generation imports torchgen from its matching
-          # PyTorch release. The CPU wheel is a build tool, not an app payload.
-          python3 -m pip install --no-cache-dir 'torch==2.11.0+cpu' PyYAML Jinja2 \
-            --index-url https://download.pytorch.org/whl/cpu \
-            --extra-index-url https://pypi.org/simple
-          python3 -c 'import torchgen, yaml, jinja2'
       - name: Install Linux GPU runtime dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y libgomp1 libvulkan1 libvulkan-dev glslc spirv-headers unzip
       - name: Typecheck Linux main process
@@ -808,8 +798,7 @@ jobs:
       - name: Build Linux packages
         env:
           OFFGRID_FORCE_CORE: '0'
-          OFFGRID_TTS_PREBUILT: ${{ steps.linux_tts_cache.outputs.cache-hit == 'true' && '1' || '0' }}
-        run: npm run build:linux:release
+        run: npm run build:linux:pinned
       - name: Report Linux native payload sizes
         run: du -sh dist/linux-unpacked/resources/bin/* | sort -h | tail -25
       - name: Verify Linux package inputs

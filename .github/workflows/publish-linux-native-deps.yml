@@ -1,9 +1,6 @@
 name: Pin Linux native release inputs
 
 on:
-  push:
-    branches: [feature/linux-core-chat-release]
-    paths: [.github/workflows/publish-linux-native-deps.yml]
   workflow_dispatch:
 
 permissions:
