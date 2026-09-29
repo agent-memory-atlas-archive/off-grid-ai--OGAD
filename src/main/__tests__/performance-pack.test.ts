@@ -73,6 +73,17 @@ describe('optional NVIDIA performance pack', () => {
     expect(pack.startPerformancePack().phase).toBe('not-needed')
   })
 
+  it('rejects a manifest that points outside the approved download host', async () => {
+    const bytes = archive()
+    manifest(bytes)
+    const manifestPath = path.join(fixture.root, 'performance-packs.json')
+    const contents = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+    contents.cuda.linux.url = 'https://example.com/untrusted.tar.gz'
+    fs.writeFileSync(manifestPath, JSON.stringify(contents))
+    const pack = await import('../performance-pack')
+    expect(pack.performancePackStatus().phase).toBe('unavailable')
+  })
+
   it('checks the hash, installs the archive, and activates the verified bin root', async () => {
     const bytes = archive()
     manifest(bytes)
@@ -120,5 +131,23 @@ describe('optional NVIDIA performance pack', () => {
     pack.startPerformancePack()
     expect((await settled('installed')).bytes).toBe(bytes.length)
     expect(fetcher).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a response with the wrong resume range', async () => {
+    const bytes = archive()
+    const hash = createHash('sha256').update(bytes).digest('hex')
+    manifest(bytes, hash)
+    const packRoot = path.join(fixture.root, 'performance-packs', `cuda-${version}-${hash.slice(0, 12)}`)
+    fs.mkdirSync(path.dirname(packRoot), { recursive: true })
+    const prefix = Math.floor(bytes.length / 2)
+    fs.writeFileSync(`${packRoot}.tar.gz.part`, bytes.subarray(0, prefix))
+    vi.stubGlobal('fetch', async () => new Response(new Uint8Array(bytes.subarray(prefix)), {
+      status: 206,
+      headers: { 'Content-Range': `bytes 0-${bytes.length - 1}/${bytes.length}` }
+    }))
+    const pack = await import('../performance-pack')
+    pack.startPerformancePack()
+    expect((await settled('failed')).error).toMatch(/invalid resume range/)
+    expect(fs.statSync(`${packRoot}.tar.gz.part`).size).toBe(prefix)
   })
 })

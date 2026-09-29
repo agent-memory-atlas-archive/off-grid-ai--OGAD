@@ -122,6 +122,7 @@ async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Prom
   const stream = fs.createWriteStream(archive, { flags: append ? 'a' : 'w' })
   downloadedBytes = append ? existing : 0
   publish()
+  let lastProgressPublishedAt = Date.now()
   try {
     const reader = response.body.getReader()
     while (true) {
@@ -136,7 +137,11 @@ async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Prom
       }
       downloadedBytes += value.byteLength
       if (downloadedBytes > asset.bytes) throw new Error('The download is larger than expected.')
-      publish()
+      const now = Date.now()
+      if (now - lastProgressPublishedAt >= 250 || downloadedBytes === asset.bytes) {
+        publish()
+        lastProgressPublishedAt = now
+      }
     }
     await new Promise<void>((resolve, reject) => {
       stream.once('error', reject)
