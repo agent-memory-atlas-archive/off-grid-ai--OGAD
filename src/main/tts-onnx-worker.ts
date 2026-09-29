@@ -1,4 +1,5 @@
 import { parentPort, workerData } from 'node:worker_threads'
+import { writeFile } from 'node:fs/promises'
 import type { DeviceType, ProgressInfo } from '@huggingface/transformers'
 import { KokoroTTS } from 'kokoro-js'
 import { configureTransformersEnv } from './embeddings-env'
@@ -33,6 +34,28 @@ export interface TtsWorkerResponse {
 }
 
 type KokoroRuntime = Awaited<ReturnType<typeof KokoroTTS.from_pretrained>>
+
+function pcm16Wav(samples: Float32Array, sampleRate: number): Buffer {
+  const wav = Buffer.allocUnsafe(44 + samples.length * 2)
+  wav.write('RIFF', 0)
+  wav.writeUInt32LE(wav.length - 8, 4)
+  wav.write('WAVEfmt ', 8)
+  wav.writeUInt32LE(16, 16)
+  wav.writeUInt16LE(1, 20)
+  wav.writeUInt16LE(1, 22)
+  wav.writeUInt32LE(sampleRate, 24)
+  wav.writeUInt32LE(sampleRate * 2, 28)
+  wav.writeUInt16LE(2, 32)
+  wav.writeUInt16LE(16, 34)
+  wav.write('data', 36)
+  wav.writeUInt32LE(samples.length * 2, 40)
+  for (let i = 0; i < samples.length; i++) {
+    const value = Math.max(-1, Math.min(1, samples[i] || 0))
+    wav.writeInt16LE(Math.round(value * (value < 0 ? 32768 : 32767)), 44 + i * 2)
+  }
+  return wav
+}
+
 let loaded: { runtime: KokoroRuntime; device: DeviceType } | null = null
 let loading: Promise<{ runtime: KokoroRuntime; device: DeviceType }> | null = null
 const lastProgress = new Map<number, number>()
@@ -88,7 +111,9 @@ port.on('message', (request: TtsWorkerRequest) => {
           voice: request.voice as never,
           speed: request.speed ?? 1
         })
-        await audio.save(request.outputPath)
+        // Chromium's RDP audio path can advance through float WAV data without
+        // sending audible samples. PCM16 works with the RDP sink and browsers.
+        await writeFile(request.outputPath, pcm16Wav(audio.data, audio.sampling_rate))
       }
       port.postMessage({
         id: request.id,

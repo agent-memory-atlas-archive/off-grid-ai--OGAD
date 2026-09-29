@@ -4,13 +4,14 @@ const host = vi.hoisted(() => ({
   post: vi.fn(),
   load: vi.fn(),
   generate: vi.fn(),
-  save: vi.fn()
+  write: vi.fn()
 }))
 vi.mock('node:worker_threads', () => ({
   parentPort: { on: host.on, postMessage: host.post },
   workerData: { modelsDir: '/synthetic/models' }
 }))
 vi.mock('kokoro-js', () => ({ KokoroTTS: { from_pretrained: host.load } }))
+vi.mock('node:fs/promises', () => ({ writeFile: host.write }))
 vi.mock('../embeddings-env', () => ({ configureTransformersEnv: vi.fn() }))
 vi.mock('../onnx-device', () => ({
   loadWithOnnxFallback: async (load: (device: string) => Promise<unknown>) => ({
@@ -31,8 +32,8 @@ beforeEach(() => {
     })
     return { generate: host.generate }
   })
-  host.generate.mockResolvedValue({ save: host.save })
-  host.save.mockResolvedValue(undefined)
+  host.generate.mockResolvedValue({ data: new Float32Array([-1, 0, 1]), sampling_rate: 24000 })
+  host.write.mockResolvedValue(undefined)
 })
 describe('ONNX speech worker response evidence', () => {
   it('reports the actual provider, emits progress and reuses its loaded runtime', async () => {
@@ -57,7 +58,14 @@ describe('ONNX speech worker response evidence', () => {
     )
     expect(host.load).toHaveBeenCalledOnce()
     expect(host.load.mock.calls[0]![1]).toMatchObject({ dtype: 'fp16', device: 'coreml' })
-    expect(host.save).toHaveBeenCalledWith('/synthetic/out.wav')
+    expect(host.write).toHaveBeenCalledWith('/synthetic/out.wav', expect.any(Buffer))
+    const wav = host.write.mock.calls[0]![1] as Buffer
+    expect(wav.toString('ascii', 0, 4)).toBe('RIFF')
+    expect(wav.readUInt16LE(20)).toBe(1) // PCM
+    expect(wav.readUInt16LE(34)).toBe(16)
+    expect([wav.readInt16LE(44), wav.readInt16LE(46), wav.readInt16LE(48)]).toEqual([
+      -32768, 0, 32767
+    ])
   })
   it('returns an error for incomplete synthesis without claiming completion', async () => {
     await import('../tts-onnx-worker')

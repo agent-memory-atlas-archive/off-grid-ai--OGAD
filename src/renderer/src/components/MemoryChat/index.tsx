@@ -1560,6 +1560,7 @@ export function MemoryChat({
       const userMessage: ChatMessage = {
         id: crypto.randomUUID(),
         role: 'user',
+        createdAt: Date.now(),
         content: trimmed,
         attachments: [
           ...atts.map((a) => ({ name: a.name, kind: a.kind, text: a.text, path: a.path })),
