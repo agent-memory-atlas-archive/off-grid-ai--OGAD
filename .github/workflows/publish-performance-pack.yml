@@ -1,6 +1,10 @@
 name: Publish optional CUDA pack
 
 on:
+  # One bootstrap run from this PR branch. Remove this trigger after both packs exist.
+  push:
+    branches: [feature/linux-core-chat-release]
+    paths: [.github/workflows/publish-performance-pack.yml]
   workflow_dispatch:
     inputs:
       platform:
@@ -21,6 +25,13 @@ jobs:
   publish:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(github.event_name == 'push' && '["linux","win32"]' || format('["{0}"]', inputs.platform)) }}
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      VERSION: ${{ inputs.version || '2026-09-29-v1' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -29,9 +40,6 @@ jobs:
         with:
           node-version: '22'
       - name: Check input and source artifact
-        env:
-          PLATFORM: ${{ inputs.platform }}
-          VERSION: ${{ inputs.version }}
         run: |
           [[ "$VERSION" =~ ^[a-zA-Z0-9._-]+$ ]]
           case "$PLATFORM" in
@@ -52,8 +60,6 @@ jobs:
           gh run download "$source_run" --repo "$GITHUB_REPOSITORY" --name "$source_name" --dir source
           find source -maxdepth 3 -type f -printf '%p %s bytes\n'
       - name: Extract CUDA directories
-        env:
-          PLATFORM: ${{ inputs.platform }}
         run: |
           mkdir -p extracted
           if [ "$PLATFORM" = linux ]; then
@@ -80,23 +86,22 @@ jobs:
           echo "BIN_ROOT=$PWD/$bin_root" >> "$GITHUB_ENV"
           du -sh "$bin_root"/*
       - name: Make and check versioned pack
-        env:
-          PLATFORM: ${{ inputs.platform }}
-          VERSION: ${{ inputs.version }}
         run: |
           node scripts/package-performance-pack.mjs "$PLATFORM" "$BIN_ROOT" "$RUNNER_TEMP/$VERSION.tar.gz" "$VERSION"
           tar -tzf "$RUNNER_TEMP/$VERSION.tar.gz" | grep -q '^bin/llama-cuda/'
           sha256sum "$RUNNER_TEMP/$VERSION.tar.gz"
           cat "$RUNNER_TEMP/$VERSION.tar.gz.json"
       - name: Install S3 client
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install AWS CLI
         run: python3 -m pip install --user awscli
       - name: Upload to Cloudflare R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
-          PLATFORM: ${{ inputs.platform }}
-          VERSION: ${{ inputs.version }}
         run: |
           test -n "$AWS_ACCESS_KEY_ID"
           test -n "$AWS_SECRET_ACCESS_KEY"
@@ -114,6 +119,6 @@ jobs:
       - name: Keep manifest for app pinning
         uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
         with:
-          name: cuda-${{ inputs.platform }}-${{ inputs.version }}-manifest
-          path: ${{ runner.temp }}/${{ inputs.version }}.tar.gz.json
+          name: cuda-${{ matrix.platform }}-${{ env.VERSION }}-manifest
+          path: ${{ runner.temp }}/${{ env.VERSION }}.tar.gz.json
           if-no-files-found: error
