@@ -26,7 +26,8 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   unzip xz-utils python3 python3-venv python3-dev file docker.io \
   libgomp1 libvulkan1 libvulkan-dev glslc spirv-headers \
   libx11-dev libxext-dev libxfixes-dev libxi-dev libxtst-dev libxrandr-dev \
-  libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libsecret-1-0 ubuntu-drivers-common
+  libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libsecret-1-0 \
+  pipewire-audio pipewire-module-xrdp ubuntu-drivers-common
 sudo systemctl start docker
 if ! command -v nvidia-smi >/dev/null || ! nvidia-smi >/dev/null 2>&1; then
   echo 'Installing the Ubuntu NVIDIA compute driver. A reboot is needed after this step.'
@@ -52,7 +53,7 @@ if [[ -z ${OFFGRID_CUDA_ARCHITECTURES:-} ]]; then
   }
   export OFFGRID_CUDA_ARCHITECTURES=$gpu_arches
 fi
-echo "Building Whisper CUDA for GPU architecture: $OFFGRID_CUDA_ARCHITECTURES"
+echo "NVIDIA GPU architecture: $OFFGRID_CUDA_ARCHITECTURES"
 
 if ! command -v node >/dev/null || [[ $(node -p 'process.versions.node.split(".")[0]') != 22 ]]; then
   echo 'Installing Node 22 from nodejs.org.'
