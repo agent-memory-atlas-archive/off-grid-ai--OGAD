@@ -9,6 +9,13 @@ interface PerformancePackPanelProps {
   onSkip?: () => void
 }
 
+const GPU_COMPONENTS = [
+  { name: 'Chat and vision', detail: 'NVIDIA chat engine' },
+  { name: 'Image generation', detail: 'NVIDIA image engine' },
+  { name: 'Transcription', detail: 'NVIDIA speech-to-text engine' },
+  { name: 'Computer use', detail: 'NVIDIA decision engine' }
+] as const
+
 export function PerformancePackPanel({ onSkip }: PerformancePackPanelProps): React.ReactElement | null {
   const [status, setStatus] = useState<PerformancePackStatus | null>(null)
 
@@ -38,8 +45,8 @@ export function PerformancePackPanel({ onSkip }: PerformancePackPanelProps): Rea
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-medium text-white">Use your NVIDIA GPU</h3>
           <p className="mt-1 text-xs leading-5 text-neutral-400">
-            Download {formatStorageBytes(status.bytes)} once to use your NVIDIA GPU for supported chat,
-            image, speech, and computer use models. You can use the app during the download or skip this step.
+            One download of {formatStorageBytes(status.bytes)} adds GPU support for the model types below.
+            You can use the app during the download or skip this step.
           </p>
           {installed ? (
             <p className="mt-2 text-xs text-green-500">Installed. Restart the app to use it.</p>
@@ -47,6 +54,22 @@ export function PerformancePackPanel({ onSkip }: PerformancePackPanelProps): Rea
           {status.error ? <p className="mt-2 text-xs text-red-400">{status.error}</p> : null}
         </div>
       </div>
+      <div className="mt-4 divide-y divide-neutral-800 rounded-md border border-neutral-800 bg-neutral-950/40 px-3">
+        {GPU_COMPONENTS.map((component) => (
+          <div key={component.name} className="flex items-center justify-between gap-3 py-2.5">
+            <div className="min-w-0">
+              <p className="text-xs text-neutral-200">{component.name}</p>
+              <p className="text-[11px] text-neutral-500">{component.detail}</p>
+            </div>
+            <span className={`shrink-0 text-[11px] ${installed ? 'text-green-500' : 'text-neutral-500'}`}>
+              {installed ? 'Ready' : 'Included'}
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[11px] text-neutral-500">
+        Voice replies and search use separate GPU settings.
+      </p>
       {status.downloadedBytes > 0 && !installed ? (
         <div className="mt-4">
           <div className="mb-1 flex justify-between text-[11px] text-neutral-400">
