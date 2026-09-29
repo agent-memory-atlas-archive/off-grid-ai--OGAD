@@ -1,10 +1,6 @@
 name: Publish optional CUDA pack
 
 on:
-  # One bootstrap run from this PR branch. Remove this trigger after both packs exist.
-  push:
-    branches: [feature/linux-core-chat-release]
-    paths: [.github/workflows/publish-performance-pack.yml]
   workflow_dispatch:
     inputs:
       platform:
