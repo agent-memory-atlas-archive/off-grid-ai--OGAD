@@ -693,23 +693,62 @@ jobs:
         run: npm version "${{ needs.version.outputs.version }}" --no-git-tag-version --allow-same-version
       - name: Stage native files and bundle
         run: node scripts/stage-native.mjs && npx electron-vite build
-      - name: Package and publish Windows web installer, payload, and update metadata
+      - name: Package Windows web installer, payload, and update metadata
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Optional Windows code signing — a no-op if the secrets are absent (the
           # build still publishes, unsigned; SmartScreen warns until a cert is added).
           CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: |
-          # Same version tag as build-mac -> both platforms land on ONE release.
-          #   stable -> latest.yml, published as a normal release (everyone)
-          #   beta   -> beta.yml (from the -beta suffix), published as a PRE-RELEASE
-          if [ "${{ needs.version.outputs.channel }}" = "stable" ]; then
-            npx electron-builder --win -c.publish.releaseType=release --publish always
-          else
-            npx electron-builder --win -c.publish.releaseType=prerelease --publish always
-          fi
+          npx electron-builder --win --publish never
+      - name: Report Windows native payload sizes
+        shell: bash
+        run: du -sh resources/bin/* | sort -h | tail -20
+      - name: Publish Windows assets that fit GitHub Releases
+        id: win_assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          shopt -s nullglob
+          installers=(dist/nsis-web/*-setup.exe)
+          payloads=(dist/nsis-web/*.7z)
+          test "${#installers[@]}" -eq 1
+          test "${#payloads[@]}" -ge 1
+          # The current builder emits latest.yml for both beta and stable.
+          feed=dist/latest.yml
+          test -s "$feed"
+          sha256sum "${installers[@]}" "${payloads[@]}" > dist/windows-packages.sha256
+          gh release upload "v$VERSION" dist/windows-packages.sha256 --clobber
+          limit=$((2 * 1024 * 1024 * 1024))
+          for asset in "${installers[@]}" "${payloads[@]}"; do
+            if [ "$(stat -c %s "$asset")" -ge "$limit" ]; then
+              echo 'large=true' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          gh release upload "v$VERSION" "${installers[@]}" "${payloads[@]}" "$feed" --clobber
+          echo 'large=false' >> "$GITHUB_OUTPUT"
+      - name: Upload large Windows installer and payload to this workflow run
+        if: steps.win_assets.outputs.large == 'true'
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
+        with:
+          name: OffGrid-Windows-${{ needs.version.outputs.version }}
+          path: |
+            dist/nsis-web/*-setup.exe
+            dist/nsis-web/*.7z
+            dist/*.yml
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Link large Windows package from the run summary
+        if: steps.win_assets.outputs.large == 'true'
+        shell: bash
+        run: |
+          echo "The Windows installer and payload are together in the [workflow run artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})." >> "$GITHUB_STEP_SUMMARY"
+          echo 'The SHA-256 checksums are attached to the versioned release as windows-packages.sha256.' >> "$GITHUB_STEP_SUMMARY"
       # Permanent Windows download link — the Windows counterpart to the Mac
       # OffGrid-latest.dmg alias. The versioned installer (off-grid-ai-<v>-setup.exe)
       # changes name every release, so /releases/latest/download/<name> can't target
@@ -718,7 +757,7 @@ jobs:
       # The versioned installer + latest.yml updater feed are untouched, so auto-update
       # is unaffected. --clobber replaces the copy from the prior run.
       - name: Publish stable latest-setup.exe alias
-        if: needs.version.outputs.channel == 'stable'
+        if: needs.version.outputs.channel == 'stable' && steps.win_assets.outputs.large != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -730,7 +769,7 @@ jobs:
       # Mac nightly.dmg link). build-win runs after build-mac, which already ensured the
       # 'nightly' release exists — the fallback create is just belt-and-suspenders.
       - name: Publish constant nightly-setup.exe link
-        if: needs.version.outputs.channel == 'beta'
+        if: needs.version.outputs.channel == 'beta' && steps.win_assets.outputs.large != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -860,6 +899,8 @@ jobs:
           OFFGRID_TTS_PREBUILT: ${{ steps.linux_tts_cache.outputs.cache-hit == 'true' && '1' || '0' }}
           OFFGRID_KEV_PREBUILT: ${{ steps.linux_kev_cache.outputs.cache-hit == 'true' && '1' || '0' }}
         run: npm run build:linux
+      - name: Report Linux native payload sizes
+        run: du -sh dist/linux-unpacked/resources/bin/* | sort -h | tail -25
       - name: Save Linux speech binary
         if: steps.linux_tts_cache.outputs.cache-hit != 'true'
         run: install -Dm755 ../executorch-speech/native/bin/executorch-speech build/cached-executorch-speech
@@ -1021,12 +1062,56 @@ jobs:
           bundled_asar="$(find "$extraction/deb" -name app.asar -type f -print -quit)"
           test -n "$bundled_asar"
           cmp dist/linux-unpacked/resources/app.asar "$bundled_asar"
-      - name: Publish Linux artifacts to the versioned release
+      - name: Publish Linux assets that fit GitHub Releases
+        id: linux_assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           shopt -s nullglob
-          artifacts=(dist/*.AppImage dist/*.deb dist/*-linux.yml)
-          test "${#artifacts[@]}" -ge 3
-          gh release upload "v$VERSION" "${artifacts[@]}" --clobber
+          appimages=(dist/*.AppImage)
+          debs=(dist/*.deb)
+          feeds=(dist/*-linux.yml)
+          test "${#appimages[@]}" -eq 1
+          test "${#debs[@]}" -eq 1
+          test "${#feeds[@]}" -ge 1
+          # GitHub Releases rejects each asset >= 2 GiB. Keep large verified
+          # packages as Actions artifacts instead of failing a public release.
+          limit=$((2 * 1024 * 1024 * 1024))
+          if [ "$(stat -c %s "${appimages[0]}")" -lt "$limit" ]; then
+            gh release upload "v$VERSION" "${appimages[0]}" "${feeds[@]}" --clobber
+            echo 'appimage_large=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'appimage_large=true' >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$(stat -c %s "${debs[0]}")" -lt "$limit" ]; then
+            gh release upload "v$VERSION" "${debs[0]}" --clobber
+            echo 'deb_large=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'deb_large=true' >> "$GITHUB_OUTPUT"
+          fi
+          sha256sum "${appimages[0]}" "${debs[0]}" > dist/linux-packages.sha256
+          gh release upload "v$VERSION" dist/linux-packages.sha256 --clobber
+      - name: Upload large Linux AppImage to this workflow run
+        if: steps.linux_assets.outputs.appimage_large == 'true'
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
+        with:
+          name: OffGrid-Linux-AppImage-${{ needs.version.outputs.version }}
+          path: dist/*.AppImage
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Upload large Linux deb to this workflow run
+        if: steps.linux_assets.outputs.deb_large == 'true'
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
+        with:
+          name: OffGrid-Linux-deb-${{ needs.version.outputs.version }}
+          path: dist/*.deb
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Link large Linux packages from the run summary
+        if: steps.linux_assets.outputs.appimage_large == 'true' || steps.linux_assets.outputs.deb_large == 'true'
+        run: |
+          echo "Large Linux packages are available in the [workflow run artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})." >> "$GITHUB_STEP_SUMMARY"
+          echo 'The SHA-256 checksums are attached to the versioned release as linux-packages.sha256.' >> "$GITHUB_STEP_SUMMARY"
