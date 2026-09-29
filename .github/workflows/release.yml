@@ -99,6 +99,23 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           # Pin the build to THIS exact commit, not floating main.
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Create draft release for parallel platform builds
+        if: ${{ !inputs.artifact_only }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.bump.outputs.version }}
+          CHANNEL: ${{ steps.bump.outputs.channel }}
+          TARGET_SHA: ${{ steps.bump.outputs.sha }}
+        run: |
+          TAG="v$VERSION"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft --target "$TARGET_SHA" \
+              --title "Off Grid AI Desktop $VERSION" --notes 'Build in progress.'
+          fi
+          if [ "$CHANNEL" = beta ] && ! gh release view nightly >/dev/null 2>&1; then
+            gh release create nightly --prerelease --title 'Nightly (rolling)' \
+              --notes 'Rolling nightly build. Pre-release.'
+          fi
 
   # Single build: pro code bundled, license-gated. Publishes to the default update
   # channel (latest-mac.yml).
@@ -286,14 +303,13 @@ jobs:
         run: npm version "${{ needs.version.outputs.version }}" --no-git-tag-version --allow-same-version
       - name: Stage native files and bundle
         run: node scripts/stage-native.mjs && npx electron-vite build
-      # Same approach as mobile (.github/workflows/release.yml): collect the commits
-      # since the previous release tag into release-notes.md. Generated BEFORE publish
-      # so the tag electron-builder is about to create (v$VERSION) is not yet the
-      # "last tag" — git describe resolves to the PREVIOUS release. We drop the
-      # bot version-bump commit ([skip ci]) so notes are only real changes.
+      # The version job has already created this build's draft tag. Exclude it
+      # when finding the previous release for the changelog.
       - name: Generate release notes
         run: |
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          LAST_TAG=$(git describe --tags --abbrev=0 \
+            --exclude="v${{ needs.version.outputs.version }}" \
+            --exclude=nightly 2>/dev/null || echo "")
           node scripts/release-notes.mjs \
             "$LAST_TAG" \
             "${{ needs.version.outputs.version }}" \
@@ -362,7 +378,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.version.outputs.version }}
           CHANNEL: ${{ needs.version.outputs.channel }}
-          TARGET_SHA: ${{ needs.version.outputs.sha }}
         run: |
           # electron-builder writes ONE update feed, latest-mac.yml, for BOTH channels
           # (we set no publish.channel, so it never emits beta-mac.yml). Beta vs stable
@@ -378,10 +393,7 @@ jobs:
             "dist/$FEED" dist dist/release-assets "$VERSION"
 
           TAG="v$VERSION"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --draft --target "$TARGET_SHA" \
-              --title "Off Grid AI Desktop $VERSION" --notes-file release-notes.md
-          fi
+          gh release view "$TAG" >/dev/null
           gh release upload "$TAG" dist/release-assets/* --clobber
           if [ "$CHANNEL" = stable ]; then
             gh release edit "$TAG" --draft=false --prerelease=false --latest
@@ -453,31 +465,15 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: gh release edit "v$VERSION" --notes-file release-notes.md
 
-      # Announce every published release in Slack: the GitHub release link + the notes
-      # generated above. Fail-soft (scripts/notify-slack-release.mjs always exits 0), so a
-      # Slack outage never fails a release. Needs org/repo secret SLACK_WEBHOOK_URL (an
-      # Incoming Webhook, channel-bound). No secret => the step is a logged no-op.
-      - name: Announce release in Slack
-        if: ${{ !inputs.artifact_only && success() }}
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          PRODUCT: Off Grid AI Desktop
-          VERSION: ${{ needs.version.outputs.version }}
-          CHANNEL_LABEL: ${{ needs.version.outputs.channel }}
-          NOTES_FILE: release-notes.md
-          RELEASE_URL: https://github.com/off-grid-ai/OGAD/releases/tag/v${{ needs.version.outputs.version }}
-        run: node scripts/notify-slack-release.mjs
-
   # Windows release build. Mirrors build-mac: it consumes the SAME resolved version
   # + channel from the `version` job and publishes the NSIS installer plus the
   # Windows electron-updater feed (latest.yml for stable, beta.yml for nightly) to
   # the SAME GitHub release, so Windows and macOS ship as one version with working
-  # auto-update. Runs AFTER build-mac so the v$VERSION release already exists — this
-  # avoids a release-creation race between two concurrent `electron-builder --publish`
-  # runs. Windows native runtimes are fetched by scripts/fetch-win-binaries.ps1
+  # auto-update. The version job creates the draft release first, so all platform
+  # builds can upload to it in parallel. Windows native runtimes are fetched by scripts/fetch-win-binaries.ps1
   # (the repo's LFS binaries are macOS-only).
   build-win:
-    needs: [version, build-mac]
+    needs: version
     # Skipped for an artifact-only demo build (macOS DMG is all the lead needs).
     if: ${{ !inputs.artifact_only }}
     # windows-2022 = VS 2022 toolchain. windows-latest ships VS 2026, which node-gyp 11
@@ -700,10 +696,10 @@ jobs:
               --notes "Rolling nightly build, auto-updated on every change. Pre-release - expect rough edges."
           gh release upload nightly dist/OffGrid-nightly-setup.exe --clobber
 
-  # Core Linux release. Wait for build-mac to create the versioned release, then
-  # add AppImage, deb, and Linux update metadata to that same release.
+  # Core Linux release. Upload AppImage, deb, and update metadata to the draft
+  # release created by the version job while macOS and Windows build in parallel.
   build-linux:
-    needs: [version, build-mac]
+    needs: version
     if: ${{ !inputs.artifact_only }}
     runs-on: ubuntu-24.04
     steps:
@@ -964,3 +960,28 @@ jobs:
         run: |
           echo "Large Linux packages are available in the [workflow run artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})." >> "$GITHUB_STEP_SUMMARY"
           echo 'The SHA-256 checksums are attached to the versioned release as linux-packages.sha256.' >> "$GITHUB_STEP_SUMMARY"
+
+  # Announce only when all three installers have built and published successfully.
+  announce:
+    needs: [version, build-mac, build-win, build-linux]
+    if: ${{ !inputs.artifact_only }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+          persist-credentials: false
+      - name: Read published release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: gh release view "v$VERSION" --json body --jq .body > release-notes.md
+      - name: Announce release in Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          PRODUCT: Off Grid AI Desktop
+          VERSION: ${{ needs.version.outputs.version }}
+          CHANNEL_LABEL: ${{ needs.version.outputs.channel }}
+          NOTES_FILE: release-notes.md
+          RELEASE_URL: https://github.com/off-grid-ai/OGAD/releases/tag/v${{ needs.version.outputs.version }}
+        run: node scripts/notify-slack-release.mjs
