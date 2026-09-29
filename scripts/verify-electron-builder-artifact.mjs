@@ -18,7 +18,12 @@ export default async function verifyElectronBuilderArtifact(event) {
     return
   }
 
-  const appOutDir = event.packager.computeAppOutDir(event.target.outDir, event.arch)
+  // nsis-web stores its payload in dist/nsis-web, while the staged app stays in
+  // dist/win-unpacked. The target output directory is not the app directory.
+  const packageOutDir = event.target.name === 'nsis-web'
+    ? path.dirname(event.target.outDir)
+    : event.target.outDir
+  const appOutDir = event.packager.computeAppOutDir(packageOutDir, event.arch)
   if (asarOnlyArtifact) {
     assertAsarArchiveInventory(path.join(appOutDir, 'resources', 'app.asar'))
     const executable = artifact.endsWith('.exe') ? 'llama-server.exe' : 'llama-server'
@@ -38,15 +43,22 @@ export default async function verifyElectronBuilderArtifact(event) {
     ]
     if (artifact.endsWith('.exe')) {
       required.push(
+        path.join('bin', 'whisper', 'whisper-cli.exe'),
+        path.join('bin', 'whisper-cpu', 'whisper-cli.exe'),
         path.join('bin', 'sd-cuda', 'sd-cli.exe'),
         path.join('bin', 'sd-cuda', 'ggml-cuda.dll'),
         path.join('bin', 'sd', 'sd-cli.exe'),
-        path.join('bin', 'sd-cpu', 'sd-cli.exe')
+        path.join('bin', 'sd-cpu', 'sd-cli.exe'),
+        path.join('bin', 'ffmpeg.exe'),
+        path.join('bin', 'kev-runtime', 'python', 'python.exe'),
+        path.join('bin', 'kev-local-server.py')
       )
     }
     if (artifact.endsWith('.appimage') || artifact.endsWith('.deb')) {
       required.push(
         path.join('bin', 'whisper', 'whisper-cli'),
+        path.join('bin', 'whisper-cuda', 'whisper-cli'),
+        path.join('bin', 'whisper-cpu', 'whisper-cli'),
         path.join('bin', 'whisper', 'LICENSE'),
         path.join('bin', 'ffmpeg'),
         path.join('bin', 'licenses', 'ffmpeg.txt'),
@@ -55,6 +67,8 @@ export default async function verifyElectronBuilderArtifact(event) {
         path.join('bin', 'sd', 'libggml-vulkan.so'),
         path.join('bin', 'sd', 'libgomp.so.1'),
         path.join('bin', 'sd', 'libvulkan.so.1'),
+        path.join('bin', 'sd-cuda', 'sd-cli'),
+        path.join('bin', 'sd-cuda', 'sd-server'),
         path.join('bin', 'licenses', 'libgomp1.txt'),
         path.join('bin', 'licenses', 'libvulkan1.txt'),
         path.join('bin', 'executorch-speech'),
@@ -68,17 +82,22 @@ export default async function verifyElectronBuilderArtifact(event) {
       }
     }
     if (artifact.endsWith('.appimage') || artifact.endsWith('.deb')) {
-      const libvips = path.join(
+      const libvipsDir = path.join(
         appOutDir,
         'resources',
         'app.asar.unpacked',
         'node_modules',
         '@img',
         'sharp-libvips-linux-x64',
-        'lib',
-        'libvips-cpp.so.8.18.3'
+        'lib'
       )
-      if (!fs.existsSync(libvips) || !fs.statSync(libvips).isFile()) {
+      const hasLibvips =
+        fs.existsSync(libvipsDir) &&
+        fs.readdirSync(libvipsDir).some((name) => {
+          const file = path.join(libvipsDir, name)
+          return /^libvips-cpp\.so\.\d+(?:\.\d+)*$/.test(name) && fs.statSync(file).isFile()
+        })
+      if (!hasLibvips) {
         throw new Error('installer input is missing the unpacked Sharp libvips library')
       }
     }

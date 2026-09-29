@@ -64,4 +64,23 @@ describe('packaged ONNX Runtime pruning', () => {
     expect(fs.existsSync(path.join(runtimeRoot, 'darwin'))).toBe(false)
     expect(fs.existsSync(path.join(runtimeRoot, 'win32'))).toBe(false)
   })
+
+  it('finds the runtime nested under Transformers.js', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-onnx-nested-'))
+    roots.push(root)
+    const runtimeRoot = path.join(
+      root,
+      'resources/app.asar.unpacked/node_modules/@huggingface/transformers/node_modules/onnxruntime-node/bin/napi-v6'
+    )
+    for (const target of ['linux/x64', 'win32/x64']) {
+      const directory = path.join(runtimeRoot, target)
+      fs.mkdirSync(directory, { recursive: true })
+      fs.writeFileSync(path.join(directory, 'runtime.bin'), target)
+    }
+
+    await pruneOnnxRuntime(context(root))
+
+    expect(fs.existsSync(path.join(runtimeRoot, 'linux/x64/runtime.bin'))).toBe(true)
+    expect(fs.existsSync(path.join(runtimeRoot, 'win32'))).toBe(false)
+  })
 })
