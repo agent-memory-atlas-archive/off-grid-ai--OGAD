@@ -108,8 +108,10 @@ jobs:
           TARGET_SHA: ${{ steps.bump.outputs.sha }}
         run: |
           TAG="v$VERSION"
-          gh release create "$TAG" --draft --target "$TARGET_SHA" \
-            --title "Off Grid AI Desktop $VERSION" --notes 'Build in progress.'
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft --target "$TARGET_SHA" \
+              --title "Off Grid AI Desktop $VERSION" --notes 'Build in progress.'
+          fi
           if [ "$CHANNEL" = beta ] && ! gh release view nightly >/dev/null 2>&1; then
             gh release create nightly --prerelease --title 'Nightly (rolling)' \
               --notes 'Rolling nightly build. Pre-release.'
