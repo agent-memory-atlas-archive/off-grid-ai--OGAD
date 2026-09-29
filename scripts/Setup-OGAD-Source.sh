@@ -173,7 +173,7 @@ echo "Build complete: $workspace/desktop/dist"
 step '6 of 6: Start from source'
 if [[ -n ${DISPLAY:-} && ${1:-} != --setup-only ]]; then
   read -r -p 'Press Enter to start OGAD. Keep this terminal open. ' _
-  bash scripts/start-linux-gpu.sh
+  npm run dev
 else
-  echo "To start from the Linux desktop terminal: cd '$workspace/desktop' && bash scripts/start-linux-gpu.sh"
+  echo "To start from the Linux desktop terminal: cd '$workspace/desktop' && npm run dev"
 fi

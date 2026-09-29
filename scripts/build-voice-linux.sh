@@ -16,16 +16,43 @@ if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
   echo '[build-voice-linux] Linux x64 is required' >&2
   exit 1
 fi
+
+# The CUDA, Vulkan, and CPU binaries came from a successful pinned Linux CI build.
+# CI downloads this exact checked archive instead of compiling
+# Whisper in a fresh runner. Set OFFGRID_BUILD_VOICE_FROM_SOURCE=1 to regenerate it.
+if [ "${OFFGRID_BUILD_VOICE_FROM_SOURCE:-0}" != 1 ] &&
+  [ "${OFFGRID_REUSE_STAGED_VOICE:-0}" != 1 ]; then
+  VOICE_ARCHIVE="ogad-whisper-${WHISPER_REF}-linux-x64-cuda12.8-multiarch-v1.tar.gz"
+  VOICE_SHA256=ba6fe2d08fa75589cb86b01c06e2f16b8483b81d19949b2035289d8bc0ff3c77
+  VOICE_WORK="$(mktemp -d)"
+  trap 'rm -rf -- "$VOICE_WORK"' EXIT
+  if [ -n "${OFFGRID_VOICE_ARCHIVE_CACHE_DIR:-}" ] &&
+    [ -f "$OFFGRID_VOICE_ARCHIVE_CACHE_DIR/$VOICE_ARCHIVE" ]; then
+    cp "$OFFGRID_VOICE_ARCHIVE_CACHE_DIR/$VOICE_ARCHIVE" "$VOICE_WORK/$VOICE_ARCHIVE"
+  else
+    curl --fail --location --retry 3 --silent --show-error \
+      "https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/$VOICE_ARCHIVE" \
+      --output "$VOICE_WORK/$VOICE_ARCHIVE"
+  fi
+  printf '%s  %s\n' "$VOICE_SHA256" "$VOICE_WORK/$VOICE_ARCHIVE" | sha256sum --check --status
+  mkdir -p "$ROOT/build/linux-bin"
+  tar -xzf "$VOICE_WORK/$VOICE_ARCHIVE" -C "$ROOT/build/linux-bin" --no-same-owner
+  OFFGRID_REUSE_STAGED_VOICE=1
+fi
 if [ "${OFFGRID_REUSE_STAGED_VOICE:-0}" = 1 ]; then
   for binary in "$ROOT/build/linux-bin/whisper-cuda/whisper-cli" \
     "$ROOT/build/linux-bin/whisper/whisper-cli" \
     "$ROOT/build/linux-bin/whisper-cpu/whisper-cli" \
     "$ROOT/build/linux-bin/ffmpeg"; do
     test -x "$binary"
+    file "$binary" | grep -q 'ELF 64-bit.*x86-64'
+    dependencies="$(LD_LIBRARY_PATH="$ROOT/build/linux-bin/cuda-runtime" ldd "$binary")"
+    test -z "$(printf '%s\n' "$dependencies" | grep 'not found' | grep -v 'libcuda.so.1' || true)"
   done
-  dependencies="$(LD_LIBRARY_PATH="$ROOT/build/linux-bin/cuda-runtime" \
-    ldd "$ROOT/build/linux-bin/whisper-cuda/whisper-cli")"
-  test -z "$(printf '%s\n' "$dependencies" | grep 'not found' | grep -v 'libcuda.so.1' || true)"
+  test -f "$ROOT/build/linux-bin/whisper/LICENSE"
+  test -f "$ROOT/build/linux-bin/licenses/ffmpeg.txt"
+  test -f "$ROOT/build/linux-bin/cuda-runtime/libcudart.so.12"
+  "$ROOT/build/linux-bin/ffmpeg" -version >/dev/null
   echo '[build-voice-linux] reusing verified staged Whisper and FFmpeg'
   exit 0
 fi
