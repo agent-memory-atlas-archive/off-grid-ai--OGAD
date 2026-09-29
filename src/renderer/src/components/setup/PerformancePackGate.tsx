@@ -10,7 +10,9 @@ export function PerformancePackGate({ children }: { children: React.ReactNode })
   const [dismissed, setDismissed] = useState(() => localStorage.getItem(SKIPPED_KEY) === 'true')
 
   useEffect(() => {
-    void window.api.performancePack.status().then(setStatus).catch(() => setStatus({
+    const pack = window.api.performancePack
+    if (typeof pack?.status !== 'function') return
+    void pack.status().then(setStatus).catch(() => setStatus({
       phase: 'unavailable', bytes: 0, downloadedBytes: 0
     }))
   }, [])

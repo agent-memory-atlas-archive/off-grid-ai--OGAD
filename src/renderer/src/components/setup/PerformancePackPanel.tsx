@@ -13,8 +13,10 @@ export function PerformancePackPanel({ onSkip }: PerformancePackPanelProps): Rea
   const [status, setStatus] = useState<PerformancePackStatus | null>(null)
 
   useEffect(() => {
-    void window.api.performancePack.status().then(setStatus)
-    return window.api.performancePack.onChanged(setStatus)
+    const pack = window.api.performancePack
+    if (typeof pack?.status !== 'function') return
+    void pack.status().then(setStatus).catch(() => {})
+    return pack.onChanged?.(setStatus)
   }, [])
 
   if (!status || status.phase === 'not-needed' || status.phase === 'unavailable') return null
