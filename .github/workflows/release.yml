@@ -344,6 +344,7 @@ jobs:
           node scripts/refresh-mac-dmg-update-info.mjs "$DMG" dist/latest-mac.yml
           APP="$(find dist -maxdepth 2 -type d -name 'Off Grid AI Desktop.app' -print -quit)"
           test -n "$APP"
+          test -s "$APP/Contents/Resources/performance-packs.json"
           node scripts/probe-packaged-tts.mjs "$APP" --synthesize
       # Internal demo build: hand the signed+notarized DMG back as a run artifact and stop
       # (the publish steps below are all skipped). Repo-scoped, auto-expiring, no Release.
@@ -614,6 +615,7 @@ jobs:
       - name: Verify Windows base runtimes
         shell: bash
         run: |
+          test -s dist/win-unpacked/resources/performance-packs.json
           for binary in llama/llama-server.exe llama-cpu/llama-server.exe llama-prism/llama-server.exe llama-prism-cpu/llama-server.exe whisper-cpu/whisper-cli.exe sd/sd-cli.exe sd-cpu/sd-cli.exe ffmpeg.exe; do
             test -s "dist/win-unpacked/resources/bin/$binary"
           done
@@ -803,6 +805,7 @@ jobs:
         run: du -sh dist/linux-unpacked/resources/bin/* | sort -h | tail -25
       - name: Verify Linux package inputs
         run: |
+          test -s dist/linux-unpacked/resources/performance-packs.json
           for folder in llama-cuda llama-prism-cuda cuda-runtime sd-cuda whisper-cuda kev-runtime; do
             test ! -e "dist/linux-unpacked/resources/bin/$folder"
           done
