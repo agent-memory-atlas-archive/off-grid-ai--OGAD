@@ -3,20 +3,22 @@ import { DownloadSimple, Pause, Play, ArrowClockwise, CheckCircle } from '@phosp
 import { projectProgress } from '@offgrid/ui'
 import { Button } from '../ui/button'
 import type { PerformancePackStatus } from '../../../../shared/performance-pack'
+import { currentPlatform } from '@renderer/lib/device'
 import { formatStorageBytes } from './storage-format'
 
 interface PerformancePackPanelProps {
   onSkip?: () => void
+  showUnavailable?: boolean
 }
 
 const GPU_COMPONENTS = [
   { name: 'Chat and vision', detail: 'NVIDIA chat engine' },
   { name: 'Image generation', detail: 'NVIDIA image engine' },
   { name: 'Transcription', detail: 'NVIDIA speech-to-text engine' },
-  { name: 'Computer use', detail: 'NVIDIA decision engine' }
+  { name: 'Computer Use', detail: 'NVIDIA grounding and decision engines' }
 ] as const
 
-export function PerformancePackPanel({ onSkip }: PerformancePackPanelProps): React.ReactElement | null {
+export function PerformancePackPanel({ onSkip, showUnavailable = false }: PerformancePackPanelProps): React.ReactElement | null {
   const [status, setStatus] = useState<PerformancePackStatus | null>(null)
 
   useEffect(() => {
@@ -26,7 +28,16 @@ export function PerformancePackPanel({ onSkip }: PerformancePackPanelProps): Rea
     return pack.onChanged?.(setStatus)
   }, [])
 
-  if (!status || status.phase === 'not-needed' || status.phase === 'unavailable') return null
+  if (!status) return showUnavailable ? <p role="status" className="text-sm text-neutral-500">Checking GPU components...</p> : null
+  if (status.phase === 'not-needed' || status.phase === 'unavailable') {
+    if (!showUnavailable) return null
+    const message = currentPlatform() === 'darwin'
+      ? 'Metal support is included on macOS. No extra GPU download is needed.'
+      : status.phase === 'not-needed'
+        ? 'No NVIDIA driver was found. The CUDA download is only for devices with an NVIDIA GPU.'
+        : 'No optional GPU download is available in this build.'
+    return <p className="text-sm text-neutral-500">{message}</p>
+  }
 
   const progress = projectProgress({
     downloadedBytes: status.downloadedBytes,
@@ -49,7 +60,9 @@ export function PerformancePackPanel({ onSkip }: PerformancePackPanelProps): Rea
             You can use the app during the download or skip this step.
           </p>
           {installed ? (
-            <p className="mt-2 text-xs text-green-500">Installed. Restart the app to use it.</p>
+            <p className="mt-2 text-xs text-green-500">
+              {status.restartRequired ? 'Installed. Restart the app to use it.' : 'Installed and ready.'}
+            </p>
           ) : null}
           {status.error ? <p className="mt-2 text-xs text-red-400">{status.error}</p> : null}
         </div>
@@ -82,16 +95,16 @@ export function PerformancePackPanel({ onSkip }: PerformancePackPanelProps): Rea
         </div>
       ) : null}
       <div className="mt-4 flex flex-wrap gap-2">
-        {installed ? (
+        {installed && status.restartRequired ? (
           <Button size="sm" onClick={() => void window.api.performancePack.restart()}>
             <ArrowClockwise className="h-4 w-4" /> Restart app
           </Button>
-        ) : (
+        ) : !installed ? (
           <Button size="sm" onClick={() => void action().then(setStatus)}>
             {downloading ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
             {downloading ? 'Pause' : status.phase === 'paused' ? 'Resume' : status.phase === 'failed' ? 'Try again' : 'Download'}
           </Button>
-        )}
+        ) : null}
         {onSkip ? (
           <Button size="sm" variant="outline" onClick={onSkip}>Skip for now</Button>
         ) : null}

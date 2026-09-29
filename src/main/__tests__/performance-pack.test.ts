@@ -94,9 +94,13 @@ describe('optional NVIDIA performance pack', () => {
     expect(pack.startPerformancePack().phase).toBe('downloading')
     const status = await settled('installed')
     expect(status.downloadedBytes).toBe(bytes.length)
+    expect(status.restartRequired).toBe(true)
     expect(fetcher).toHaveBeenCalledOnce()
     expect(fs.existsSync(path.join(process.env.OFFGRID_PERFORMANCE_PACK_BIN!, 'llama-cuda', 'llama-server'))).toBe(true)
     expect(pack.startPerformancePack().phase).toBe('installed')
+    vi.resetModules()
+    const afterRestart = await import('../performance-pack')
+    expect(afterRestart.performancePackStatus().restartRequired).toBe(false)
   })
 
   it('rejects an archive with the wrong hash and removes the partial file', async () => {

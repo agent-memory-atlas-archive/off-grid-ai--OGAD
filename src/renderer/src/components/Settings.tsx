@@ -25,6 +25,7 @@ export { ModelPipelineSection } from './ProcessingControls'
 const SETTINGS_SECTION_TITLES: Record<string, string> = {
   setup: 'Setup & health',
   permissions: 'Setup & health',
+  performance: 'GPU performance',
   capture: 'Capture & processing',
   'computer-use': 'Computer use',
   remote: 'Remote model server',
@@ -161,9 +162,6 @@ export function Settings({
             >
               <SetupPanel />
               <div className="mt-4">
-                <PerformancePackPanel />
-              </div>
-              <div className="mt-4">
                 <StoragePanel />
               </div>
               {currentPlatform() === 'darwin' ? (
@@ -174,6 +172,14 @@ export function Settings({
                   <SettingsPermissionsPanel />
                 </section>
               ) : null}
+            </SettingsCard>
+
+            <SettingsCard
+              title="GPU performance"
+              summary="Manage GPU components for chat, images, transcription, and Computer Use."
+              delay={0.135}
+            >
+              <PerformancePackPanel showUnavailable />
             </SettingsCard>
 
             <SettingsCard

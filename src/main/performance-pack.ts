@@ -18,6 +18,7 @@ let task: Promise<void> | null = null
 let phase: PerformancePackStatus['phase'] | null = null
 let downloadedBytes = 0
 let errorMessage: string | undefined
+let installedThisSession = false
 let notify: ((status: PerformancePackStatus) => void) | undefined
 
 function manifestAsset(): PerformancePackAsset | null {
@@ -78,7 +79,10 @@ export function performancePackStatus(): PerformancePackStatus {
   if (!asset) return { phase: 'unavailable', bytes: 0, downloadedBytes: 0 }
   if (!hasNvidiaDriver()) return { phase: 'not-needed', bytes: 0, downloadedBytes: 0 }
   if (installedBin(asset)) {
-    return { phase: 'installed', bytes: asset.bytes, downloadedBytes: asset.bytes, version: asset.version }
+    return {
+      phase: 'installed', bytes: asset.bytes, downloadedBytes: asset.bytes,
+      version: asset.version, restartRequired: installedThisSession
+    }
   }
   const current = phase ?? 'available'
   return {
@@ -169,6 +173,7 @@ async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Prom
     fs.rmSync(root, { recursive: true, force: true })
     fs.renameSync(staging, root)
     fs.rmSync(archive, { force: true })
+    installedThisSession = true
     activateInstalledPerformancePack()
   } catch (error) {
     fs.rmSync(staging, { recursive: true, force: true })

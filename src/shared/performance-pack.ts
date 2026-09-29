@@ -25,4 +25,5 @@ export interface PerformancePackStatus {
   downloadedBytes: number
   version?: string
   error?: string
+  restartRequired?: boolean
 }
