@@ -104,7 +104,7 @@ jobs:
   # channel (latest-mac.yml).
   build-mac:
     needs: version
-    runs-on: macos-latest
+    runs-on: macos-15 # Standard arm64 runner; matches the pinned native payload.
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -114,68 +114,14 @@ jobs:
             false # Smudge nothing on checkout; pull only the shipped, non-rebuilt
             # binaries below. Fetching everything (~200 MB) blew the org's monthly LFS
             # bandwidth budget and failed the release checkout ("exceeded its LFS budget").
-      - name: Pull shipped LFS binaries (skip the ones rebuilt below)
-        # resources/bin/{ffmpeg,text-extractor,sd/**,LICENSE} are prebuilt and shipped
-        # as-is, so they MUST be real files — a pointer stub spawns as ENOEXEC at runtime.
-        # llama/ + whisper/ are excluded because build-llama.sh / build-whisper-cli.sh
-        # recompile them from source in place later in this job, so pulling the committed
-        # copies is wasted bandwidth. Artifact verification still checks the signed
-        # package before publication.
-        run: git lfs pull --exclude="resources/bin/llama,resources/bin/whisper"
-      - name: Resolve pinned macOS engine refs for cache
-        id: mac_engine_pins
+      - name: Pull shipped LFS binaries
+        run: git lfs pull --exclude="resources/bin/llama,resources/bin/llama-prism,resources/bin/whisper,resources/bin/kev-runtime"
+      - name: Stage pinned macOS native engines
         run: |
-          echo "refs=$(node -p "const p=require('./package.json').offgrid; p.llamaRef+'-'+p.prismLlamaRef")" >> "$GITHUB_OUTPUT"
-      - name: Restore macOS chat engines
-        id: mac_llama_cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            resources/bin/llama
-            resources/bin/llama-prism
-          key: mac-llama-${{ runner.arch }}-${{ steps.mac_engine_pins.outputs.refs }}-${{ hashFiles('scripts/build-llama.sh') }}
-      # Rebuild the chat engine from source with a PINNED macOS deployment target.
-      # The committed/LFS llama-server is minos 26 (built on a macOS-26 toolchain),
-      # so it only launches on macOS 26 — every macOS 13/14/15 user saw "Chat model
-      # Down". This compiles llama-server targeting macOS 13, GATES on its minos,
-      # and overwrites resources/bin/llama/ BEFORE electron-builder signs+notarizes,
-      # so the shipped engine is correct by construction. (~2 min, zero deps.)
-      - name: Build llama-server (pinned deployment target)
-        if: steps.mac_llama_cache.outputs.cache-hit != 'true'
-        run: |
-          command -v cmake >/dev/null || brew install cmake
-          MACOS_DEPLOYMENT_TARGET=13.0 bash scripts/build-llama.sh
-          LLAMA_VARIANT=prism MACOS_DEPLOYMENT_TARGET=13.0 bash scripts/build-llama.sh
-          otool -l resources/bin/llama/llama-server | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print "[ci] bundled engine minos="$2; exit}'
-          otool -l resources/bin/llama-prism/llama-server | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print "[ci] bundled Prism engine minos="$2; exit}'
-      - name: Save macOS chat engines
-        if: steps.mac_llama_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            resources/bin/llama
-            resources/bin/llama-prism
-          key: mac-llama-${{ runner.arch }}-${{ steps.mac_engine_pins.outputs.refs }}-${{ hashFiles('scripts/build-llama.sh') }}
-      - name: Restore macOS Whisper CLI
-        id: mac_whisper_cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: resources/bin/whisper
-          key: mac-whisper-${{ runner.arch }}-${{ hashFiles('scripts/build-whisper-cli.sh') }}-v1.7.4
-      # Rebuild the one-shot Whisper CLI instead of trusting the committed LFS
-      # payload. The production script disables OpenMP/BLAS auto-discovery and
-      # rejects Homebrew paths, missing @rpath names, symlinks, and a newer minos.
-      - name: Build Whisper CLI (pinned deployment target)
-        if: steps.mac_whisper_cache.outputs.cache-hit != 'true'
-        run: |
-          MACOS_DEPLOYMENT_TARGET=13.0 WHISPER_REF=v1.7.4 bash scripts/build-whisper-cli.sh
-          otool -l resources/bin/whisper/whisper-cli | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print "[ci] bundled Whisper minos="$2; exit}'
-      - name: Save macOS Whisper CLI
-        if: steps.mac_whisper_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: resources/bin/whisper
-          key: mac-whisper-${{ runner.arch }}-${{ hashFiles('scripts/build-whisper-cli.sh') }}-v1.7.4
+          curl -fL --retry 3 -o "$RUNNER_TEMP/mac-native.tar.gz" \
+            'https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/ogad-mac-native-2026-09-arm64-v1.tar.gz'
+          echo 'ef1880daac727595bf825a254b1ebbc2a0c15c0cecd8da422c499b1568db0ad0  '"$RUNNER_TEMP/mac-native.tar.gz" | shasum -a 256 -c -
+          tar -xzf "$RUNNER_TEMP/mac-native.tar.gz" -C resources/bin
       - name: Verify cached macOS engines
         run: |
           for variant in llama llama-prism; do
@@ -231,25 +177,10 @@ jobs:
           mkdir -p resources/bin
           cp scripts/actions-helper/actions-helper resources/bin/actions-helper
           chmod +x resources/bin/actions-helper
-      - name: Restore macOS Kev runtime
-        id: mac_kev_cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: resources/bin/kev-runtime
-          key: mac-kev-${{ runner.arch }}-${{ hashFiles('scripts/build-kev-runtime.sh') }}
-      - name: Build Kev server runtime (model weights excluded)
-        if: steps.mac_kev_cache.outputs.cache-hit != 'true'
-        run: bash scripts/build-kev-runtime.sh
       - name: Verify macOS Kev runtime
         run: |
           resources/bin/kev-runtime/python/bin/python3 -c 'import kev, mlx_lm, torch, uvicorn'
           resources/bin/kev-runtime/python/bin/python3 resources/bin/kev-local-server.py --help >/dev/null
-      - name: Save macOS Kev runtime
-        if: steps.mac_kev_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: resources/bin/kev-runtime
-          key: mac-kev-${{ runner.arch }}-${{ hashFiles('scripts/build-kev-runtime.sh') }}
       # Stage the Parakeet STT runtime (sherpa-onnx CLI + ONNX model) into
       # resources/bin/parakeet. Additive: with SHERPA_ONNX_URL / PARAKEET_MODEL_URL
       # unset this is a no-op and transcription stays on whisper, so it can't break a
@@ -665,30 +596,8 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # raises the GitHub API rate limit
+          OFFGRID_INCLUDE_CUDA: '0'
         run: ./scripts/fetch-win-binaries.ps1
-      - name: Restore Windows Kev CUDA runtime
-        id: win_kev_cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: resources/bin/kev-runtime
-          key: win-kev-x64-${{ hashFiles('scripts/build-kev-runtime.ps1') }}
-      - name: Build Kev server runtime (model weights excluded)
-        if: steps.win_kev_cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: ./scripts/build-kev-runtime.ps1
-      - name: Verify Windows Kev CUDA runtime
-        shell: pwsh
-        run: |
-          & ./resources/bin/kev-runtime/python/python.exe -c 'import kev, torch, uvicorn; assert torch.version.cuda'
-          if ($LASTEXITCODE -ne 0) { throw 'Windows Kev CUDA runtime failed its import check' }
-          & ./resources/bin/kev-runtime/python/python.exe ./resources/bin/kev-local-server.py --help | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw 'Windows Kev server failed its launch check' }
-      - name: Save Windows Kev CUDA runtime
-        if: steps.win_kev_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: resources/bin/kev-runtime
-          key: win-kev-x64-${{ hashFiles('scripts/build-kev-runtime.ps1') }}
       - name: Stamp build version
         run: npm version "${{ needs.version.outputs.version }}" --no-git-tag-version --allow-same-version
       - name: Stage native files and bundle
@@ -702,6 +611,15 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: |
           npx electron-builder --win --publish never
+      - name: Verify Windows base runtimes
+        shell: bash
+        run: |
+          for binary in llama/llama-server.exe llama-cpu/llama-server.exe llama-prism/llama-server.exe llama-prism-cpu/llama-server.exe whisper-cpu/whisper-cli.exe sd/sd-cli.exe sd-cpu/sd-cli.exe ffmpeg.exe; do
+            test -s "dist/win-unpacked/resources/bin/$binary"
+          done
+          for folder in llama-cuda llama-prism-cuda cuda-runtime sd-cuda whisper kev-runtime; do
+            test ! -e "dist/win-unpacked/resources/bin/$folder"
+          done
       - name: Report Windows native payload sizes
         shell: bash
         run: du -sh resources/bin/* | sort -h | tail -20
@@ -868,12 +786,6 @@ jobs:
         if: steps.linux_tts_cache.outputs.cache-hit == 'true'
         run: |
           install -Dm755 build/cached-executorch-speech ../executorch-speech/native/bin/executorch-speech
-      - name: Restore Linux Kev CUDA runtime
-        id: linux_kev_cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: build/linux-bin/kev-runtime
-          key: linux-kev-x64-${{ hashFiles('scripts/build-kev-runtime-linux.sh') }}
       - name: Install dependencies
         run: npm ci
       - name: Install Linux local voice build dependency
@@ -897,31 +809,14 @@ jobs:
         env:
           OFFGRID_FORCE_CORE: '0'
           OFFGRID_TTS_PREBUILT: ${{ steps.linux_tts_cache.outputs.cache-hit == 'true' && '1' || '0' }}
-          OFFGRID_KEV_PREBUILT: ${{ steps.linux_kev_cache.outputs.cache-hit == 'true' && '1' || '0' }}
-        run: npm run build:linux
+        run: npm run build:linux:release
       - name: Report Linux native payload sizes
         run: du -sh dist/linux-unpacked/resources/bin/* | sort -h | tail -25
-      - name: Save Linux speech binary
-        if: steps.linux_tts_cache.outputs.cache-hit != 'true'
-        run: install -Dm755 ../executorch-speech/native/bin/executorch-speech build/cached-executorch-speech
-      - name: Store Linux speech binary in cache
-        if: steps.linux_tts_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: build/cached-executorch-speech
-          key: linux-tts-x64-e3b471e6-${{ hashFiles('scripts/build-tts-linux.sh') }}
-      - name: Save Linux Kev CUDA runtime
-        if: steps.linux_kev_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: build/linux-bin/kev-runtime
-          key: linux-kev-x64-${{ hashFiles('scripts/build-kev-runtime-linux.sh') }}
-      - name: Verify packaged Kev runtime
-        run: |
-          test -f dist/linux-unpacked/resources/bin/kev-local-server.py
-          dist/linux-unpacked/resources/bin/kev-runtime/python/bin/python3 -c 'import kev, torch, uvicorn; assert torch.version.cuda'
       - name: Verify Linux package inputs
         run: |
+          for folder in llama-cuda llama-prism-cuda cuda-runtime sd-cuda whisper-cuda kev-runtime; do
+            test ! -e "dist/linux-unpacked/resources/bin/$folder"
+          done
           for variant in llama llama-cpu llama-prism llama-prism-cpu; do
             engine="dist/linux-unpacked/resources/bin/$variant/llama-server"
             test -x "$engine"
@@ -933,13 +828,6 @@ jobs:
           for variant in llama llama-prism; do
             test -f "dist/linux-unpacked/resources/bin/$variant/libggml-vulkan.so"
           done
-          for variant in llama-cuda llama-prism-cuda; do
-            test -x "dist/linux-unpacked/resources/bin/$variant/llama-server"
-            test -f "dist/linux-unpacked/resources/bin/$variant/libggml-cuda.so"
-          done
-          for library in libcudart.so.12 libcublas.so.12 libcublasLt.so.12; do
-            test -f "dist/linux-unpacked/resources/bin/cuda-runtime/$library"
-          done
           for helper in whisper/whisper-cli whisper-cpu/whisper-cli ffmpeg; do
             binary="dist/linux-unpacked/resources/bin/$helper"
             test -x "$binary"
@@ -947,7 +835,6 @@ jobs:
             ldd "$binary" | tee "$RUNNER_TEMP/$(basename "$binary")-ldd.txt"
             if grep -q 'not found' "$RUNNER_TEMP/$(basename "$binary")-ldd.txt"; then exit 1; fi
           done
-          test -x dist/linux-unpacked/resources/bin/whisper-cuda/whisper-cli
           dist/linux-unpacked/resources/bin/ffmpeg -version >/dev/null
           dist/linux-unpacked/resources/bin/whisper/whisper-cli --help >/dev/null 2>&1
           dist/linux-unpacked/resources/bin/whisper-cpu/whisper-cli --help >/dev/null 2>&1
@@ -973,28 +860,6 @@ jobs:
         run: bash scripts/probe-linux-voice.sh dist/linux-unpacked/resources/bin
       - name: Smoke-test local Linux voice output
         run: node scripts/probe-linux-tts.mjs
-      - name: Verify packaged CUDA dependencies
-        # Prism links libcuda at startup, so only a real NVIDIA host can launch it.
-        run: |
-          docker run --rm -v "$PWD/dist/linux-unpacked/resources/bin:/engines:ro" ubuntu:24.04 bash -euo pipefail -c '
-            for variant in llama-cuda llama-prism-cuda; do
-              export LD_LIBRARY_PATH="/engines/$variant:/engines/cuda-runtime"
-              dependencies="$(ldd "/engines/$variant/llama-server"; ldd "/engines/$variant/libggml-cuda.so")"
-              missing="$(printf "%s\n" "$dependencies" | grep "not found" | grep -v "libcuda.so.1" || true)"
-              test -z "$missing" || { printf "%s\n" "$missing" >&2; exit 1; }
-              if [ "$variant" = llama-cuda ]; then
-                "/engines/$variant/llama-server" --version
-                "/engines/$variant/llama-server" --list-devices
-              fi
-            done
-            for binary in whisper-cuda/whisper-cli sd-cuda/sd-cli sd-cuda/sd-server; do
-              test -x "/engines/$binary"
-              export LD_LIBRARY_PATH="/engines/$(dirname "$binary"):/engines/cuda-runtime"
-              dependencies="$(ldd "/engines/$binary")"
-              missing="$(printf "%s\n" "$dependencies" | grep "not found" | grep -v "libcuda.so.1" || true)"
-              test -z "$missing" || { printf "%s\n" "$missing" >&2; exit 1; }
-            done
-          '
       - name: Verify packaged Linux native modules
         run: |
           ELECTRON_RUN_AS_NODE=1 dist/linux-unpacked/off-grid-ai -e '
@@ -1022,42 +887,34 @@ jobs:
           extraction="$(mktemp -d)"
           trap 'rm -rf -- "$extraction"' EXIT
           (cd "$extraction" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null)
-          for variant in llama-cuda llama llama-cpu llama-prism-cuda llama-prism llama-prism-cpu; do
+          for variant in llama llama-cpu llama-prism llama-prism-cpu; do
             bundled="$(find "$extraction/squashfs-root" -path "*/resources/bin/$variant/llama-server" -type f -print -quit)"
             test -n "$bundled"
             cmp "dist/linux-unpacked/resources/bin/$variant/llama-server" "$bundled"
           done
-          for helper in sd-cuda/sd-cli sd-cuda/sd-server whisper-cuda/whisper-cli whisper/whisper-cli whisper-cpu/whisper-cli whisper/LICENSE ffmpeg licenses/ffmpeg.txt sd/sd-cli sd/sd-server sd/libggml-vulkan.so sd/libgomp.so.1 sd/libvulkan.so.1 executorch-speech licenses/libgomp1.txt licenses/libvulkan1.txt; do
+          for helper in whisper/whisper-cli whisper-cpu/whisper-cli whisper/LICENSE ffmpeg licenses/ffmpeg.txt sd/sd-cli sd/sd-server sd/libggml-vulkan.so sd/libgomp.so.1 sd/libvulkan.so.1 executorch-speech licenses/libgomp1.txt licenses/libvulkan1.txt; do
             bundled="$(find "$extraction/squashfs-root" -path "*/resources/bin/$helper" -type f -print -quit)"
             test -n "$bundled"
             cmp "dist/linux-unpacked/resources/bin/$helper" "$bundled"
           done
-          for variant in llama-cuda llama-prism-cuda; do
-            backend="$(find "$extraction/squashfs-root" -path "*/resources/bin/$variant/libggml-cuda.so" -print -quit)"
-            test -f "$backend"
-          done
-          test -f "$(find "$extraction/squashfs-root" -path '*/resources/bin/cuda-runtime/libcublasLt.so.12' -type f -print -quit)"
+          test -z "$(find "$extraction/squashfs-root" -path '*/resources/bin/cuda-runtime/libcublasLt.so.12' -print -quit)"
           test -f "$(find "$extraction/squashfs-root" -path '*/resources/speech-assets/index.json' -type f -print -quit)"
           bundled_asar="$(find "$extraction/squashfs-root" -name app.asar -type f -print -quit)"
           test -n "$bundled_asar"
           cmp dist/linux-unpacked/resources/app.asar "$bundled_asar"
           rm -rf -- "$extraction/squashfs-root"
           dpkg-deb --extract "$deb" "$extraction/deb"
-          for variant in llama-cuda llama llama-cpu llama-prism-cuda llama-prism llama-prism-cpu; do
+          for variant in llama llama-cpu llama-prism llama-prism-cpu; do
             bundled="$(find "$extraction/deb" -path "*/resources/bin/$variant/llama-server" -type f -print -quit)"
             test -n "$bundled"
             cmp "dist/linux-unpacked/resources/bin/$variant/llama-server" "$bundled"
           done
-          for helper in sd-cuda/sd-cli sd-cuda/sd-server whisper-cuda/whisper-cli whisper/whisper-cli whisper-cpu/whisper-cli whisper/LICENSE ffmpeg licenses/ffmpeg.txt sd/sd-cli sd/sd-server sd/libggml-vulkan.so sd/libgomp.so.1 sd/libvulkan.so.1 executorch-speech licenses/libgomp1.txt licenses/libvulkan1.txt; do
+          for helper in whisper/whisper-cli whisper-cpu/whisper-cli whisper/LICENSE ffmpeg licenses/ffmpeg.txt sd/sd-cli sd/sd-server sd/libggml-vulkan.so sd/libgomp.so.1 sd/libvulkan.so.1 executorch-speech licenses/libgomp1.txt licenses/libvulkan1.txt; do
             bundled="$(find "$extraction/deb" -path "*/resources/bin/$helper" -type f -print -quit)"
             test -n "$bundled"
             cmp "dist/linux-unpacked/resources/bin/$helper" "$bundled"
           done
-          for variant in llama-cuda llama-prism-cuda; do
-            backend="$(find "$extraction/deb" -path "*/resources/bin/$variant/libggml-cuda.so" -print -quit)"
-            test -f "$backend"
-          done
-          test -f "$(find "$extraction/deb" -path '*/resources/bin/cuda-runtime/libcublasLt.so.12' -type f -print -quit)"
+          test -z "$(find "$extraction/deb" -path '*/resources/bin/cuda-runtime/libcublasLt.so.12' -print -quit)"
           test -f "$(find "$extraction/deb" -path '*/resources/speech-assets/index.json' -type f -print -quit)"
           bundled_asar="$(find "$extraction/deb" -name app.asar -type f -print -quit)"
           test -n "$bundled_asar"

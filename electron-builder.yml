@@ -50,6 +50,14 @@ win:
   extraResources:
     - from: resources/bin
       to: bin
+      filter:
+        - '**/*'
+        - '!llama-cuda/**'
+        - '!llama-prism-cuda/**'
+        - '!cuda-runtime/**'
+        - '!sd-cuda/**'
+        - '!whisper/**'
+        - '!kev-runtime/**'
 nsisWeb:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
@@ -124,6 +132,14 @@ linux:
   extraResources:
     - from: build/linux-bin
       to: bin
+      filter:
+        - '**/*'
+        - '!llama-cuda/**'
+        - '!llama-prism-cuda/**'
+        - '!cuda-runtime/**'
+        - '!sd-cuda/**'
+        - '!whisper-cuda/**'
+        - '!kev-runtime/**'
     - from: ../executorch-speech/native/bin/executorch-speech
       to: bin/executorch-speech
     - from: ../executorch-speech/generated/default-assets
