@@ -36,6 +36,8 @@ import { VoiceSettingsTab } from './VoiceSettingsTab'
 import { RemoteVisionSettingsTab } from './RemoteVisionSettingsTab'
 import { SettingsRow as Row } from './SettingsRow'
 import { SettingsSelect } from './SettingsSelect'
+import { BackendPreferencesSection } from './ProcessingControls'
+import type { BackendModality } from '../../../shared/backend-preferences'
 import type { SpeechLanguage } from '@offgrid/speech'
 import { CaretRight, X } from '@phosphor-icons/react'
 import { getSlot, SLOTS } from '@renderer/bootstrap/slotRegistry'
@@ -44,6 +46,14 @@ const MAX_OUTPUT_AUTO = MAX_TOKENS_AUTO
 // The values THIS picker offers. The nesting rule they obey is shared (@offgrid/models); which
 // discrete steps to show is a desktop rendering choice, and OGAM uses sliders instead.
 const MAX_OUTPUT_OPTIONS = [2048, 4096, 8192, 16384, 32768]
+
+const BACKENDS_BY_TAB: Partial<Record<Tab, readonly BackendModality[]>> = {
+  model: ['llm'],
+  image: ['image'],
+  voice: ['tts'],
+  transcription: ['stt'],
+  tools: ['grounding', 'decision', 'embeddings']
+}
 
 /** The ceiling on thinking: the response length it must fit inside, which for an auto output cap
  *  is the context window. Mirrors reconcileBudgets so the options offered match what is kept. */
@@ -487,6 +497,11 @@ export function SettingsPanel({
       </div>
 
       <div className={embedded ? 'p-1 pt-4 text-sm' : 'min-h-0 flex-1 overflow-y-auto p-4 text-sm'}>
+        {BACKENDS_BY_TAB[tab] && (
+          <div className="mb-5">
+            <BackendPreferencesSection modalities={BACKENDS_BY_TAB[tab]} />
+          </div>
+        )}
         {tab === 'tasks' && TaskSettings ? <TaskSettings /> : null}
         {tab === 'model' && (
           <>

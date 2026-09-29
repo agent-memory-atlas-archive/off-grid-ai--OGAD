@@ -208,7 +208,9 @@ const BACKEND_ROW_LABELS: Record<BackendModality, string> = {
   grounding: 'Grounding', decision: 'Decider', embeddings: 'Search embeddings'
 }
 
-export function BackendPreferencesSection(): React.ReactElement {
+export function BackendPreferencesSection({ modalities }: {
+  modalities: readonly BackendModality[]
+}): React.ReactElement {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const api = (window as any).api
   const platform: string = api.platform ?? 'linux'
@@ -217,13 +219,17 @@ export function BackendPreferencesSection(): React.ReactElement {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    void api.backendPreferencesGet?.().then((value: unknown) => {
-      setPreferences(normalizeBackendPreferences(value, platform))
-    }).catch(() => setError('Backend settings could not load.'))
+    if (api.backendPreferencesGet) {
+      void api.backendPreferencesGet().then((value: unknown) => {
+        setPreferences(normalizeBackendPreferences(value, platform))
+      }).catch(() => setError('Backend settings could not load.'))
+    }
     const poll = (): void => {
-      void api.runtimeBackends?.().then((value: unknown) => {
-        setRunning(Array.isArray(value) ? value : [])
-      }).catch(() => {})
+      if (api.runtimeBackends) {
+        void api.runtimeBackends().then((value: unknown) => {
+          setRunning(Array.isArray(value) ? value : [])
+        }).catch(() => {})
+      }
     }
     poll()
     const timer = setInterval(poll, 3_000)
@@ -242,7 +248,7 @@ export function BackendPreferencesSection(): React.ReactElement {
   }
 
   return (
-    <section aria-labelledby="model-backend-heading" className="xl:col-span-2">
+    <section aria-labelledby="model-backend-heading">
       <h4 id="model-backend-heading" className="mb-1 text-[11px] uppercase tracking-wide text-neutral-500">
         Model backends
       </h4>
@@ -253,7 +259,7 @@ export function BackendPreferencesSection(): React.ReactElement {
       </p>
       {error && <p role="alert" className="mb-2 text-xs text-red-400">{error}</p>}
       <div className="grid grid-cols-1 gap-x-6 xl:grid-cols-2">
-        {RESIDENCY_ROWS.map((row) => {
+        {RESIDENCY_ROWS.filter((row) => modalities.includes(row.modality)).map((row) => {
           const modality = row.modality
           const runtime = running.find((entry) => entry.id === RUNTIME_IDS[modality])
           return (
@@ -284,7 +290,6 @@ export function ProcessingControls(): React.ReactElement {
     <div className="grid grid-cols-1 gap-6 border-t border-neutral-800/70 pt-5 xl:grid-cols-2">
       <ModelPipelineSection />
       <RuntimeResidencySection />
-      <BackendPreferencesSection />
     </div>
   )
 }
