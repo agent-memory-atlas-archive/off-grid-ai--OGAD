@@ -179,7 +179,7 @@ async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Prom
 export function startPerformancePack(): PerformancePackStatus {
   const asset = manifestAsset()
   if (!asset || !hasNvidiaDriver() || installedBin(asset)) return performancePackStatus()
-  if (task) return performancePackStatus()
+  if (task !== null) return performancePackStatus()
   phase = 'downloading'
   errorMessage = undefined
   controller = new AbortController()
