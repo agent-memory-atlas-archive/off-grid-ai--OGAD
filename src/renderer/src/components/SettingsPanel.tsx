@@ -37,7 +37,6 @@ import { RemoteVisionSettingsTab } from './RemoteVisionSettingsTab'
 import { SettingsRow as Row } from './SettingsRow'
 import { SettingsSelect } from './SettingsSelect'
 import { BackendPreferencesSection } from './ProcessingControls'
-import type { BackendModality } from '../../../shared/backend-preferences'
 import type { SpeechLanguage } from '@offgrid/speech'
 import { CaretRight, X } from '@phosphor-icons/react'
 import { getSlot, SLOTS } from '@renderer/bootstrap/slotRegistry'
@@ -46,14 +45,6 @@ const MAX_OUTPUT_AUTO = MAX_TOKENS_AUTO
 // The values THIS picker offers. The nesting rule they obey is shared (@offgrid/models); which
 // discrete steps to show is a desktop rendering choice, and OGAM uses sliders instead.
 const MAX_OUTPUT_OPTIONS = [2048, 4096, 8192, 16384, 32768]
-
-const BACKENDS_BY_TAB: Partial<Record<Tab, readonly BackendModality[]>> = {
-  model: ['llm'],
-  image: ['image'],
-  voice: ['tts'],
-  transcription: ['stt'],
-  tools: ['grounding', 'decision', 'embeddings']
-}
 
 /** The ceiling on thinking: the response length it must fit inside, which for an auto output cap
  *  is the context window. Mirrors reconcileBudgets so the options offered match what is kept. */
@@ -497,11 +488,6 @@ export function SettingsPanel({
       </div>
 
       <div className={embedded ? 'p-1 pt-4 text-sm' : 'min-h-0 flex-1 overflow-y-auto p-4 text-sm'}>
-        {BACKENDS_BY_TAB[tab] && (
-          <div className="mb-5">
-            <BackendPreferencesSection modalities={BACKENDS_BY_TAB[tab]} />
-          </div>
-        )}
         {tab === 'tasks' && TaskSettings ? <TaskSettings /> : null}
         {tab === 'model' && (
           <>
@@ -658,6 +644,7 @@ export function SettingsPanel({
             </Row>
             {/* Order matters: the OUTER budget first, because each inner one is bounded by it.
                 thinking budget within max output within context window (rule in @offgrid/models). */}
+            <BackendPreferencesSection modalities={['llm']} />
             <Row label="Context window" controlId="context-window" hint={contextWindowHint(s)}>
               <SettingsSelect
                 id="context-window"
@@ -927,6 +914,7 @@ export function SettingsPanel({
                 <p className="mt-1 text-[10px] text-neutral-600">{transcriptionInfo.label}</p>
               ) : null}
             </Row>
+            <BackendPreferencesSection modalities={['stt']} />
             <Row
               label="Spoken language"
               controlId="stt-language"
@@ -949,6 +937,7 @@ export function SettingsPanel({
 
         {tab === 'tools' && (
           <>
+            <BackendPreferencesSection modalities={['grounding', 'decision', 'embeddings']} />
             <div className="mb-3 flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2">
               <div>
                 <div className="text-sm">Enable tools</div>

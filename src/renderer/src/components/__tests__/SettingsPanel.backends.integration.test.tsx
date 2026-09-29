@@ -36,28 +36,30 @@ it('places each backend choice with its model settings and saves the selected de
 
   render(<SettingsPanel embedded onClose={() => {}} />)
   const user = userEvent.setup()
-  expect(screen.getByRole('button', { name: 'Text, vision, and reasoning backend' })).toBeTruthy()
-  expect(screen.queryByRole('button', { name: 'Image generation backend' })).toBeNull()
+  const textBackend = screen.getByRole('button', { name: 'Chat and vision backend' })
+  expect(textBackend).toBeTruthy()
+  expect(textBackend.compareDocumentPosition(screen.getByRole('button', { name: 'Context window' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Images backend' })).toBeNull()
 
   await user.click(screen.getByRole('button', { name: 'image' }))
-  const image = screen.getByRole('button', { name: 'Image generation backend' })
+  const image = screen.getByRole('button', { name: 'Images backend' })
   await user.click(image)
   await user.click(screen.getByRole('menuitemradio', { name: 'Vulkan' }))
   await waitFor(() => expect(saved).toContainEqual(['image', 'vulkan']))
 
   await user.click(screen.getByRole('button', { name: 'voice' }))
-  expect(screen.getByRole('button', { name: 'Text-to-speech backend' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Speech backend' })).toBeTruthy()
 
   await user.click(screen.getByRole('button', { name: 'transcription' }))
-  expect(screen.getByRole('button', { name: 'Transcription and dictation backend' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Transcription backend' })).toBeTruthy()
 
   await user.click(screen.getByRole('button', { name: 'tools' }))
-  expect(screen.getByRole('button', { name: 'Computer Use / Web Use grounding backend' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Computer Use / Web Use decider backend' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Embeddings (search and RAG) backend' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Grounding backend' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Decider backend' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Search embeddings backend' })).toBeTruthy()
 
   await user.click(screen.getByRole('button', { name: 'image' }))
   await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Image generation backend' }).textContent).toContain('Vulkan')
+    expect(screen.getByRole('button', { name: 'Images backend' }).textContent).toContain('Vulkan')
   )
 })

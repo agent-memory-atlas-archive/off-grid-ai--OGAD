@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { SettingsSelect } from './SettingsSelect'
+import { SettingsRow } from './SettingsRow'
 import {
   backendChoices,
   normalizeBackendPreferences,
@@ -248,39 +249,28 @@ export function BackendPreferencesSection({ modalities }: {
   }
 
   return (
-    <section aria-labelledby="model-backend-heading">
-      <h4 id="model-backend-heading" className="mb-1 text-[11px] uppercase tracking-wide text-neutral-500">
-        Model backends
-      </h4>
-      <p className="mb-3 text-xs text-neutral-600">
-        Choose the first backend to try for each model type. Auto uses the best available backend.
-        Other GPU backends can be used if your choice cannot start. CPU uses the CPU only.
-        A loaded model changes backend when it next loads.
-      </p>
+    <section aria-label="Model backends">
       {error && <p role="alert" className="mb-2 text-xs text-red-400">{error}</p>}
-      <div className="grid grid-cols-1 gap-x-6 xl:grid-cols-2">
-        {RESIDENCY_ROWS.filter((row) => modalities.includes(row.modality)).map((row) => {
-          const modality = row.modality
-          const runtime = running.find((entry) => entry.id === RUNTIME_IDS[modality])
-          return (
-            <div key={modality} className="flex items-center justify-between gap-4 border-t border-neutral-800/70 py-2.5">
-              <div className="min-w-0">
-                <div className="text-sm text-neutral-200">{BACKEND_ROW_LABELS[modality]}</div>
-                <div className="text-xs text-neutral-600">Now: {runtimeBackendLabel(runtime)}</div>
-              </div>
-              <div className="w-32 shrink-0">
-                <SettingsSelect
-                  id={`backend-${modality}`}
-                  label={`${row.label} backend`}
-                  value={preferences[modality]}
-                  options={backendChoices(modality, platform).map((value) => ({ value, label: BACKEND_LABELS[value] }))}
-                  onValueChange={(value) => change(modality, value)}
-                />
-              </div>
-            </div>
-          )
-        })}
-      </div>
+      {modalities.map((modality) => {
+        const runtime = running.find((entry) => entry.id === RUNTIME_IDS[modality])
+        const label = `${BACKEND_ROW_LABELS[modality]} backend`
+        return (
+          <SettingsRow
+            key={modality}
+            label={label}
+            controlId={`backend-${modality}`}
+            hint={`Now: ${runtimeBackendLabel(runtime)}. Auto tries the best available backend. Changes when the model next loads.`}
+          >
+            <SettingsSelect
+              id={`backend-${modality}`}
+              label={label}
+              value={preferences[modality]}
+              options={backendChoices(modality, platform).map((value) => ({ value, label: BACKEND_LABELS[value] }))}
+              onValueChange={(value) => change(modality, value)}
+            />
+          </SettingsRow>
+        )
+      })}
     </section>
   )
 }
