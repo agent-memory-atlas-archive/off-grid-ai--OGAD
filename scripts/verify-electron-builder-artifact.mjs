@@ -43,10 +43,15 @@ export default async function verifyElectronBuilderArtifact(event) {
     ]
     if (artifact.endsWith('.exe')) {
       required.push(
+        path.join('bin', 'whisper', 'whisper-cli.exe'),
+        path.join('bin', 'whisper-cpu', 'whisper-cli.exe'),
         path.join('bin', 'sd-cuda', 'sd-cli.exe'),
         path.join('bin', 'sd-cuda', 'ggml-cuda.dll'),
         path.join('bin', 'sd', 'sd-cli.exe'),
-        path.join('bin', 'sd-cpu', 'sd-cli.exe')
+        path.join('bin', 'sd-cpu', 'sd-cli.exe'),
+        path.join('bin', 'ffmpeg.exe'),
+        path.join('bin', 'kev-runtime', 'python', 'python.exe'),
+        path.join('bin', 'kev-local-server.py')
       )
     }
     if (artifact.endsWith('.appimage') || artifact.endsWith('.deb')) {

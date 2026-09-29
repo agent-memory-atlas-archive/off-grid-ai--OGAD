@@ -215,9 +215,8 @@ Write-Host 'resources/bin now contains (win64):'
 Get-ChildItem -Path $bin -Recurse -Include *.exe |
   ForEach-Object { Write-Host "  $($_.FullName.Replace($bin, '').TrimStart('\'))" }
 
-# Verify the result so a failed fetch fails LOUD here, not as a confusing
-# "binary not found" at app startup. llama-server is REQUIRED (no chat without
-# it); whisper/sd/ffmpeg are optional (voice/image degrade gracefully if absent).
+# Verify every runtime needed for chat, speech, and image generation. A failed
+# download must stop the build before an incomplete installer is uploaded.
 $llama = Join-Path $bin 'llama\llama-server.exe'
 if (-not (Test-Path -LiteralPath $llama)) {
   Write-Error "REQUIRED binary missing: $llama (the llama.cpp fetch failed above). Cannot run the model server."
@@ -239,19 +238,17 @@ foreach ($p in @(
     (Join-Path $bin 'cuda-runtime\cudart64_12.dll'),
     (Join-Path $bin 'cuda-runtime\cublas64_12.dll'),
     (Join-Path $bin 'cuda-runtime\cublasLt64_12.dll'),
-    (Join-Path $bin 'sd-cuda\sd-cli.exe'),
-    (Join-Path $bin 'sd-cuda\ggml-cuda.dll'))) {
-  if (-not (Test-Path -LiteralPath $p)) { throw "REQUIRED CUDA runtime missing: $p" }
-}
-foreach ($p in @(
-    (Join-Path $bin 'llama-cpu\llama-server.exe'),
     (Join-Path $bin 'whisper\whisper-cli.exe'),
     (Join-Path $bin 'whisper-cpu\whisper-cli.exe'),
+    (Join-Path $bin 'sd-cuda\sd-cli.exe'),
+    (Join-Path $bin 'sd-cuda\ggml-cuda.dll'),
     (Join-Path $bin 'sd\sd-cli.exe'),
     (Join-Path $bin 'sd-cpu\sd-cli.exe'),
     (Join-Path $bin 'ffmpeg.exe'))) {
-  if (-not (Test-Path -LiteralPath $p)) { Write-Warning "optional runtime missing (feature will be unavailable): $p" }
+  if (-not (Test-Path -LiteralPath $p)) { throw "REQUIRED Windows runtime missing: $p" }
 }
+$cpuLlama = Join-Path $bin 'llama-cpu\llama-server.exe'
+if (-not (Test-Path -LiteralPath $cpuLlama)) { throw "REQUIRED Windows runtime missing: $cpuLlama" }
 Write-Host ''
 Write-Host "OK: llama-server.exe present at $llama"
 Write-Host "OK: Prism llama-server.exe present at $prism"
