@@ -62,6 +62,14 @@ let loading: Promise<{ runtime: KokoroRuntime; device: DeviceType }> | null = nu
 const unusableDevices = new Set<DeviceType>()
 const lastProgress = new Map<number, number>()
 
+function speechDeviceCandidates(): DeviceType[] {
+  const candidates = onnxDeviceCandidates(process.platform, backendPreference)
+  // On Linux, CPU Kokoro is substantially faster than WebGPU when CUDA cannot
+  // produce audio. Keep an explicit WebGPU choice ahead of CPU.
+  if (process.platform !== 'linux' || backendPreference === 'webgpu') return candidates
+  return [...candidates.filter((device) => device !== 'webgpu'), ...candidates.filter((device) => device === 'webgpu')]
+}
+
 function hasAudibleSamples(samples: Float32Array): boolean {
   if (samples.length === 0) return false
   for (const value of samples) {
@@ -98,7 +106,7 @@ async function runtime(id: number): Promise<{ runtime: KokoroRuntime; device: De
       progress_callback: (info) => reportProgress(id, info)
     })
     return runtime
-  }, onnxDeviceCandidates(process.platform, backendPreference).filter((device) => !unusableDevices.has(device)))
+  }, speechDeviceCandidates().filter((device) => !unusableDevices.has(device)))
     .then((value) => {
       port.postMessage({ id, type: 'ready', device: value.device, fallbackReason: value.fallbackReason } satisfies TtsWorkerResponse)
       loaded = value
@@ -114,7 +122,7 @@ async function runtime(id: number): Promise<{ runtime: KokoroRuntime; device: De
 async function synthesizeWithFallback(request: TtsWorkerRequest): Promise<DeviceType> {
   if (!request.text || !request.outputPath) throw new Error('Speech request is incomplete.')
   const failures: string[] = []
-  const maxAttempts = onnxDeviceCandidates(process.platform, backendPreference).length
+  const maxAttempts = speechDeviceCandidates().length
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const selected = await runtime(request.id)
     try {
