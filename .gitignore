@@ -18,6 +18,7 @@ resources/bin/kev-runtime/
 # Off Grid AI SD-GGUF conversion build dir
 build-sd-gguf/
 build/linux-bin/
+build/image-macos/
 
 # Swift build artifacts (embedded repos)
 electron/coreml-sd/.build/
@@ -54,6 +55,7 @@ resources/bin/location.node
 .env
 .env.local
 test-results/
+outputs/video-verification/
 
 # Marketing material (dev.to drafts, emails, assets) — publishing, not app code
 /marketing/
