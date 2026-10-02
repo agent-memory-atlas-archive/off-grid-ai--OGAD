@@ -179,7 +179,7 @@ describe('<App/> locked Pro navigation integration', () => {
     expect(screen.queryByText(/coming soon to Linux/i)).toBeNull()
   }, 30_000)
 
-  it('unlocks only Vault for an entitled Linux user, including Assistant and Tasks routes', async () => {
+  it('unlocks the ported routes for an entitled Linux user', async () => {
     const user = userEvent.setup()
     installAppBoundary({ platform: 'linux', isPro: true })
     const paidView = vi.fn((view: string) => <h1>Paid {view}</h1>)
@@ -192,13 +192,14 @@ describe('<App/> locked Pro navigation integration', () => {
     await user.hover(navigation)
     await waitFor(() => expect(navigation.getAttribute('aria-expanded')).toBe('true'))
 
+    const linuxRoutes = new Set(['vault', 'clipboard', 'replay'])
     for (const feature of PRO_FEATURES) {
       const navButton = within(navigation).getByRole('button', { name: feature.label })
-      if (feature.route === 'vault') {
+      if (linuxRoutes.has(feature.route)) {
         expect(within(navButton).queryByTitle('Coming soon')).toBeNull()
         expect(within(navButton).queryByTitle('Pro')).toBeNull()
         await user.click(navButton)
-        expect(await screen.findByRole('heading', { name: 'Paid vault' })).toBeTruthy()
+        expect(await screen.findByRole('heading', { name: `Paid ${feature.route}` })).toBeTruthy()
       } else {
         expect(within(navButton).getByTitle('Coming soon')).toBeTruthy()
         paidView.mockClear()
@@ -206,8 +207,8 @@ describe('<App/> locked Pro navigation integration', () => {
         expect(await screen.findByRole('heading', { name: feature.label, level: 1 })).toBeTruthy()
         expect(screen.getByText(/This feature is coming soon to Linux/)).toBeTruthy()
         expect(screen.queryByRole('button', { name: /Get Pro/ })).toBeNull()
-        // The previous Vault screen can render during its exit animation.
-        expect(paidView.mock.calls.every(([route]) => route === 'vault')).toBe(true)
+        // A previous ported screen can render during its exit animation.
+        expect(paidView.mock.calls.every(([route]) => linuxRoutes.has(String(route)))).toBe(true)
         expect(taskWorkspace).not.toHaveBeenCalled()
       }
       await user.hover(navigation)

@@ -901,6 +901,10 @@ const offGridApi = {
   crmDayJournalCached: (startSec: number) => ipcRenderer.invoke('crm:day-journal-cached', startSec),
   crmReplayFrames: (startSec: number, endSec: number) =>
     ipcRenderer.invoke('crm:replay-frames', startSec, endSec),
+  crmReplaySaveFrameEdit: (imagePath: string, caption: string, tags: string[]) =>
+    ipcRenderer.invoke('crm:replay-save-frame-edit', imagePath, caption, tags),
+  crmReplayReprocessFrame: (imagePath: string) =>
+    ipcRenderer.invoke('crm:replay-reprocess-frame', imagePath),
   crmReplayThreads: (startSec: number, endSec: number) =>
     ipcRenderer.invoke('crm:replay-threads', startSec, endSec),
   crmReplayEntityDay: (entityId: number, startSec: number, endSec: number) =>

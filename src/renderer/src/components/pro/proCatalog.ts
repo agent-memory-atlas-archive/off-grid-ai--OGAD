@@ -117,8 +117,8 @@ export const PRO_FEATURES: ProFeature[] = [
     // binary is no longer on the path. Screenshots come from Electron desktopCapturer
     // and the frame store, replay reader and screen carry no platform-native code.
     // Accessibility text is macOS-only enrichment that never gates analysis, so on
-    // Windows a vision model is what produces frame summaries.
-    platforms: ['darwin', 'win32']
+    // Windows and Linux use a vision model for frame summaries.
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'meetings',
@@ -228,10 +228,10 @@ export const PRO_FEATURES: ProFeature[] = [
       `${primaryModifier()}+Shift+C quick-paste popup anywhere`,
       'Stored locally in your encrypted database'
     ],
-    // Ported to Windows: the store + popup + global hotkey (CommandOrControl+Shift+C)
-    // are all cross-platform Electron; auto-paste is synthesized per-platform in
-    // pro text-injection (osascript on macOS, PowerShell SendKeys on Windows).
-    platforms: ['darwin', 'win32']
+    // The store, popup, and hotkey use Electron on all three desktop platforms.
+    // Pro synthesizes paste with osascript, PowerShell, xdotool (X11), or wtype
+    // (Wayland, where the compositor supports its virtual keyboard protocol).
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'devices',

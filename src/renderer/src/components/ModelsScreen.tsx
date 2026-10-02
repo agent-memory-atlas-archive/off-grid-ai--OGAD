@@ -815,8 +815,8 @@ export function ModelsScreen({
                 }`}
                 title={
                   tier === 'tight'
-                    ? 'Fits, but context will be tight on this Mac'
-                    : "Past this Mac's comfortable ceiling — you can still Load anyway"
+                    ? `Fits, but context will be tight on this ${deviceNoun()}`
+                    : `Past this ${deviceNoun()}'s comfortable ceiling — you can still Load anyway`
                 }
               >
                 {tier === 'tight' ? 'Tight on RAM' : "Won't fit — Load anyway"}

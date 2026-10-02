@@ -2,6 +2,15 @@ import { restoreCanonicalProductName } from './bootstrap/user-data'
 import { app, shell, BrowserWindow, protocol, session, desktopCapturer, screen } from 'electron'
 import { tmpdir } from 'os'
 
+// Electron 39 needs the portal to register global shortcuts on Wayland.
+// Clipboard's Ctrl+Shift+C depends on this before app ready.
+if (
+  process.platform === 'linux' &&
+  (process.env['XDG_SESSION_TYPE'] === 'wayland' || process.env['WAYLAND_DISPLAY'])
+) {
+  app.commandLine.appendSwitch('enable-features', 'GlobalShortcutsPortal')
+}
+
 // Custom scheme to serve local capture screenshots to the renderer (file:// is
 // blocked there). Registered before app 'ready'; handled after.
 protocol.registerSchemesAsPrivileged([

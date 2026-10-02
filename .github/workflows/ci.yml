@@ -98,6 +98,7 @@ jobs:
           persist-credentials: false
       - name: Fall back to the Shared base branch
         if: ${{ !cancelled() && steps.shared_branch.outcome != 'success' }}
+        id: shared_base
         continue-on-error: true
         uses: actions/checkout@v4
         with:
@@ -106,10 +107,19 @@ jobs:
           path: _shared
           ref: ${{ github.base_ref || 'main' }}
           persist-credentials: false
+      - name: Fall back to Shared main
+        if: ${{ !cancelled() && steps.shared_branch.outcome != 'success' && steps.shared_base.outcome != 'success' }}
+        uses: actions/checkout@v4
+        with:
+          repository: off-grid-ai/shared
+          token: ${{ secrets.CI_CROSS_REPO_TOKEN }}
+          path: _shared
+          ref: main
+          persist-credentials: false
       - name: Put shared beside this checkout
         if: ${{ !cancelled() }}
         run: |
-          if [ ! -d _shared ]; then
+          if [ ! -f _shared/package-lock.json ]; then
             echo "::error::off-grid-ai/shared was not checked out - shared packages cannot resolve. Check CI_CROSS_REPO_TOKEN."
             exit 1
           fi

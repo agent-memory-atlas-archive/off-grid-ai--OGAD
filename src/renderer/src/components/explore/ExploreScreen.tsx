@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { openExternal } from '@/constants/links'
 import { ExploreSection } from './ExploreSection'
 import { ALL_PRESETS, PRESET_SECTIONS, type DemoPreset } from './presetCatalog'
+import { deviceNoun } from '@renderer/lib/device'
 
 const SUPPORT_EMAIL = 'support@getoffgridai.co'
 
@@ -35,8 +36,8 @@ export function ExploreScreen({
         <div>
           <h1 className="text-lg tracking-tight text-white">Assistant</h1>
           <p className="mt-1 text-xs text-neutral-500">
-            Pick a run - add the details once, then start it in chat. Everything happens on your
-            Mac.
+            Pick a run - add the details once, then start it in chat. Everything happens on your{' '}
+            {deviceNoun()}.
           </p>
         </div>
         <span className="shrink-0 pb-0.5 text-[10px] uppercase tracking-wide text-neutral-600">

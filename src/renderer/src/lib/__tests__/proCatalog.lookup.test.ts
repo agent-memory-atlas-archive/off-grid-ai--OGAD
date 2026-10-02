@@ -35,7 +35,7 @@ const winPorted = (route: string): ProFeature => ({
 })
 
 const WIN_PORTED = new Set(PRO_FEATURES.map((feature) => feature.route))
-const LINUX_PORTED = new Set(['vault'])
+const LINUX_PORTED = new Set(['vault', 'clipboard', 'replay'])
 
 describe('getProFeature', () => {
   it('returns the matching feature for a known route', () => {
@@ -158,7 +158,7 @@ describe('proFeatureComingSoon', () => {
   it('opens Vault for a Linux Pro subscriber', () => {
     expect(proFeatureComingSoon('vault', 'linux', true)).toBe(false)
     expect(proFeatureComingSoon('vault', 'linux', false)).toBe(false)
-    expect(proFeatureComingSoon('replay', 'linux', true)).toBe(true)
+    expect(proFeatureComingSoon('replay', 'linux', true)).toBe(false)
   })
 
   it('does not gate core or unknown routes', () => {
