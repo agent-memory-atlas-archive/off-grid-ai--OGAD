@@ -70,7 +70,7 @@ describe('Pro platform availability', () => {
     render(<UpgradeScreen />)
 
     expect(screen.getByText(/Some Pro features are coming soon to Linux/)).toBeTruthy()
-    expect(screen.getByText(/Vault is available on Linux now/)).toBeTruthy()
+    expect(screen.getByText(/Replay, Vault, Clipboard are available on Linux now/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /Get Pro/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: /Activate/ })).toBeTruthy()
   })
