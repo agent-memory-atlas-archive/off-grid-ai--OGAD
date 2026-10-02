@@ -574,8 +574,7 @@ const offGridApi = {
     pause: (): Promise<PerformancePackStatus> => ipcRenderer.invoke('performance-pack:pause'),
     restart: (): Promise<void> => ipcRenderer.invoke('performance-pack:restart'),
     onChanged: (callback: (status: PerformancePackStatus) => void): (() => void) => {
-      const subscription = (_event: unknown, status: PerformancePackStatus): void =>
-        callback(status)
+      const subscription = (_event: unknown, status: PerformancePackStatus): void => callback(status)
       ipcRenderer.on('performance-pack:changed', subscription)
       return unsubscribe('performance-pack:changed', subscription)
     }
