@@ -117,7 +117,12 @@ class VisionService {
         return null
       }
       const target =
-        sources.find((source) => String(source.display_id) === String(display.id)) ?? sources[0]!
+        sources.find((source) => String(source.display_id) === String(display.id)) ??
+        (sources.length === 1 ? sources[0] : undefined)
+      if (!target) {
+        console.log('Vision: Cannot identify the active window display')
+        return null
+      }
       if (target.thumbnail.isEmpty()) {
         console.log('Vision: Active screen thumbnail empty (screen may be locked)')
         return null
