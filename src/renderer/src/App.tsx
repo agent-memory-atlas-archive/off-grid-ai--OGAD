@@ -32,9 +32,10 @@ import { UpgradeScreen } from './components/pro/UpgradeScreen'
 import {
   featureSupportsPlatform,
   getProFeature,
-  proFeatureComingSoon
+  proFeatureComingSoon,
+  landingView
 } from './components/pro/proCatalog'
-import { currentPlatform, isMac } from './lib/device'
+import { currentPlatform } from './lib/device'
 import { NotificationProvider } from './hooks/NotificationProvider'
 import { useNotifications } from './hooks/useNotifications'
 import { ToastProvider } from './hooks/ToastProvider'
@@ -329,9 +330,8 @@ function AppContent() {
     )
   }, [addNotification, isPro, proReady])
 
-  // Free users land on Models (download a model first, with the sidebar to
-  // explore); Mac Pro users land on Day. Never land on a locked or unavailable tab.
-  const [viewMode, commitViewMode] = useState<ViewMode>(isPro && isMac() ? 'day' : 'models')
+  // Open on Day only where the catalog supports it.
+  const [viewMode, commitViewMode] = useState<ViewMode>(landingView(currentPlatform(), isPro))
   const [settingsSection, setSettingsSection] = useState<string | null>(null)
   const [settingsNavigationKey, setSettingsNavigationKey] = useState(0)
   const [navigationSubroute, setNavigationSubroute] = useState<string | null>(null)

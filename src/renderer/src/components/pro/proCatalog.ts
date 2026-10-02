@@ -85,7 +85,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'Per-meeting prep: who’s in it and your open items',
       'Priorities surfaced from what you actually did'
     ],
-    platforms: ['darwin', 'win32']
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'reflect',
@@ -188,7 +188,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'Approval queue for actions',
       'Auto-extracted to-dos'
     ],
-    platforms: ['darwin', 'win32']
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'voice',
@@ -303,4 +303,24 @@ export function proFeatureComingSoon(
     return false
   }
   return !featureSupportsPlatform(feature, platform)
+}
+
+/**
+ * Which view the app should OPEN on. Free users land on Models (they need a model
+ * before anything else works); Pro users land on Day — but only where Day is
+ * actually available.
+ *
+ * This lives here, beside the seam, because it is a per-feature platform decision and
+ * `platforms` is the single source of truth for those. It previously sat in App.tsx as
+ * `isPro && isMac() ? 'day' : 'models'`, which was right only by accident: it agreed
+ * with the catalog while Day was macOS-only, and would have stranded a ported Day on
+ * Windows — nav and gating would light Day up from `platforms` while the landing
+ * screen still asked `isMac()`. Route the decision through the seam so porting a
+ * feature never leaves a second place to update.
+ *
+ * Never land on a locked or unavailable tab.
+ */
+export function landingView(platform: DevicePlatform, isPro: boolean): 'day' | 'models' {
+  const day = getProFeature('day')
+  return isPro && day && featureSupportsPlatform(day, platform) ? 'day' : 'models'
 }
