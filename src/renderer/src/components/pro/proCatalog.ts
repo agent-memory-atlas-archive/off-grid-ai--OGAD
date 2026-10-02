@@ -44,7 +44,7 @@ export interface ProFeature {
    * Platforms this feature is tested + supported on — the SINGLE SOURCE OF TRUTH
    * for per-feature availability. macOS (`'darwin'`) is the reference platform and
    * MUST be present on every feature (Pro was built Mac-first). As a feature is
-   * ported and verified on Windows, add `'win32'` here — that one edit flips the
+   * ported and verified on another platform, add it here — that one edit flips the
    * feature live everywhere (nav routing, the coming-soon gate, upsell copy), since
    * every surface reads this list through `featureSupportsPlatform`. Do not gate a
    * feature on the platform anywhere else; add the platform here instead.
@@ -213,8 +213,9 @@ export const PRO_FEATURES: ProFeature[] = [
     ],
     // First Pro feature ported to Windows: the vault engine is fully cross-platform
     // (KDBX4 via kdbxweb, Argon2id via hash-wasm WASM, BIP39 recovery, device key
-    // via node-machine-id) - no macOS-native code. Verified on Windows.
-    platforms: ['darwin', 'win32']
+    // via node-machine-id) - no macOS-native code. Linux uses the same KDBX4
+    // engine and a stable machine id, with the persisted fallback when unavailable.
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'clipboard',
