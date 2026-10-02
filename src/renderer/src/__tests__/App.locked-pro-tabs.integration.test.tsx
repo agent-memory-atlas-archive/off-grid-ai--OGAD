@@ -12,7 +12,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { getRegisteredNav } from '../bootstrap/navRegistry'
 import { getRegisteredScreens } from '../bootstrap/screenRegistry'
 import { getRegisteredSettingsSections } from '../bootstrap/sectionRegistry'
-import { getSlot, SLOTS } from '../bootstrap/slotRegistry'
+import { getSlot, registerSlot, SLOTS } from '../bootstrap/slotRegistry'
+import { clearProFeaturesRenderer } from '../bootstrap/loadProFeaturesRenderer'
 import { registerProView } from '../bootstrap/proView'
 import { PRO_FEATURES } from '../components/pro/proCatalog'
 import { PRO_PURCHASE_URL } from '@offgrid/core/shared/product-links'
@@ -39,6 +40,7 @@ describe('<App/> locked Pro navigation integration', () => {
 
   afterEach(() => {
     cleanup()
+    clearProFeaturesRenderer()
     vi.unstubAllGlobals()
   })
 
@@ -175,6 +177,41 @@ describe('<App/> locked Pro navigation integration', () => {
     expect(screen.getByText(/Off Grid AI Pro · Available now/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /Get Pro/ })).toBeTruthy()
     expect(screen.queryByText(/coming soon to Linux/i)).toBeNull()
+  }, 30_000)
+
+  it('unlocks only Vault for an entitled Linux user, including Assistant and Tasks routes', async () => {
+    const user = userEvent.setup()
+    installAppBoundary({ platform: 'linux', isPro: true })
+    const paidView = vi.fn((view: string) => <h1>Paid {view}</h1>)
+    const taskWorkspace = vi.fn(() => <h1>Paid Tasks workspace</h1>)
+    registerProView(paidView)
+    registerSlot(SLOTS.taskWorkspace, taskWorkspace)
+
+    render(<App />)
+    const navigation = await screen.findByRole('navigation', { name: 'Primary navigation' })
+    await user.hover(navigation)
+    await waitFor(() => expect(navigation.getAttribute('aria-expanded')).toBe('true'))
+
+    for (const feature of PRO_FEATURES) {
+      const navButton = within(navigation).getByRole('button', { name: feature.label })
+      if (feature.route === 'vault') {
+        expect(within(navButton).queryByTitle('Coming soon')).toBeNull()
+        expect(within(navButton).queryByTitle('Pro')).toBeNull()
+        await user.click(navButton)
+        expect(await screen.findByRole('heading', { name: 'Paid vault' })).toBeTruthy()
+      } else {
+        expect(within(navButton).getByTitle('Coming soon')).toBeTruthy()
+        paidView.mockClear()
+        await user.click(navButton)
+        expect(await screen.findByRole('heading', { name: feature.label, level: 1 })).toBeTruthy()
+        expect(screen.getByText(/This feature is coming soon to Linux/)).toBeTruthy()
+        expect(screen.queryByRole('button', { name: /Get Pro/ })).toBeNull()
+        // The previous Vault screen can render during its exit animation.
+        expect(paidView.mock.calls.every(([route]) => route === 'vault')).toBe(true)
+        expect(taskWorkspace).not.toHaveBeenCalled()
+      }
+      await user.hover(navigation)
+    }
   }, 30_000)
 
   it('marks Pro Settings cards as coming soon on Linux', async () => {

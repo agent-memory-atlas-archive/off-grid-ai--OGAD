@@ -29,7 +29,11 @@ import { shouldRemovePaidRendererAccess } from './bootstrap/entitlementRegistry'
 import { useRendererEntitlement } from './bootstrap/useRendererEntitlement'
 import { renderProView, type ProViewContext } from './bootstrap/proView'
 import { UpgradeScreen } from './components/pro/UpgradeScreen'
-import { getProFeature, proFeatureComingSoon } from './components/pro/proCatalog'
+import {
+  featureSupportsPlatform,
+  getProFeature,
+  proFeatureComingSoon
+} from './components/pro/proCatalog'
 import { currentPlatform, isMac } from './lib/device'
 import { NotificationProvider } from './hooks/NotificationProvider'
 import { useNotifications } from './hooks/useNotifications'
@@ -400,7 +404,7 @@ function AppContent() {
   // memory-mirror views (Day/Replay/Entities/…) and avoid looping the graph.
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ; (window.api as any)?.reportSelfView?.(viewMode)
+    ;(window.api as any)?.reportSelfView?.(viewMode)
   }, [viewMode])
 
   // Navigation history stacks (back and forward)
@@ -472,7 +476,7 @@ function AppContent() {
     void license
       .status()
       .then(applyStatus)
-      .catch(() => { })
+      .catch(() => {})
     return () => {
       active = false
       off()
@@ -704,7 +708,7 @@ function AppContent() {
       .then((v) => {
         if (v) setUpdateReady(v)
       })
-      .catch(() => { })
+      .catch(() => {})
     unsubscribers.push(
       window.api.onUpdateDownloaded((data) => {
         setUpdateReady(data.version)
@@ -945,9 +949,10 @@ function AppContent() {
       icon: <f.icon className="h-5 w-5 shrink-0 text-neutral-400" weight="regular" />,
       view: f.route as ViewMode,
       locked:
-        !isPro &&
-        !(route === 'tasks' && TaskWorkspace) &&
-        !(route === 'devices' && proActivation === 'entitlement-bootstrap')
+        !featureSupportsPlatform(f, currentPlatform()) ||
+        (!isPro &&
+          !(route === 'tasks' && TaskWorkspace) &&
+          !(route === 'devices' && proActivation === 'entitlement-bootstrap'))
     }
   }
   // Icons take no color — the nav button drives it (emerald when active).
@@ -1063,7 +1068,10 @@ function AppContent() {
           </span>
         )}
         {sidebarOpen && item.locked && (
-          <IconLock className="h-3.5 w-3.5 shrink-0 text-neutral-400/60" title="Pro" />
+          <IconLock
+            className="h-3.5 w-3.5 shrink-0 text-neutral-400/60"
+            title={proFeatureComingSoon(item.view, currentPlatform(), true) ? 'Coming soon' : 'Pro'}
+          />
         )}
       </button>
     )
@@ -1319,7 +1327,9 @@ function AppContent() {
                     transition={{ duration: 0.12, ease: [0.25, 0.46, 0.45, 0.94] }}
                     className="p-6 h-full overflow-y-auto"
                   >
-                    {viewMode === 'explore' ? (
+                    {proFeatureComingSoon(viewMode, currentPlatform(), true) ? (
+                      <UpgradeScreen variant="coming-soon" feature={getProFeature(viewMode)} />
+                    ) : viewMode === 'explore' ? (
                       isPro ? (
                         <ExploreScreen onRunPreset={handleRunPreset} />
                       ) : (
@@ -1377,8 +1387,6 @@ function AppContent() {
                       />
                     ) : !isPro ? (
                       <UpgradeScreen feature={getProFeature(viewMode)} />
-                    ) : proFeatureComingSoon(viewMode, currentPlatform(), isPro) ? (
-                      <UpgradeScreen variant="coming-soon" feature={getProFeature(viewMode)} />
                     ) : (
                       // Pro tabs: render through the pro view-router when active,
                       // otherwise show the upgrade writeup for that feature.
@@ -1410,8 +1418,8 @@ function AppContent() {
                         onOpenHit: handleOpenHit,
                         openChatOwner: handleOpenChatOwner
                       } satisfies ProViewContext) ?? (
-                          <UpgradeScreen feature={getProFeature(viewMode)} />
-                        ))
+                        <UpgradeScreen feature={getProFeature(viewMode)} />
+                      ))
                     )}
                   </motion.div>
                 )}
