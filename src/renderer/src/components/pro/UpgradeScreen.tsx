@@ -261,7 +261,7 @@ export function UpgradeScreen({
                   </span>
                 </div>
               )}
-              {(!linux || linuxFeatureAvailable) && (
+              {(!linux || !f || linuxFeatureAvailable) && (
                 <>
                   <div className="text-[10px] uppercase tracking-widest text-neutral-500">
                     Unlock Pro
@@ -279,7 +279,7 @@ export function UpgradeScreen({
                 </>
               )}
 
-              {__OFFGRID_PRO__ && (!linux || linuxFeatureAvailable) ? (
+              {__OFFGRID_PRO__ && (!linux || !f || linuxFeatureAvailable) ? (
                 <>
                   <div className="border-t border-neutral-800" />
                   <LicenseActivation />

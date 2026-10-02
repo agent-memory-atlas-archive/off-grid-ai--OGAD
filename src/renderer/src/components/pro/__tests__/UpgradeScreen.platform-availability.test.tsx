@@ -60,4 +60,18 @@ describe('Pro platform availability', () => {
     expect(screen.getByRole('button', { name: /Activate/ })).toBeTruthy()
     expect(screen.queryByText(/coming soon to Linux/i)).toBeNull()
   })
+
+  it('offers purchase and license activation on the general Linux upgrade screen', () => {
+    vi.stubGlobal('__OFFGRID_PRO__', true)
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { platform: 'linux', openExternal: vi.fn() }
+    })
+    render(<UpgradeScreen />)
+
+    expect(screen.getByText(/Some Pro features are coming soon to Linux/)).toBeTruthy()
+    expect(screen.getByText(/Vault is available on Linux now/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Get Pro/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Activate/ })).toBeTruthy()
+  })
 })
