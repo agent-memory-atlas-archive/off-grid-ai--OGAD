@@ -401,7 +401,7 @@ function SetupNudge({
         : missingModel
           ? `Pick a model yourself, or let Off Grid AI configure one for your ${deviceNoun()}.`
           : missingLocalNetwork
-            ? 'Allow this Mac to find and sync directly with your devices.'
+            ? `Allow this ${deviceNoun()} to find and sync directly with your devices.`
             : 'Grant screen and accessibility access so Off Grid AI can see and remember.'
   const presentedProgress = progress ? projectProgress(progress) : null
   const cta =

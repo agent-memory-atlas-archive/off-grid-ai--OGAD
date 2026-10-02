@@ -125,7 +125,7 @@ ${EXECUTION_RULES}`,
         intake: {
           title: 'Plan the comic book',
           description:
-            'Add the story brief, choose one visual style, and set 10 to 100 pages. Each page is generated on your Mac, so long books can take hours and use substantial disk space.',
+            'Add the story brief, choose one visual style, and set 10 to 100 pages. Each page is generated on your device, so long books can take hours and use substantial disk space.',
           fields: [
             {
               id: 'brief',
@@ -155,8 +155,7 @@ ${EXECUTION_RULES}`,
             {
               id: 'heroReference',
               label: 'Hero reference image',
-              help:
-                'Optional. Choose a clear local photo of one person. Image-to-image models use it privately on your Mac to keep that person as the hero.',
+              help: 'Optional. Choose a clear local photo of one person. Image-to-image models use it privately on your device to keep that person as the hero.',
               kind: 'image'
             },
             {
@@ -543,7 +542,7 @@ ${EXECUTION_RULES}`,
   {
     id: 'computer-use',
     capability: 'computer-use',
-    title: 'Drive your Mac',
+    title: 'Drive your device',
     teaches: 'Give it the target state once. It operates the app and stops at approval gates.',
     presets: [
       {
@@ -880,14 +879,14 @@ ${EXECUTION_RULES}`,
   {
     id: 'phone',
     capability: 'phone',
-    title: "Your Mac's tools, from your phone",
-    teaches: 'Define the result on your Mac once, then return it to the paired phone.',
+    title: "Your device's tools, from your phone",
+    teaches: 'Define the result on your device once, then return it to the paired phone.',
     presets: [
       {
         id: 'phone-summarize',
         icon: PaperPlaneTilt,
         title: "Get today's summary on your phone",
-        prompt: `Create the requested summary from this Mac's on-device capture history and return it to the paired phone named in the approved brief below.
+        prompt: `Create the requested summary from this device's on-device capture history and return it to the paired phone named in the approved brief below.
 
 Required method:
 1. Restrict retrieval to the supplied date, time window, focus, and exclusions.
@@ -903,7 +902,8 @@ ${EXECUTION_RULES}`,
         requires: 'phone-paired',
         intake: {
           title: 'Set the phone summary',
-          description: 'Choose what the Mac should summarize and which paired phone receives it.',
+          description:
+            'Choose what this device should summarize and which paired phone receives it.',
           fields: [
             {
               id: 'phone',

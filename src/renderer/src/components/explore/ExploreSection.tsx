@@ -5,6 +5,7 @@ import {
   type PresetCapability,
   type PresetRequirement
 } from './presetCatalog'
+import { deviceNoun } from '@renderer/lib/device'
 
 /**
  * The Explore surface: the demo-preset catalog rendered as capability panels, each holding a
@@ -55,7 +56,8 @@ export function ExploreSection({
         <div className="mb-4">
           <h2 className="text-sm text-foreground">Explore what Off Grid AI can do</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Pick one - add the details once, then start the run. Everything runs on your Mac.
+            Pick one - add the details once, then start the run. Everything runs on your{' '}
+            {deviceNoun()}.
           </p>
         </div>
       ) : null}
