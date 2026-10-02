@@ -112,6 +112,9 @@ export function UpgradeScreen({
   const comingSoon = variant === 'coming-soon'
   const linux = currentPlatform() === 'linux'
   const linuxFeatureAvailable = availableOnLinux(f)
+  const linuxAvailable = PRO_FEATURES.filter(availableOnLinux)
+    .map((item) => item.label)
+    .join(', ')
   // Whether to warn a prospective buyer that Pro isn't fully live on their device
   // yet. Per-feature: if this writeup is for a specific feature, only warn when THAT
   // feature isn't ported here (so a Windows-ready feature like Vault shows no
@@ -214,7 +217,7 @@ export function UpgradeScreen({
               </div>
               <p className="text-sm leading-relaxed text-neutral-300">
                 {linux
-                  ? 'This feature is coming soon to Linux. Vault is available now. Your license also works on Windows and macOS.'
+                  ? `This feature is coming soon to Linux. ${linuxAvailable} are available now. Your license also works on Windows and macOS.`
                   : `Your license covers desktop and mobile - up to 5 devices. This feature is not on your ${deviceNoun()} yet.`}
               </p>
               <p className="text-[11px] leading-relaxed text-neutral-600">
@@ -253,7 +256,7 @@ export function UpgradeScreen({
                       {linux ? linuxNoticeTitle(f) : `Coming soon to your ${deviceNoun()}.`}
                     </span>{' '}
                     {linux
-                      ? 'Vault is available on Linux now. Other Pro features are available on Windows and macOS.'
+                      ? `${linuxAvailable} are available on Linux now. Other Pro features are available on Windows and macOS.`
                       : 'This feature is available on Windows and macOS.'}
                   </span>
                 </div>

@@ -28,8 +28,6 @@ export const PRO_SETTINGS_SLOTS: ProSettingsSlot[] = [
   {
     id: 'capture',
     delay: 0.14,
-    comingSoonDescription:
-      'Screen capture controls are coming soon to Linux. They are available on Windows and macOS.',
     placeholder: {
       title: 'Capture',
       description:
