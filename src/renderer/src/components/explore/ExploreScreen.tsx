@@ -36,7 +36,7 @@ export function ExploreScreen({
         <div>
           <h1 className="text-lg tracking-tight text-white">Assistant</h1>
           <p className="mt-1 text-xs text-neutral-500">
-            Pick a run - add the details once, then start it in chat. Everything happens on your
+            Pick a run - add the details once, then start it in chat. Everything happens on your{' '}
             {deviceNoun()}.
           </p>
         </div>
