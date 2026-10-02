@@ -1385,6 +1385,11 @@ function AppContent() {
                         activeSection={settingsSection}
                         onSectionChange={setSettingsSection}
                       />
+                    ) : isPro && !proReady ? (
+                      <div className="flex h-full items-center justify-center" role="status">
+                        <IconLoader2 className="h-5 w-5 animate-spin text-neutral-500" />
+                        <span className="sr-only">Loading Pro features</span>
+                      </div>
                     ) : !isPro ? (
                       <UpgradeScreen feature={getProFeature(viewMode)} />
                     ) : (
