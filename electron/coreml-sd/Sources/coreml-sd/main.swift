@@ -49,6 +49,8 @@ do {
         return try StableDiffusionPipeline(resourcesAt: modelURL, controlNet: [], configuration: config, reduceMemory: true)
     }()
     try pipeline.loadResources()
+    print("OFFGRID_BACKEND:Core ML")
+    fflush(stdout)
 
     var cfg = PipelineConfiguration(prompt: prompt)
     cfg.negativePrompt = negative

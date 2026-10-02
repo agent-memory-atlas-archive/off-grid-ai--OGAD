@@ -13,19 +13,12 @@
  *    transcript-derived envelope (stable before/during playback).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Play, Pause, CircleNotch, CaretDown, Copy, ArrowsClockwise } from '@phosphor-icons/react'
+import { Play, Pause, CaretDown, Copy, ArrowsClockwise, Check } from '@phosphor-icons/react'
+import { claimVoicePlayback, onVoicePlaybackClaim } from '@renderer/lib/voice-playback-bus'
+import { LoadingDots } from './ui/loading-dots'
 
 const WAVEFORM_BARS = 48
 const SPEED_STEPS = [0.5, 0.8, 1.0, 1.25, 1.5, 2.0]
-
-// One bubble plays at a time: when any bubble starts, the rest pause.
-const playBus = new EventTarget()
-
-/** Pause every voice bubble — call when leaving a chat so playback never carries
- *  across conversations. A sentinel id matches no bubble, so all of them stop. */
-export function stopAllVoicePlayback(): void {
-  playBus.dispatchEvent(new CustomEvent('play', { detail: '__stop_all__' }))
-}
 
 function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return '0:00'
@@ -101,9 +94,21 @@ interface VoiceBubbleProps {
   /** Assistant reply still generating — shows pulsing dots, no playback. */
   isLoading?: boolean
   /** Synthesize text → playable dataUrl on-device (assistant replies). */
-  synthesize: (text: string) => Promise<{ dataUrl: string }>
+  synthesize: (text: string, voice?: string) => Promise<{ dataUrl: string }>
+  /** Read the selected voice before playing a synthesized reply. */
+  readVoice?: () => Promise<string | undefined>
   /** Play once automatically when ready (a just-finished assistant reply). */
   autoPlay?: boolean
+  /** The latest assistant voice reply opens its transcript without another click. */
+  showTranscriptInitially?: boolean
+  /** Persisted playback speed from Voice settings. */
+  defaultSpeed?: number
+  /** Use the parent message bubble for width, color, border, and padding. */
+  embedded?: boolean
+  /** Reports audio preparation and playback so hands-free input cannot record the reply. */
+  onPlaybackStateChange?: (active: boolean) => void
+  /** The chat's existing copy-feedback state for this message. */
+  copied?: boolean
   onCopy?: (text: string) => void
   onRetry?: () => void
 }
@@ -116,18 +121,41 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
   isUser = false,
   isLoading = false,
   synthesize,
+  readVoice,
   autoPlay = false,
+  showTranscriptInitially = false,
+  defaultSpeed = 1,
+  embedded = false,
+  onPlaybackStateChange,
+  copied = false,
   onCopy,
   onRetry
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null)
-  const srcRef = useRef<string | null>(null) // cached synthesized dataUrl
+  const srcRef = useRef<{ dataUrl: string; voice?: string } | null>(null)
   const [status, setStatus] = useState<'idle' | 'loading' | 'playing' | 'paused'>('idle')
   const [currentTime, setCurrentTime] = useState(0)
   const [loadedDuration, setLoadedDuration] = useState(0)
-  const [speed, setSpeed] = useState(1.0)
-  const [showTranscript, setShowTranscript] = useState(false)
+  const [speed, setSpeed] = useState(defaultSpeed)
+  const [showTranscript, setShowTranscript] = useState(showTranscriptInitially)
   const [playbackError, setPlaybackError] = useState<string | null>(null)
+  const playbackActive = status === 'loading' || status === 'playing'
+
+  useEffect(() => {
+    if (showTranscriptInitially && transcript && !isLoading) setShowTranscript(true)
+  }, [isLoading, showTranscriptInitially, transcript])
+
+  useEffect(() => {
+    setSpeed(defaultSpeed)
+    if (audioRef.current) audioRef.current.playbackRate = defaultSpeed
+  }, [defaultSpeed])
+
+  useEffect(() => {
+    onPlaybackStateChange?.(playbackActive)
+    return () => {
+      if (playbackActive) onPlaybackStateChange?.(false)
+    }
+  }, [onPlaybackStateChange, playbackActive])
 
   // Stable waveform: real decoded envelope for a recording, else transcript-derived.
   const [fileWave, setFileWave] = useState<number[]>([])
@@ -161,15 +189,12 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
 
   // Pause when another bubble takes over playback.
   useEffect(() => {
-    const onOther = (e: Event) => {
-      const id = (e as CustomEvent<string>).detail
+    return onVoicePlaybackClaim((id) => {
       if (id !== messageId && audioRef.current && !audioRef.current.paused) {
         audioRef.current.pause()
         setStatus('paused')
       }
-    }
-    playBus.addEventListener('play', onOther)
-    return () => playBus.removeEventListener('play', onOther)
+    })
   }, [messageId])
 
   useEffect(
@@ -197,33 +222,43 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
   )
 
   const handlePlayPause = useCallback(async () => {
+    if (isUser && !audioUrl) {
+      setPlaybackError('This voice recording is no longer on this device.')
+      return
+    }
     const audio = audioRef.current
     if (status === 'playing' && audio) {
       audio.pause()
       setStatus('paused')
       return
     }
-    if (status === 'paused' && audio) {
-      playBus.dispatchEvent(new CustomEvent('play', { detail: messageId }))
-      await audio.play()
-      setStatus('playing')
-      return
-    }
-    // idle → resolve a source (cached synth / recording), then play.
     setPlaybackError(null)
     setStatus('loading')
     try {
-      let src = audioUrl || srcRef.current
+      const voice = audioUrl ? undefined : await readVoice?.().catch(() => undefined)
+      if (status === 'paused' && audio && (audioUrl || srcRef.current?.voice === voice)) {
+        claimVoicePlayback(messageId)
+        await audio.play()
+        setStatus('playing')
+        return
+      }
+      // A changed voice must not resume or reuse the previous synthesized clip.
+      audio?.pause()
+      audioRef.current = null
+      setCurrentTime(0)
+      setLoadedDuration(0)
+      const cached = srcRef.current
+      let src = audioUrl || (cached && cached.voice === voice ? cached.dataUrl : null)
       if (!src) {
-        const { dataUrl } = await synthesize(transcript)
+        const { dataUrl } = await synthesize(transcript, voice)
         if (!dataUrl) throw new Error('no audio')
-        srcRef.current = dataUrl
+        srcRef.current = { dataUrl, voice }
         src = dataUrl
       }
       const audioEl = new Audio(src)
       audioRef.current = audioEl
       wire(audioEl)
-      playBus.dispatchEvent(new CustomEvent('play', { detail: messageId }))
+      claimVoicePlayback(messageId)
       await audioEl.play()
       setStatus('playing')
     } catch (e) {
@@ -235,7 +270,7 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
           : 'Speech could not be generated. Check that Text-to-speech is installed in Settings, then try again.'
       )
     }
-  }, [status, audioUrl, transcript, synthesize, wire, messageId])
+  }, [status, isUser, audioUrl, readVoice, transcript, synthesize, wire, messageId])
 
   const cycleSpeed = useCallback(() => {
     setSpeed((prev) => {
@@ -264,7 +299,11 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
 
   return (
     <div
-      className={`flex w-[88%] max-w-[34rem] flex-col gap-2 rounded-xl border p-3 ${isUser ? 'self-end border-green-500/40 bg-green-500/10' : 'self-start border-neutral-800 bg-neutral-900/50'}`}
+      className={
+        embedded
+          ? 'flex w-full flex-col gap-2'
+          : `flex w-[88%] max-w-[34rem] flex-col gap-2 rounded-xl border p-3 ${isUser ? 'self-end border-green-500/40 bg-green-500/10' : 'self-start border-neutral-800 bg-neutral-900/50'}`
+      }
     >
       <div className="flex items-center gap-2.5">
         {/* Play / pause / loading */}
@@ -276,7 +315,7 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
           title={status === 'playing' ? 'Pause' : 'Play'}
         >
           {status === 'loading' ? (
-            <CircleNotch size={16} weight="bold" className="animate-spin" />
+            <LoadingDots size="small" />
           ) : status === 'playing' ? (
             <Pause size={16} weight="fill" />
           ) : (
@@ -287,11 +326,7 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
         {/* Waveform (click to seek) */}
         <div className="flex h-10 flex-1 items-center gap-[1.5px] overflow-hidden">
           {isLoading && !isUser ? (
-            <span className="flex items-center gap-1.5 pl-1">
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-green-500 [animation-delay:-0.3s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-green-500 [animation-delay:-0.15s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-green-500" />
-            </span>
+            <LoadingDots className="mx-1" />
           ) : (
             bars.map((shape, i) => {
               const played = progress > 0 && i / bars.length < progress
@@ -353,20 +388,32 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
             <button
               type="button"
               onClick={() => onCopy(transcript)}
-              className="cursor-pointer text-neutral-600 transition-colors hover:text-green-500"
-              title="Copy transcript"
+              className={`flex cursor-pointer items-center gap-1 text-[11px] transition-colors ${copied ? 'text-green-500' : 'text-neutral-600 hover:text-green-500'}`}
+              title={copied ? 'Copied' : 'Copy transcript'}
+              aria-label={copied ? 'Copied' : 'Copy transcript'}
             >
-              <Copy size={13} />
+              {copied ? (
+                <>
+                  <Check size={13} weight="bold" />
+                  <span role="status" aria-live="polite">
+                    Copied
+                  </span>
+                </>
+              ) : (
+                <Copy size={13} />
+              )}
             </button>
           ) : null}
           {!isLoading && onRetry ? (
             <button
               type="button"
               onClick={onRetry}
-              className="cursor-pointer text-neutral-600 transition-colors hover:text-green-500"
-              title="Regenerate"
+              className="flex cursor-pointer items-center gap-1 text-[11px] text-neutral-600 transition-colors hover:text-green-500"
+              title={isUser ? 'Resend' : 'Regenerate'}
+              aria-label={isUser ? 'Resend' : 'Regenerate'}
             >
               <ArrowsClockwise size={13} />
+              {isUser ? 'Resend' : null}
             </button>
           ) : null}
         </div>

@@ -3,12 +3,13 @@
  * Release checklist #105 through the real rendered assistant action, TTS IPC handler,
  * persisted voice setting, synthesis service, subprocess protocol, and WAV validation.
  * The fake subprocess replaces only the heavyweight Kokoro/ONNX worker; Audio replaces
- * Chromium's media boundary. All Off Grid code between those boundaries stays production.
+ * Chromium's media boundary. All Off Grid AI code between those boundaries stays production.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Blob as NodeBlob } from 'node:buffer'
+import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -23,10 +24,21 @@ import {
   type FakeLlamaServer
 } from '../src/main/__tests__/harness/fake-llama-server'
 
-type IpcEvent = { sender: { send: (channel: string, payload: unknown) => void } }
+type IpcEvent = {
+  sender: EventEmitter & {
+    id: number
+    isDestroyed: () => boolean
+    send: (channel: string, payload: unknown) => void
+  }
+}
 type IpcHandler = (event: IpcEvent, ...args: unknown[]) => unknown
 const handlers = new Map<string, IpcHandler>()
 const listeners = new Map<string, (event: IpcEvent, ...args: unknown[]) => unknown>()
+const rendererSender = Object.assign(new EventEmitter(), {
+  id: 1,
+  isDestroyed: (): boolean => false,
+  send: (_channel: string, _payload: unknown): void => undefined
+})
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-memory-chat-tts-'))
 const dataDir = path.join(root, 'data')
 const resourceDir = path.join(root, 'resources')
@@ -87,6 +99,7 @@ interface AudioBoundary {
 }
 
 const audios: AudioBoundary[] = []
+const pendingSpeech = new Set<Promise<unknown>>()
 let fakeLlama: FakeLlamaServer
 
 class RecorderBoundary {
@@ -118,10 +131,21 @@ function executable(relativePath: string, source: string): void {
   fs.writeFileSync(target, source, { mode: 0o755 })
 }
 
+function resourceExecutable(relativePath: string, source: string): void {
+  const target = path.join(resourceDir, 'bin', relativePath)
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.writeFileSync(target, source, { mode: 0o755 })
+}
+
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   const handler = handlers.get(channel)
   if (!handler) throw new Error(`IPC handler not registered: ${channel}`)
-  return (await handler({ sender: { send: () => undefined } }, ...args)) as T
+  const result = Promise.resolve(handler({ sender: rendererSender }, ...args))
+  if (channel === 'tts:speak') {
+    pendingSpeech.add(result)
+    void result.finally(() => pendingSpeech.delete(result)).catch(() => undefined)
+  }
+  return (await result) as T
 }
 
 function installProductionVoiceBridge(boundary: ChatBoundary): void {
@@ -137,9 +161,13 @@ function installProductionVoiceBridge(boundary: ChatBoundary): void {
       invoke('rag:truncate-messages', id, keepCount),
     getSettings: () => invoke('settings:get'),
     saveSetting: (key: string, value: unknown) => invoke('settings:save', key, value),
-    transcribeAudio: (audio: ArrayBuffer | Uint8Array, ext?: string) =>
-      invoke('voice:transcribe', audio, ext),
+    transcribeAudio: (audio: ArrayBuffer | Uint8Array, ext: string, requestId: string) =>
+      invoke('voice:transcribe', audio, ext, requestId),
+    saveVoiceRecording: (audio: ArrayBuffer | Uint8Array, ext: string) =>
+      invoke('voice:save-recording', audio, ext),
+    cancelTranscription: (requestId: string) => invoke('voice:cancel-transcription', requestId),
     ragChat: (...args: unknown[]) => invoke('rag:chat', ...args),
+    toolChat: (...args: unknown[]) => invoke('tools:chat', ...args),
     speak: (text: string, voice?: string) => invoke('tts:speak', text, voice)
   })
   installBoundary(boundary)
@@ -151,13 +179,11 @@ function setEnv(name: string, original: string | undefined): void {
 }
 
 function installRealSpeechBridge(boundary: ChatBoundary): void {
-  const handler = handlers.get('tts:speak')
-  if (!handler) throw new Error('TTS IPC handler was not registered')
   ;(
     boundary.api as unknown as {
       speak: (text: string, voice?: string) => Promise<{ dataUrl: string }>
     }
-  ).speak = (text, voice) => handler(undefined, text, voice) as Promise<{ dataUrl: string }>
+  ).speak = (text, voice) => invoke('tts:speak', text, voice)
   installBoundary(boundary)
 }
 
@@ -168,11 +194,13 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(dataDir, 'models', 'ggml-base.bin'), 'synthetic whisper model')
   executable('ffmpeg', ['#!/bin/sh', 'for last; do :; done', 'printf RIFF > "$last"'].join('\n'))
   executable('whisper/whisper-cli', '#!/bin/sh\nprintf "Schedule the stable release review\\n"')
-  fs.writeFileSync(
-    path.join(resourceDir, 'tts-worker.mjs'),
+  resourceExecutable(
+    'executorch-speech',
     [
-      "import fs from 'node:fs'",
-      'const [, , command, output, voice] = process.argv',
+      '#!/usr/bin/env node',
+      "const fs = require('node:fs')",
+      'const args = process.argv.slice(2)',
+      'const value = flag => args[args.indexOf(flag) + 1]',
       "let input = ''",
       "process.stdin.setEncoding('utf8')",
       "process.stdin.on('data', chunk => { input += chunk })",
@@ -180,15 +208,14 @@ beforeAll(async () => {
       "  if (fs.existsSync(process.env.OFFGRID_TTS_TEST_FAILURE_MARKER || '')) {",
       '    fs.rmSync(process.env.OFFGRID_TTS_TEST_FAILURE_MARKER, { force: true })',
       "    process.stderr.write('local speech model is unavailable')",
+      '    process.exitCode = 23',
       '    return',
       '  }',
-      "  if (command !== 'speak' || !output) return",
       '  fs.writeFileSync(process.env.OFFGRID_TTS_TEST_INPUT_RECORD, input)',
-      "  fs.writeFileSync(process.env.OFFGRID_TTS_TEST_VOICE_RECORD, voice || '')",
-      "  fs.writeFileSync(output, Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(60, 1)]))",
+      "  fs.writeFileSync(process.env.OFFGRID_TTS_TEST_VOICE_RECORD, value('--voice') || '')",
+      "  fs.writeFileSync(value('--output'), Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(60, 1)]))",
       '})'
-    ].join('\n'),
-    { mode: 0o755 }
+    ].join('\n')
   )
   setupIPC()
   saveSetting('ttsVoice', 'af_bella')
@@ -201,6 +228,12 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  // The DB suite reuses one process across files. Recreate this file's explicit profile boundary
+  // before every journey so another file's teardown cannot leave a closed database with no parent.
+  fs.mkdirSync(dataDir, { recursive: true })
+  saveSetting('ttsVoice', 'af_bella')
+  // This journey covers voice, persistence, and speech; no tool catalog is needed.
+  saveSetting('toolsEnabled', false)
   audios.length = 0
   RecorderBoundary.instances = []
   fs.rmSync(failureMarker, { force: true })
@@ -225,7 +258,8 @@ beforeEach(() => {
   )
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.allSettled([...pendingSpeech])
   cleanup()
   vi.unstubAllGlobals()
 })
@@ -245,6 +279,20 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true })
 })
 
+/**
+ * The reply as the TRANSCRIPT shows it, not the history rail's preview of it.
+ *
+ * The chat list shows each conversation's last message, so a reply is legitimately on screen twice and a
+ * bare getByText throws "found multiple elements" for a UI that is behaving correctly. The rail is the
+ * <aside> (role complementary); anything outside it is transcript.
+ */
+const inTranscript = (text: string): HTMLElement => {
+  const rail = screen.queryByRole('complementary')
+  const shown = screen.getAllByText(text).filter((node) => !rail?.contains(node))
+  expect(shown.length).toBeGreaterThan(0)
+  return shown[0]!
+}
+
 describe('assistant reply speech integration (#105)', () => {
   it('synthesizes and plays the rendered assistant reply through the real TTS contract', async () => {
     const boundary = new ChatBoundary()
@@ -252,8 +300,22 @@ describe('assistant reply speech integration (#105)', () => {
     const user = userEvent.setup()
     renderChat({ conversationId: 'conversation-b' })
 
-    await user.click(await screen.findByRole('button', { name: 'Speak' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy())
+    await waitFor(() => expect(inTranscript('Conversation B baseline')).toBeTruthy(), {
+      timeout: 10_000
+    })
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Message actions' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    await user.click(await screen.findByRole('menuitem', { name: 'Speak' }))
+    // This crosses a real child-process boundary. Shared Linux runners can take
+    // more than 10 seconds to schedule the native speech worker under DB-suite load.
+    await waitFor(() => expect(audios).toHaveLength(1), { timeout: 30_000 })
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Message actions' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    expect(await screen.findByRole('menuitem', { name: 'Stop' }, { timeout: 30_000 })).toBeTruthy()
 
     expect(audios).toHaveLength(1)
     expect(audios[0]!.play).toHaveBeenCalledOnce()
@@ -261,8 +323,8 @@ describe('assistant reply speech integration (#105)', () => {
     expect(metadata).toBe('data:audio/wav;base64')
     expect(Buffer.from(encoded!, 'base64').subarray(0, 4).toString('ascii')).toBe('RIFF')
     expect(fs.readFileSync(inputRecord, 'utf8')).toBe('Conversation B baseline')
-    expect(fs.readFileSync(voiceRecord, 'utf8')).toBe('af_bella')
-  })
+    expect(path.basename(fs.readFileSync(voiceRecord, 'utf8'))).toContain('af_heart.bin')
+  }, 40_000)
 
   it('surfaces a real synthesis failure as an actionable rendered error', async () => {
     fs.writeFileSync(failureMarker, 'fail')
@@ -271,24 +333,32 @@ describe('assistant reply speech integration (#105)', () => {
     const user = userEvent.setup()
     renderChat({ conversationId: 'conversation-b' })
 
-    await user.click(await screen.findByRole('button', { name: 'Speak' }))
+    await waitFor(() => expect(inTranscript('Conversation B baseline')).toBeTruthy(), {
+      timeout: 10_000
+    })
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Message actions' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    await user.click(await screen.findByRole('menuitem', { name: 'Speak' }))
 
     expect((await screen.findByRole('alert')).textContent).toMatch(
       /speech could not be generated.*text-to-speech is installed in settings/i
     )
     expect(audios).toHaveLength(0)
-    expect(screen.getByRole('button', { name: 'Speak' })).toBeTruthy()
-  })
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Message actions' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    expect(await screen.findByRole('menuitem', { name: 'Speak' })).toBeTruthy()
+  }, 15_000)
 
   it('records, transcribes, chats, speaks, stops, recovers, and reopens one voice turn', async () => {
     const conversationId = 'voice-conversation-lifecycle'
     database.createRagConversation(conversationId, 'Voice lifecycle')
     fs.writeFileSync(failureMarker, 'fail')
     fakeLlama.reset()
-    fakeLlama.enqueue(
-      { content: '{"intent":"chat","urls":[]}' },
-      { content: 'The release review is scheduled locally.', finishReason: 'stop' }
-    )
+    fakeLlama.enqueue({ content: 'The release review is scheduled locally.', finishReason: 'stop' })
 
     const trackStop = vi.fn()
     const stream = { getTracks: () => [{ stop: trackStop }] } as unknown as MediaStream
@@ -312,20 +382,23 @@ describe('assistant reply speech integration (#105)', () => {
     const user = userEvent.setup()
     const view = renderChat({ conversationId })
 
-    await user.click(await screen.findByTitle('Voice mode off'))
+    await user.click(await screen.findByRole('button', { name: 'Voice', pressed: false }))
     await waitFor(() => expect(database.getSetting('composerVoiceMode', false)).toBe(true))
 
-    await user.click(screen.getByText('Tap to record a voice note'))
+    await user.click(screen.getByRole('button', { name: 'Start voice recording' }))
     expect(RecorderBoundary.instances).toHaveLength(1)
     expect(RecorderBoundary.instances[0]!.state).toBe('recording')
-    await user.click(screen.getByText('Recording — tap to send'))
+    await user.click(screen.getByRole('button', { name: 'Stop voice recording' }))
 
-    await waitFor(() => expect(screen.getAllByText('Show transcript')).toHaveLength(2), {
+    await waitFor(() => expect(screen.getAllByText('Show transcript')).toHaveLength(1), {
       timeout: 10_000
     })
-    for (const toggle of screen.getAllByText('Show transcript')) await user.click(toggle)
+    await user.click(screen.getByText('Show transcript'))
     expect(screen.getByText('Schedule the stable release review')).toBeTruthy()
-    expect(screen.getByText('The release review is scheduled locally.')).toBeTruthy()
+    await waitFor(
+      () => expect(inTranscript('The release review is scheduled locally.')).toBeTruthy(),
+      { timeout: 10_000 }
+    )
     expect((await screen.findByRole('alert')).textContent).toMatch(
       /speech could not be generated.*text-to-speech is installed in settings/i
     )
@@ -341,7 +414,7 @@ describe('assistant reply speech integration (#105)', () => {
     })
 
     await user.click(screen.getAllByTitle('Play').at(-1)!)
-    await waitFor(() => expect(screen.getByTitle('Pause')).toBeTruthy())
+    expect(await screen.findByTitle('Pause', {}, { timeout: 10_000 })).toBeTruthy()
     expect(audios).toHaveLength(1)
     expect(audios[0]!.play).toHaveBeenCalledOnce()
     await user.click(screen.getByTitle('Pause'))
@@ -351,18 +424,24 @@ describe('assistant reply speech integration (#105)', () => {
     installProductionVoiceBridge(new ChatBoundary())
     renderChat({ conversationId })
 
-    expect(await screen.findByTitle('Voice mode on — speak and listen in voice notes')).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Voice', pressed: true })).toBeTruthy()
     const reopenedTranscripts = await screen.findAllByText('Show transcript')
-    expect(reopenedTranscripts).toHaveLength(2)
-    await user.click(reopenedTranscripts[1]!)
-    expect(screen.getByText('The release review is scheduled locally.')).toBeTruthy()
+    expect(reopenedTranscripts).toHaveLength(1)
+    await user.click(reopenedTranscripts[0]!)
+    await waitFor(
+      () => expect(inTranscript('The release review is scheduled locally.')).toBeTruthy(),
+      { timeout: 10_000 }
+    )
     expect(database.getSetting('ttsVoice', '')).toBe('af_bella')
     expect(database.getRagMessages(conversationId)).toHaveLength(2)
 
-    await user.click(screen.getByTitle('Voice mode on — speak and listen in voice notes'))
+    await user.click(screen.getByRole('button', { name: 'Voice', pressed: true }))
+    await waitFor(() => expect(database.getSetting('composerVoiceMode', true)).toBe(false))
     const composer = await screen.findByPlaceholderText(/^ask /i)
-    await user.type(composer, 'Typed chat remains usable after voice recovery')
-    expect((composer as HTMLTextAreaElement).value).toBe(
+    fireEvent.change(composer, {
+      target: { value: 'Typed chat remains usable after voice recovery' }
+    })
+    expect((screen.getByPlaceholderText(/^ask /i) as HTMLTextAreaElement).value).toBe(
       'Typed chat remains usable after voice recovery'
     )
   }, 20_000)

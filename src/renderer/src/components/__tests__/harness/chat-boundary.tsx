@@ -3,19 +3,72 @@ import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { MemoryChat } from '../../MemoryChat'
 import { TooltipProvider } from '../../ui/tooltip'
-import type { RagChatResultContract } from '../../../../../shared/ipc-contracts'
+import type {
+  ActiveChatStreamContract,
+  RagChatResultContract
+} from '../../../../../shared/ipc-contracts'
 
 export type StreamEvent = {
   streamId: string
-  type: 'content' | 'reasoning' | 'step'
+  type: 'content' | 'reasoning' | 'step' | 'tool_result'
   text?: string
+  step?: unknown
+  call?: { name: string; result: string; status: 'completed' | 'failed' | 'pending' }
 }
 type ThinkSplitter = { push: (text: string) => void; answer: () => string }
 export type ThinkSplitterFactory = (
   emit: (event: { text: string; kind: 'content' | 'reasoning' }) => void
 ) => ThinkSplitter
-type RagResult = RagChatResultContract
-type StoredMessage = { id: number; role: 'user' | 'assistant'; content: string; context?: unknown }
+type RagResult = RagChatResultContract & {
+  imageRequests?: Array<{ prompt: string; enhancePrompt?: boolean }>
+  unified?: unknown[]
+  toolCalls?: Array<{
+    name: string
+    result: string
+    status?: 'completed' | 'failed' | 'pending'
+  }>
+}
+type StoredMessage = {
+  id: number | string
+  role: 'user' | 'assistant' | 'system' | 'tool'
+  content: string
+  context?: unknown
+  created_at?: string
+}
+type TaskSnapshot = {
+  taskId: string
+  journeyId?: string
+  kind: 'web_use' | 'computer_use'
+  title: string
+  status: 'running' | 'paused' | 'waiting' | 'reconnecting' | 'done' | 'failed' | 'stopped'
+  summary?: string
+  steps: string[]
+  currentAction?: string
+  currentReasoning?: string
+  reasoningLive?: boolean
+  currentStep?: number
+  startedAt: number
+  updatedAt: number
+}
+
+/**
+ * Every persisted message carries a timestamp, so this fake has to give one too.
+ *
+ * The renderer projects each row through projectSyncedMessageTurn, which REFUSES a message with no
+ * usable createdAt and returns null - a message that cannot be ordered cannot be merged with one from
+ * another device, and sync will not guess. MemoryChat drops those rows, so a fixture without a
+ * timestamp renders as an empty conversation and every assertion about its content fails while
+ * pointing at the wrong thing (no Copy button, no Speak button, no reply text).
+ *
+ * The real boundary cannot produce that row: the messages table defaults created_at to SQLite's
+ * CURRENT_TIMESTAMP. Stamping here makes the fake match the seam it stands for, in the exact shape
+ * SQLite writes (naive UTC, space-separated), rather than asking every fixture to remember it.
+ *
+ * Deterministic and increasing, so message order is fixture order and no test depends on a clock.
+ */
+const FIXTURE_EPOCH = Date.UTC(2026, 0, 1, 9, 0, 0)
+const storedAt = (sequence: number): string =>
+  new Date(FIXTURE_EPOCH + sequence * 1000).toISOString().replace('T', ' ').slice(0, 19)
 type Conversation = {
   id: string
   title: string
@@ -40,7 +93,7 @@ function deferred<T>(): {
 }
 
 export class ChatBoundary {
-  constructor(private readonly createSplitter?: ThinkSplitterFactory) {}
+  constructor(private readonly createSplitter?: ThinkSplitterFactory) { }
 
   readonly projects = [
     { id: 'project-alpha', name: 'Project Alpha' },
@@ -68,15 +121,25 @@ export class ChatBoundary {
     thinking: boolean
     turn: ReturnType<typeof deferred<RagResult>>
   }[] = []
+  readonly toolQueries: { query: string; options: Record<string, unknown> }[] = []
 
   readonly speechTurns: ReturnType<typeof deferred<{ dataUrl: string }>>[] = []
+  readonly activeRagStreams: ActiveChatStreamContract[] = []
 
   private streamCallback: ((event: StreamEvent) => void) | null = null
+  private taskChangedCallback: ((task: TaskSnapshot) => void) | null = null
+  private conversationChangedCallback:
+    | ((change: { conversationId: string; projectId?: string | null }) => void)
+    | null = null
   private readonly rawSplitters = new Map<number, ThinkSplitter>()
+  private readonly pendingConversationReads = new Map<string, ReturnType<typeof deferred<void>>>()
   private nextMessageId = 10
   private pendingUserWrite: ReturnType<typeof deferred<void>> | null = null
 
   readonly cancelRag = vi.fn()
+  readonly listTasks = vi.fn(async () => [] as TaskSnapshot[])
+  readonly stopComputerTask = vi.fn(async () => true)
+  readonly guideTask = vi.fn(async () => ({ available: true, accepted: true }))
   readonly saveArtifact = vi.fn(async () => 'artifact-id')
   readonly addRagMessage = vi.fn(
     async (
@@ -91,15 +154,18 @@ export class ChatBoundary {
         await gate.promise
       }
       this.messages[conversationId] ??= []
+      const id = this.nextMessageId++
+      const uuid = `message-${id}`
       this.messages[conversationId]!.push({
-        id: this.nextMessageId++,
+        id: uuid,
         role,
         content,
-        context
+        context,
+        created_at: storedAt(this.nextMessageId)
       })
       const conversation = this.conversations.find((item) => item.id === conversationId)
       if (conversation) conversation.message_count = this.messages[conversationId]!.length
-      return this.nextMessageId - 1
+      return { id, uuid }
     }
   )
 
@@ -114,21 +180,54 @@ export class ChatBoundary {
     imageGenStatus: vi.fn(async () => ({ available: false, models: [], active: '' })),
     cancelImageGen: vi.fn(),
     cancelRag: this.cancelRag,
-    onImageGenProgress: vi.fn(() => () => {}),
+    tasks: {
+      list: this.listTasks,
+      guideTask: this.guideTask,
+      onChanged: vi.fn((callback: (task: TaskSnapshot) => void) => {
+        this.taskChangedCallback = callback
+        return () => {
+          if (this.taskChangedCallback === callback) this.taskChangedCallback = null
+        }
+      })
+    },
+    vision: { control: this.stopComputerTask },
+    onImageGenProgress: vi.fn(() => () => { }),
+    onImageGenJobState: vi.fn(() => () => { }),
+    onImageGenConversationUpdated: vi.fn(() => () => { }),
+    imageGenJobStatus: vi.fn(async () => ({ id: null, phase: 'idle' as const, conversationId: null, projectId: null, stage: null, enhancedPrompt: '', progress: null, outputPath: null, error: null, startedAt: null, finishedAt: null })),
+    onRagConversationsChanged: vi.fn(
+      (callback: (change: { conversationId: string; projectId?: string | null }) => void) => {
+        this.conversationChangedCallback = callback
+        return () => {
+          if (this.conversationChangedCallback === callback) {
+            this.conversationChangedCallback = null
+          }
+        }
+      }
+    ),
     onRagStream: vi.fn((callback: (event: StreamEvent) => void) => {
       this.streamCallback = callback
       return () => {
         this.streamCallback = null
       }
     }),
+    getActiveRagStreams: vi.fn(async () => this.activeRagStreams.map((stream) => ({ ...stream }))),
     getRagConversations: vi.fn(async () => this.conversations.map((item) => ({ ...item }))),
     getRagConversation: vi.fn(async (id: string) => {
       const found = this.conversations.find((item) => item.id === id)
       return found ? { ...found } : null
     }),
-    getRagMessages: vi.fn(async (id: string) =>
-      (this.messages[id] ?? []).map((item) => ({ ...item }))
-    ),
+    getRagMessages: vi.fn(async (id: string) => {
+      await this.pendingConversationReads.get(id)?.promise
+      return (
+        // created_at is filled in where a fixture omitted it, because the table it stands for always has
+        // one and the renderer discards any row that does not.
+        (this.messages[id] ?? []).map((item, index) => ({
+          ...item,
+          created_at: item.created_at ?? storedAt(index)
+        }))
+      )
+    }),
     createRagConversation: vi.fn(
       async (id: string, title = 'Untitled', projectId: string | null = null) => {
         this.conversations.unshift(this.conversation(id, title, projectId))
@@ -141,18 +240,35 @@ export class ChatBoundary {
       if (conversation) conversation.project_id = projectId
     }),
     addRagMessage: this.addRagMessage,
+    updateRagMessage: async (conversationId: string, messageId: string, content: string, context?: unknown) => {
+      const message = this.messages[conversationId]?.find((entry) => entry.id === messageId)
+      if (!message) return false
+      message.content = content
+      if (context !== undefined) message.context = context
+      return true
+    },
     truncateRagMessages: this.truncateRagMessages,
     saveArtifact: this.saveArtifact,
+    artifactRuntime: async () => ({}),
+    createArtifactPreview: async (html: string) => `data:text/html,${encodeURIComponent(html)}`,
+    revokeArtifactPreview: async () => true,
     speak: vi.fn(() => {
       const turn = deferred<{ dataUrl: string }>()
       this.speechTurns.push(turn)
       return turn.promise
     }),
+    ttsVoices: vi.fn(async () => [
+      { id: 'af_heart', label: 'Heart', language: 'en-US' },
+      { id: 'bf_emma', label: 'Emma', language: 'en-GB' }
+    ]),
+    prepareTtsVoice: vi.fn(async () => ({ ready: true })),
+    onTtsVoiceProgress: vi.fn(() => () => { }),
     getSettings: vi.fn(async () => ({})),
-    saveSetting: vi.fn(async () => {}),
+    getLlmSettings: vi.fn(async () => ({})),
+    saveSetting: vi.fn(async () => { }),
     listProjects: vi.fn(async () => this.projects.map((item) => ({ ...item }))),
     styleThumbs: vi.fn(async () => ({})),
-    listSkills: vi.fn(async () => []),
+    listSkills: vi.fn(async (): Promise<{ name: string; description: string }[]> => []),
     ragChat: vi.fn(
       async (
         query: string,
@@ -176,6 +292,22 @@ export class ChatBoundary {
         })
         return turn.promise
       }
+    ),
+    toolChat: vi.fn(
+      async (query: string, _history: unknown[], options: Record<string, unknown>) => {
+        const turn = deferred<RagResult>()
+        this.toolQueries.push({ query, options })
+        this.calls.push({
+          query,
+          projectId: typeof options.projectId === 'string' ? options.projectId : null,
+          conversationId: String(options.conversationId),
+          noMemory: !options.projectId && !options.allMemory,
+          streamId: String(options.streamId),
+          thinking: !!options.thinking,
+          turn
+        })
+        return turn.promise
+      }
     )
   }
 
@@ -187,6 +319,15 @@ export class ChatBoundary {
     this.pendingUserWrite?.resolve()
   }
 
+  blockConversationRead(conversationId: string): void {
+    this.pendingConversationReads.set(conversationId, deferred<void>())
+  }
+
+  releaseConversationRead(conversationId: string): void {
+    this.pendingConversationReads.get(conversationId)?.resolve()
+    this.pendingConversationReads.delete(conversationId)
+  }
+
   emit(callIndex: number, text: string): void {
     const call = this.calls[callIndex]!
     this.streamCallback?.({ streamId: call.streamId, type: 'content', text })
@@ -195,6 +336,38 @@ export class ChatBoundary {
   emitReasoning(callIndex: number, text: string): void {
     const call = this.calls[callIndex]!
     this.streamCallback?.({ streamId: call.streamId, type: 'reasoning', text })
+  }
+
+  emitToolStep(callIndex: number, name: string): void {
+    const call = this.calls[callIndex]!
+    this.streamCallback?.({
+      streamId: call.streamId,
+      type: 'step',
+      step: { kind: 'running_tool', name }
+    })
+  }
+
+  emitPreparingToolCalls(callIndex: number, name: string): void {
+    const call = this.calls[callIndex]!
+    this.streamCallback?.({
+      streamId: call.streamId,
+      type: 'step',
+      step: { kind: 'preparing_tool_calls', name }
+    })
+  }
+
+  emitToolResult(
+    callIndex: number,
+    name: string,
+    result: string,
+    status: 'completed' | 'failed' | 'pending' = 'completed'
+  ): void {
+    const call = this.calls[callIndex]!
+    this.streamCallback?.({
+      streamId: call.streamId,
+      type: 'tool_result',
+      call: { name, result, status }
+    })
   }
 
   emitRaw(callIndex: number, text: string): void {
@@ -227,6 +400,14 @@ export class ChatBoundary {
     this.calls[callIndex]!.turn.reject(error)
   }
 
+  emitTask(task: TaskSnapshot): void {
+    this.taskChangedCallback?.(task)
+  }
+
+  emitConversationChanged(conversationId: string): void {
+    this.conversationChangedCallback?.({ conversationId })
+  }
+
   private conversation(id: string, title: string, projectId: string | null): Conversation {
     return {
       id,
@@ -240,12 +421,14 @@ export class ChatBoundary {
 }
 
 export function installBoundary(boundary: ChatBoundary): void {
-  ;(globalThis as unknown as { window: { api: unknown } }).window.api = boundary.api
+  ; (globalThis as unknown as { window: { api: unknown } }).window.api = boundary.api
 }
 
 export function renderChat(target: {
   conversationId?: string
   projectId?: string
+  draftPrompt?: string
+  presetId?: string
 }): ReturnType<typeof render> {
   return render(
     <TooltipProvider>

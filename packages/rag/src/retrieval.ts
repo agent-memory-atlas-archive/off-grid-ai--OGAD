@@ -1,11 +1,16 @@
 // Retrieval: rank candidate chunks against a query embedding, optionally trim to
 // a context-window budget, and format the survivors for prompt injection. Ported
-// from Off Grid Mobile (rag/retrieval.ts). Pure: scoring only — fetching is the
+// from Off Grid AI Mobile (rag/retrieval.ts). Pure: scoring only — fetching is the
 // VectorStore's job.
 
 import { cosineSimilarity } from './vectorMath'
 import type { ChunkCandidate } from './bridges'
 import type { RagSearchResult } from './types'
+
+/** Remove XML-like prompt delimiters while preserving the text between them. */
+function neutralizePromptTags(text: string): string {
+  return text.replaceAll(/[<>]/g, '')
+}
 
 /** Score every candidate by cosine similarity and return the top-k, desc. */
 export function rankBySimilarity(
@@ -50,7 +55,10 @@ export function selectWithinBudget(
 export function formatForPrompt(result: { chunks: RagSearchResult[] }): string {
   if (!result.chunks.length) return ''
   const body = result.chunks
-    .map((c) => `[Source: ${c.name} (part ${c.position + 1})]\n${c.content}`)
+    .map(
+      (c) =>
+        `[Source: ${neutralizePromptTags(c.name)} (part ${c.position + 1})]\n${neutralizePromptTags(c.content)}`
+    )
     .join('\n---\n')
   return (
     '<knowledge_base>\n' +

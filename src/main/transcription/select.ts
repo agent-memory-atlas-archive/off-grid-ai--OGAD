@@ -7,13 +7,20 @@
 //                          interim, so ticks don't reload the model each call.
 // Everything that turns audio into text depends on this seam, never on a concrete
 // engine module: adding an engine is a new entry here + a new TranscriptionService.
-import type { TranscriptionService } from './types'
+import type { TranscriptionService, TranscribeOptions } from './types'
 import { transcriptionService as whisper } from './whisper-cli'
 import { parakeetTranscription as parakeet } from './parakeet-cli'
-import { whisperServerTranscription as whisperResident, whisperServer } from './whisper-server'
+import { whisperServer } from './whisper-server'
+import { whisperServerTranscription as whisperResident } from './whisper-server-transcription'
 import { getActiveModal } from '../active-models'
 import { modelsByKind } from '@offgrid/models'
+import { transcriptionLanguages, type SpeechLanguage } from '@offgrid/speech'
 import type { ManagedRuntime } from '../runtime-manager'
+import { getSetting } from '../database'
+import { getActiveRemoteVisionServerForModality } from '../vision/remote-vision-server'
+import { remoteVisionModelId } from '../../shared/remote-vision-server'
+import { transcribeRemoteAudio } from '../remote-media-runtime'
+import { recordAIRequest } from '../ai-request-log'
 // The pure engine classifiers live in a LEAF module (classify.ts) so the CLIs can import
 // them without forming a load-time cycle back through select (which reads the CLI
 // singletons at module scope). Re-exported here so existing importers/tests keep working.
@@ -101,18 +108,103 @@ export function engineForActiveModel(
   return catalogEngine(entry)
 }
 
+/** Reads one persisted user preference. The app supplies the real settings table; a caller
+ *  that has no database (and no preference to honor) supplies its own reader instead of
+ *  dragging the native DB module into a path that only turns audio into text. */
+export type TranscriptionSettingReader = (key: string, fallback: string) => string
+
 /**
  * Resolve the transcription service implied by the active model choice, honoring the
  * whisper fallback when Parakeet isn't installed. This is what core, engine-agnostic
  * paths (generic mic transcription, file/RAG ingestion) call so a Parakeet selection is
  * actually used instead of always running whisper.
+ *
+ * The language preference arrives through `readSetting` rather than a hardwired import: the
+ * active engine comes from the filesystem and the catalog, so this seam otherwise needs no
+ * database at all, and coupling it to one made every caller — including a runner that cannot
+ * load the native DB module — pay for a single string lookup.
  */
-export function getActiveTranscription(): TranscriptionService {
-  const engine = engineForActiveModel(
-    getActiveModal('transcription'),
-    modelsByKind('transcription')
+export function getActiveTranscription(
+  readSetting: TranscriptionSettingReader = getSetting
+): TranscriptionService {
+  const remote = getActiveRemoteVisionServerForModality('transcription')
+  if (remote) {
+    return {
+      isAvailable: () => true,
+      transcribe: (input, options) =>
+        recordAIRequest(
+          {
+            modality: 'stt',
+            source: 'Remote transcription',
+            model: remote.selectedModel,
+            backend: 'Remote',
+            request: { ...input, ...options },
+            signal: options?.signal
+          },
+          async (log) => {
+            await log.inputFile(input.path)
+            return transcribeRemoteAudio(
+              remote,
+              input.path,
+              options?.language ?? readSetting('sttLanguage', 'auto'),
+              options?.signal
+            )
+          }
+        )
+    }
+  }
+  const active = getActiveModal('transcription')
+  const engine = engineForActiveModel(active, modelsByKind('transcription'))
+  const language = resolveConfiguredTranscriptionLanguage(
+    readSetting('sttLanguage', 'auto'),
+    transcriptionLanguages(engine, active)
   )
-  return getTranscription(engine)
+  return withConfiguredTranscriptionLanguage(getTranscription(engine), language)
+}
+
+/** Apply the user's language hint at the shared transcription seam. An explicit
+ *  call-site hint still wins, so specialized import flows can override it. */
+export function withConfiguredTranscriptionLanguage(
+  service: TranscriptionService,
+  language: string
+): TranscriptionService {
+  return {
+    isAvailable: () => service.isAvailable(),
+    transcribe: (input: { path: string }, opts?: TranscribeOptions) =>
+      service.transcribe(input, { language, ...opts })
+  }
+}
+
+/** Keep a stored language only while the active engine/model supports it. */
+export function resolveConfiguredTranscriptionLanguage(
+  configuredLanguage: string,
+  languages: readonly SpeechLanguage[]
+): string {
+  return languages.some((candidate) => candidate.code === configuredLanguage)
+    ? configuredLanguage
+    : (languages[0]?.code ?? 'auto')
+}
+
+export function transcriptionActiveInfo(
+  info: ReturnType<typeof getActiveTranscriptionInfo>,
+  installed: readonly InstalledTranscriptionEntry[],
+  configuredLanguage: string
+): ReturnType<typeof getActiveTranscriptionInfo> & {
+  language: string
+  languages: readonly SpeechLanguage[]
+  options: ReturnType<typeof transcriptionModelOptions>
+} {
+  const activeEntry = installed.find((entry) => transcriptionEntryMatches(entry, info.modelId))
+  const languages = transcriptionLanguages(
+    info.engine === 'remote' ? 'whisper' : info.engine,
+    activeEntry?.familyId ?? info.modelId
+  )
+  return {
+    ...info,
+    language: resolveConfiguredTranscriptionLanguage(configuredLanguage, languages),
+    languages,
+    options: transcriptionModelOptions(info.modelId, installed)
+  }
 }
 
 /** The engine actually used for a requested one, after the whisper fallback. Single
@@ -124,7 +216,7 @@ export function effectiveEngine(engine: TranscriptionEngine): TranscriptionEngin
 
 export interface ActiveTranscriptionInfo {
   /** The engine that actually runs (after the whisper fallback). */
-  engine: TranscriptionEngine
+  engine: TranscriptionEngine | 'remote'
   /** The active transcription model id/filename, or null when none is explicitly selected. */
   modelId: string | null
   /** Human-readable provenance, e.g. "Whisper · Whisper Medium". */
@@ -156,6 +248,13 @@ export function transcriptionProvenance(
 /** Live provenance: the engine that would actually run for the active model, plus a display
  *  label. Read from the same active-model source of truth the transcription path uses. */
 export function getActiveTranscriptionInfo(): ActiveTranscriptionInfo {
+  const remote = getActiveRemoteVisionServerForModality('transcription')
+  if (remote)
+    return {
+      engine: 'remote',
+      modelId: remoteVisionModelId(remote.id, remote.selectedModel),
+      label: `Remote · ${remote.selectedModel}`
+    }
   const active = getActiveModal('transcription')
   const entries = modelsByKind('transcription')
   const engine = effectiveEngine(engineForActiveModel(active, entries))
@@ -169,20 +268,40 @@ export interface TranscriptionModelOption {
   active: boolean
 }
 
+export interface InstalledTranscriptionEntry {
+  id: string
+  familyId?: string
+  name?: string
+  files: Array<{ name: string }>
+}
+
+function transcriptionEntryMatches(
+  entry: InstalledTranscriptionEntry,
+  active: string | null
+): boolean {
+  return (
+    active != null &&
+    (entry.id === active ||
+      entry.familyId === active ||
+      entry.files.some((file) => file.name === active))
+  )
+}
+
 /** Pure: the switchable transcription models for a picker — the built-in whisper default plus
  *  every INSTALLED transcription catalog model — with the active one flagged. Matches the active
  *  value by catalog id OR primary filename (active-models stores either). Selecting an option
  *  goes through the existing setActiveModalModel('transcription', id) — this only lists. */
 export function transcriptionModelOptions(
   active: string | null,
-  installed: Array<{ id: string; name?: string; files: Array<{ name: string }> }>
+  installed: readonly InstalledTranscriptionEntry[]
 ): TranscriptionModelOption[] {
+  const hasInstalledActive = installed.some((entry) => transcriptionEntryMatches(entry, active))
   return [
-    { id: null, name: 'Whisper (built-in)', active: active == null },
+    { id: null, name: 'Whisper (built-in)', active: active == null || !hasInstalledActive },
     ...installed.map((e) => ({
       id: e.id,
       name: e.name ?? e.id,
-      active: e.id === active || e.files.some((f) => f.name === active)
+      active: transcriptionEntryMatches(e, active)
     }))
   ]
 }

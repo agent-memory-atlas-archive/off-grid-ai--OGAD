@@ -32,6 +32,9 @@ ${para}` : para;
     }
   }
   flush();
+  if (chunks.length === 0) {
+    return [{ content: clean, position: 0 }];
+  }
   return chunks.map((content, position) => ({ content, position }));
 }
 
@@ -60,6 +63,9 @@ function topKSimilar(query, candidates, k) {
 }
 
 // src/retrieval.ts
+function neutralizePromptTags(text) {
+  return text.replaceAll(/[<>]/g, "");
+}
 function rankBySimilarity(queryVec, candidates, topK = 5) {
   return candidates.map((c) => ({
     docId: c.docId,
@@ -84,8 +90,10 @@ function selectWithinBudget(chunks, charBudget) {
 }
 function formatForPrompt(result) {
   if (!result.chunks.length) return "";
-  const body = result.chunks.map((c) => `[Source: ${c.name} (part ${c.position + 1})]
-${c.content}`).join("\n---\n");
+  const body = result.chunks.map(
+    (c) => `[Source: ${neutralizePromptTags(c.name)} (part ${c.position + 1})]
+${neutralizePromptTags(c.content)}`
+  ).join("\n---\n");
   return `<knowledge_base>
 The following excerpts are from the user's project knowledge base. Use them to answer and cite the source filename when you do.
 ${body}
@@ -172,11 +180,14 @@ var RagService = class {
     onProgress?.("chunking");
     const chunks = chunkText(text, this.deps.chunkOptions);
     const docId = await this.deps.store.addDocument({
+      syncId: params.syncId,
       projectId: params.projectId,
       name: params.fileName,
       path: params.path,
       size: params.size,
-      kind
+      kind,
+      createdAt: params.createdAt,
+      enabled: params.enabled
     });
     if (chunks.length === 0) {
       onProgress?.("done");

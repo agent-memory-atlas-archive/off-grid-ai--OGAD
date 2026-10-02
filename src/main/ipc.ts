@@ -1,4 +1,5 @@
 import { ipcMain, BrowserWindow, app, clipboard } from 'electron'
+import { setupAIRequestLogIPC } from './ai-request-log-ipc'
 import { setupArtifactPreviewIpc } from './artifact-preview-ipc'
 import {
   getDB,
@@ -12,9 +13,6 @@ import {
   getEntities,
   getEntityDetails,
   upsertEntitySession,
-  rebuildEntityEdgesForSession,
-  getEntityGraph,
-  rebuildEntityEdgesForAllSessions,
   deleteMemory,
   getEntitiesForSession,
   getDashboardStats,
@@ -34,6 +32,10 @@ import {
   getSetting
 } from './database'
 import { deleteEntityById, resolveEntityCandidate } from './entity-domain'
+import { setComputerUseSettings } from './computer-use-settings'
+import { COMPUTER_USE_SETTINGS_KEY } from '../shared/computer-use-settings'
+import { setWebUseSettings } from './web-use-settings'
+import { WEB_USE_SETTINGS_KEY } from '../shared/web-use-settings'
 import { embeddings } from './embeddings'
 import {
   getResidency,
@@ -41,12 +43,15 @@ import {
   type Modality,
   type ResidencyMode
 } from './runtime-residency'
+import { getBackendPreferences, setBackendPreference } from './backend-preferences'
+import type { BackendModality, BackendPreference } from '../shared/backend-preferences'
 import {
   requestAccessibilityPermission,
   requestScreenRecordingPermission,
   openAccessibilitySettings,
   openScreenRecordingSettings,
-  openMicrophoneSettings
+  openMicrophoneSettings,
+  openLocalNetworkSettings
 } from './permissions'
 import { setupSystemStatusIpc } from './system-status-ipc'
 import { CACHE_CLEANUP_CHANNEL } from '../shared/ipc-contracts'
@@ -54,14 +59,26 @@ import { toResponseGenerationResult, type ResponseGenerationResult } from './llm
 import { getAllPromptDefs } from './prompts'
 import { getPrompt, getPromptTemplate, resetPrompt } from './prompt-store'
 import { setupTtsIpc } from './tts-ipc'
+import { setupVoiceTranscriptionIpc } from './voice-transcription-ipc'
 import {
   safeParseJson,
-  tokenizeQuery,
+  ftsMatchExpression,
   clipText,
   isGenerativeRequest,
   isTrivialMessage,
   appNameLikeClause
 } from './ipc-query-logic'
+import { requestApplicationRelaunch } from './shutdown'
+import {
+  activateInstalledPerformancePack,
+  onPerformancePackChanged,
+  pausePerformancePack,
+  performancePackStatus,
+  startPerformancePack
+} from './performance-pack'
+import { sampleProgressRate, type ProgressRateSample } from '@offgrid/ui'
+import { notifyRagConversationChanged } from './rag-conversation-events'
+import { parseRemoteVisionModelId, remoteVisionModelId } from '../shared/remote-vision-server'
 // import { llm } from './llm'; // Moved to dynamic import to support ESM
 
 // Incrementally update master memory with a new conversation summary
@@ -91,7 +108,83 @@ async function regenerateMasterMemory(): Promise<string | null> {
 // arrive (inline chain-of-thought); otherwise fall back to a single blocking call.
 // Active streaming turns, keyed by streamId, so a renderer 'rag:cancel' can abort
 // an in-flight generation and keep whatever was produced so far.
+import {
+  activeChatStreamSnapshots,
+  beginChatImageStream,
+  bindChatStream,
+  continueChatStreamWithImage,
+  currentChatStreamMessageId,
+  endChatStream,
+  endChatStreamForConversation,
+  noteChatStreamImageProgress,
+  noteChatStreamDelta,
+  resetChatStreamPartial,
+  noteChatStreamToolCompleted,
+  noteChatStreamToolStarted,
+  takeChatStreamMessageId
+} from './chat-stream-state'
+
 const streamControllers = new Map<string, AbortController>()
+
+/** Retry a failed model round without re-running any tool call that already started. */
+async function runChatWithFallback<T>(
+  run: () => Promise<T>,
+  options: {
+    signal?: AbortSignal
+    canRetry?: () => boolean
+    onModelChanged?: (failed: string, next: string) => void
+  } = {}
+): Promise<{ result: T; modelName?: string }> {
+  let lastError: unknown
+  try {
+    return { result: await run() }
+  } catch (error) {
+    if (options.signal?.aborted || options.canRetry?.() === false) throw error
+    lastError = error
+  }
+  const models = await import('./models-manager')
+  const { getRemoteVisionServerSettings } = await import('./vision/remote-vision-server')
+  const remote = getRemoteVisionServerSettings()
+  const selectedLocal = models.getActiveModel()
+  const selectedRemote = remote.servers.find((server) => server.id === remote.activeServerId)
+  const installed = (await models.getStorageInfo()).models
+    .filter((model) => model.kind === 'text' || model.kind === 'vision')
+    .map((model) => model.id)
+  const alternatives = [
+    ...(selectedRemote
+      ? remote.servers
+          .filter((server) => server.id !== selectedRemote.id)
+          .map((server) => ({
+            id: remoteVisionModelId(server.id, server.model),
+            name: server.model
+          }))
+      : []),
+    ...installed
+      .filter((id) => !parseRemoteVisionModelId(id) && (selectedRemote || id !== selectedLocal))
+      .sort((a, b) => (a === selectedLocal ? -1 : b === selectedLocal ? 1 : 0))
+      .map((id) => ({ id, name: id }))
+  ]
+  let failedName = selectedRemote?.model ?? selectedLocal ?? 'Selected model'
+  for (const next of alternatives) {
+    if (options.signal?.aborted || options.canRetry?.() === false) throw lastError
+    try {
+      const activated = await models.activateModel(next.id, 'text')
+      if (!activated.success) continue
+    } catch {
+      continue
+    }
+    if (options.signal?.aborted) throw lastError
+    options.onModelChanged?.(failedName, next.name)
+    try {
+      return { result: await run(), modelName: next.name }
+    } catch (error) {
+      if (options.signal?.aborted || options.canRetry?.() === false) throw error
+      failedName = next.name
+      lastError = error
+    }
+  }
+  throw lastError
+}
 
 async function streamAnswer(
   event: { sender?: { send: (channel: string, payload: unknown) => void } } | undefined,
@@ -111,9 +204,13 @@ async function streamAnswer(
     // screen-replay (Tier 3) defers to it. Chat runs ON the 'llm' engine, so it
     // evicts nothing (evicting 'llm' would evict itself). run()'s finally releases
     // the slot even if fn throws, so we let errors propagate from inside.
-    return modalityQueue.run(CHAT_JOB, async () =>
-      toResponseGenerationResult(await llm.chatStream(prompt, images, () => {}, { thinking }))
-    )
+    return modalityQueue.run(CHAT_JOB, async () => {
+      const { result, modelName } = await runChatWithFallback(() =>
+        llm.chatStream(prompt, images, () => {}, { thinking })
+      )
+      const response = toResponseGenerationResult(result)
+      return modelName ? { ...response, metrics: { ...response.metrics, modelName } } : response
+    })
   }
 
   const sender = event.sender
@@ -127,22 +224,48 @@ async function streamAnswer(
     // the run() callback so the queue slot is held for the whole generation; the
     // cancel path aborts via the controller registered above.
     return await modalityQueue.run(CHAT_JOB, async () => {
-      const result = await llm.chatStream(
-        prompt,
-        images,
-        (text, kind) => {
-          try {
-            sender.send('rag:stream', { streamId, type: kind, text })
-          } catch {
-            /* window gone */
+      const { result, modelName } = await runChatWithFallback(
+        () =>
+          llm.chatStream(
+            prompt,
+            images,
+            (text, kind) => {
+              noteChatStreamDelta(streamId, text, kind)
+              try {
+                sender.send('rag:stream', { streamId, type: kind, text })
+              } catch {
+                /* window gone */
+              }
+            },
+            { thinking, signal: controller.signal }
+          ),
+        {
+          signal: controller.signal,
+          onModelChanged: (failed, next) => {
+            resetChatStreamPartial(streamId)
+            try {
+              sender.send('rag:stream', {
+                streamId,
+                type: 'step',
+                step: { kind: 'model_changed', failed, next }
+              })
+            } catch {
+              /* window gone */
+            }
           }
-        },
-        { thinking, signal: controller.signal }
+        }
       )
-      return toResponseGenerationResult(result)
+      const response = toResponseGenerationResult(result)
+      return modelName ? { ...response, metrics: { ...response.metrics, modelName } } : response
     })
   } finally {
     streamControllers.delete(streamId)
+    endChatStream(streamId, controller.signal.aborted ? 'discarded' : 'record_pending')
+    try {
+      sender.send('rag:stream', { streamId, type: 'done' })
+    } catch {
+      /* window gone */
+    }
   }
 }
 
@@ -191,7 +314,7 @@ async function classifyIntent(
     ]
       .filter(Boolean)
       .join('\n\n')
-    const raw = await llm.chat(prompt, [], 60000, 200, {
+    const raw = await llm.chat(prompt, [], undefined, 200, {
       disableThinking: true,
       responseFormat: {
         type: 'json_schema',
@@ -362,7 +485,6 @@ async function extractEntitiesForSession(sessionId: string): Promise<void> {
 
     if (parsed.entities.length === 0) return
 
-    const touchedEntityIds = new Set<number>()
     for (const entity of parsed.entities) {
       const name = (entity.name || '').trim()
       if (!name) continue
@@ -380,7 +502,6 @@ async function extractEntitiesForSession(sessionId: string): Promise<void> {
       if (!resolution.admitted) continue
       const entityId = resolution.entityId
       if (!entityId) continue
-      touchedEntityIds.add(entityId)
       upsertEntitySession(entityId, sessionId)
 
       const newFacts: string[] = []
@@ -421,10 +542,6 @@ async function extractEntitiesForSession(sessionId: string): Promise<void> {
       } catch (e) {
         console.error('[IPC] Failed to update entity summary:', e)
       }
-    }
-
-    if (touchedEntityIds.size > 1) {
-      rebuildEntityEdgesForSession(sessionId)
     }
   } catch (e) {
     console.error('[IPC] Entity extraction failed:', e)
@@ -467,9 +584,26 @@ export async function summarizeSession(sessionId: string): Promise<string | null
 }
 
 export function setupIPC() {
+  activateInstalledPerformancePack()
+  onPerformancePackChanged((status) => {
+    BrowserWindow.getAllWindows().forEach((window) =>
+      window.webContents.send('performance-pack:changed', status)
+    )
+  })
+  ipcMain.handle('performance-pack:status', performancePackStatus)
+  ipcMain.handle('performance-pack:start', startPerformancePack)
+  ipcMain.handle('performance-pack:pause', pausePerformancePack)
+  ipcMain.handle('performance-pack:restart', () => requestApplicationRelaunch(app))
+  setupAIRequestLogIPC()
+  setupVoiceTranscriptionIpc()
   const db = getDB()
   setupTtsIpc()
-  setupSystemStatusIpc(ipcMain)
+  setupSystemStatusIpc(ipcMain, {
+    publish: (health) =>
+      BrowserWindow.getAllWindows().forEach((window) =>
+        window.webContents.send('system:chat-health-changed', health)
+      )
+  })
 
   ipcMain.handle('db:get-memories', (_, limit: number = 50, appName?: string) => {
     let query = 'SELECT * FROM memories '
@@ -588,6 +722,7 @@ export function setupIPC() {
   })
 
   // Cancel an in-flight streaming turn; chatStream resolves with the partial answer.
+  ipcMain.handle('rag:active-streams', () => activeChatStreamSnapshots())
   ipcMain.on('rag:cancel', (_evt, streamId: string) => {
     streamControllers.get(streamId)?.abort()
   })
@@ -607,6 +742,9 @@ export function setupIPC() {
       images?: string[]
     ) => {
       const imgs = images || []
+      // Before the classifier, so the whole turn - including its thinking - is attributable to the
+      // conversation it belongs to.
+      bindChatStream(streamId, conversationId, thinking ? 'thinking' : 'waiting')
       // Intelligence layer: a grammar-constrained classifier picks the output
       // format (build / image / chat) and extracts URLs to read — replacing the
       // brittle keyword gate. Skip it in project mode (that path is its own thing).
@@ -621,7 +759,7 @@ export function setupIPC() {
         const desc = (
           await (
             await import('./llm')
-          ).llm.chat(imgPrompt, [], 60000, 200, { disableThinking: true })
+          ).llm.chat(imgPrompt, [], undefined, 200, { disableThinking: true })
         )
           .trim()
           .replace(/^["']|["']$/g, '')
@@ -665,7 +803,7 @@ export function setupIPC() {
           referenceBlock = `REFERENCE — the user pointed you at these page(s); BUILD using this content (e.g. if it's API docs, build a UI that actually calls those endpoints):\n${parts.join('\n\n')}`
         }
         const prompt = [
-          'You are Off Grid, an on-device assistant with a LIVE, sandboxed code canvas built in.',
+          'You are Off Grid AI, an on-device assistant with a LIVE, sandboxed code canvas built in.',
           'The user wants you to BUILD something. Output the FINISHED, self-contained code as ONE fenced block — it runs immediately in the canvas beside the chat:',
           '- React app/component -> ```jsx — write idiomatic React (you may `import React, { useState } from "react"` and `export default function App() {…}`; the sandbox handles imports/exports). Define the main component as `App` or a default export.',
           '- a plain web page / interactive UI (no React) -> ```html — one complete document, inline all CSS and JS.',
@@ -690,7 +828,7 @@ export function setupIPC() {
           .map((m) => `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${m.content}`)
           .join('\n')
         const prompt = [
-          'You are Off Grid, a private, on-device assistant.',
+          'You are Off Grid AI, a private, on-device assistant.',
           'You can generate images on-device. If (and only if) the user is asking for a picture/image/logo/art to be CREATED, respond with ONLY a fenced block ```image\\n<a detailed image prompt>\\n``` and nothing else. For everything else, answer normally in text.',
           hist ? `Conversation so far:\n${hist}` : '',
           `User: ${query}`,
@@ -770,8 +908,10 @@ export function setupIPC() {
       if (streamId)
         event.sender.send('rag:stream', { streamId, type: 'step', step: { kind: 'searching' } })
       const db = getDB()
-      const tokens = tokenizeQuery(query)
-      const ftsQuery = tokens.length > 0 ? tokens.join(' OR ') : query
+      // Quote each token as an FTS5 phrase (via the shared safe builder) so a hyphenated word like
+      // "best-reviewed" can't reach MATCH as invalid syntax and throw "no such column: reviewed",
+      // which failed the whole retrieval. Preserves the any-term (OR) recall the retrieval expects.
+      const ftsQuery = ftsMatchExpression(query)
 
       let memories: any[] = []
       try {
@@ -1011,18 +1151,7 @@ export function setupIPC() {
         }
       } catch (e) {
         console.error('[RAG] LLM chat failed:', e)
-        return {
-          answer: 'Sorry, I could not generate a response right now.',
-          context: {
-            masterMemory: null,
-            memories,
-            messages,
-            summaries,
-            entities,
-            entityFacts,
-            unified: unifiedHits
-          }
-        }
+        throw e
       }
     }
   )
@@ -1047,17 +1176,6 @@ export function setupIPC() {
     return getMemoryRecordsForSession(sessionId)
   })
 
-  ipcMain.handle(
-    'db:get-entity-graph',
-    (_, appName?: string, focusEntityId?: number, edgeLimit: number = 200) => {
-      return getEntityGraph(appName, focusEntityId, edgeLimit)
-    }
-  )
-
-  ipcMain.handle('db:rebuild-entity-graph', () => {
-    rebuildEntityEdgesForAllSessions()
-    return true
-  })
   ipcMain.handle('db:delete-session', async (_, sessionId: string) => {
     const db = getDB()
     // Delete from new tables (messages will cascade due to foreign key)
@@ -1128,8 +1246,18 @@ export function setupIPC() {
     return true
   })
 
+  ipcMain.handle('permissions:open-local-network-settings', () => {
+    openLocalNetworkSettings()
+    return true
+  })
+
   ipcMain.handle('permissions:request-screen-recording', async () => {
     return await requestScreenRecordingPermission()
+  })
+
+  ipcMain.handle('permissions:relaunch', () => {
+    requestApplicationRelaunch(app)
+    return true
   })
 
   // === RAG CONVERSATION HANDLERS ===
@@ -1154,6 +1282,7 @@ export function setupIPC() {
     async (_, id: string, projectId: string | null) => {
       const { setRagConversationProject } = await import('./database')
       setRagConversationProject(id, projectId)
+      notifyRagConversationChanged({ conversationId: id, projectId })
       return true
     }
   )
@@ -1166,6 +1295,14 @@ export function setupIPC() {
     return getRagMessages(conversationId)
   })
 
+  ipcMain.handle(
+    'rag:update-message',
+    async (_e, conversationId: string, messageId: string, content: string, context?: unknown) => {
+      const { updateRagMessage } = await import('./database')
+      return updateRagMessage(conversationId, messageId, content, context)
+    }
+  )
+
   ipcMain.handle('rag:truncate-messages', async (_e, conversationId: string, keepCount: number) => {
     const { truncateRagMessages } = await import('./database')
     return truncateRagMessages(conversationId, keepCount)
@@ -1173,7 +1310,12 @@ export function setupIPC() {
   ipcMain.handle(
     'rag:add-message',
     (_, conversationId: string, role: 'user' | 'assistant', content: string, context?: any) => {
-      return addRagMessage(conversationId, role, content, context)
+      // A reply that was streamed is already named, and keeps that name: every paired device has been
+      // rendering it under this id, so the arriving record retires their live preview instead of
+      // standing beside it. Read from the one owner of "what this device is generating", so no caller
+      // has to pass it and none can forget to.
+      const streamed = role === 'assistant' ? takeChatStreamMessageId(conversationId) : undefined
+      return addRagMessage(conversationId, role, content, context, streamed)
     }
   )
 
@@ -1199,7 +1341,9 @@ export function setupIPC() {
   ipcMain.handle('app:version', () => app.getVersion())
 
   ipcMain.handle('settings:save', (_, key: string, value: any) => {
-    saveSetting(key, value)
+    if (key === COMPUTER_USE_SETTINGS_KEY) setComputerUseSettings(value)
+    else if (key === WEB_USE_SETTINGS_KEY) setWebUseSettings(value)
+    else saveSetting(key, value)
     console.log(`[IPC] Setting saved: ${key} =`, value)
     return true
   })
@@ -1210,6 +1354,12 @@ export function setupIPC() {
   ipcMain.handle('runtime:residency:set', (_e, modality: Modality, mode: ResidencyMode) =>
     setResidencyMode(modality, mode)
   )
+  ipcMain.handle('runtime:backend:get', () => getBackendPreferences())
+  ipcMain.handle('runtime:backend:set', async (_e, modality: BackendModality, preference: BackendPreference) => {
+    const next = setBackendPreference(modality, preference)
+    // A loaded engine keeps its present backend until its next load. The UI says so.
+    return next
+  })
   // Unload one modality's model from memory now (the "free RAM" button). Goes through
   // the same evict() seam as residency/shutdown; the engine reloads on next use.
   ipcMain.handle('runtime:unload', async (_e, modality: Modality) => {
@@ -1376,9 +1526,6 @@ export function setupIPC() {
           console.error(`[IPC] Failed to reprocess session ${session.id}:`, e)
         }
       }
-
-      // Rebuild entity edges from mentions across all entities
-      rebuildEntityEdgesForAllSessions()
     } else {
       // Additive reprocess: keep existing data, just re-run entity extraction on top
       console.log(
@@ -1436,6 +1583,7 @@ export function setupIPC() {
     const downloadFile = (url: string, destPath: string, modelName: string): Promise<void> => {
       return new Promise((resolve, reject) => {
         const file = fs.createWriteStream(destPath)
+        let rateSample: ProgressRateSample | undefined
 
         const request = (redirectUrl: string) => {
           https
@@ -1464,12 +1612,20 @@ export function setupIPC() {
               response.on('data', (chunk: Buffer) => {
                 downloaded += chunk.length
                 const percent = totalSize ? Math.round((downloaded / totalSize) * 100) : 0
+                const rate = sampleProgressRate(rateSample, {
+                  currentBytes: downloaded,
+                  sampledAtMs: Date.now()
+                })
+                rateSample = rate.sample
 
                 // Send progress to renderer
                 BrowserWindow.getAllWindows().forEach((win) => {
                   win.webContents.send('model:download-progress', {
                     modelName,
                     percent,
+                    downloadedBytes: downloaded,
+                    totalBytes: totalSize || undefined,
+                    bytesPerSecond: rate.bytesPerSecond,
                     downloadedMB: (downloaded / 1024 / 1024).toFixed(1),
                     totalMB: totalSize ? (totalSize / 1024 / 1024).toFixed(1) : '?'
                   })
@@ -1512,7 +1668,7 @@ export function setupIPC() {
     }
   })
 
-  // === OFF GRID MODEL CATALOG (text, vision, image, voice, transcription) ===
+  // === Off Grid AI MODEL CATALOG (text, vision, image, voice, transcription) ===
 
   // Model management lives in ./models-manager (one source of truth, shared with
   // the headless gateway HTTP admin endpoints). These IPC handlers are thin
@@ -1527,11 +1683,19 @@ export function setupIPC() {
   ipcMain.handle('models:search', (_, query: string, kind?: string) =>
     import('./models-manager').then((m) => m.searchModels(query, kind))
   )
+  ipcMain.handle('models:files', (_, modelId: string) =>
+    import('@offgrid/models').then((m) => m.getModelFiles(modelId))
+  )
 
-  ipcMain.handle('models:download', async (_, modelId: string) => {
+  ipcMain.handle('models:download', async (_, modelId: string, fileName?: string) => {
     const { downloadModel } = await import('./models-manager')
-    return downloadModel(modelId, (p) =>
-      BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('model:download-progress', p))
+    return downloadModel(
+      modelId,
+      (p) =>
+        BrowserWindow.getAllWindows().forEach((w) =>
+          w.webContents.send('model:download-progress', p)
+        ),
+      fileName
     )
   })
   ipcMain.handle('models:cancel-download', (_evt, modelId: string) =>
@@ -1545,8 +1709,8 @@ export function setupIPC() {
     import('./models-manager').then((m) => m.setActiveModel(modelId))
   )
   // Single activation seam: route any model to the right backend by its kind.
-  ipcMain.handle('models:activate', (_, modelId: string) =>
-    import('./models-manager').then((m) => m.activateModel(modelId))
+  ipcMain.handle('models:activate', (_, modelId: string, requestedKind?: string) =>
+    import('./models-manager').then((m) => m.activateModel(modelId, requestedKind))
   )
   ipcMain.handle('models:get-active', () =>
     import('./models-manager').then((m) => m.getActiveModel())
@@ -1560,6 +1724,14 @@ export function setupIPC() {
   )
   ipcMain.handle('models:active-modalities', () =>
     import('./models-manager').then((m) => m.getActiveModalities())
+  )
+  ipcMain.handle('models:computer-use-active', () =>
+    import('./vision/vision-task-model-strategy').then((m) =>
+      m.getComputerUseActiveModelProjection()
+    )
+  )
+  ipcMain.handle('models:web-use-active', () =>
+    import('./vision/vision-task-model-strategy').then((m) => m.getWebUseActiveModelProjection())
   )
 
   // Storage + download manager
@@ -1652,10 +1824,13 @@ export function setupIPC() {
       } catch {
         /* not running */
       }
-      // re-listens; falls back to a free port if the preferred one is held. Async, so catch a
-      // rejection on the promise rather than leaving it unhandled.
-      startModelServer().catch((e) => console.error('[model-server] restart failed', e))
-      return { success: true }
+      try {
+        await startModelServer()
+        return { success: true }
+      } catch (error) {
+        console.error('[model-server] restart failed', error)
+        return { success: false, error: error instanceof Error ? error.message : String(error) }
+      }
     }
     return { success: false, error: `cannot restart "${id}"` }
   })
@@ -1664,9 +1839,9 @@ export function setupIPC() {
     import('./setup').then((m) => m.estimateModelFit(modelId))
   )
 
-  // Open an https link in the user's default browser (e.g. a model's HF page).
+  // Open a safe web link or email draft in the user's default app.
   ipcMain.handle('app:open-external', async (_e, url: string) => {
-    if (!/^https:\/\//.test(url)) return { success: false }
+    if (!/^(https:\/\/|mailto:)/i.test(url)) return { success: false }
     const { shell } = await import('electron')
     await shell.openExternal(url)
     return { success: true }
@@ -1693,10 +1868,20 @@ export function setupIPC() {
   const imageJobPublisher = (
     snapshot: import('../shared/image-generation-contract').ImageGenerationJobContract
   ): void => {
+    if (snapshot.phase === 'running') {
+      noteChatStreamImageProgress(
+        snapshot.conversationId,
+        snapshot.progress?.step,
+        snapshot.progress?.total
+      )
+    } else if (snapshot.phase === 'succeeded') {
+      endChatStreamForConversation(snapshot.conversationId, 'record_pending')
+    } else if (snapshot.phase === 'failed' || snapshot.phase === 'cancelled') {
+      endChatStreamForConversation(snapshot.conversationId, 'discarded')
+    }
     for (const window of BrowserWindow.getAllWindows()) {
       if (window.isDestroyed()) continue
       window.webContents.send('imagegen:job-state', snapshot)
-      if (snapshot.progress) window.webContents.send('imagegen:progress', snapshot.progress)
     }
   }
   const imageConversationPublisher = (conversationId: string): void => {
@@ -1728,7 +1913,20 @@ export function setupIPC() {
       }
     ) => {
       const imageGenerationJobs = await imageJobPublisherReady
-      return imageGenerationJobs.start(params)
+      // Admission belongs to the job service. Reject before changing the conversation stream, so a
+      // second request cannot reset or discard the identity of the image that is already running.
+      imageGenerationJobs.assertCanStart()
+      beginChatImageStream(params.conversationId)
+      try {
+        const messageId = currentChatStreamMessageId(params.conversationId)
+        return await imageGenerationJobs.start({
+          ...params,
+          ...(messageId ? { messageId } : {})
+        })
+      } catch (error) {
+        endChatStreamForConversation(params.conversationId, 'discarded')
+        throw error
+      }
     }
   )
 
@@ -1737,10 +1935,13 @@ export function setupIPC() {
     return imageGenerationJobs.cancel()
   })
 
-  ipcMain.handle('imagegen:conversation-persisted', async (_event, conversationId: string) => {
-    const imageGenerationJobs = await imageJobPublisherReady
-    return imageGenerationJobs.acknowledgeConversation(conversationId)
-  })
+  ipcMain.handle(
+    'imagegen:conversation-persisted',
+    async (_event, conversationId: string, messageId?: string) => {
+      const imageGenerationJobs = await imageJobPublisherReady
+      return imageGenerationJobs.acknowledgeConversation(conversationId, messageId)
+    }
+  )
 
   ipcMain.handle(
     'imagegen:list',
@@ -1753,10 +1954,6 @@ export function setupIPC() {
   ipcMain.handle('imagegen:style-thumbs', async () => {
     const { listStyleThumbs } = await import('./imagegen')
     return listStyleThumbs()
-  })
-  ipcMain.handle('imagegen:make-style-thumb', async (_e, key: string, prompt: string) => {
-    const { generateStyleThumb } = await import('./imagegen')
-    return generateStyleThumb(key, prompt)
   })
   ipcMain.handle('imagegen:list-loras', async () => {
     const { listLoras } = await import('./imagegen')
@@ -1815,6 +2012,7 @@ export function setupIPC() {
       query: string,
       history?: { role: string; content: string }[],
       opts?: {
+        assistantOnly?: boolean
         connectors?: boolean
         conversationId?: string
         projectId?: string
@@ -1831,47 +2029,98 @@ export function setupIPC() {
       const sender = event.sender
       // Non-stream fallback (no streamId): buffer, no live deltas (matches streamAnswer).
       if (!streamId) {
-        return modalityQueue.run(CHAT_JOB, () => toolChat(query, history || [], opts || {}))
+        return modalityQueue.run(CHAT_JOB, async () => {
+          const { result, modelName } = await runChatWithFallback(() =>
+            toolChat(query, history || [], opts || {})
+          )
+          return modelName ? { ...result, metrics: { ...result.metrics, modelName } } : result
+        })
       }
       // Streaming: same channel/queue/abort as streamAnswer, so a tools turn streams
       // thinking -> tool-call activity -> answer, and the stop button (rag:cancel) aborts it.
       const controller = new AbortController()
       streamControllers.set(streamId, controller)
+      bindChatStream(streamId, opts.conversationId, opts.thinking ? 'thinking' : 'waiting')
+      let continuesAsImage = false
+      let toolStarted = false
       try {
-        return await modalityQueue.run(CHAT_JOB, () =>
-          toolChat(query, history || [], {
-            ...opts,
-            thinking: opts.thinking,
-            signal: controller.signal,
-            onDelta: (text, kind) => {
-              try {
-                sender.send('rag:stream', { streamId, type: kind, text })
-              } catch {
-                /* window gone */
-              }
-            },
-            onStep: (call) => {
-              try {
-                sender.send('rag:stream', {
-                  streamId,
-                  type: 'step',
-                  step: { kind: 'running_tool', name: call.name }
-                })
-              } catch {
-                /* window gone */
-              }
-            },
-            onToolResult: (call) => {
-              try {
-                sender.send('rag:stream', { streamId, type: 'tool_result', call })
-              } catch {
-                /* window gone */
+        const { result, modelName } = await modalityQueue.run(CHAT_JOB, () =>
+          runChatWithFallback(
+            () =>
+              toolChat(query, history || [], {
+                ...opts,
+                thinking: opts.thinking,
+                signal: controller.signal,
+                onDelta: (text, kind) => {
+                  noteChatStreamDelta(streamId, text, kind)
+                  try {
+                    sender.send('rag:stream', { streamId, type: kind, text })
+                  } catch {
+                    /* window gone */
+                  }
+                },
+                onStep: (call) => {
+                  toolStarted = true
+                  noteChatStreamToolStarted(streamId, call.name)
+                  try {
+                    sender.send('rag:stream', {
+                      streamId,
+                      type: 'step',
+                      step: { kind: 'running_tool', name: call.name }
+                    })
+                  } catch {
+                    /* window gone */
+                  }
+                },
+                onActivity: (activity) => {
+                  try {
+                    sender.send('rag:stream', { streamId, type: 'step', step: activity })
+                  } catch {
+                    /* window gone */
+                  }
+                },
+                onToolResult: (call) => {
+                  toolStarted = true
+                  noteChatStreamToolCompleted(streamId, call.name, call.result, call.status)
+                  try {
+                    sender.send('rag:stream', { streamId, type: 'tool_result', call })
+                  } catch {
+                    /* window gone */
+                  }
+                }
+              }),
+            {
+              signal: controller.signal,
+              canRetry: () => !toolStarted,
+              onModelChanged: (failed, next) => {
+                resetChatStreamPartial(streamId)
+                try {
+                  sender.send('rag:stream', {
+                    streamId,
+                    type: 'step',
+                    step: { kind: 'model_changed', failed, next }
+                  })
+                } catch {
+                  /* window gone */
+                }
               }
             }
-          })
+          )
         )
+        if (result.imageRequests.length > 0) {
+          continuesAsImage = continueChatStreamWithImage(streamId)
+        }
+        return modelName ? { ...result, metrics: { ...result.metrics, modelName } } : result
       } finally {
         streamControllers.delete(streamId)
+        if (!continuesAsImage) {
+          endChatStream(streamId, controller.signal.aborted ? 'discarded' : 'record_pending')
+          try {
+            sender.send('rag:stream', { streamId, type: 'done' })
+          } catch {
+            /* window gone */
+          }
+        }
       }
     }
   )
@@ -1885,6 +2134,28 @@ export function setupIPC() {
     const { llm } = await import('./llm')
     await llm.setSettings(s)
     return llm.getSettings()
+  })
+  ipcMain.handle('vision:remote-server:get', async () => {
+    const { getRemoteVisionServerSettings } = await import('./vision/remote-vision-server')
+    return getRemoteVisionServerSettings()
+  })
+  ipcMain.handle(
+    'vision:remote-server:set',
+    async (_e, update: import('../shared/remote-vision-server').RemoteVisionServerUpdate) => {
+      const { setRemoteVisionServerSettings } = await import('./vision/remote-vision-server')
+      return setRemoteVisionServerSettings(update)
+    }
+  )
+  ipcMain.handle(
+    'vision:remote-server:test',
+    async (_e, update: import('../shared/remote-vision-server').RemoteVisionServerUpdate) => {
+      const { testRemoteVisionServer } = await import('./vision/remote-vision-server')
+      return testRemoteVisionServer(update)
+    }
+  )
+  ipcMain.handle('vision:remote-server:remove', async (_e, serverId: string) => {
+    const { removeRemoteVisionServer } = await import('./vision/remote-vision-server')
+    return removeRemoteVisionServer(serverId)
   })
   // Cleanly unload the chat engine so it stops holding the model port (frees it for LM Studio /
   // another tool without force-quitting the app). Returns whether the port was actually freed.
@@ -1932,29 +2203,22 @@ export function setupIPC() {
     const { processUpload } = await import('./files')
     return processUpload(name, bytes)
   })
-  // An on-disk uploaded file as a data URL, so the chat viewer can render a PDF
-  // natively (Chromium's built-in viewer) instead of dumping parsed text.
+  // An allowed local media file as a data URL. The chat viewer uses this for uploaded PDFs, and
+  // artifact download uses it to make exported HTML images work outside the app. Admission matches
+  // ogcapture: so this renderer-reachable handler cannot read arbitrary local files.
   ipcMain.handle('files:data-url', async (_e, p?: string) => {
     try {
       const fs = await import('fs')
       const path = await import('path')
       const { app } = await import('electron')
-      // Only ever serve files inside the app's uploads dir — this handler is
-      // renderer-reachable, so reading an arbitrary path would be a file-read /
-      // exfiltration primitive. Resolve + boundary-check before touching disk.
-      const root = path.resolve(app.getPath('userData'), 'uploads')
+      const { localMediaRoots } = await import('./media-roots')
+      const { isPathAllowed } = await import('./media-range')
+      const { mimeForExt } = await import('./mime')
       const resolved = path.resolve(p ?? '')
-      if (resolved !== root && !resolved.startsWith(root + path.sep)) return null
+      if (!isPathAllowed(resolved, localMediaRoots(app.getPath('userData')))) return null
       const buf = await fs.promises.readFile(resolved)
       const ext = (resolved.split('.').pop() || '').toLowerCase()
-      const mime =
-        ext === 'pdf'
-          ? 'application/pdf'
-          : ext === 'png'
-            ? 'image/png'
-            : /^jpe?g$/.test(ext)
-              ? 'image/jpeg'
-              : 'application/octet-stream'
+      const mime = mimeForExt(ext)
       return `data:${mime};base64,${buf.toString('base64')}`
     } catch {
       return null
@@ -1982,50 +2246,66 @@ export function setupIPC() {
     const { skillsDir } = await import('./skills')
     return skillsDir()
   })
+  ipcMain.handle(
+    'filesystem:pick-folder',
+    async (_event, input?: { title?: string; defaultPath?: string }) => {
+      const { dialog } = await import('electron')
+      const result = await dialog.showOpenDialog({
+        title: input?.title ?? 'Choose a folder',
+        ...(input?.defaultPath ? { defaultPath: input.defaultPath } : {}),
+        properties: ['openDirectory', 'createDirectory']
+      })
+      return result.canceled ? null : (result.filePaths[0] ?? null)
+    }
+  )
 
   // Which STT engine + model would run right now (provenance) + the installed transcription
   // models a picker can switch to (via the existing models:set-active-modal — this only lists).
   ipcMain.handle('transcription:active-info', async () => {
-    const { getActiveTranscriptionInfo, transcriptionModelOptions } =
+    const { getActiveTranscriptionInfo, transcriptionActiveInfo } =
       await import('./transcription/select')
-    const { listInstalled } = await import('./models-manager')
-    const { modelsByKind } = await import('@offgrid/models')
-    const info = getActiveTranscriptionInfo()
-    const installedIds = new Set(await listInstalled())
+    const { getCatalog } = await import('./models-manager')
+    const { getSetting } = await import('./database')
+    const catalog = await getCatalog()
     const installed = (
-      modelsByKind('transcription') as Array<{
+      catalog.models as Array<{
         id: string
+        familyId?: string
         name?: string
-        files: Array<{ name: string }>
+        kind?: string
+        downloaded?: boolean
+        files?: Array<{ name: string; downloaded?: boolean }>
       }>
-    ).filter((entry) => installedIds.has(entry.id))
-    return { ...info, options: transcriptionModelOptions(info.modelId, installed) }
+    ).filter(
+      (model) =>
+        model.kind === 'transcription' &&
+        (model.downloaded === true || model.files?.every((file) => file.downloaded === true))
+    )
+    return transcriptionActiveInfo(
+      getActiveTranscriptionInfo(),
+      installed.map((model) => ({
+        id: model.id,
+        familyId: model.familyId,
+        name: model.name,
+        files: model.files ?? []
+      })),
+      getSetting('sttLanguage', 'auto')
+    )
   })
 
-  // --- Voice input (STT via the active engine: whisper default / Parakeet opt-in) ---
-  ipcMain.handle('voice:transcribe', async (_e, audio: ArrayBuffer | Uint8Array, ext = 'webm') => {
-    const fs = await import('fs')
-    const path = await import('path')
-    const os = await import('os')
-    // Route through the active-model-implied engine so a Parakeet selection is honored
-    // (falls back to whisper when Parakeet isn't installed).
-    const { getActiveTranscription } = await import('./transcription/select')
-    const transcriptionService = getActiveTranscription()
-    // Respect a Uint8Array's view bounds (byteOffset/length) — Buffer.from on the
-    // backing ArrayBuffer would copy the WHOLE buffer, corrupting a sliced view.
-    const buf = ArrayBuffer.isView(audio)
-      ? Buffer.from(audio.buffer, audio.byteOffset, audio.byteLength)
-      : Buffer.from(audio as ArrayBuffer)
-    // ext is renderer-controlled — strip anything but alphanumerics so it can't
-    // contain path separators / traversal sequences in the temp filename.
-    const safeExt = (ext || 'webm').replace(/[^a-zA-Z0-9]/g, '').slice(0, 10) || 'webm'
-    const tmp = path.join(os.tmpdir(), `offgrid-mic-${Date.now()}.${safeExt}`)
-    await fs.promises.writeFile(tmp, buf)
-    try {
-      return (await transcriptionService.transcribe({ path: tmp })).text
-    } finally {
-      fs.promises.unlink(tmp).catch(() => {})
-    }
+  /**
+   * Keep the image a generation will be based on, and give it a name the mesh can use.
+   *
+   * The user picks an init image from their own disk. Referring to it there is not enough for two
+   * reasons: the file can move or be deleted the moment the turn ends, and its path means nothing on
+   * any other device. So it is copied into the app's own storage and given a uuid, which is what lets
+   * it travel as an ordinary attachment on the message that used it.
+   */
+  ipcMain.handle('imagegen:keep-init-image', async (_e, sourcePath: string) => {
+    const { preserveGeneratedImageSource } = await import('./imagegen')
+    const id = crypto.randomUUID()
+    const kept = preserveGeneratedImageSource(id, sourcePath)
+    return kept ? { id, path: kept } : null
   })
 
   ipcMain.handle('imagegen:pick-image', async (e) => {

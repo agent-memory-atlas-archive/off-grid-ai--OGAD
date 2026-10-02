@@ -21,19 +21,13 @@ export interface CrashRecoveryInput {
   wasIntentional: boolean
   /** Engine deliberately parked (e.g. image generation owns the memory). */
   paused: boolean
-  /** Exit signal, if any. A user/OS kill must stay dead. */
+  /** Exit signal, if any. An external termination is recoverable; app stop intent is tracked separately. */
   signal: NodeJS.Signals | null
 }
 
-/**
- * True only for a GENUINE crash of a previously healthy engine - the one case where
- * respawning is both safe and useful.
- *
- * Deliberate kills are excluded so that killing llama-server actually stops it;
- * otherwise it respawns and cannot be stopped without killing the whole app.
- */
+/** Recover an unexpected exit, including OS signals, only after a healthy launch. */
 export function shouldAutoRecover(i: CrashRecoveryInput): boolean {
   if (i.probing) return false
   if (i.wasIntentional || i.paused) return false
-  return i.signal !== 'SIGKILL' && i.signal !== 'SIGTERM'
+  return true
 }

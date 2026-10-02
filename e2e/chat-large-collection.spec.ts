@@ -15,7 +15,7 @@ let userDataDir: string
 
 async function finishOnboarding(): Promise<void> {
   for (let step = 0; step < 6; step += 1) {
-    const button = page.getByRole('button', { name: /Continue|Start using Off Grid/i })
+    const button = page.getByRole('button', { name: /Continue|Start using Off Grid AI/i })
     if (!(await button.isVisible().catch(() => false))) return
     await button.click()
   }
@@ -57,7 +57,11 @@ test.beforeAll(async () => {
     }
   })
 
-  await page.getByTitle('Chat').click()
+  // By role and name, not by title: the sidebar opens EXPANDED, and App.tsx sets
+  // title={!sidebarOpen ? item.label : undefined} - the title attribute belongs to the collapsed rail
+  // only. An expanded nav carries its label as visible text, so getByTitle waits 30s for an attribute
+  // the app is right not to render.
+  await page.getByRole('button', { name: 'Chat', exact: true }).click()
   await expect(page.getByPlaceholder('Search conversations…')).toBeVisible()
 })
 

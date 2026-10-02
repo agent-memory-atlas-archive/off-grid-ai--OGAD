@@ -1,347 +1,242 @@
-// On-device text-to-speech via Kokoro-82M (open-weight, Apache-2.0, multilingual).
-//
-// Kokoro runs through kokoro-js, which uses @huggingface/transformers' bundled
-// onnxruntime-node. The main process ALSO loads @xenova/transformers (for
-// embeddings), whose onnxruntime-node is a different build — and loading two
-// native ORT runtimes in one process throws "Session already disposed". So we run
-// Kokoro in a short-lived subprocess (Electron-as-Node) instead: it isolates the
-// ORT runtime AND means the model is only resident while speaking, then freed —
-// swap-in / swap-out rather than a permanent ~330MB resident session.
+import { beginRuntimeBackend } from './runtime-backends'
+// Local text-to-speech through the pinned React Native ExecuTorch Kokoro runtime.
+// The runtime lives in its own repository and runs as a child process, so it does
+// not add another native inference engine to Electron's main process.
 
-import { spawn, type ChildProcess } from 'child_process'
-import path from 'path'
+import {
+  ExecutorchSpeechRuntime,
+  prepareVoice,
+  speechCapabilities,
+  type DownloadProgress
+} from '@offgrid/executorch-speech'
+import { kokoroVoiceLabel, speechLanguageLabel, type RuntimeSpeechVoice } from '@offgrid/speech'
 import fs from 'fs'
+import { recordAIRequest } from './ai-request-log'
 import os from 'os'
+import path from 'path'
 import { getActiveModal } from './active-models'
-import { applicationCodeFile, modelsDir } from './runtime-env'
-import { getResidencyMode } from './runtime-residency'
-import type { ManagedRuntime } from './runtime-manager'
-import { DEFAULT_VOICE, chooseVoice, isTeardownNoise, parseServeLine } from './tts-logic'
+import { getActiveRemoteVisionServerForModality } from './vision/remote-vision-server'
+import { listRemoteVoices, synthesizeRemoteVoice } from './remote-media-runtime'
 import { writeDiagnosticLog } from './diagnostics-log'
+import { modelsDir, resourceDirs } from './runtime-env'
+import type { ManagedRuntime } from './runtime-manager'
+import { chooseVoice, DEFAULT_VOICE } from './tts-logic'
+import { OnnxSpeechRuntime } from './tts-onnx'
+
+const LANGUAGE_TAGS: Readonly<Record<string, string>> = {
+  'en-us': 'en-US',
+  'en-gb': 'en-GB'
+}
+const SUPPORTED_VOICES = new Set(speechCapabilities.voices.map(({ id }) => id))
+const ONNX_VOICES = new Set(
+  speechCapabilities.voices
+    .filter(({ language }) => language === 'en-us' || language === 'en-gb')
+    .map(({ id }) => id)
+)
+const onnxSpeech = new OnnxSpeechRuntime()
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function workerPath(): string {
-  const found = applicationCodeFile('tts-worker.js', 'tts-worker.mjs')
-  if (!found) throw new Error('TTS worker not found in trusted application resources.')
-  return found
+function executablePath(): string {
+  const candidates = [
+    ...resourceDirs().map((root) => path.join(root, 'bin', 'executorch-speech')),
+    path.resolve(process.cwd(), '../executorch-speech/native/bin/executorch-speech')
+  ]
+  const executable = candidates.find((candidate) => fs.existsSync(candidate))
+  if (!executable) throw new Error('The local voice runtime is not installed in this build.')
+  return executable
 }
 
-function workerEnvironment(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    ELECTRON_RUN_AS_NODE: '1',
-    OFFGRID_TTS_CACHE_DIR: path.join(modelsDir(), '.cache', 'kokoro'),
-    OFFGRID_TTS_MODEL_FILE: path.join(modelsDir(), 'kokoro-82m-v1.0.onnx')
-  }
-  delete env.ELECTRON_NO_ASAR
-  return env
+function cacheDirectory(): string {
+  return path.join(modelsDir(), '.cache', 'executorch-speech')
 }
 
-// Run the TTS worker in its own process. The worker reliably produces its output
-// (stdout for voices, the WAV file for speak) but then crashes during teardown
-// with "mutex lock failed" — onnxruntime-node's thread-pool destructor under
-// Electron-as-Node. That crash is AFTER the work is done, so we never reject on
-// exit code here; callers validate the actual output and ignore the teardown noise.
-function runWorker(
-  args: string[],
-  stdin?: string
-): Promise<{ out: string; err: string; code: number }> {
-  return new Promise((resolve, reject) => {
-    // No `cwd`: the worker gets an ABSOLUTE script path and Node resolves its deps
-    // relative to that file, not cwd. A cwd of the app root breaks the packaged build -
-    // app.getAppPath() is `app.asar` (a FILE), and spawn throws ENOTDIR on a non-dir cwd.
-    // Matches how STT spawns (no cwd). This was the live "spawn ENOTDIR" TTS failure.
-    const mode = args[0] || 'unknown'
-    const worker = workerPath()
-    writeDiagnosticLog('tts', 'worker.spawn', { mode, worker, runtime: process.execPath })
-    const child = spawn(process.execPath, [worker, ...args], {
-      env: workerEnvironment()
-    })
-    let out = ''
-    let err = ''
-    child.stdout.on('data', (d: Buffer) => (out += d.toString()))
-    child.stderr.on('data', (d: Buffer) => (err += d.toString()))
-    child.on('error', (error) => {
-      writeDiagnosticLog('tts', 'worker.spawn_failed', { mode, error: error.message }, 'error')
-      reject(error)
-    })
-    child.on('close', (code, signal) => {
-      writeDiagnosticLog('tts', 'worker.closed', {
-        mode,
-        code,
-        signal,
-        stderr: err.trim() || undefined
-      })
-      resolve({ out, err, code: code ?? 0 })
-    })
-    if (stdin !== undefined) {
-      child.stdin.write(stdin)
-      child.stdin.end()
-    }
-  })
+function bundledCacheDirectory(): string | undefined {
+  return [
+    ...resourceDirs().map((root) => path.join(root, 'speech-assets')),
+    path.resolve(process.cwd(), '../executorch-speech/generated/default-assets')
+  ].find((candidate) => fs.existsSync(path.join(candidate, 'index.json')))
+}
+
+function runtime(): ExecutorchSpeechRuntime {
+  return new ExecutorchSpeechRuntime(cacheDirectory(), executablePath(), bundledCacheDirectory())
+}
+
+async function synthesizeExecutorch(input: Parameters<ExecutorchSpeechRuntime['synthesize']>[0]): Promise<void> {
+  await onnxSpeech.close()
+  const status = beginRuntimeBackend('speech', 'Kokoro')
+  try {
+    // This bundled native target links the XNNPACK CPU backend only.
+    status.ready('CPU (ExecuTorch)')
+    await runtime().synthesize(input)
+  } catch (error) {
+    status.fail(error)
+    throw error
+  } finally { status.stop() }
 }
 
 let busy = false
 
-// ---- resident mode: a persistent worker that keeps Kokoro warm ----------------
-// In 'resident' mode we spawn ONE long-lived worker ('serve') that loads the model
-// once and answers many synth requests over stdin/stdout (NDJSON). evict() kills it
-// to free ~330MB; the queue re-warms it (resident) or leaves it dead (on-demand,
-// where each synth uses the one-shot path below instead).
-let serveChild: ChildProcess | null = null
-let serveReady: Promise<void> | null = null
-let serveStdout = ''
-let reqSeq = 0
-const servePending = new Map<string, { resolve: () => void; reject: (e: Error) => void }>()
-// Free the ~330MB worker after this long idle even in resident mode - nothing in the
-// queue evicts 'tts' today (only image/chat declare evicts), so without this the
-// worker would live for the whole session. Mirrors sd-server / whisper-server idle-evict.
-const SERVE_IDLE_MS = 5 * 60_000
-const SERVE_REQ_TIMEOUT_MS = 60_000 // a single synth shouldn't take longer; guards a hung worker
-let serveIdleTimer: ReturnType<typeof setTimeout> | null = null
-function armIdleEvict(): void {
-  if (serveIdleTimer) clearTimeout(serveIdleTimer)
-  serveIdleTimer = setTimeout(() => stopServe(), SERVE_IDLE_MS)
-  serveIdleTimer.unref()
-}
-function clearIdleEvict(): void {
-  if (serveIdleTimer) {
-    clearTimeout(serveIdleTimer)
-    serveIdleTimer = null
-  }
-}
-
-function startServe(): Promise<void> {
-  if (serveReady !== null) {
-    writeDiagnosticLog('tts', 'resident.reused')
-    return serveReady
-  }
-  serveReady = new Promise<void>((resolve, reject) => {
-    // No `cwd` - see runWorker: an asar-file cwd throws ENOTDIR in the packaged build.
-    const worker = workerPath()
-    writeDiagnosticLog('tts', 'resident.starting', { worker, runtime: process.execPath })
-    const child = spawn(process.execPath, [worker, 'serve'], {
-      env: workerEnvironment()
-    })
-    serveChild = child
-    child.stdout.setEncoding('utf8')
-    child.stdout.on('data', (d: string) => {
-      serveStdout += d
-      let nl: number
-      while ((nl = serveStdout.indexOf('\n')) >= 0) {
-        const line = serveStdout.slice(0, nl)
-        serveStdout = serveStdout.slice(nl + 1)
-        const msg = parseServeLine(line)
-        if (!msg) {
-          writeDiagnosticLog('tts', 'resident.protocol_ignored', { line }, 'warn')
-          continue
-        }
-        if (msg.ready) {
-          writeDiagnosticLog('tts', 'resident.ready', { pid: child.pid })
-          resolve()
-          continue
-        }
-        const p = msg.id != null ? servePending.get(msg.id) : undefined
-        if (p && msg.id != null) {
-          servePending.delete(msg.id)
-          if (msg.ok) {
-            writeDiagnosticLog('tts', 'resident.request_completed', { requestId: msg.id })
-            p.resolve()
-          } else {
-            writeDiagnosticLog(
-              'tts',
-              'resident.request_failed',
-              { requestId: msg.id, error: msg.error || 'tts worker error' },
-              'error'
-            )
-            p.reject(new Error(msg.error || 'tts worker error'))
-          }
-        }
-      }
-    })
-    child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (data: string) => {
-      for (const line of data.split(/\r?\n/).filter(Boolean)) {
-        writeDiagnosticLog('tts.worker', 'stderr', { message: line }, 'warn')
-      }
-    })
-    child.on('error', (error) => {
-      writeDiagnosticLog('tts', 'resident.spawn_failed', { error: error.message }, 'error')
-      reject(error)
-    })
-    child.on('close', (code, signal) => {
-      writeDiagnosticLog('tts', 'resident.closed', { code, signal })
-      serveChild = null
-      serveReady = null
-      for (const p of servePending.values()) p.reject(new Error('tts worker exited'))
-      servePending.clear()
-    })
-  })
-  return serveReady
-}
-
-function stopServe(): void {
-  clearIdleEvict()
-  const c = serveChild
-  serveChild = null
-  serveReady = null
-  if (c) {
-    writeDiagnosticLog('tts', 'resident.stopping', { pid: c.pid })
-    try {
-      c.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
-/** Synthesize on the resident worker (model stays warm across calls). Bounded by a
- *  timeout so a hung worker rejects (and frees `busy`) instead of wedging TTS. */
-async function synthResident(text: string, voice: string, out: string): Promise<void> {
-  await startServe()
-  clearIdleEvict() // busy now; re-arm when the request settles
-  const c = serveChild
-  if (!c?.stdin) throw new Error('tts worker not running')
-  const id = String(++reqSeq)
-  writeDiagnosticLog('tts', 'resident.request_started', {
-    requestId: id,
-    chars: text.length
-  })
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        servePending.delete(id)
-        writeDiagnosticLog('tts', 'resident.request_timed_out', { requestId: id }, 'error')
-        reject(new Error('tts worker timed out'))
-      }, SERVE_REQ_TIMEOUT_MS)
-      servePending.set(id, {
-        resolve: () => {
-          clearTimeout(timer)
-          resolve()
-        },
-        reject: (e) => {
-          clearTimeout(timer)
-          reject(e)
-        }
-      })
-      c.stdin!.write(JSON.stringify({ id, text: text.slice(0, 2000), voice, out }) + '\n')
-    })
-  } finally {
-    armIdleEvict() // idle again - free the model after SERVE_IDLE_MS
-  }
-}
-
-/** TTS as a ManagedRuntime for the shared residency seam — same interface as every
- *  other engine. evict frees the resident worker; warm preloads it (resident); on-
- *  demand release just ensures no worker lingers (each synth spawns one-shot). */
+/** The ONNX worker owns accelerated model memory and can be terminated on eviction. */
 export const ttsRuntime: ManagedRuntime = {
   modality: 'tts',
-  evict: () => stopServe(),
-  warm: () => {
-    writeDiagnosticLog('tts', 'runtime.warm_requested')
-    void startServe().catch((error) => {
-      writeDiagnosticLog('tts', 'runtime.warm_failed', { error: messageOf(error) }, 'error')
-    })
-  },
-  release: () => stopServe()
+  evict: () => onnxSpeech.close(),
+  warm: () => onnxSpeech.prepare(DEFAULT_VOICE).then(() => undefined),
+  release: () => onnxSpeech.close()
+}
+
+/** Runtime-owned catalogue. Listing it never downloads model assets. */
+export async function listVoiceCatalog(
+  onProgress?: (progress: number) => void
+): Promise<RuntimeSpeechVoice[]> {
+  const remote = getActiveRemoteVisionServerForModality('voice')
+  if (remote) return remote.provider === 'openrouter' ? listRemoteVoices(remote) : []
+  const voices = speechCapabilities.voices.map(({ id, language }) => ({
+    id,
+    label: kokoroVoiceLabel(id),
+    language: LANGUAGE_TAGS[language] ?? language,
+    languageLabel: speechLanguageLabel(LANGUAGE_TAGS[language] ?? language)
+  }))
+  onProgress?.(100)
+  return voices
+}
+
+export async function listVoices(onProgress?: (progress: number) => void): Promise<string[]> {
+  return (await listVoiceCatalog(onProgress)).map(({ id }) => id)
+}
+
+/** Download and validate the selected voice once. Cached assets return immediately. */
+export async function prepareVoiceAssets(
+  voice: string,
+  onProgress?: (progress: DownloadProgress) => void
+): Promise<void> {
+  if (ONNX_VOICES.has(voice)) {
+    try {
+      await onnxSpeech.prepare(voice, onProgress)
+      return
+    } catch (error) {
+      writeDiagnosticLog('tts', 'onnx.prepare.failed', { error: messageOf(error) }, 'warn')
+    }
+  }
+  await prepareVoice(cacheDirectory(), voice, onProgress, undefined, bundledCacheDirectory())
 }
 
 /** Synthesize speech for `text`; returns a WAV data URL. */
-export async function synthesize(text: string, voice?: string): Promise<{ dataUrl: string }> {
-  // Caller's voice wins; else the user-selected speech voice IF it's a real voice
-  // name (e.g. "af_heart") and not a model id; else default. Guarded so picking a
-  // model in the UI can never feed the engine an invalid voice.
-  const sel = getActiveModal('speech')
-  voice = chooseVoice(voice, sel)
-  // Markdown -> speakable text is owned by the renderer (src/renderer/.../speakable.ts,
-  // which reuses the chat UI's markdown AST). This service synthesizes PLAIN text only.
-  const t = (text || '').trim()
-  if (!t) throw new Error('Nothing to speak.')
-  if (busy) throw new Error('Already generating speech — please wait.')
-  busy = true
-  const out = path.join(os.tmpdir(), `offgrid-tts-${process.pid}-${Date.now()}.wav`)
-  const t0 = Date.now()
-  const resident = getResidencyMode('tts') === 'resident'
-  const requestId = `speak-${process.pid}-${t0}`
-  writeDiagnosticLog('tts', 'request.started', {
-    requestId,
-    chars: t.length,
-    mode: resident ? 'resident' : 'on-demand'
-  })
-  try {
-    // Resident: reuse the warm worker (fast, model stays loaded). On-demand: spawn
-    // a one-shot worker that frees the ~330MB model on exit. Same output either way.
-    let err = ''
-    if (resident) {
-      try {
-        await synthResident(t, voice || DEFAULT_VOICE, out)
-      } catch (e) {
-        err = (e as Error).message
+export async function synthesize(
+  text: string,
+  voice?: string,
+  onProgress?: (progress: DownloadProgress) => void
+): Promise<{ dataUrl: string }> {
+  return recordAIRequest(
+    { modality: 'tts', source: 'Speech synthesis', request: { text, voice } },
+    async (log) => {
+      const remote = getActiveRemoteVisionServerForModality('voice')
+      if (remote) {
+        log.update({ model: remote.selectedModel, backend: 'Remote' })
+        if (remote.provider !== 'openrouter') return synthesizeRemoteVoice(remote, text, voice)
+        const voices = await listRemoteVoices(remote)
+        const chosenVoice = voices.find((candidate) => candidate.id === voice)?.id ?? voices[0]?.id
+        if (!chosenVoice) throw new Error('This remote model has no available speakers.')
+        log.update({ effectiveRequest: { text, voice: chosenVoice } })
+        return synthesizeRemoteVoice(remote, text, chosenVoice)
       }
-    } else {
-      ;({ err } = await runWorker(['speak', out, voice || DEFAULT_VOICE], t))
-    }
-    // Success = a real WAV on disk (>44-byte header), regardless of exit code.
-    let wav: Buffer | null = null
-    let size = 0
-    try {
-      const buf = await fs.promises.readFile(out)
-      size = buf.length
-      if (buf.length > 44) wav = buf
-    } catch {
-      /* no file */
-    }
-    writeDiagnosticLog('tts', 'request.worker_finished', {
-      requestId,
-      durationMs: Date.now() - t0,
-      mode: resident ? 'resident' : 'on-demand',
-      wavBytes: size,
-      stderr: err.trim() || undefined
-    })
-    if (!wav) throw new Error(err.trim() || 'tts worker failed')
-    writeDiagnosticLog('tts', 'request.completed', {
-      requestId,
-      durationMs: Date.now() - t0,
-      wavBytes: wav.length
-    })
-    return { dataUrl: `data:audio/wav;base64,${wav.toString('base64')}` }
-  } catch (e) {
-    writeDiagnosticLog(
-      'tts',
-      'request.failed',
-      { requestId, durationMs: Date.now() - t0, error: messageOf(e) },
-      'error'
-    )
-    throw e
-  } finally {
-    busy = false
-    fs.promises.unlink(out).catch(() => {})
-  }
-}
+      const selected = getActiveModal('speech')
+      const requestedVoice = chooseVoice(voice, selected) || DEFAULT_VOICE
+      // Older releases persisted Kokoro voices that the ExecuTorch catalogue does not contain.
+      // Keep those profiles able to speak after upgrade; the runtime manifest remains the voice SSOT.
+      const chosenVoice = SUPPORTED_VOICES.has(requestedVoice) ? requestedVoice : DEFAULT_VOICE
+      const input = (text || '').trim()
+      log.update({
+        model: selected ?? 'Kokoro',
+        effectiveRequest: { text: input.slice(0, 2000), voice: chosenVoice }
+      })
+      if (!input) throw new Error('Nothing to speak.')
+      if (busy) throw new Error('Already generating speech. Please wait.')
 
-let voicesCache: string[] | null = null
+      busy = true
+      const requestId = `speak-${process.pid}-${Date.now()}`
+      const outputPath = path.join(os.tmpdir(), `offgrid-tts-${requestId}.wav`)
+      const startedAt = Date.now()
+      writeDiagnosticLog('tts', 'request.started', {
+        requestId,
+        chars: input.length,
+        engine: ONNX_VOICES.has(chosenVoice) ? 'onnxruntime' : 'executorch'
+      })
 
-/** Available voice ids (e.g. af_heart, af_bella, am_michael, …). */
-export async function listVoices(): Promise<string[]> {
-  if (voicesCache) {
-    writeDiagnosticLog('tts', 'voices.cache_hit', { count: voicesCache.length })
-    return voicesCache
-  }
-  writeDiagnosticLog('tts', 'voices.requested')
-  const { out, err } = await runWorker(['voices'])
-  let voices: string[] = []
-  try {
-    const parsed = JSON.parse(out.trim())
-    if (Array.isArray(parsed)) voices = parsed
-  } catch {
-    /* fall through */
-  }
-  if (!voices.length && !isTeardownNoise(err))
-    throw new Error(err.trim() || 'failed to list voices')
-  voicesCache = voices
-  writeDiagnosticLog('tts', 'voices.completed', { count: voices.length })
-  return voices
+      try {
+        let engine = 'executorch'
+        let device = 'cpu'
+        if (ONNX_VOICES.has(chosenVoice)) {
+          try {
+            device = await recordAIRequest(
+              {
+                modality: 'tts',
+                source: 'ONNX speech attempt',
+                model: selected ?? 'Kokoro',
+                request: { text: input.slice(0, 2000), voice: chosenVoice }
+              },
+              async (attempt) => {
+                const usedDevice = await onnxSpeech.synthesize({
+                  text: input.slice(0, 2000),
+                  voice: chosenVoice,
+                  outputPath,
+                  onProgress
+                })
+                attempt.update({ backend: usedDevice })
+                return usedDevice
+              }
+            )
+            engine = 'onnxruntime'
+          } catch (error) {
+            writeDiagnosticLog(
+              'tts',
+              'onnx.fallback',
+              { requestId, error: messageOf(error) },
+              'warn'
+            )
+            await synthesizeExecutorch({
+              text: input.slice(0, 2000),
+              voiceId: chosenVoice,
+              outputPath,
+              onDownloadProgress: onProgress
+            })
+          }
+        } else {
+          await synthesizeExecutorch({
+            text: input.slice(0, 2000),
+            voiceId: chosenVoice,
+            outputPath,
+            onDownloadProgress: onProgress
+          })
+        }
+        const wav = await fs.promises.readFile(outputPath)
+        log.update({
+          backend: device,
+          metrics: { engine, durationMs: Date.now() - startedAt, wavBytes: wav.length }
+        })
+        if (wav.length <= 44) throw new Error('The local voice runtime returned empty audio.')
+        writeDiagnosticLog('tts', 'request.completed', {
+          requestId,
+          durationMs: Date.now() - startedAt,
+          wavBytes: wav.length,
+          engine,
+          device
+        })
+        return { dataUrl: `data:audio/wav;base64,${wav.toString('base64')}` }
+      } catch (error) {
+        writeDiagnosticLog(
+          'tts',
+          'request.failed',
+          { requestId, durationMs: Date.now() - startedAt, error: messageOf(error) },
+          'error'
+        )
+        throw error
+      } finally {
+        busy = false
+        void fs.promises.unlink(outputPath).catch(() => {})
+      }
+    }
+  )
 }

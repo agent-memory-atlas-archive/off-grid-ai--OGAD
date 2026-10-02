@@ -64,6 +64,10 @@ function installNativeBoundary(): string {
 const fs = require('node:fs')
 const http = require('node:http')
 const args = process.argv.slice(2)
+if (args.includes('--list-devices')) {
+  console.log('Available devices:\\n  (none)')
+  process.exit(0)
+}
 const port = Number(args[args.indexOf('--port') + 1])
 const server = http.createServer((req, res) => {
   res.setHeader('Content-Type', 'application/json')
@@ -88,6 +92,12 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)))
 `
   )
   fs.chmodSync(executable, 0o755)
+  // This fixture is a CPU-only server. Linux and Windows now probe the GPU
+  // variants before launch, so give the contender the CPU fallback path.
+  const cpuExecutable = path.join(fixture.binDir, 'llama-cpu', 'llama-server')
+  fs.mkdirSync(path.dirname(cpuExecutable), { recursive: true })
+  fs.copyFileSync(executable, cpuExecutable)
+  fs.chmodSync(cpuExecutable, 0o755)
   return executable
 }
 
@@ -132,7 +142,7 @@ function listenerPids(): number[] {
         LLAMA_SERVER_PORT
       ).map(Number)
     }
-    return execSync(`"${sysTool('lsof')}" -ti tcp:${String(LLAMA_SERVER_PORT)}`, {
+    return execSync(`"${sysTool('lsof')}" -tiTCP:${String(LLAMA_SERVER_PORT)} -sTCP:LISTEN`, {
       encoding: 'utf-8'
     })
       .trim()
@@ -246,6 +256,10 @@ describe('model port ownership', () => {
       import('../llama-error')
     ])
     const conflict = modelPortConflictReason(LLAMA_SERVER_PORT)
+    const lifecycle: Array<{ ready: boolean; starting: boolean }> = []
+    const offHealth = llm.onHealthInvalidated(() =>
+      lifecycle.push({ ready: llm.isReady(), starting: llm.isStarting() })
+    )
 
     // The preferred port is held by the first live engine. Rather than dead-ending on a
     // single-owner conflict, the second instance scans upward and starts its own engine on a
@@ -255,6 +269,8 @@ describe('model port ownership', () => {
     expect(llm.getPort()).not.toBe(LLAMA_SERVER_PORT)
     // The conflict reason is NOT surfaced — we moved instead of refusing.
     expect(llm.lastError()).not.toBe(conflict)
+    expect(lifecycle).toContainEqual({ ready: false, starting: true })
+    expect(lifecycle).toContainEqual({ ready: true, starting: false })
 
     // The FIRST engine is untouched: still alive, still the sole owner of the preferred port.
     expect(processIsAlive(enginePid)).toBe(true)
@@ -274,5 +290,7 @@ describe('model port ownership', () => {
 
     // Tear down the second engine this test started (the first owner is cleaned up in afterAll).
     await llm.unload()
+    expect(lifecycle.at(-1)).toEqual({ ready: false, starting: false })
+    offHealth()
   })
 })

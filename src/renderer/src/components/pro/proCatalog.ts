@@ -8,8 +8,11 @@ import {
   MagnifyingGlass,
   Broadcast,
   ClipboardText,
+  Robot,
+  ListChecks,
   Waveform,
-  ShieldCheck
+  ShieldCheck,
+  Devices as DevicesIcon
 } from '@phosphor-icons/react'
 import type { ComponentType } from 'react'
 import { deviceNoun, primaryModifier } from '@renderer/lib/device'
@@ -41,7 +44,7 @@ export interface ProFeature {
    * Platforms this feature is tested + supported on — the SINGLE SOURCE OF TRUTH
    * for per-feature availability. macOS (`'darwin'`) is the reference platform and
    * MUST be present on every feature (Pro was built Mac-first). As a feature is
-   * ported and verified on Windows, add `'win32'` here — that one edit flips the
+   * ported and verified on another platform, add it here — that one edit flips the
    * feature live everywhere (nav routing, the coming-soon gate, upsell copy), since
    * every surface reads this list through `featureSupportsPlatform`. Do not gate a
    * feature on the platform anywhere else; add the platform here instead.
@@ -51,18 +54,38 @@ export interface ProFeature {
 
 export const PRO_FEATURES: ProFeature[] = [
   {
+    route: 'explore',
+    label: 'Assistant',
+    icon: Robot,
+    tagline: 'Start a prepared run.',
+    description:
+      'Choose a workflow, add its details, and start it in Chat. The work stays on your device.',
+    highlights: ['Prepared workflows', 'One intake before the run', 'Starts in your local Chat'],
+    platforms: ['darwin', 'win32']
+  },
+  {
+    route: 'tasks',
+    label: 'Tasks',
+    icon: ListChecks,
+    tagline: 'See every active run in one place.',
+    description:
+      'Track running and completed work, open its live view, and respond when a task needs attention.',
+    highlights: ['Live task status', 'Saved task history', 'Attention requests in one place'],
+    platforms: ['darwin', 'win32']
+  },
+  {
     route: 'day',
     label: 'Day',
     icon: CalendarBlank,
     tagline: 'Your day, planned for you.',
     description:
-      'Off Grid reads your calendar and what you’ve been working on and lays out your day — what’s next, who you’re meeting, and what’s still open — so you start every morning oriented instead of scrambling.',
+      'Off Grid AI reads your calendar and what you’ve been working on and lays out your day — what’s next, who you’re meeting, and what’s still open — so you start every morning oriented instead of scrambling.',
     highlights: [
       'A morning briefing built from your real activity',
       'Per-meeting prep: who’s in it and your open items',
       'Priorities surfaced from what you actually did'
     ],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'reflect',
@@ -98,8 +121,8 @@ export const PRO_FEATURES: ProFeature[] = [
     // binary is no longer on the path. Screenshots come from Electron desktopCapturer
     // and the frame store, replay reader and screen carry no platform-native code.
     // Accessibility text is macOS-only enrichment that never gates analysis, so on
-    // Windows a vision model is what produces frame summaries.
-    platforms: ['darwin', 'win32']
+    // Windows and Linux use a vision model for frame summaries.
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'meetings',
@@ -113,7 +136,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'On-device transcription',
       'Searchable transcripts & summaries'
     ],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'actions',
@@ -121,13 +144,13 @@ export const PRO_FEATURES: ProFeature[] = [
     icon: CheckSquare,
     tagline: 'To-dos and actions, handled.',
     description:
-      'Off Grid extracts the commitments out of your day and your secretary proposes the next step — every action waits in an approval queue, so nothing happens without your say-so.',
+      'Off Grid AI extracts the commitments out of your day and your secretary proposes the next step — every action waits in an approval queue, so nothing happens without your say-so.',
     highlights: [
       'Auto-extracted to-dos',
       'Secretary-proposed actions',
       'Approval-gated — you’re always in control'
     ],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'entities',
@@ -141,7 +164,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'Cross-source narrative summaries',
       'Relationship graph'
     ],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'search',
@@ -151,7 +174,7 @@ export const PRO_FEATURES: ProFeature[] = [
     description:
       'One search bar across your captured activity, meetings, entities, and connectors — semantic + keyword, all on-device.',
     highlights: ['Unified semantic search', 'Across capture, meetings & connectors', 'Fully local'],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'notifications',
@@ -159,13 +182,13 @@ export const PRO_FEATURES: ProFeature[] = [
     icon: Broadcast,
     tagline: 'Approvals & to-dos, surfaced.',
     description:
-      'Off Grid reaches out first — a morning briefing, a heads-up before meetings, approvals waiting on your decision, and to-dos it pulled from your day — even when the window is closed.',
+      'Off Grid AI reaches out first — a morning briefing, a heads-up before meetings, approvals waiting on your decision, and to-dos it pulled from your day — even when the window is closed.',
     highlights: [
       'Proactive briefings & meeting prep',
       'Approval queue for actions',
       'Auto-extracted to-dos'
     ],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'voice',
@@ -178,7 +201,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'Paste-at-cursor + a searchable recordings library',
       'Transcribe any audio/video file, all on-device'
     ],
-    platforms: ['darwin']
+    platforms: ['darwin', 'win32']
   },
   {
     route: 'vault',
@@ -186,7 +209,7 @@ export const PRO_FEATURES: ProFeature[] = [
     icon: ShieldCheck,
     tagline: 'Passwords and secrets, encrypted on this device.',
     description:
-      'An encrypted KDBX4 vault for web logins, app passwords, API keys, secure notes, and secret files (.env and the like). Your master password and a device-specific key together lock the vault - the file alone is unreadable. Back up the file anywhere; it stays opaque without both factors. Sync to other devices in your Off Grid mesh via EasyShare when you are ready.',
+      'An encrypted KDBX4 vault for web logins, app passwords, API keys, secure notes, and secret files (.env and the like). Your master password and a device-specific key together lock the vault - the file alone is unreadable. Back up the file anywhere; it stays opaque without both factors. Sync to other devices in your Off Grid AI mesh via EasyShare when you are ready.',
     highlights: [
       'AES-256 + Argon2id, device-key bound',
       'Logins, app passwords, API keys, notes, and files',
@@ -194,8 +217,9 @@ export const PRO_FEATURES: ProFeature[] = [
     ],
     // First Pro feature ported to Windows: the vault engine is fully cross-platform
     // (KDBX4 via kdbxweb, Argon2id via hash-wasm WASM, BIP39 recovery, device key
-    // via node-machine-id) - no macOS-native code. Verified on Windows.
-    platforms: ['darwin', 'win32']
+    // via node-machine-id) - no macOS-native code. Linux uses the same KDBX4
+    // engine and a stable machine id, with the persisted fallback when unavailable.
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'clipboard',
@@ -208,9 +232,28 @@ export const PRO_FEATURES: ProFeature[] = [
       `${primaryModifier()}+Shift+C quick-paste popup anywhere`,
       'Stored locally in your encrypted database'
     ],
-    // Ported to Windows: the store + popup + global hotkey (CommandOrControl+Shift+C)
-    // are all cross-platform Electron; auto-paste is synthesized per-platform in
-    // pro text-injection (osascript on macOS, PowerShell SendKeys on Windows).
+    // The store, popup, and hotkey use Electron on all three desktop platforms.
+    // Pro synthesizes paste with osascript, PowerShell, xdotool (X11), or wtype
+    // (Wayland, where the compositor supports its virtual keyboard protocol).
+    platforms: ['darwin', 'win32', 'linux']
+  },
+  {
+    route: 'devices',
+    label: 'Devices',
+    icon: DevicesIcon,
+    tagline: 'Your chats and settings, on every device.',
+    description:
+      'Pair your computer and phone over your local network to keep chats, projects and model settings in step. Data moves through a direct encrypted connection between your devices. Nothing is uploaded to an Off Grid AI server.',
+    highlights: [
+      'Chats, projects and model settings stay in step across devices',
+      'Known devices reconnect when they return to the network',
+      'Direct encrypted transfer on your local network'
+    ],
+    // Both platforms: sync is cross-platform by construction. The transport is node:net and
+    // discovery is bonjour-service (pure JS mDNS), so a Windows install gets the LAN route with
+    // no native code. The single `process.platform === 'darwin'` branch in the activation path
+    // only ADDS the Apple proximity route on top - macOS ends up with LAN plus proximity,
+    // Windows with LAN. Gating this to darwin would dark-out a feature that works.
     platforms: ['darwin', 'win32']
   }
 ]
@@ -222,12 +265,8 @@ export function getProFeature(route: string): ProFeature | undefined {
 /**
  * Whether a single Pro feature is tested + supported on a platform. This is the
  * per-feature seam: read a feature's `platforms` list (its single source of truth)
- * rather than a blanket `!isMac` rule, so features go live on a new platform ONE AT
- * A TIME as each is ported and verified. Pure + unit-testable.
- *
- * macOS is the reference platform and is always supported, even if a `platforms`
- * list somehow omits it — so a data typo can never dark-out a feature on Mac (the
- * only platform where the whole Pro tier is known-good today).
+ * rather than a blanket platform rule. Pure + unit-testable.
+ * macOS remains supported even if a data entry omits it.
  */
 export function featureSupportsPlatform(feature: ProFeature, platform: DevicePlatform): boolean {
   return isMac(platform) || feature.platforms.includes(platform)
@@ -236,14 +275,13 @@ export function featureSupportsPlatform(feature: ProFeature, platform: DevicePla
 /**
  * The baseline rule for Pro surfaces that don't (yet) have their own per-feature
  * `platforms` declaration — today just the pro Settings sections (proactive
- * delivery, learned prefs), which aren't catalog routes. Pro runtime features are
- * macOS-tested only on those, so a Pro subscriber off macOS sees a "coming soon"
- * placeholder; free users are unaffected (they get the upsell). Catalog ROUTES use
+ * delivery, learned prefs), which aren't catalog routes. Linux subscribers see
+ * a "coming soon" placeholder; free users see the upgrade screen. Catalog routes use
  * the per-feature `featureSupportsPlatform` seam via `proFeatureComingSoon`
  * instead — prefer that for anything backed by a ProFeature.
  */
 export function proComingSoonHere(platform: DevicePlatform, isPro: boolean): boolean {
-  return isPro && !isMac(platform)
+  return isPro && platform !== 'darwin' && platform !== 'win32'
 }
 
 /**

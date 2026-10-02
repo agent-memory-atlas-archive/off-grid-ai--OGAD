@@ -12,9 +12,24 @@
 export interface HistoryTurn {
   role: string
   content: string
+  context?: { taskGuidance?: unknown; attachments?: { name: string; kind: string; text?: string }[] } | null
+  attachments?: { name: string; kind: string; text?: string }[]
+  notice?: boolean
 }
 
-/** Build the last `limit` turns of history for a send.
+function modelContent(turn: HistoryTurn): string {
+  if (turn.role !== 'user') return turn.content
+  const attachments = turn.attachments ?? turn.context?.attachments ?? []
+  const text = attachments
+    .filter((attachment) => attachment.text && attachment.kind !== 'audio')
+    .map((attachment) => `--- attached ${attachment.kind}: ${attachment.name} ---\n${attachment.text}`)
+    .join('\n\n')
+  return text ? `${text}\n\n${turn.content}` : turn.content
+}
+
+export const EARLIER_CHAT_EXCERPTS_PREFIX = 'Earlier chat excerpts'
+
+/** Build bounded history for a send.
  *  - regen: the latest user turn is already in the thread → keep up to and
  *    including it (drop anything after).
  *  - normal send: append the new user turn.
@@ -23,9 +38,48 @@ export function buildSendHistory<T extends HistoryTurn>(
   convMsgs: readonly T[],
   regen: boolean,
   newUserText: string,
-  limit = 20
+  limit = 20,
+  contextWindowTokens?: number
 ): HistoryTurn[] {
-  const flat = convMsgs.map((m) => ({ role: m.role, content: m.content }))
+  // Task guidance is shown in Chat for continuity, but the operator already
+  // consumed it. Do not replay it as another user prompt to the resident LLM.
+  const lastCompaction = convMsgs.findLastIndex(
+    (message) => message.notice && message.content === '_Compacted_'
+  )
+  const beforeNotice = convMsgs
+    .slice(0, lastCompaction < 0 ? 0 : lastCompaction)
+    .filter((message) => !message.context?.taskGuidance && !message.notice)
+  // The notice is inserted after the user turn that triggered compaction.
+  // Keep that active turn intact for the next reply as well.
+  const retainedUserTurn = beforeNotice.at(-1)?.role === 'user' ? beforeNotice.at(-1) : undefined
+  const preCompactionTurns = retainedUserTurn ? beforeNotice.slice(0, -1) : beforeNotice
+  const preCompactionExcerpts = preCompactionTurns.length
+    ? [
+        preCompactionTurns[0]!,
+        ...preCompactionTurns.slice(-3).filter((turn) => turn !== preCompactionTurns[0])
+      ]
+    : []
+  const preCompactionLabels = preCompactionExcerpts.map(
+    (turn) => `${turn.role === 'assistant' ? 'Assistant' : 'User'}: ${turn.content.slice(0, 90)}`
+  )
+  const flat = [
+    ...(preCompactionLabels.length
+      ? [
+          {
+            role: 'user',
+            content:
+              `${EARLIER_CHAT_EXCERPTS_PREFIX} (${preCompactionTurns.length} turns; some details omitted): ${preCompactionLabels.join(' | ')}`.slice(
+                0,
+                400
+              )
+          }
+        ]
+      : []),
+    ...(retainedUserTurn ? [retainedUserTurn] : []),
+    ...convMsgs
+      .slice(lastCompaction + 1)
+      .filter((message) => !message.context?.taskGuidance && !message.notice)
+  ].map((m) => ({ role: m.role, content: modelContent(m) }))
   let base: HistoryTurn[]
   if (regen) {
     const lastUserIdx = flat.map((m) => m.role).lastIndexOf('user')
@@ -33,5 +87,44 @@ export function buildSendHistory<T extends HistoryTurn>(
   } else {
     base = [...flat, { role: 'user', content: newUserText }]
   }
-  return base.slice(-limit)
+  if (base.length === 0) return []
+  const estimatedTokens = Math.ceil(JSON.stringify(base).length / 4)
+  if (contextWindowTokens && estimatedTokens < contextWindowTokens * 0.8) return base
+  const effectiveLimit =
+    contextWindowTokens && estimatedTokens >= contextWindowTokens * 0.8 && base.length > 2
+      ? Math.min(limit, Math.max(2, Math.floor(base.length / 2)))
+      : limit
+  if (effectiveLimit <= 1) return base.slice(-1)
+  // The active turn is never shortened. Prior turns share a fixed budget so a
+  // few very large messages cannot exhaust the model context by themselves.
+  const recent = base.length <= effectiveLimit ? base : base.slice(-(effectiveLimit - 1))
+  const older = base.slice(0, base.length - recent.length)
+  const excerptTurns = older.length
+    ? [older[0]!, ...older.slice(-3).filter((turn) => turn !== older[0])]
+    : []
+  const excerpts = excerptTurns.map(
+    (turn) => `${turn.role === 'assistant' ? 'Assistant' : 'User'}: ${turn.content.slice(0, 90)}`
+  )
+  const prior: HistoryTurn[] = [
+    ...(older.length
+      ? [
+          {
+            role: 'user',
+            content: `${EARLIER_CHAT_EXCERPTS_PREFIX} (${older.length} turns; some details omitted): ${excerpts.join(' | ')}`
+          }
+        ]
+      : []),
+    ...recent.slice(0, -1)
+  ]
+  const charsPerTurn = Math.max(1, Math.floor(3000 / Math.max(1, prior.length)))
+  return [
+    ...prior.map((turn) => ({
+      ...turn,
+      content:
+        turn.content.length > charsPerTurn
+          ? `${turn.content.slice(0, charsPerTurn - 1)}…`
+          : turn.content
+    })),
+    recent[recent.length - 1]!
+  ]
 }

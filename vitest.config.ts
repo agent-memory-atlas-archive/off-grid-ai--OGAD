@@ -8,12 +8,19 @@ import { createVitestProjects } from './src/main/__tests__/vitest-projects'
 // pro-specific threshold group when pro is actually checked out, so a core-only
 // run measures + gates core alone instead of erroring on an empty pro/** glob.
 const hasPro = existsSync(resolve(__dirname, 'pro/tsconfig.json'))
+// CI and the pre-push hook merge this report with the DB and optional e2e reports, then
+// gate only the lines this branch adds. The fast suite is one input to that aggregate,
+// so applying the whole-tree floor here would stop before the complementary reports run.
+const usesAggregateCoverageGate = process.env.OFFGRID_AGGREGATE_COVERAGE === '1'
+// The pro test globs are gated the same way the pro thresholds already are:
+// a core-only checkout can carry stray pro/ files (this repo tracks a handful
+// of pro test files with no implementations beside them), and collecting
+// orphan tests fails the suite for everyone without desktop-pro access.
 const productTestFiles = [
   'integration-tests/*.test.ts',
   'src/**/*.test.ts',
   'src/**/*.test.tsx',
-  'pro/**/*.test.ts',
-  'pro/**/*.test.tsx'
+  ...(hasPro ? ['pro/**/*.test.ts', 'pro/**/*.test.tsx'] : [])
 ]
 const commonExcludes = ['e2e/**', 'node_modules/**', 'out/**']
 
@@ -65,6 +72,15 @@ export default defineConfig({
     projects: createVitestProjects(productTestFiles, commonExcludes),
     coverage: {
       provider: 'v8',
+      // Write the report even when a test FAILS. Without this, one flaky pro
+      // test (the sandbox-only sync/ambient timing flakes) suppresses the whole
+      // coverage report, leaving a stale coverage-final.json on disk - so the
+      // new-code gate then measures thoroughly-tested files as 0% and blocks a
+      // green branch. A failing test's own coverage is unaffected; every OTHER
+      // test's coverage is still collected and written. The failing TEST still
+      // fails the run; this only decouples "a test flaked" from "the coverage
+      // report is missing". Mirrors vitest.db.config.ts.
+      reportOnFailure: true,
       // all:true + an `include` of the LOGIC surface (.ts, both core src AND the pro
       // submodule) => every logic file is in the denominator whether or not a test imports
       // it, so untested modules show as 0% and are VISIBLE (previously all:false hid them -
@@ -91,29 +107,54 @@ export default defineConfig({
         // (rebuilds better-sqlite3 for the node ABI); can't load the native module here.
         'src/main/database.ts',
         'src/main/rag/store.ts',
+        // The actions runtime composition: Electron + app-DB wiring over tested,
+        // injectable modules; covered by use-runtime.integration.dbtest.ts (real DB,
+        // helper boundary mocked). Its pure seam (pickByPlatform) IS measured here.
+        'src/main/actions/use-runtime.ts',
+        // The rail hosts: the browser's WebContentsView + CDP debugger, and the
+        // vision rail's screen capture + actuation + overlay, over the unit-
+        // tested collector/driver/loop/guard/executor. A real display drives
+        // them - the e2e tour and the real-machine pass, not this runner.
+        'src/main/browser/browser-host.ts',
+        'src/main/vision/vision-host.ts',
+        // The floating supervisor NSPanel: BrowserWindow glue over the tested feed.
+        'src/main/vision/supervisor-window.ts',
+        // On-demand grounder swap: reloads llama-server with UI-TARS and back,
+        // needs the multi-GB models on disk. Its decision (isGrounderActive) is
+        // measured; the reload orchestration is exercised by the A/B run.
+        'src/main/vision/grounder-loader.ts',
+        // The accessibility rail's live host: get-windows I/O + the Swift helper
+        // spawn + synthetic input + the Accessibility grant, over the unit-tested
+        // parser/router/loop/target-picker. Driven on a real Mac (the T1f pass).
+        'src/main/accessibility/ax-host.ts',
+        // The shared synthetic-input adapter is measured here through its injected
+        // NutApi boundary. Only loadActuation performs the optional native require;
+        // the complete adapter contract runs without a display in the unit suite.
+        // powershell.exe-spawning I/O shell (Windows-only twin of native-helper's
+        // spawn side); its parsing is the shared parseHelperResponse, which is
+        // covered. Exercised on a real Windows machine per WINDOWS_TEST_PLAN.md.
+        'src/main/actions/win-powershell.ts',
         // SQLite settings shell; prompt registry and filling remain measured.
         'src/main/prompt-store.ts',
         // SQLite settings shell; policy is measured in runtime-residency-logic.ts.
         'src/main/runtime-residency.ts',
-        // Native / subprocess-spawning I/O shells. Their PURE logic was extracted into
-        // sibling modules that ARE covered (imagegen/*, models/*, transcription/classify,
-        // model-server/*); these husks spawn binaries / bind sockets - exercised via
-        // `npm run smoke` + e2e, not unit tests. Mirrors the excluded model-server.ts.
+        // Native / subprocess-spawning I/O shells without coverage in this runner.
+        // The resident SD server and Whisper CLI now have product tests here,
+        // so their new runtime fallback paths are measured rather than excluded.
         'src/main/imagegen.ts',
         'src/main/mflux.ts',
-        'src/main/sd-server.ts',
-        'src/main/model-server.ts',
         // Cross-platform orphan-port reaper: execSync(netstat/lsof/tasklist/ps) + process.kill
         // — an OS-boundary shell, verified by the real macOS/Windows run, not in-process.
         'src/main/kill-orphan-port.ts',
-        'src/main/media-server.ts',
-        'src/main/transcription/whisper-cli.ts',
         'src/main/transcription/parakeet-cli.ts',
         'src/main/transcription/whisper-server.ts',
         'src/main/coreml-image.ts',
         // Entry/wiring that isn't logic (index barrels re-export; bootstrap boots Electron).
         'src/main/index.ts',
-        'src/preload/**',
+        // src/preload/** WAS excluded here as "wiring, exercised via e2e". It is unit-tested now
+        // (src/preload/__tests__/preload-bridge.test.ts sweeps all 152 exposed methods and proves each one
+        // reaches main), so excluding it would hide the one file whose failure mode - a method that forwards
+        // nothing - is invisible to types and shows up only as a dead button in front of a user.
         // CORE native/IPC-wiring/entry shells (recon-classified): pure logic already
         // extracted to measured siblings (ipc-query-logic, search-ranking, model-sizing,
         // models/*, llm/*, licensing/*-logic, files-classify, tts-logic, etc.). These husks
@@ -135,7 +176,10 @@ export default defineConfig({
         'src/main/vision.ts',
         'src/main/ocr.ts',
         'src/main/embeddings.ts',
-        'src/main/permissions.ts',
+        // permissions.ts is no longer excluded: it is unit-tested now, including the multicast probe's four
+        // outcomes (delivered, refused, socket error, silent) - the socket-error case is the one that would
+        // otherwise be an uncaught exception in main during setup, so it is worth measuring rather than
+        // trusting to a run on real hardware.
         'src/main/rag/extractors.ts',
         'src/main/rag/index.ts', // orchestrator; buildProjectPrompt extracted → rag/prompt.ts
         'src/main/licensing/license-service.ts', // Keychain/IPC shell; isProActive → license-service logic exports (tested)
@@ -157,7 +201,9 @@ export default defineConfig({
         // Renderer .ts that are pure IPC passthrough (no logic) or React hooks (e2e-covered).
         'src/renderer/src/lib/voiceApi.ts',
         'src/renderer/src/useMeetingRecorder.ts',
-        'src/renderer/src/bootstrap/loadProFeaturesRenderer.ts',
+        // loadProFeaturesRenderer.ts is no longer in this list: it decides which half of the app switches on
+        // at launch, which is a decision rather than passthrough, and it now has its own tests covering all
+        // three outcomes and every way each fails.
         'src/bootstrap/proStub.ts',
         // PRO renderer IPC-passthrough API wrappers (no logic — mirror the core voiceApi rule).
         'pro/renderer/api.ts',
@@ -203,22 +249,29 @@ export default defineConfig({
         'src/renderer/src/**/*.tsx',
         'pro/renderer/**/*.tsx'
       ],
-      thresholds: {
-        // Uniform 85% floor across every metric — the standard stated in CLAUDE.md. The floor had
-        // ratcheted up to ~95/96, which turned brittle against CI's legitimately-skipped ambient
-        // (macOS-helper / native-dep) journeys — a 0.1-0.3% swing flipped the gate red. 85% is a
-        // stable floor comfortably below current measured coverage (~95/90/96 in CI) while still
-        // blocking any real regression. Set deliberately per the maintainer's call.
-        statements: 85,
-        branches: 85,
-        functions: 85,
-        lines: 85,
-        // pro/** stays separately regression-guarded (mobile pattern), same uniform 85% floor.
-        // Only applied when pro is checked out (see hasPro) so a core-only CI run doesn't error.
-        ...(hasPro
-          ? { 'pro/**': { statements: 85, branches: 85, functions: 85, lines: 85 } }
-          : {})
-      }
+      thresholds: usesAggregateCoverageGate
+        ? undefined
+        : {
+            // Uniform 80% floor across every metric. Set deliberately per the maintainer's call
+            // (2026-08-05), down from 85: pro BRANCHES sit right on the old line (85.5% local, ~85.2%
+            // measured in CI, because CI legitimately skips the native-dep ambient journeys), so a
+            // 0.3% environment swing decided whether the gate was red. That is a gate reporting the
+            // runner rather than the code.
+            //
+            // What 80 actually loosens is branches ALONE — statements, functions and lines all measure
+            // 91-93% in pro and higher in core, so they stay far above either line. It is a floor
+            // against regression, not a target: the standard in CLAUDE.md is still 85%, every change
+            // that adds logic adds tests, and this number only moves back UP.
+            statements: 80,
+            branches: 80,
+            functions: 80,
+            lines: 80,
+            // pro/** stays separately regression-guarded (mobile pattern), same uniform floor.
+            // Only applied when pro is checked out (see hasPro) so a core-only CI run doesn't error.
+            ...(hasPro
+              ? { 'pro/**': { statements: 80, branches: 80, functions: 80, lines: 80 } }
+              : {})
+          }
     }
   }
 })

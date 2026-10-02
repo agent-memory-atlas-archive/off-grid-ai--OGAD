@@ -3,52 +3,117 @@
  * observer lifecycle are production code; only the native image runtime is a
  * controlled boundary so navigation, cancellation, and failure remain deterministic.
  */
-import { describe, expect, it } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { afterAll, describe, expect, it } from 'vitest'
 import {
+  ImageGenerationPersistenceError,
   ImageGenerationJobService,
   type ImageGenerationJobRequest,
   type ImageGenerationRuntime
 } from '../imagegen/job-service'
-import type { ImageGenerationProgressContract } from '../../shared/image-generation-contract'
+import type {
+  ImageGenerationPipelineUpdateContract,
+  ImageGenerationProgressContract
+} from '../../shared/image-generation-contract'
 import type { ImageGenOutput } from '../imagegen'
+import type { GeneratedImageSidecar } from '../imagegen/gallery-sidecar'
+import { generatedImageMetadataJson, type ChatHome } from '@offgrid/sync'
+
+/**
+ * A real file on disk for the runtime to claim it produced.
+ *
+ * On success the service stats the output and publishes it as a shared file, so that other devices can
+ * receive the generated image - it needs the real byte size, and it reads it from the file. A fictional
+ * path makes that stat throw ENOENT and the whole generation rejects, which reads as "generating an
+ * image is broken" when the only thing missing was the file.
+ *
+ * Disk is a boundary this test can afford to keep real, so it does.
+ */
+const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-image-job-'))
+const generatedFile = (name: string): string => {
+  const filePath = path.join(workspace, name)
+  fs.writeFileSync(filePath, Buffer.from('89504e470d0a1a0a', 'hex')) // PNG signature; size is what is read
+  return filePath
+}
+afterAll(() => fs.rmSync(workspace, { recursive: true, force: true }))
 
 interface ControlledGeneration {
+  update(update: ImageGenerationPipelineUpdateContract): void
   progress(progress: ImageGenerationProgressContract): void
   succeed(output: ImageGenOutput): void
   fail(error: unknown): void
 }
 
-function controlledRuntime(cancelResult = true, saveScopeError?: Error): {
+function controlledRuntime(
+  cancelResult = true,
+  saveScopeError?: Error,
+  shareResult = true,
+  noteMessageResult = true
+): {
   runtime: ImageGenerationRuntime
   generation(): ControlledGeneration
-  savedScopes: { path: string; request: ImageGenerationJobRequest }[]
+  savedScopes: { path: string; scope: GeneratedImageSidecar }[]
+  sharedPaths: string[]
+  notedMessages: { path: string; shownIn: ChatHome }[]
+  preservedSources: { syncId: string; sourcePath: string }[]
+  generatedRequests: ImageGenerationJobRequest[]
 } {
   let resolveGeneration: ((output: ImageGenOutput) => void) | null = null
   let rejectGeneration: ((error: unknown) => void) | null = null
-  let reportProgress: ((progress: ImageGenerationProgressContract) => void) | null = null
-  const savedScopes: { path: string; request: ImageGenerationJobRequest }[] = []
+  let reportUpdate: ((update: ImageGenerationPipelineUpdateContract) => void) | null = null
+  const savedScopes: { path: string; scope: GeneratedImageSidecar }[] = []
+  const sharedPaths: string[] = []
+  const notedMessages: { path: string; shownIn: ChatHome }[] = []
+  const preservedSources: { syncId: string; sourcePath: string }[] = []
+  const generatedRequests: ImageGenerationJobRequest[] = []
 
   return {
     runtime: {
-      generate: (_request, onProgress) => {
-        reportProgress = onProgress
+      generate: (request, onUpdate) => {
+        generatedRequests.push(request)
+        reportUpdate = onUpdate
         return new Promise<ImageGenOutput>((resolve, reject) => {
           resolveGeneration = resolve
           rejectGeneration = reject
         })
       },
       cancel: () => cancelResult,
-      saveScope: (path, request) => {
+      saveScope: (path, scope) => {
         if (saveScopeError) throw saveScopeError
-        savedScopes.push({ path, request })
+        savedScopes.push({ path, scope })
+      },
+      // Sharing reaches the mesh, so it is a boundary here. What is SHARED is asserted through the
+      // scope the sidecar was given, which is what the description is built from.
+      share: (path) => {
+        sharedPaths.push(path)
+        return shareResult
+      },
+      noteMessage: (path, shownIn) => {
+        notedMessages.push({ path, shownIn })
+        return noteMessageResult
+      },
+      preserveSource: (syncId, sourcePath) => {
+        preservedSources.push({ syncId, sourcePath })
+        return `${sourcePath}.kept`
       }
     },
     generation: () => ({
-      progress: (progress) => reportProgress?.(progress),
+      update: (update) => reportUpdate?.(update),
+      progress: (progress) =>
+        reportUpdate?.({
+          stage: progress.phase === 'decoding' ? 'decoding' : 'generating',
+          progress
+        }),
       succeed: (output) => resolveGeneration?.(output),
       fail: (error) => rejectGeneration?.(error)
     }),
-    savedScopes
+    savedScopes,
+    sharedPaths,
+    notedMessages,
+    preservedSources,
+    generatedRequests
   }
 }
 
@@ -56,6 +121,7 @@ const request: ImageGenerationJobRequest = {
   prompt: 'A green cabin rendered while navigating',
   model: 'local-image-model',
   conversationId: 'conversation-navigation',
+  messageId: 'message-navigation',
   projectId: 'project-navigation',
   seed: 91,
   width: 512,
@@ -64,6 +130,29 @@ const request: ImageGenerationJobRequest = {
 }
 
 describe('main-owned image generation job journeys', () => {
+  it('uses one owned init image for the native edit and its saved provenance', async () => {
+    const boundary = controlledRuntime()
+    const jobs = new ImageGenerationJobService(boundary.runtime)
+    const sourcePath = generatedFile('reference.png')
+    const generation = jobs.start({ ...request, initImage: sourcePath })
+    const keptPath = `${sourcePath}.kept`
+
+    expect(boundary.preservedSources).toEqual([{ syncId: jobs.status().id, sourcePath }])
+    expect(boundary.generatedRequests).toEqual([expect.objectContaining({ initImage: keptPath })])
+
+    const output: ImageGenOutput = {
+      dataUrl: 'data:image/png;base64,aW1hZ2U=',
+      path: generatedFile('edited.png'),
+      seed: 91,
+      model: 'Local image model',
+      prompt: 'Edit only the requested labels'
+    }
+    boundary.generation().succeed(output)
+    await generation
+
+    expect(boundary.savedScopes[0]?.scope.initImage).toBe(keptPath)
+  })
+
   it('keeps one job observable while the user navigates away and returns', async () => {
     const boundary = controlledRuntime()
     const jobs = new ImageGenerationJobService(boundary.runtime)
@@ -79,7 +168,17 @@ describe('main-owned image generation job journeys', () => {
     })
     await expect(jobs.start(request)).rejects.toThrow('already generating')
 
+    boundary.generation().update({
+      stage: 'enhancing',
+      enhancedPrompt: 'A quiet observatory under'
+    })
+    expect(jobs.status()).toMatchObject({
+      stage: 'enhancing',
+      enhancedPrompt: 'A quiet observatory under'
+    })
+
     boundary.generation().progress({ step: 2, total: 4, secPerStep: 0.5, phase: 'sampling' })
+    expect(jobs.status().stage).toBe('generating')
     const progress = jobs.status().progress
     expect(progress).toEqual({ step: 2, total: 4, secPerStep: 0.5, phase: 'sampling' })
     if (progress) progress.step = 99
@@ -89,12 +188,17 @@ describe('main-owned image generation job journeys', () => {
     const detachReturned = jobs.onChange((job) => returnedScreen.push(job.phase))
     const output: ImageGenOutput = {
       dataUrl: 'data:image/png;base64,aW1hZ2U=',
-      path: '/generated/image.png',
+      path: generatedFile('image.png'),
       seed: 91,
-      model: 'Local image model'
+      model: 'Local image model',
+      prompt: 'A detailed emerald cabin beneath a star-filled sky'
     }
     boundary.generation().succeed(output)
-    await expect(generation).resolves.toEqual(output)
+    await expect(generation).resolves.toEqual({
+      ...output,
+      syncId: jobs.status().id,
+      durationMs: expect.any(Number)
+    })
 
     expect(firstScreen).not.toContain('succeeded')
     expect(returnedScreen).toContain('succeeded')
@@ -104,7 +208,32 @@ describe('main-owned image generation job journeys', () => {
       progress: null,
       error: null
     })
-    expect(boundary.savedScopes).toEqual([{ path: output.path, request }])
+    // Everything the description is built from, in one place. A fact missing here is a fact the
+    // second description - the one made once the chat has a message - would silently drop.
+    expect(boundary.savedScopes).toEqual([
+      {
+        path: output.path,
+        scope: {
+          syncId: jobs.status().id,
+          conversationId: request.conversationId,
+          messageId: request.messageId,
+          projectId: request.projectId,
+          createdAt: expect.any(String),
+          width: request.width,
+          height: request.height,
+          // Built by the shared writer, not spelled out here. A literal in the test would let the
+          // wire's field names drift on one platform without a single assertion noticing - which is
+          // exactly what happened: the Mac wrote `model` and the phone only ever read `modelId`.
+          metadataJson: generatedImageMetadataJson({
+            prompt: output.prompt,
+            steps: request.steps,
+            seed: output.seed,
+            modelId: output.model
+          })
+        }
+      }
+    ])
+    expect(boundary.sharedPaths).toEqual([output.path])
 
     const refreshed: string[] = []
     jobs.onConversationUpdated(() => {
@@ -163,30 +292,31 @@ describe('main-owned image generation job journeys', () => {
     })
   })
 
-  it('keeps a generated image successful when scope metadata cannot be saved', async () => {
+  it('fails with a typed persistence error when scope metadata cannot be committed', async () => {
     const boundary = controlledRuntime(true, new Error('scope database unavailable'))
     const jobs = new ImageGenerationJobService(boundary.runtime)
     const generation = jobs.start(request)
     const output: ImageGenOutput = {
       dataUrl: 'data:image/png;base64,aW1hZ2U=',
-      path: '/generated/image-without-scope.png',
+      path: generatedFile('image-without-scope.png'),
       seed: 91,
-      model: 'Local image model'
+      model: 'Local image model',
+      prompt: request.prompt
     }
 
     boundary.generation().succeed(output)
 
-    await expect(generation).resolves.toEqual(output)
+    await expect(generation).rejects.toBeInstanceOf(ImageGenerationPersistenceError)
     expect(jobs.status()).toMatchObject({
-      phase: 'succeeded',
-      outputPath: output.path,
+      phase: 'failed',
+      outputPath: null,
       progress: null,
-      error: null
+      error: 'The generated image could not be committed to the image library.'
     })
     expect(boundary.savedScopes).toEqual([])
   })
 
-  it('completes an unscoped native result without writing metadata', async () => {
+  it('rejects a native result that has no owned output identity', async () => {
     const boundary = controlledRuntime()
     const jobs = new ImageGenerationJobService(boundary.runtime)
     const generation = jobs.start({ prompt: 'An unscoped image' })
@@ -194,12 +324,53 @@ describe('main-owned image generation job journeys', () => {
       dataUrl: 'data:image/png;base64,aW1hZ2U=',
       path: '',
       seed: -1,
-      model: 'Local image model'
+      model: 'Local image model',
+      prompt: 'An unscoped image'
     }
 
     boundary.generation().succeed(output)
-    await expect(generation).resolves.toEqual(output)
-    expect(jobs.status()).toMatchObject({ phase: 'succeeded', outputPath: '' })
+    await expect(generation).rejects.toMatchObject({
+      code: 'IMAGE_GENERATION_PERSISTENCE_FAILED',
+      imagePath: ''
+    })
+    expect(jobs.status()).toMatchObject({ phase: 'failed', outputPath: null })
     expect(boundary.savedScopes).toEqual([])
+  })
+
+  it('does not publish success when the committed sidecar cannot be shared', async () => {
+    const boundary = controlledRuntime(true, undefined, false)
+    const jobs = new ImageGenerationJobService(boundary.runtime)
+    const generation = jobs.start(request)
+    const output: ImageGenOutput = {
+      dataUrl: 'data:image/png;base64,aW1hZ2U=',
+      path: generatedFile('image-with-unshareable-sidecar.png'),
+      seed: 91,
+      model: 'Local image model',
+      prompt: request.prompt
+    }
+
+    boundary.generation().succeed(output)
+
+    await expect(generation).rejects.toBeInstanceOf(ImageGenerationPersistenceError)
+    expect(jobs.status()).toMatchObject({ phase: 'failed', outputPath: null })
+  })
+
+  it('surfaces a typed failure when the durable message association cannot be saved', async () => {
+    const boundary = controlledRuntime(true, undefined, true, false)
+    const jobs = new ImageGenerationJobService(boundary.runtime)
+    const generation = jobs.start({ ...request, messageId: undefined })
+    const output: ImageGenOutput = {
+      dataUrl: 'data:image/png;base64,aW1hZ2U=',
+      path: generatedFile('image-awaiting-message.png'),
+      seed: 91,
+      model: 'Local image model',
+      prompt: request.prompt
+    }
+
+    boundary.generation().succeed(output)
+    await expect(generation).resolves.toMatchObject({ path: output.path })
+    expect(() => jobs.acknowledgeConversation(request.conversationId!, 'message-later')).toThrow(
+      ImageGenerationPersistenceError
+    )
   })
 })

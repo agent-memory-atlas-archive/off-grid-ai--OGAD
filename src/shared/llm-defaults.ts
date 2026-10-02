@@ -7,6 +7,11 @@
 
 export const DEFAULT_CTX_SIZE = 16384
 
+// Capture distillation combines the structured prompt, recent activity, accessibility text, and
+// vision tokens. An 8K window is the minimum supported runtime envelope; the 16K default above
+// leaves output headroom instead of consuming the whole window with input.
+export const MIN_CAPTURE_CTX_SIZE = 8192
+
 // Max-output sentinel: the setting value meaning "auto" — let a reply run until the model emits its
 // natural stop (EOS) or the context window fills, rather than a fixed token cap that truncated long
 // answers. Stored as 0 (a literal 0-token cap is meaningless) and mapped to the engine's unlimited
@@ -15,3 +20,11 @@ export const MAX_TOKENS_AUTO = 0
 
 // Fresh-install / reset default for max output: auto (context is the limit, not a fixed number).
 export const DEFAULT_MAX_TOKENS = MAX_TOKENS_AUTO
+
+// Keep existing Desktop imports stable while Shared owns the cross-platform tool-call policy.
+export {
+  MIN_MAX_TOOL_CALLS,
+  MAX_MAX_TOOL_CALLS,
+  DEFAULT_MAX_TOOL_CALLS,
+  normalizeMaxToolCalls
+} from '@offgrid/models'

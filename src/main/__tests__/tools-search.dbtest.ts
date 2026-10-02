@@ -3,7 +3,7 @@
 // (core database.ts + pro's migrateCrm, which creates observations/observation_fts and
 // the entities.hidden column universalSearch filters on) + real keyword FTS. The ONLY
 // things faked are true external boundaries: the native engine (fake socket), Electron's
-// dir, and the two native/heavy libs behind semantic search — @xenova/transformers (the
+// dir, and the two native/heavy libs behind semantic search — @huggingface/transformers (the
 // embedding model, which would download) and @lancedb/lancedb (native vector store).
 // universalSearch already catches a failed semantic pass and falls back to keyword, so
 // the search is deterministic on real FTS with zero mocks of OUR code.
@@ -24,7 +24,7 @@ vi.mock('electron', () => ({
 }))
 // The embedding model — faked to throw so the semantic pass is skipped (universalSearch
 // catches it) and search runs on the real keyword FTS. THE external boundary.
-vi.mock('@xenova/transformers', () => ({
+vi.mock('@huggingface/transformers', () => ({
   pipeline: async () => {
     throw new Error('no embedding model in test')
   },
@@ -81,7 +81,7 @@ beforeAll(async () => {
 })
 beforeEach(() => {
   fake.reset()
-  getDB().exec('DELETE FROM observations')
+  getDB().exec('DELETE FROM observations; DELETE FROM rag_messages; DELETE FROM rag_conversations')
 })
 afterAll(async () => {
   await fake.close()
@@ -103,6 +103,17 @@ function seedObservation(summary: string, surface: string): string {
   return `obs:${id}`
 }
 
+function seedChat(id: string, title: string, content: string): string {
+  const db = getDB()
+  db.prepare('INSERT INTO rag_conversations (id, title) VALUES (?, ?)').run(id, title)
+  db.prepare('INSERT INTO rag_messages (conversation_id, role, content) VALUES (?, ?, ?)').run(
+    id,
+    'user',
+    content
+  )
+  return `chat:${id}`
+}
+
 describe('search_memory citations — real universalSearch over the real full schema', () => {
   it('surfaces a real keyword hit as a structured citation in r.unified', async () => {
     const key = seedObservation('shipped the Q3 launch on time', 'Note')
@@ -110,7 +121,13 @@ describe('search_memory citations — real universalSearch over the real full sc
       { toolCalls: [{ name: 'search_memory', args: { query: 'Q3 launch' } }] },
       { content: 'You shipped the Q3 launch.' }
     )
-    const r = await toolChat('what about Q3', [], { conversationId: 'chat-current' })
+    const r = await toolChat('what about Q3', [], {
+      conversationId: 'chat-current',
+      allMemory: true
+    })
+
+    const firstRequest = fake.requests[0] as { tools: { function: { name: string } }[] }
+    expect(firstRequest.tools.map((tool) => tool.function.name)).toContain('search_memory')
 
     // Terminal artifact: the citation the renderer builds from the REAL hit.
     const cite = r.unified.find((s) => s.key === key)
@@ -131,7 +148,7 @@ describe('search_memory citations — real universalSearch over the real full sc
       { toolCalls: [{ name: 'search_memory', args: { query: 'project' } }] }, // round 2 -> both
       { content: 'done' }
     )
-    const r = await toolChat('dig deeper', [])
+    const r = await toolChat('dig deeper', [], { allMemory: true })
     const keys = r.unified.map((s) => s.key)
     expect(keys.filter((k) => k === k1)).toHaveLength(1) // alpha once despite two rounds returning it
     expect(keys).toContain(k2) // beta added
@@ -143,8 +160,31 @@ describe('search_memory citations — real universalSearch over the real full sc
       { toolCalls: [{ name: 'search_memory', args: { query: 'zzzznomatch' } }] },
       { content: 'I could not find anything.' }
     )
-    const r = await toolChat('anything?', [])
+    const r = await toolChat('anything?', [], { allMemory: true })
     expect(r.unified).toEqual([])
     expect(r.toolCalls[0]!.result).toMatch(/nothing found in memory/i)
+  })
+
+  it('finds a past chat through the shared Search service and keeps its navigation target', async () => {
+    const key = seedChat(
+      'conversation-release',
+      'Release decision',
+      'We chose the starling rollout for Friday.'
+    )
+    fake.enqueue(
+      { toolCalls: [{ name: 'search_memory', args: { query: 'starling rollout' } }] },
+      { content: 'The rollout is planned for Friday.' }
+    )
+
+    const result = await toolChat('When is the starling rollout?', [], {
+      conversationId: 'conversation-current',
+      allMemory: true
+    })
+
+    const source = result.unified.find((item) => item.key === key)
+    expect(source?.kind).toBe('chat')
+    expect(source?.url).toBe('conversation-release')
+    expect(source?.snippet).toContain('starling rollout')
+    expect(result.answer).toBe('The rollout is planned for Friday.')
   })
 })

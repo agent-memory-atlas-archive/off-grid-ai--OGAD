@@ -2,11 +2,10 @@
  * Regression guard for the Windows image-gen "binary not found" bug.
  *
  * scripts/fetch-win-binaries.ps1 populates resources/bin/sd/sd-cli.exe from an
- * upstream stable-diffusion.cpp release asset, matched by NAME. The sd fetch is
- * OPTIONAL (the script's verify block only WARNs when sd-cli.exe is missing), so
- * a stale asset pattern fails SILENTLY at build time: `Get-AssetUrl` throws "no
- * asset matching", the try/catch swallows it into a warning, and the Windows
- * package ships with NO image binary — surfacing only at runtime as
+ * upstream stable-diffusion.cpp release asset, matched by NAME. A stale asset
+ * pattern once failed silently at build time: `Get-AssetUrl` threw "no asset
+ * matching", the try/catch swallowed it into a warning, and the Windows
+ * package shipped with no image binary. The error appeared only at runtime as
  *   "Image generation binary (sd-cli) not found in resources/bin/sd."
  * (src/main/imagegen.ts:findSdCli -> throw).
  *
@@ -32,11 +31,12 @@ describe.skipIf(!SRC)('fetch-win-binaries.ps1 — stable-diffusion.cpp asset', (
     expect(activeAvx2).toBe(false)
   })
 
-  it('matches a currently-published Windows sd asset (cpu x64)', () => {
-    // CPU build is deliberate: the default one-shot sd-cli path has no launch-
-    // failure fallback, so the bundled binary must load without a GPU/Vulkan
-    // loader. See the script comment.
+  it('stages CUDA, Vulkan, and CPU image runtimes with one shared CUDA runtime', () => {
+    expect(SRC).toMatch(/leejet\/stable-diffusion\.cpp'\s+'bin-win-cuda12-x64\\\.zip\$'/)
+    expect(SRC).toMatch(/leejet\/stable-diffusion\.cpp'\s+'bin-win-vulkan-x64\\\.zip\$'/)
     expect(SRC).toMatch(/leejet\/stable-diffusion\.cpp'\s+'bin-win-cpu-x64\\\.zip\$'/)
+    expect(SRC).toMatch(/Copy-Runtime \$x 'sd-cuda'/)
+    expect(SRC).not.toMatch(/cudart-sd-bin-win/)
   })
 
   it('still renames upstream sd.exe to the sd-cli.exe the app resolves', () => {
@@ -46,7 +46,35 @@ describe.skipIf(!SRC)('fetch-win-binaries.ps1 — stable-diffusion.cpp asset', (
     expect(SRC).toMatch(/Copy-Item \$sd \$cli -Force/)
   })
 
-  it('keeps sd-cli.exe in the post-fetch verify (present, even if only a warning)', () => {
+  it('keeps sd-cli.exe in the post-fetch verify', () => {
     expect(SRC).toMatch(/'sd\\sd-cli\.exe'/)
+  })
+})
+
+describe.skipIf(!SRC)('fetch-win-binaries.ps1 — Bonsai runtime', () => {
+  it('stages pinned Prism CUDA, Vulkan, and CPU runtimes in the directories the model server resolves', () => {
+    expect(SRC).toMatch(/offgrid\.prismLlamaRef/)
+    expect(SRC).toMatch(/PrismML-Eng\/llama\.cpp'\s+'\^llama-\.\+-bin-win-cuda-12\\\.4-x64\\\.zip\$'/)
+    expect(SRC).toMatch(/PrismML-Eng\/llama\.cpp'\s+'bin-win-vulkan-x64\\\.zip\$'/)
+    expect(SRC).toMatch(/PrismML-Eng\/llama\.cpp'\s+'bin-win-cpu-x64\\\.zip\$'/)
+    expect(SRC).toMatch(/Copy-Runtime \$x 'llama-prism-cuda'/)
+    expect(SRC).toMatch(/Copy-Runtime \$x 'llama-prism'/)
+    expect(SRC).toMatch(/Copy-Runtime \$x 'llama-prism-cpu'/)
+  })
+
+  it('stages the shared CUDA runtime and checks it before packaging', () => {
+    expect(SRC).toMatch(/ggml-org\/llama\.cpp'\s+'\^llama-\.\+-bin-win-cuda-12\\\.4-x64\\\.zip\$'/)
+    expect(SRC).toMatch(/ggml-org\/llama\.cpp'\s+'\^cudart-llama-bin-win-cuda-12\\\.4-x64\\\.zip\$'/)
+    expect(SRC).toMatch(/Copy-Runtime \$x 'cuda-runtime'/)
+    expect(SRC).toMatch(/cuda-runtime\\cudart64_12\.dll/)
+    expect(SRC).toMatch(/cuda-runtime\\cublas64_12\.dll/)
+    expect(SRC).toMatch(/cuda-runtime\\cublasLt64_12\.dll/)
+  })
+
+  it('fails the Windows build when either Prism model server is absent', () => {
+    expect(SRC).toMatch(/llama-prism\\llama-server\.exe/)
+    expect(SRC).toMatch(/REQUIRED binary missing: \$prism/)
+    expect(SRC).toMatch(/llama-prism-cpu\\llama-server\.exe/)
+    expect(SRC).toMatch(/REQUIRED binary missing: \$prismCpu/)
   })
 })

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, type ReactNode } from 'react'
+import { AnimatePresence } from 'motion/react'
 import {
   IconPlus,
   IconFolder,
@@ -17,6 +18,11 @@ import {
 import { ArtifactCanvas, type Artifact } from './ArtifactCanvas'
 import { artifactKindLabel } from '@renderer/lib/artifact-labels'
 import { timeAgo } from '@renderer/lib/time'
+import { useRendererEntitlement } from '@renderer/bootstrap/useRendererEntitlement'
+import {
+  PROJECT_DELETE_FALLBACK_REASON,
+  type ProjectDeleteOutcome
+} from '../../../shared/project-delete-outcome'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (window as any).api
@@ -55,7 +61,7 @@ function ProjectArtifacts({ projectId }: { projectId: string }): React.ReactElem
               className="group flex flex-col gap-2 rounded-lg border border-neutral-800/80 bg-neutral-900/30 p-4 text-left transition-colors hover:border-green-500/50 hover:bg-neutral-900/60"
             >
               <div className="flex items-center justify-between">
-                <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-green-400">
+                <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-400">
                   {artifactKindLabel(a.kind)}
                 </span>
                 <span className="text-[10px] text-neutral-600">
@@ -69,7 +75,9 @@ function ProjectArtifacts({ projectId }: { projectId: string }): React.ReactElem
           ))}
         </div>
       )}
-      {open && <ArtifactCanvas artifact={open} onClose={() => setOpen(null)} />}
+      <AnimatePresence>
+        {open && <ArtifactCanvas artifact={open} onClose={() => setOpen(null)} />}
+      </AnimatePresence>
     </div>
   )
 }
@@ -129,6 +137,7 @@ export function ProjectsScreen({
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [view, setView] = useState<'chat' | 'artifacts' | 'config'>('chat')
+  const [deleteFailure, setDeleteFailure] = useState('')
 
   const refreshProjects = useCallback(async () => {
     const list = (await api.listProjects?.()) ?? []
@@ -165,8 +174,19 @@ export function ProjectsScreen({
   }
 
   const removeProject = async (id: string): Promise<void> => {
-    if (!window.confirm('Delete this project, its knowledge base and chats?')) return
-    await api.deleteProject?.(id)
+    if (
+      !window.confirm(
+        'Delete this project, its knowledge base, and generated artifacts? Its chats stay in Chat.'
+      )
+    ) {
+      return
+    }
+    setDeleteFailure('')
+    const outcome = (await api.deleteProject?.(id)) as ProjectDeleteOutcome | undefined
+    if (!outcome?.ok) {
+      setDeleteFailure(outcome?.reason || PROJECT_DELETE_FALLBACK_REASON)
+      return
+    }
     selectProject(null)
     await refreshProjects()
   }
@@ -185,6 +205,11 @@ export function ProjectsScreen({
             <IconPlus className="h-4 w-4" />
           </button>
         </div>
+        {deleteFailure ? (
+          <p role="alert" className="mx-4 mb-2 text-[11px] text-red-400">
+            {deleteFailure}
+          </p>
+        ) : null}
         <div className="flex-1 overflow-y-auto px-2">
           {creating && (
             <input
@@ -305,14 +330,21 @@ function ProjectChats({
 
   useEffect(() => {
     let alive = true
-    api
-      .getRagConversations?.(project.id)
-      .then((c: RagConvo[]) => {
-        if (alive) setChats(c)
-      })
-      .catch(() => {})
+    const refresh = (): void => {
+      void api
+        .getRagConversations?.(project.id)
+        .then((c: RagConvo[]) => {
+          if (alive) setChats(c)
+        })
+        .catch(() => {})
+    }
+    refresh()
+    const offChanged = api.onRagConversationsChanged?.(() => {
+      refresh()
+    })
     return () => {
       alive = false
+      offChanged?.()
     }
   }, [project.id])
 
@@ -377,7 +409,7 @@ function ProjectConfig({
   const [includeMemory, setIncludeMemory] = useState(project.includeMemory)
   const [saving, setSaving] = useState(false)
   // Captured-memory retrieval is a Pro feature — core projects use uploaded docs only.
-  const isPro = !!api?.isPro
+  const { isPro } = useRendererEntitlement()
   const [savedAt, setSavedAt] = useState<string | null>(null)
 
   const dirty =
@@ -469,7 +501,7 @@ function ProjectConfig({
                 Include captured memory
                 <span className="block text-[11px] text-neutral-600">
                   Retrieval spans uploaded documents
-                  {includeMemory ? ' + everything Off Grid has captured' : ' only'}.
+                  {includeMemory ? ' + everything Off Grid AI has captured' : ' only'}.
                 </span>
               </span>
             </button>
@@ -516,8 +548,16 @@ function KnowledgeBase({ projectId }: { projectId: string }) {
         } else setStatus(`${d.name}: ${d.stage}…`)
       }
     )
-    return () => off?.()
-  }, [refresh])
+    const offChanged = api.onProjectDocumentsChanged?.(
+      ({ projectId: changedProjectId }: { projectId: string }) => {
+        if (changedProjectId === projectId) refresh()
+      }
+    )
+    return () => {
+      off?.()
+      offChanged?.()
+    }
+  }, [projectId, refresh])
 
   const add = async (): Promise<void> => {
     setBusy(true)
@@ -576,6 +616,7 @@ function KnowledgeBase({ projectId }: { projectId: string }) {
                     cur.map((x) => (x.id === d.id ? { ...x, enabled: !x.enabled } : x))
                   )
                 }}
+                aria-label={`${d.enabled ? 'Disable' : 'Enable'} ${d.name}`}
                 title={d.enabled ? 'Enabled in retrieval' : 'Disabled'}
                 className={`h-4 w-7 shrink-0 rounded-full transition-colors ${d.enabled ? 'bg-green-500' : 'bg-neutral-700'}`}
               >
@@ -588,6 +629,7 @@ function KnowledgeBase({ projectId }: { projectId: string }) {
                   await api.deleteProjectDocument?.(d.id)
                   setDocs((cur) => cur.filter((x) => x.id !== d.id))
                 }}
+                aria-label={`Delete ${d.name}`}
                 className="shrink-0 text-neutral-600 transition-colors hover:text-red-500"
               >
                 <IconTrash className="h-4 w-4" />

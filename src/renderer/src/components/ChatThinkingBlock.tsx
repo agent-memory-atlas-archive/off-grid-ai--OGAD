@@ -1,0 +1,44 @@
+import type { ReactElement } from 'react'
+import { Brain, CaretDown } from '@phosphor-icons/react'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger
+} from '@renderer/components/ui/collapsible'
+import { cn } from '@renderer/lib/utils'
+import { ChatMarkdown } from './ChatMarkdown'
+import { LoadingDots } from './ui/loading-dots'
+
+interface ChatThinkingBlockProps {
+  content: string
+  live?: boolean
+  label?: string
+  className?: string
+}
+
+/** One Desktop presentation for reasoning, whether this Mac or a paired device produced it. */
+export function ChatThinkingBlock({
+  content,
+  live = false,
+  label,
+  className
+}: Readonly<ChatThinkingBlockProps>): ReactElement {
+  return (
+    <Collapsible defaultOpen={live} className={cn('w-full max-w-[85%]', className)}>
+      <CollapsibleTrigger className="group inline-flex w-fit max-w-full flex-none items-center justify-start gap-1.5 whitespace-nowrap text-[11px] text-neutral-500 transition-colors hover:text-neutral-300">
+        <Brain className="h-3 w-3 shrink-0 text-neutral-600" aria-hidden="true" />
+        <span className="whitespace-nowrap">
+          {label ?? (live ? 'Thinking…' : 'Thought process')}
+        </span>
+        {live ? <LoadingDots size="small" className="pl-0" /> : null}
+        <CaretDown
+          className="h-3 w-3 shrink-0 transition-transform group-data-[state=open]:rotate-180"
+          aria-hidden="true"
+        />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-1 border-l-2 border-neutral-800 pl-3 text-xs leading-relaxed text-neutral-500">
+        <ChatMarkdown content={content} />
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}

@@ -1,18 +1,90 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { persistToggle } from '@renderer/lib/persist-toggle'
-import { useEscapeToClose } from '@renderer/lib/use-escape-to-close'
-import { DEFAULT_CTX_SIZE, MAX_TOKENS_AUTO } from '@offgrid/core/shared/llm-defaults'
-import { contextWindowOptions, contextWindowHint } from '@renderer/lib/ctx-options'
+import {
+  DEFAULT_CTX_SIZE,
+  DEFAULT_MAX_TOOL_CALLS,
+  MAX_MAX_TOOL_CALLS,
+  MAX_TOKENS_AUTO,
+  MIN_MAX_TOOL_CALLS,
+  MIN_CAPTURE_CTX_SIZE
+} from '@offgrid/core/shared/llm-defaults'
+import {
+  REASONING_BUDGET_AUTO,
+  REASONING_BUDGET_OPTIONS,
+  reasoningBudgetLabel,
+  optionsWithinCeiling,
+  reconcileBudgets
+} from '@offgrid/models'
+import { gpuLayersHint, type EngineAccelerator } from '@offgrid/core/shared/engine-accelerator'
+import {
+  contextWindowOptions,
+  contextWindowHint,
+  recommendedContextWindow
+} from '@renderer/lib/ctx-options'
+import { formatContextWindow, resolveActiveTextModel } from '@renderer/lib/model-summary'
+import {
+  invalidateDisplaySettings,
+  invalidateLlmSettings
+} from '@renderer/lib/settings-invalidation'
+import {
+  openActiveModelsPanel,
+  type ModelSettingsPanelTab as Tab
+} from '@renderer/lib/model-settings-panel'
+import { ImageSettingsTab } from './ImageSettingsTab'
+import { SidePanel } from './SidePanel'
+import { VoiceSettingsTab } from './VoiceSettingsTab'
+import { RemoteVisionSettingsTab } from './RemoteVisionSettingsTab'
+import { SettingsRow as Row } from './SettingsRow'
+import { SettingsSelect } from './SettingsSelect'
+import { BackendPreferencesSection } from './ProcessingControls'
+import type { SpeechLanguage } from '@offgrid/speech'
+import { CaretRight, X } from '@phosphor-icons/react'
+import { getSlot, SLOTS } from '@renderer/bootstrap/slotRegistry'
 
 const MAX_OUTPUT_AUTO = MAX_TOKENS_AUTO
+// The values THIS picker offers. The nesting rule they obey is shared (@offgrid/models); which
+// discrete steps to show is a desktop rendering choice, and OGAM uses sliders instead.
 const MAX_OUTPUT_OPTIONS = [2048, 4096, 8192, 16384, 32768]
 
-// Right-side Settings panel (same pattern as SkillsPanel/ArtifactCanvas).
-// Tabs: Model (inference params), Voice (Kokoro TTS), Tools (built-in, read-only),
-// Connectors (MCP servers — the user's reusable tool library). All on-device.
+/** The ceiling on thinking: the response length it must fit inside, which for an auto output cap
+ *  is the context window. Mirrors reconcileBudgets so the options offered match what is kept. */
+function thinkingCeiling(s: LlmSettings): number {
+  const maxOutput = s.maxTokens ?? MAX_OUTPUT_AUTO
+  const ctx = s.ctxSize ?? DEFAULT_CTX_SIZE
+  return maxOutput === MAX_OUTPUT_AUTO ? ctx : maxOutput
+}
 
-type Tab = 'model' | 'voice' | 'tools' | 'connectors'
+/**
+ * Apply one budget edit and pull the inner budgets back under it.
+ *
+ * Filtering the option lists stops a user PICKING an impossible combination; this stops an already
+ * stored one surviving a change to an outer limit. Both read the same rule from @offgrid/models,
+ * so the picker and the persisted value cannot disagree. Only genuinely changed fields are
+ * returned, so an unrelated edit does not rewrite the other two.
+ */
+function budgetChange(s: LlmSettings, patch: LlmSettings): LlmSettings {
+  const next = { ...s, ...patch }
+  const reconciled = reconcileBudgets({
+    contextWindow: next.ctxSize ?? DEFAULT_CTX_SIZE,
+    maxOutput: next.maxTokens ?? MAX_OUTPUT_AUTO,
+    thinkingBudget: next.reasoningBudget ?? REASONING_BUDGET_AUTO
+  })
+  return {
+    ...patch,
+    ...(reconciled.maxOutput !== (next.maxTokens ?? MAX_OUTPUT_AUTO)
+      ? { maxTokens: reconciled.maxOutput }
+      : {}),
+    ...(reconciled.thinkingBudget !== (next.reasoningBudget ?? REASONING_BUDGET_AUTO)
+      ? { reasoningBudget: reconciled.thinkingBudget }
+      : {})
+  }
+}
+
+// Right-side Settings panel (same pattern as SkillsPanel/ArtifactCanvas).
+// Tabs: Model (inference params), Image, Voice (Kokoro TTS), Tools (built-in, read-only),
+// Connectors (MCP servers — the user's reusable tool library). All on-device.
 type KvCacheType = 'f16' | 'q8_0' | 'q4_0'
+type SpeculativeDecodingMode = 'off' | 'ngram' | 'mtp' | 'draft' | 'dflash'
 type LlmSettings = {
   temperature?: number
   ctxSize?: number
@@ -21,14 +93,22 @@ type LlmSettings = {
   minP?: number
   repeatPenalty?: number
   maxTokens?: number
+  maxToolCalls?: number
+  reasoningBudget?: number
   systemPrompt?: string
   kvCacheType?: KvCacheType
   flashAttn?: boolean
   gpuLayers?: number
   threads?: number
   batchSize?: number
+  speculativeDecoding?: SpeculativeDecodingMode
+  draftModel?: string
+  supportsMtp?: boolean
+  compatibleDraftModels?: string[]
+  compatibleDflashModels?: string[]
   effectiveCtxSize?: number // reported by the backend (RAM-clamped); read-only
   modelMaxCtx?: number | null // the model's TRAINED window (GGUF); read-only, bounds the picker
+  gpuAccelerator?: EngineAccelerator | null // the engine the backend actually spawned; read-only
 }
 type Connector = {
   id: number
@@ -37,6 +117,116 @@ type Connector = {
   transport?: string
   enabled?: number | boolean
 }
+
+type ToolSetting = { name: string; description: string; enabled?: boolean }
+
+const TOOL_GROUPS = [
+  {
+    label: 'Assistant',
+    matches: (name: string): boolean => ['computer_use', 'web_use'].includes(name)
+  },
+  {
+    label: 'Calendar',
+    matches: (name: string): boolean => name.startsWith('calendar_')
+  },
+  {
+    label: 'Reminders',
+    matches: (name: string): boolean => name.startsWith('reminders_')
+  },
+  {
+    label: 'Web',
+    matches: (name: string): boolean =>
+      ['web_search', 'brave_search', 'read_url', 'open_url'].includes(name)
+  },
+  {
+    label: 'Memory',
+    matches: (name: string): boolean =>
+      ['read_screen', 'search_memory', 'search_knowledge_base', 'search_meetings'].includes(name)
+  },
+  {
+    label: 'Communication',
+    matches: (name: string): boolean =>
+      name.startsWith('contacts_') || name.startsWith('messages_') || name.startsWith('mail_')
+  },
+  {
+    label: 'Device',
+    matches: (name: string): boolean => name === 'get_current_location'
+  },
+  {
+    label: 'Media',
+    matches: (name: string): boolean => name === 'generate_image'
+  },
+  {
+    label: 'Utilities',
+    matches: (name: string): boolean => ['calculator', 'get_datetime'].includes(name)
+  }
+] as const
+
+function groupTools(tools: ToolSetting[]): { label: string; tools: ToolSetting[] }[] {
+  const groups = TOOL_GROUPS.map((group) => ({
+    label: group.label,
+    tools: tools.filter((tool) => group.matches(tool.name))
+  })).filter((group) => group.tools.length > 0)
+  const known = new Set(groups.flatMap((group) => group.tools.map((tool) => tool.name)))
+  const other = tools.filter((tool) => !known.has(tool.name))
+  return other.length > 0 ? [...groups, { label: 'Other', tools: other }] : groups
+}
+
+type DraftModelOption = { value: string; label: string }
+type DraftCatalogModel = {
+  id: string
+  name: string
+  kind?: string
+  tags?: string[]
+  files?: Array<{ name: string; role?: string }>
+}
+type DraftCompanionStatus = Record<string, { dflashInstalled?: boolean; dflashFile?: string }>
+
+function installedDraftModels(
+  models: readonly DraftCatalogModel[],
+  activeModelId: string | null,
+  companionStatus: DraftCompanionStatus,
+  compatibleDraftFiles: readonly string[],
+  compatibleDflashFiles: readonly string[]
+): { draft: DraftModelOption[]; dflash: DraftModelOption[] } {
+  const draftFiles = new Set(compatibleDraftFiles)
+  const dflashFiles = new Set(compatibleDflashFiles)
+  const draft = new Map<string, DraftModelOption>()
+  const dflashOptions = new Map<string, DraftModelOption>()
+  for (const model of models) {
+    const dflash = companionStatus[model.id]
+    if (dflash?.dflashInstalled && dflash.dflashFile && dflashFiles.has(dflash.dflashFile)) {
+      dflashOptions.set(dflash.dflashFile, {
+        value: dflash.dflashFile,
+        label: `${model.name} · DFlash`
+      })
+    }
+    if (model.id === activeModelId) continue
+    if (!model.tags?.some((tag) => tag === 'Imported' || tag === 'Downloaded')) continue
+    if (model.kind && !['text', 'vision', 'local'].includes(model.kind)) continue
+    const primary = model.files?.find(
+      (file) =>
+        file.name.toLowerCase().endsWith('.gguf') &&
+        file.role !== 'mmproj' &&
+        !/(?:^|[-_.])(mmproj|projector)(?:[-_.]|$)/i.test(file.name)
+    )?.name
+    if (primary && draftFiles.has(primary)) {
+      draft.set(primary, { value: primary, label: model.name })
+    }
+  }
+  return { draft: [...draft.values()], dflash: [...dflashOptions.values()] }
+}
+
+type TranscriptionInfo = {
+  engine: 'whisper' | 'parakeet' | 'whisper-resident' | 'remote'
+  modelId: string | null
+  label: string
+  language: string
+  languages: SpeechLanguage[]
+  options: { id: string | null; name: string; active: boolean }[]
+}
+
+const DEFAULT_TRANSCRIPTION_MODEL = '__default-transcription-model__'
 
 const CTX_OPTIONS = [4096, 8192, 16384, 32768, 65536, 131072]
 // Defaults mirror the backend's LLMService field defaults (for "Reset to defaults").
@@ -47,116 +237,188 @@ const DEFAULTS: LlmSettings = {
   minP: 0.05,
   repeatPenalty: 1.1,
   maxTokens: MAX_TOKENS_AUTO,
+  maxToolCalls: DEFAULT_MAX_TOOL_CALLS,
   ctxSize: DEFAULT_CTX_SIZE,
   systemPrompt: '',
   kvCacheType: 'f16',
   flashAttn: false,
   gpuLayers: 99,
   threads: 0,
-  batchSize: 512
+  batchSize: 512,
+  speculativeDecoding: 'off',
+  draftModel: ''
 }
 
-function Row({
-  label,
-  hint,
-  value,
-  children
+export function SettingsPanel({
+  onClose,
+  embedded = false,
+  initialTab = 'model'
 }: {
-  label: string
-  hint?: string
-  value?: string
-  children: React.ReactNode
-}) {
-  return (
-    <div className="mb-4">
-      <div className="mb-1 flex items-center justify-between">
-        <label className="text-[11px] uppercase tracking-wide text-neutral-400">{label}</label>
-        {value !== undefined ? <span className="text-xs text-green-500">{value}</span> : null}
-      </div>
-      {children}
-      {hint ? <p className="mt-1 text-[10px] text-neutral-600">{hint}</p> : null}
-    </div>
-  )
-}
-
-export function SettingsPanel({ onClose }: { onClose: () => void }) {
-  useEscapeToClose(onClose)
-  const [tab, setTab] = useState<Tab>('model')
+  onClose: () => void
+  embedded?: boolean
+  initialTab?: Tab
+}): React.JSX.Element {
+  const TaskSettings = getSlot(SLOTS.taskSettings)
+  const [tab, setTab] = useState<Tab>(initialTab)
   const [s, setS] = useState<LlmSettings>({})
-  const [voices, setVoices] = useState<string[]>([])
-  const [voice, setVoice] = useState<string>('af_heart')
-  const [tools, setTools] = useState<{ name: string; description: string; enabled?: boolean }[]>([])
+  const [transcriptionInfo, setTranscriptionInfo] = useState<TranscriptionInfo | null>(null)
+  const [tools, setTools] = useState<ToolSetting[]>([])
+  const [toolsEnabled, setToolsEnabled] = useState(true)
+  const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [connectors, setConnectors] = useState<Connector[]>([])
   const [newConn, setNewConn] = useState({ name: '', url: '' })
-  const [voiceState, setVoiceState] = useState<'idle' | 'generating' | 'playing' | 'error'>('idle')
+  const [activeModelName, setActiveModelName] = useState<string | null>(null)
+  const [draftModels, setDraftModels] = useState<DraftModelOption[]>([])
+  const [dflashModels, setDflashModels] = useState<DraftModelOption[]>([])
+  // Default hidden, like mobile: the numbers are for when you go looking, not a permanent fixture.
+  const [showGenerationDetails, setShowGenerationDetails] = useState(false)
+  useEffect(() => {
+    const syncToolsEnabled = (event: Event): void => {
+      setToolsEnabled((event as CustomEvent<boolean>).detail)
+    }
+    window.addEventListener('offgrid-tools-enabled-changed', syncToolsEnabled)
+    return () => window.removeEventListener('offgrid-tools-enabled-changed', syncToolsEnabled)
+  }, [])
+
+  const refreshConnectors = useCallback((): void => {
+    window.api
+      .mcpList?.()
+      .then((c: Connector[]) => setConnectors(c))
+      .catch(() => setConnectors([]))
+  }, [])
 
   useEffect(() => {
     window.api
       .getLlmSettings?.()
       .then((v: LlmSettings) => setS(v))
       .catch(() => {})
+    const modelApi = window.api as Partial<
+      Pick<
+        typeof window.api,
+        'getModelCatalog' | 'getActiveModel' | 'getActiveModelIds' | 'getModelVisionStatus'
+      >
+    >
+    if (
+      modelApi.getModelCatalog &&
+      modelApi.getActiveModel &&
+      modelApi.getActiveModelIds &&
+      modelApi.getModelVisionStatus
+    ) {
+      Promise.all([
+        modelApi.getModelCatalog(),
+        modelApi.getActiveModel(),
+        modelApi.getActiveModelIds(),
+        modelApi.getModelVisionStatus(),
+        window.api.getLlmSettings?.()
+      ])
+        .then(([catalog, activeId, activeIds, companionStatus, llmSettings]) => {
+          setActiveModelName(
+            resolveActiveTextModel(catalog.models, activeId, new Set(activeIds)).name
+          )
+          const compatible = installedDraftModels(
+            catalog.models,
+            activeId,
+            companionStatus,
+            llmSettings?.compatibleDraftModels ?? [],
+            llmSettings?.compatibleDflashModels ?? []
+          )
+          setDraftModels(compatible.draft)
+          setDflashModels(compatible.dflash)
+        })
+        .catch(() => {
+          setActiveModelName(null)
+          setDraftModels([])
+          setDflashModels([])
+        })
+    }
     window.api
-      .ttsVoices?.()
-      .then((v: string[]) => setVoices(v))
+      .getTranscriptionInfo?.()
+      .then((info: TranscriptionInfo) => setTranscriptionInfo(info))
+      .catch(() => setTranscriptionInfo(null))
+    window.api
+      .getSettings?.()
+      .then((settings) => {
+        setShowGenerationDetails(settings.showGenerationDetails === true)
+        setToolsEnabled(settings.toolsEnabled !== false)
+      })
       .catch(() => {})
     window.api
       .listTools?.()
-      .then((t: { name: string; description: string }[]) => setTools(t))
-      .catch(() => {})
-    window.api
-      .getSettings()
-      .then((all: Record<string, unknown>) => {
-        if (all.ttsVoice) setVoice(String(all.ttsVoice))
-      })
+      .then((t: ToolSetting[]) => setTools(t))
       .catch(() => {})
     refreshConnectors()
-  }, [])
-
-  const refreshConnectors = (): void => {
-    window.api
-      .mcpList?.()
-      .then((c: Connector[]) => setConnectors(c))
-      .catch(() => setConnectors([]))
-  }
+  }, [refreshConnectors])
 
   // Persist one inference setting (optimistic) — backend applies it per-request.
   const set = (patch: LlmSettings): void => {
     setS((prev) => ({ ...prev, ...patch }))
-    window.api.setLlmSettings?.(patch)
+    void Promise.resolve(window.api.setLlmSettings?.(patch))
+      .then(() => window.api.getLlmSettings?.())
+      .then((next) => {
+        if (next) {
+          setS(next)
+          invalidateLlmSettings()
+        }
+      })
+      .catch(() => {
+        void window.api
+          .getLlmSettings?.()
+          .then((next) => setS(next))
+          .catch(() => {})
+      })
   }
 
   const resetDefaults = (): void => {
     setS((prev) => ({ ...prev, ...DEFAULTS }))
-    window.api.setLlmSettings?.(DEFAULTS)
+    void Promise.resolve(window.api.setLlmSettings?.(DEFAULTS))
+      .then(() => {
+        invalidateLlmSettings()
+        return window.api.getLlmSettings?.()
+      })
+      .then((next) => {
+        if (next) setS(next)
+      })
+      .catch(() => {})
   }
 
-  const pickVoice = (v: string): void => {
-    void persistToggle(v, voice, setVoice, (val) => window.api.saveSetting('ttsVoice', val))
+  /**
+   * A DISPLAY preference, so it rides saveSetting rather than LlmSettings - nothing here reaches
+   * the engine, and putting a UI toggle in the engine's parameter block would send a pointless
+   * reconfigure on every flip.
+   */
+  const toggleGenerationDetails = (): void => {
+    const next = !showGenerationDetails
+    setShowGenerationDetails(next)
+    void Promise.resolve(window.api.saveSetting('showGenerationDetails', next))
+      .then(() => invalidateDisplaySettings())
+      .catch(() => {
+        // The switch is only a mirror of what was stored, so a failed write puts it back.
+        setShowGenerationDetails(!next)
+      })
   }
 
-  const testVoice = async (): Promise<void> => {
-    setVoiceState('generating')
-    try {
-      const res = await window.api.speak('This is the Off Grid voice.', voice)
-      if (!res?.dataUrl) throw new Error('No audio returned')
-      const audio = new Audio(res.dataUrl)
-      audio.onended = () => setVoiceState('idle')
-      audio.onerror = () => {
-        console.error('[voice] playback error', audio.error)
-        setVoiceState('error')
-      }
-      // Safety: never get stuck if onended doesn't fire.
-      audio.onloadedmetadata = () =>
-        setTimeout(
-          () => setVoiceState((s) => (s === 'playing' ? 'idle' : s)),
-          (audio.duration + 1) * 1000
-        )
-      setVoiceState('playing')
-      await audio.play()
-    } catch (e) {
-      console.error('[voice] test failed', e)
-      setVoiceState('error')
-    }
+  const pickTranscriptionLanguage = (language: string): void => {
+    if (!transcriptionInfo) return
+    setTranscriptionInfo({ ...transcriptionInfo, language })
+    void Promise.resolve(window.api.saveSetting('sttLanguage', language)).catch(() => {
+      void window.api
+        .getTranscriptionInfo()
+        .then((persisted) => setTranscriptionInfo(persisted))
+        .catch(() => {})
+    })
+  }
+
+  const pickTranscriptionModel = (value: string): void => {
+    const modelId = value === DEFAULT_TRANSCRIPTION_MODEL ? null : value
+    void Promise.resolve(window.api.setActiveModalModel('transcription', modelId))
+      .then(() => window.api.getTranscriptionInfo())
+      .then((info) => setTranscriptionInfo(info))
+      .catch(() => {
+        void window.api
+          .getTranscriptionInfo()
+          .then((persisted) => setTranscriptionInfo(persisted))
+          .catch(() => {})
+      })
   }
 
   const addConnector = async (): Promise<void> => {
@@ -170,414 +432,750 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     refreshConnectors()
   }
 
-  return (
+  const openActiveModels = (): void => {
+    onClose()
+    openActiveModelsPanel()
+  }
+
+  const content = (
     <>
-      {/* Click-outside scrim: any click off the panel closes it (paired with Escape). */}
-      <div
-        className="fixed inset-0 z-40 bg-black/30 transition-opacity duration-150"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      <div className="fixed right-0 top-0 bottom-0 z-50 flex w-[30vw] min-w-[420px] flex-col border-l border-neutral-800 bg-neutral-950 font-mono shadow-2xl">
+      {!embedded ? (
         <div className="flex items-center justify-between border-b border-neutral-800 px-4 py-2.5">
           <div className="flex items-center gap-2 text-sm text-neutral-200">
             <span className="rounded-sm bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-green-500">
               Settings
             </span>
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 transition-colors hover:text-white"
-          >
-            Close
-          </button>
-        </div>
-
-        <div className="flex items-center gap-1 border-b border-neutral-800 px-3 py-2">
-          {(['model', 'voice', 'tools', 'connectors'] as const).map((t) => (
+          <div className="flex items-center gap-2">
             <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`rounded-md px-3 py-1 text-xs capitalize transition-colors ${tab === t ? 'bg-neutral-800 text-green-500' : 'text-neutral-500 hover:text-neutral-300'}`}
+              onClick={openActiveModels}
+              className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 transition-colors hover:text-white"
             >
-              {t}
+              Active models
             </button>
-          ))}
+            <button
+              onClick={onClose}
+              aria-label="Close"
+              className="text-neutral-500 transition-colors hover:text-white"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
+      ) : null}
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 text-sm">
-          {tab === 'model' && (
-            <>
-              <Row
-                label="Temperature"
-                value={(s.temperature ?? 0.7).toFixed(2)}
-                hint="Lower = focused, higher = creative."
-              >
-                <input
-                  type="range"
-                  min={0}
-                  max={1.5}
-                  step={0.05}
-                  value={s.temperature ?? 0.7}
-                  onChange={(e) => set({ temperature: Number(e.target.value) })}
-                  className="w-full accent-green-500"
-                />
-              </Row>
-              <Row
-                label="Top-P"
-                value={(s.topP ?? 0.95).toFixed(2)}
-                hint="Nucleus sampling cutoff."
-              >
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={s.topP ?? 0.95}
-                  onChange={(e) => set({ topP: Number(e.target.value) })}
-                  className="w-full accent-green-500"
-                />
-              </Row>
-              <Row
-                label="Top-K"
-                value={String(s.topK ?? 40)}
-                hint="0 disables. Limits candidate tokens."
-              >
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={1}
-                  value={s.topK ?? 40}
-                  onChange={(e) => set({ topK: Number(e.target.value) })}
-                  className="w-full accent-green-500"
-                />
-              </Row>
-              <Row
-                label="Min-P"
-                value={(s.minP ?? 0.05).toFixed(2)}
-                hint="Min probability relative to the top token."
-              >
-                <input
-                  type="range"
-                  min={0}
-                  max={0.5}
-                  step={0.01}
-                  value={s.minP ?? 0.05}
-                  onChange={(e) => set({ minP: Number(e.target.value) })}
-                  className="w-full accent-green-500"
-                />
-              </Row>
-              <Row
-                label="Repeat penalty"
-                value={(s.repeatPenalty ?? 1.1).toFixed(2)}
-                hint="Higher discourages repetition."
-              >
-                <input
-                  type="range"
-                  min={1}
-                  max={1.5}
-                  step={0.01}
-                  value={s.repeatPenalty ?? 1.1}
-                  onChange={(e) => set({ repeatPenalty: Number(e.target.value) })}
-                  className="w-full accent-green-500"
-                />
-              </Row>
-              <Row
-                label="Max output"
-                hint={
-                  (s.maxTokens ?? MAX_OUTPUT_AUTO) === MAX_OUTPUT_AUTO
-                    ? 'Auto: the reply runs until the model stops or the context window fills — no fixed cap.'
-                    : 'Hard cap on the response length (must fit within the context window).'
-                }
-              >
-                <select
-                  aria-label="Max output"
-                  value={s.maxTokens ?? MAX_OUTPUT_AUTO}
-                  onChange={(e) => set({ maxTokens: Number(e.target.value) })}
-                  className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-neutral-200 outline-none focus:border-green-500"
-                >
-                  <option value={MAX_OUTPUT_AUTO}>Auto (until the model stops)</option>
-                  {MAX_OUTPUT_OPTIONS.map((n) => (
-                    <option key={n} value={n}>
-                      {n / 1024}K tokens
-                    </option>
-                  ))}
-                </select>
-              </Row>
-              <Row
-                label="Context window"
-                hint={contextWindowHint(s)}
-              >
-                <select
-                  aria-label="Context window"
-                  value={s.ctxSize ?? DEFAULT_CTX_SIZE}
-                  onChange={(e) => set({ ctxSize: Number(e.target.value) })}
-                  className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-neutral-200 outline-none focus:border-green-500"
-                >
-                  {contextWindowOptions(CTX_OPTIONS, s.modelMaxCtx, s.ctxSize ?? DEFAULT_CTX_SIZE).map(
-                    (c) => (
-                      <option key={c} value={c}>
-                        {c >= 1024 ? `${c / 1024}K` : c} tokens
-                        {c === s.modelMaxCtx ? " (model's max)" : c === DEFAULT_CTX_SIZE ? ' (default)' : ''}
-                      </option>
-                    )
-                  )}
-                </select>
-              </Row>
-              <Row
-                label="System prompt"
-                hint="Prepended to every chat as a system message. Leave blank for the default."
-              >
-                <textarea
-                  value={s.systemPrompt ?? ''}
-                  onChange={(e) => set({ systemPrompt: e.target.value })}
-                  rows={5}
-                  placeholder="e.g. You are a concise, technical assistant."
-                  className="w-full resize-none rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
-                />
-              </Row>
+      <div className="flex flex-nowrap items-center gap-1 overflow-x-auto border-b border-neutral-800 px-3 py-2">
+        {(
+          [
+            'model',
+            'image',
+            'voice',
+            'transcription',
+            'remote',
+            ...(TaskSettings ? (['tasks'] as const) : []),
+            'tools',
+            'connectors'
+          ] as const
+        ).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`shrink-0 rounded-md px-3 py-1 text-xs capitalize transition-colors ${tab === t ? 'bg-neutral-800 text-green-500' : 'text-neutral-500 hover:text-neutral-300'}`}
+          >
+            {t === 'model' ? 'Text' : t}
+          </button>
+        ))}
+      </div>
 
-              {/* Advanced — launch-time params; changing any reloads the model. */}
-              <div className="mb-3 mt-6 border-t border-neutral-800 pt-4 text-[10px] font-medium uppercase tracking-widest text-neutral-600">
-                Advanced (reloads the model)
-              </div>
-              <Row
-                label="KV cache"
-                hint="Quantize the KV cache to cut memory and allow a larger context. q8_0 ≈ half, q4_0 ≈ quarter of f16. Auto-enables FlashAttention."
-              >
-                <div className="flex gap-1.5">
-                  {(['f16', 'q8_0', 'q4_0'] as const).map((t) => (
-                    <button
-                      key={t}
-                      onClick={() =>
-                        set({ kvCacheType: t, ...(t !== 'f16' ? { flashAttn: true } : {}) })
-                      }
-                      className={`flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors ${(s.kvCacheType ?? 'f16') === t ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}
-                    >
-                      {t}
-                    </button>
-                  ))}
+      <div className={embedded ? 'p-1 pt-4 text-sm' : 'min-h-0 flex-1 overflow-y-auto p-4 text-sm'}>
+        {tab === 'tasks' && TaskSettings ? <TaskSettings /> : null}
+        {tab === 'model' && (
+          <>
+            <div
+              className="mb-5 grid grid-cols-2 gap-px border border-neutral-800 bg-neutral-800 lg:grid-cols-4"
+              role="status"
+            >
+              {[
+                ['Current model', activeModelName ?? 'No active model'],
+                ['Configured', formatContextWindow(s.ctxSize) ?? 'Checking'],
+                ['Running', formatContextWindow(s.effectiveCtxSize) ?? 'Checking'],
+                [
+                  'Recommended',
+                  formatContextWindow(recommendedContextWindow(s.modelMaxCtx)) ?? 'Not supported'
+                ]
+              ].map(([label, value]) => (
+                <div key={label} className="bg-neutral-950/90 p-3">
+                  <div className="text-[10px] uppercase tracking-wide text-neutral-600">
+                    {label}
+                  </div>
+                  <div className="mt-1 truncate text-xs text-neutral-200" title={value}>
+                    {value}
+                  </div>
                 </div>
-              </Row>
-              <Row
-                label="FlashAttention"
-                value={(s.flashAttn ?? false) ? 'On' : 'Off'}
-                hint="Faster, lower memory. Required for a quantized KV cache."
-              >
-                <button
-                  onClick={() => set({ flashAttn: !(s.flashAttn ?? false) })}
-                  disabled={(s.kvCacheType ?? 'f16') !== 'f16'}
-                  className={`w-full rounded-md border px-2 py-1.5 text-xs transition-colors disabled:opacity-50 ${s.flashAttn ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}
-                >
-                  {s.flashAttn ? 'Enabled' : 'Disabled'}
-                </button>
-              </Row>
-              <Row
-                label="GPU layers"
-                value={String(s.gpuLayers ?? 99)}
-                hint="Layers offloaded to the GPU (Metal). 99 = all. Lower only if you hit GPU-memory issues."
-              >
-                <input
-                  type="range"
-                  min={0}
-                  max={99}
-                  step={1}
-                  value={s.gpuLayers ?? 99}
-                  onChange={(e) => set({ gpuLayers: Number(e.target.value) })}
-                  className="w-full accent-green-500"
-                />
-              </Row>
-              <Row
-                label="CPU threads"
-                value={(s.threads ?? 0) === 0 ? 'auto' : String(s.threads)}
-                hint="0 = auto (let llama.cpp choose)."
-              >
-                <input
-                  type="range"
-                  min={0}
-                  max={16}
-                  step={1}
-                  value={s.threads ?? 0}
-                  onChange={(e) => set({ threads: Number(e.target.value) })}
-                  className="w-full accent-green-500"
-                />
-              </Row>
-              <Row
-                label="Batch size"
-                value={String(s.batchSize ?? 512)}
-                hint="Tokens processed per batch during prompt ingest."
-              >
-                <input
-                  type="range"
-                  min={64}
-                  max={2048}
-                  step={64}
-                  value={s.batchSize ?? 512}
-                  onChange={(e) => set({ batchSize: Number(e.target.value) })}
-                  className="w-full accent-green-500"
-                />
-              </Row>
-
+              ))}
+            </div>
+            <p className="mb-5 text-[11px] leading-5 text-neutral-500">
+              16K is recommended for capture and chat. Capture needs at least 8K; smaller windows
+              can save memory but leave captured frames waiting for analysis.
+            </p>
+            <Row
+              label="Temperature"
+              value={(s.temperature ?? 0.7).toFixed(2)}
+              hint="Lower = focused, higher = creative."
+            >
+              <input
+                type="range"
+                min={0}
+                max={1.5}
+                step={0.05}
+                value={s.temperature ?? 0.7}
+                onChange={(e) =>
+                  setS((current) => ({ ...current, temperature: Number(e.target.value) }))
+                }
+                onBlur={(e) => set({ temperature: Number(e.target.value) })}
+                className="w-full accent-green-500"
+              />
+            </Row>
+            <Row
+              label="Generation details"
+              controlId="generation-details-toggle"
+              value={showGenerationDetails ? 'Shown' : 'Hidden'}
+              hint="Show context use, speed, token count, and time under each answer."
+            >
               <button
-                onClick={resetDefaults}
-                className="mt-2 w-full rounded-md border border-neutral-800 px-3 py-2 text-xs text-neutral-400 transition-colors hover:border-neutral-700 hover:text-white"
+                id="generation-details-toggle"
+                type="button"
+                role="switch"
+                aria-checked={showGenerationDetails}
+                onClick={toggleGenerationDetails}
+                className={`w-full border px-3 py-1.5 text-left text-xs transition-colors ${
+                  showGenerationDetails
+                    ? 'border-green-500/40 text-green-500'
+                    : 'border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                }`}
               >
-                Reset to defaults
+                {showGenerationDetails ? 'Showing under each answer' : 'Hidden'}
               </button>
-            </>
-          )}
+            </Row>
+            <Row
+              label="Maximum tool calls"
+              controlId="maximum-tool-calls"
+              value={String(s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS)}
+              hint="Emergency limit for tool calls in one response."
+            >
+              <input
+                id="maximum-tool-calls"
+                type="range"
+                min={MIN_MAX_TOOL_CALLS}
+                max={MAX_MAX_TOOL_CALLS}
+                step={1}
+                value={s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS}
+                onChange={(e) =>
+                  setS((current) => ({
+                    ...current,
+                    maxToolCalls: Math.round(Number(e.target.value))
+                  }))
+                }
+                onBlur={(e) => set({ maxToolCalls: Math.round(Number(e.target.value)) })}
+                className="w-full accent-green-500"
+              />
+            </Row>
+            <Row label="Top-P" value={(s.topP ?? 0.95).toFixed(2)} hint="Nucleus sampling cutoff.">
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={s.topP ?? 0.95}
+                onChange={(e) => setS((current) => ({ ...current, topP: Number(e.target.value) }))}
+                onBlur={(e) => set({ topP: Number(e.target.value) })}
+                className="w-full accent-green-500"
+              />
+            </Row>
+            <Row
+              label="Top-K"
+              value={String(s.topK ?? 40)}
+              hint="0 disables. Limits candidate tokens."
+            >
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={s.topK ?? 40}
+                onChange={(e) => setS((current) => ({ ...current, topK: Number(e.target.value) }))}
+                onBlur={(e) => set({ topK: Number(e.target.value) })}
+                className="w-full accent-green-500"
+              />
+            </Row>
+            <Row
+              label="Min-P"
+              value={(s.minP ?? 0.05).toFixed(2)}
+              hint="Min probability relative to the top token."
+            >
+              <input
+                type="range"
+                min={0}
+                max={0.5}
+                step={0.01}
+                value={s.minP ?? 0.05}
+                onChange={(e) => setS((current) => ({ ...current, minP: Number(e.target.value) }))}
+                onBlur={(e) => set({ minP: Number(e.target.value) })}
+                className="w-full accent-green-500"
+              />
+            </Row>
+            <Row
+              label="Repeat penalty"
+              value={(s.repeatPenalty ?? 1.1).toFixed(2)}
+              hint="Higher discourages repetition."
+            >
+              <input
+                type="range"
+                min={1}
+                max={1.5}
+                step={0.01}
+                value={s.repeatPenalty ?? 1.1}
+                onChange={(e) =>
+                  setS((current) => ({ ...current, repeatPenalty: Number(e.target.value) }))
+                }
+                onBlur={(e) => set({ repeatPenalty: Number(e.target.value) })}
+                className="w-full accent-green-500"
+              />
+            </Row>
+            {/* Order matters: the OUTER budget first, because each inner one is bounded by it.
+                thinking budget within max output within context window (rule in @offgrid/models). */}
+            <BackendPreferencesSection modalities={['llm']} />
+            <Row label="Context window" controlId="context-window" hint={contextWindowHint(s)}>
+              <SettingsSelect
+                id="context-window"
+                label="Context window"
+                value={String(s.ctxSize ?? DEFAULT_CTX_SIZE)}
+                onValueChange={(value) => set(budgetChange(s, { ctxSize: Number(value) }))}
+                options={contextWindowOptions(
+                  CTX_OPTIONS,
+                  s.modelMaxCtx,
+                  s.ctxSize ?? DEFAULT_CTX_SIZE
+                ).map((value) => ({
+                  value: String(value),
+                  label: `${value >= 1024 ? `${value / 1024}K` : value} tokens${
+                    value === s.modelMaxCtx
+                      ? " (model's max)"
+                      : value === DEFAULT_CTX_SIZE
+                        ? ' (recommended)'
+                        : value < MIN_CAPTURE_CTX_SIZE
+                          ? ' (capture unavailable)'
+                          : ''
+                  }`
+                }))}
+              />
+            </Row>
+            <Row
+              label="Max output"
+              controlId="max-output"
+              hint={
+                (s.maxTokens ?? MAX_OUTPUT_AUTO) === MAX_OUTPUT_AUTO
+                  ? 'Auto: the reply runs until the model stops or the context window fills - no fixed cap.'
+                  : 'Hard cap on the response length. Cannot exceed the context window.'
+              }
+            >
+              <SettingsSelect
+                id="max-output"
+                label="Max output"
+                value={String(s.maxTokens ?? MAX_OUTPUT_AUTO)}
+                onValueChange={(value) => set(budgetChange(s, { maxTokens: Number(value) }))}
+                options={[
+                  { value: String(MAX_OUTPUT_AUTO), label: 'Auto (until the model stops)' },
+                  ...optionsWithinCeiling(MAX_OUTPUT_OPTIONS, s.ctxSize ?? DEFAULT_CTX_SIZE).map(
+                    (value) => ({ value: String(value), label: `${value / 1024}K tokens` })
+                  )
+                ]}
+              />
+            </Row>
+            <Row
+              label="Thinking budget"
+              controlId="thinking-budget"
+              hint={
+                (s.reasoningBudget ?? REASONING_BUDGET_AUTO) === REASONING_BUDGET_AUTO
+                  ? 'Auto: when Thinking is on, the model reasons for as long as it wants - it can spend the whole response reasoning and never answer.'
+                  : 'Cap on the tokens spent thinking. At the cap the model stops reasoning and answers. Cannot exceed Max output.'
+              }
+            >
+              <SettingsSelect
+                id="thinking-budget"
+                label="Thinking budget"
+                value={String(s.reasoningBudget ?? REASONING_BUDGET_AUTO)}
+                onValueChange={(value) => set(budgetChange(s, { reasoningBudget: Number(value) }))}
+                options={[
+                  REASONING_BUDGET_AUTO,
+                  ...optionsWithinCeiling(REASONING_BUDGET_OPTIONS, thinkingCeiling(s))
+                ].map((value) => ({ value: String(value), label: reasoningBudgetLabel(value) }))}
+              />
+            </Row>
+            <Row
+              label="System prompt"
+              hint="Prepended to every chat as a system message. Leave blank for the default."
+            >
+              <textarea
+                value={s.systemPrompt ?? ''}
+                onChange={(e) => setS((current) => ({ ...current, systemPrompt: e.target.value }))}
+                onBlur={(e) => set({ systemPrompt: e.target.value })}
+                rows={5}
+                placeholder="e.g. You are a concise, technical assistant."
+                className="w-full resize-none rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
+              />
+            </Row>
 
-          {tab === 'voice' && (
-            <>
-              <Row
-                label="Voice"
-                hint="Kokoro on-device voices (af_ = US female, am_ = US male, bf_/bm_ = British)."
-              >
-                <select
-                  value={voice}
-                  onChange={(e) => pickVoice(e.target.value)}
-                  className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-neutral-200 outline-none focus:border-green-500"
-                >
-                  {(voices.length ? voices : [voice]).map((v) => (
-                    <option key={v} value={v}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-              </Row>
+            {/* Advanced — launch-time params; changing any reloads the model. */}
+            <div className="mb-3 mt-6 border-t border-neutral-800 pt-4 text-[10px] font-medium uppercase tracking-widest text-neutral-600">
+              Advanced (reloads the model)
+            </div>
+            <Row
+              label="KV cache"
+              hint="Quantize the KV cache to cut memory and allow a larger context. q8_0 ≈ half, q4_0 ≈ quarter of f16. Auto-enables FlashAttention."
+            >
+              <div className="flex gap-1.5">
+                {(['f16', 'q8_0', 'q4_0'] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() =>
+                      set({ kvCacheType: t, ...(t !== 'f16' ? { flashAttn: true } : {}) })
+                    }
+                    className={`flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors ${(s.kvCacheType ?? 'f16') === t ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </Row>
+            <Row
+              label="FlashAttention"
+              value={(s.flashAttn ?? false) ? 'On' : 'Off'}
+              hint="Faster, lower memory. Required for a quantized KV cache."
+            >
               <button
-                onClick={testVoice}
-                disabled={voiceState === 'generating' || voiceState === 'playing'}
-                className="rounded-md bg-green-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-green-500 disabled:opacity-40"
+                onClick={() => set({ flashAttn: !(s.flashAttn ?? false) })}
+                disabled={(s.kvCacheType ?? 'f16') !== 'f16'}
+                className={`w-full rounded-md border px-2 py-1.5 text-xs transition-colors disabled:opacity-50 ${s.flashAttn ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}
               >
-                {voiceState === 'generating'
-                  ? 'Generating…'
-                  : voiceState === 'playing'
-                    ? 'Playing…'
-                    : 'Test voice'}
+                {s.flashAttn ? 'Enabled' : 'Disabled'}
               </button>
-              {voiceState === 'error' ? (
-                <span className="ml-2 text-[11px] text-red-400">
-                  Couldn’t play — check the console.
-                </span>
+            </Row>
+            <Row
+              label="Speculative decoding"
+              controlId="speculative-decoding"
+              hint="N-gram needs no second model. MTP uses prediction heads in a compatible main model. Draft and DFlash need a compatible installed draft GGUF."
+            >
+              <SettingsSelect
+                id="speculative-decoding"
+                label="Speculative decoding"
+                value={s.speculativeDecoding ?? 'off'}
+                onValueChange={(value) =>
+                  set({
+                    speculativeDecoding: value,
+                    ...(value === 'draft' && !draftModels.some((m) => m.value === s.draftModel)
+                      ? { draftModel: draftModels[0]?.value ?? '' }
+                      : value === 'dflash' && !dflashModels.some((m) => m.value === s.draftModel)
+                        ? { draftModel: dflashModels[0]?.value ?? '' }
+                        : {})
+                  })
+                }
+                options={[
+                  { value: 'off', label: 'Off' },
+                  { value: 'ngram', label: 'N-gram' },
+                  {
+                    value: 'mtp',
+                    label: s.supportsMtp === false ? 'MTP · Not supported by this model' : 'MTP',
+                    disabled: s.supportsMtp === false
+                  },
+                  {
+                    value: 'draft',
+                    label: 'Draft model',
+                    disabled: draftModels.length === 0
+                  },
+                  { value: 'dflash', label: 'DFlash', disabled: dflashModels.length === 0 }
+                ]}
+              />
+            </Row>
+            {(s.speculativeDecoding === 'draft' || s.speculativeDecoding === 'dflash') && (
+              <Row
+                label="Draft model"
+                controlId="speculative-draft-model"
+                hint="Use a smaller GGUF that is tokenizer-compatible with the active model."
+              >
+                <SettingsSelect
+                  id="speculative-draft-model"
+                  label="Draft model"
+                  value={s.draftModel ?? ''}
+                  options={s.speculativeDecoding === 'dflash' ? dflashModels : draftModels}
+                  placeholder="No compatible model installed"
+                  searchable
+                  disabled={
+                    s.speculativeDecoding === 'dflash'
+                      ? dflashModels.length === 0
+                      : draftModels.length === 0
+                  }
+                  onValueChange={(value) => set({ draftModel: value })}
+                />
+              </Row>
+            )}
+            <Row
+              label="GPU layers"
+              value={String(s.gpuLayers ?? 99)}
+              hint={gpuLayersHint(s.gpuAccelerator ?? null)}
+            >
+              <input
+                type="range"
+                min={0}
+                max={99}
+                step={1}
+                value={s.gpuLayers ?? 99}
+                onChange={(e) =>
+                  setS((current) => ({ ...current, gpuLayers: Number(e.target.value) }))
+                }
+                onBlur={(e) => set({ gpuLayers: Number(e.target.value) })}
+                className="w-full accent-green-500"
+              />
+            </Row>
+            <Row
+              label="CPU threads"
+              value={(s.threads ?? 0) === 0 ? 'auto' : String(s.threads)}
+              hint="0 = auto (let llama.cpp choose)."
+            >
+              <input
+                type="range"
+                min={0}
+                max={16}
+                step={1}
+                value={s.threads ?? 0}
+                onChange={(e) =>
+                  setS((current) => ({ ...current, threads: Number(e.target.value) }))
+                }
+                onBlur={(e) => set({ threads: Number(e.target.value) })}
+                className="w-full accent-green-500"
+              />
+            </Row>
+            <Row
+              label="Batch size"
+              value={String(s.batchSize ?? 512)}
+              hint="Tokens processed per batch during prompt ingest."
+            >
+              <input
+                type="range"
+                min={64}
+                max={2048}
+                step={64}
+                value={s.batchSize ?? 512}
+                onChange={(e) =>
+                  setS((current) => ({ ...current, batchSize: Number(e.target.value) }))
+                }
+                onBlur={(e) => set({ batchSize: Number(e.target.value) })}
+                className="w-full accent-green-500"
+              />
+            </Row>
+
+            <button
+              onClick={resetDefaults}
+              className="mt-2 w-full rounded-md border border-neutral-800 px-3 py-2 text-xs text-neutral-400 transition-colors hover:border-neutral-700 hover:text-white"
+            >
+              Reset to defaults
+            </button>
+          </>
+        )}
+
+        {tab === 'image' && <ImageSettingsTab />}
+
+        {tab === 'remote' && <RemoteVisionSettingsTab />}
+
+        {tab === 'voice' && <VoiceSettingsTab />}
+
+        {tab === 'transcription' && (
+          <>
+            <Row
+              label="Current model"
+              controlId="transcription-model"
+              hint="The model used for the next recording."
+            >
+              <SettingsSelect
+                id="transcription-model"
+                label="Current transcription model"
+                value={
+                  transcriptionInfo?.options.find((option) => option.active)?.id ??
+                  DEFAULT_TRANSCRIPTION_MODEL
+                }
+                placeholder="Checking installed models..."
+                onValueChange={pickTranscriptionModel}
+                disabled={!transcriptionInfo || transcriptionInfo.options.length === 0}
+                options={(transcriptionInfo?.options ?? []).map((option) => ({
+                  value: option.id ?? DEFAULT_TRANSCRIPTION_MODEL,
+                  label: option.name
+                }))}
+              />
+              {transcriptionInfo ? (
+                <p className="mt-1 text-[10px] text-neutral-600">{transcriptionInfo.label}</p>
               ) : null}
-            </>
-          )}
+            </Row>
+            <BackendPreferencesSection modalities={['stt']} />
+            <Row
+              label="Spoken language"
+              controlId="stt-language"
+              hint="Auto-detect is available for multilingual Whisper models. English-only models show English only."
+            >
+              <SettingsSelect
+                id="stt-language"
+                label="Spoken language"
+                value={transcriptionInfo?.language ?? 'auto'}
+                onValueChange={pickTranscriptionLanguage}
+                disabled={!transcriptionInfo}
+                options={(transcriptionInfo?.languages ?? []).map((language) => ({
+                  value: language.code,
+                  label: language.label
+                }))}
+              />
+            </Row>
+          </>
+        )}
 
-          {tab === 'tools' && (
-            <>
-              <p className="mb-3 text-[11px] text-neutral-500">
-                Built-in tools the model can call when “Tools” is on in the composer.
-              </p>
-              {tools.length === 0 ? (
-                <p className="text-xs text-neutral-600">No tools.</p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {tools.map((t) => (
-                    <div
-                      key={t.name}
-                      className="flex items-start justify-between gap-3 rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2"
+        {tab === 'tools' && (
+          <>
+            <BackendPreferencesSection modalities={['grounding', 'decision', 'embeddings']} />
+            <div className="mb-3 flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2">
+              <div>
+                <div className="text-sm">Enable tools</div>
+                <div className="text-[11px] text-neutral-500">
+                  Controls whether any tools are sent to the chat model.
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-label="Enable tools"
+                aria-checked={toolsEnabled}
+                onClick={() => {
+                  const next = !toolsEnabled
+                  setToolsEnabled(next)
+                  void window.api.saveSetting('toolsEnabled', next)
+                  window.dispatchEvent(
+                    new CustomEvent('offgrid-tools-enabled-changed', { detail: next })
+                  )
+                }}
+                className={`shrink-0 rounded px-2 py-1 text-[11px] ${toolsEnabled ? 'text-green-500' : 'text-neutral-500'}`}
+              >
+                {toolsEnabled ? 'On' : 'Off'}
+              </button>
+            </div>
+            <p className="mb-3 text-[11px] text-neutral-500">
+              Built-in tools the model can call when “Tools” is on in the composer.
+            </p>
+            {tools.length === 0 ? (
+              <p className="text-xs text-neutral-600">No tools.</p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {groupTools(tools).map((group) => {
+                  const enabledCount = group.tools.filter((tool) => tool.enabled !== false).length
+                  const allEnabled = enabledCount === group.tools.length
+                  const groupState = enabledCount === 0 ? 'Off' : allEnabled ? 'On' : 'Mixed'
+                  const groupId = group.label.toLowerCase().replaceAll(' ', '-')
+                  const isExpanded = expandedToolGroups.has(group.label)
+
+                  return (
+                    <section
+                      key={group.label}
+                      aria-labelledby={`tool-group-${groupId}`}
+                      className="overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/40"
                     >
-                      <div className="min-w-0">
-                        <div
-                          className={`text-sm ${t.enabled === false ? 'text-neutral-500' : 'text-green-500'}`}
-                        >
-                          {t.name}
-                        </div>
-                        <div className="text-[11px] text-neutral-500">{t.description}</div>
-                      </div>
-                      <button
-                        onClick={() => {
-                          const next = t.enabled === false
-                          void persistToggle(
-                            tools.map((x) => (x.name === t.name ? { ...x, enabled: next } : x)),
-                            tools,
-                            setTools,
-                            () => window.api.setToolEnabled?.(t.name, next)
-                          )
-                        }}
-                        className={`shrink-0 rounded px-2 py-1 text-[11px] ${t.enabled === false ? 'text-neutral-500' : 'text-green-500'}`}
+                      <div
+                        className={`flex items-center justify-between gap-3 px-3 py-2 ${isExpanded ? 'border-b border-neutral-800' : ''}`}
                       >
-                        {t.enabled === false ? 'Off' : 'On'}
+                        <button
+                          type="button"
+                          aria-expanded={isExpanded}
+                          aria-controls={`tool-group-items-${groupId}`}
+                          onClick={() => {
+                            setExpandedToolGroups((current) => {
+                              const next = new Set(current)
+                              if (next.has(group.label)) next.delete(group.label)
+                              else next.add(group.label)
+                              return next
+                            })
+                          }}
+                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                        >
+                          <CaretRight
+                            size={14}
+                            aria-hidden="true"
+                            className={`shrink-0 transition-transform duration-150 ${isExpanded ? 'rotate-90' : ''}`}
+                          />
+                          <span>
+                            <span
+                              id={`tool-group-${groupId}`}
+                              role="heading"
+                              aria-level={3}
+                              className="text-[11px] uppercase tracking-wide text-neutral-400"
+                            >
+                              {group.label}
+                            </span>
+                            <span className="block text-[10px] text-neutral-600">
+                              {enabledCount} of {group.tools.length} on
+                            </span>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-label={`Enable ${group.label} tools`}
+                          aria-checked={allEnabled}
+                          onClick={() => {
+                            const next = !allEnabled
+                            const names = new Set(group.tools.map((tool) => tool.name))
+                            const nextTools = tools.map((tool) =>
+                              names.has(tool.name) ? { ...tool, enabled: next } : tool
+                            )
+                            void persistToggle(nextTools, tools, setTools, async () => {
+                              for (const tool of group.tools) {
+                                await window.api.setToolEnabled?.(tool.name, next)
+                              }
+                            })
+                          }}
+                          className={`shrink-0 rounded px-2 py-1 text-[11px] transition-all duration-150 active:scale-95 ${allEnabled ? 'text-green-500' : 'text-neutral-500'}`}
+                        >
+                          {groupState}
+                        </button>
+                      </div>
+                      {isExpanded && (
+                        <div
+                          id={`tool-group-items-${groupId}`}
+                          className="divide-y divide-neutral-800/70"
+                        >
+                          {group.tools.map((tool) => (
+                            <div
+                              key={tool.name}
+                              className="flex items-start justify-between gap-3 px-3 py-2 transition-colors duration-150 hover:bg-neutral-800/30"
+                            >
+                              <div className="min-w-0">
+                                <div
+                                  className={`text-sm ${tool.enabled === false ? 'text-neutral-500' : 'text-green-500'}`}
+                                >
+                                  {tool.name}
+                                </div>
+                                <div className="text-[11px] text-neutral-500">
+                                  {tool.description}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-label={`Enable ${tool.name}`}
+                                aria-checked={tool.enabled !== false}
+                                onClick={() => {
+                                  const next = tool.enabled === false
+                                  void persistToggle(
+                                    tools.map((item) =>
+                                      item.name === tool.name ? { ...item, enabled: next } : item
+                                    ),
+                                    tools,
+                                    setTools,
+                                    () => window.api.setToolEnabled?.(tool.name, next)
+                                  )
+                                }}
+                                className={`shrink-0 rounded px-2 py-1 text-[11px] transition-all duration-150 active:scale-95 ${tool.enabled === false ? 'text-neutral-500' : 'text-green-500'}`}
+                              >
+                                {tool.enabled === false ? 'Off' : 'On'}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  )
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        {tab === 'connectors' && (
+          <>
+            <p className="mb-3 text-[11px] text-neutral-500">
+              Connect MCP servers — your reusable tool library (web search, fetch, etc.). Add an
+              HTTP MCP endpoint:
+            </p>
+            <div className="mb-4 flex flex-col gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 p-3">
+              <input
+                value={newConn.name}
+                onChange={(e) => setNewConn({ ...newConn, name: e.target.value })}
+                placeholder="Name (e.g. Brave Search)"
+                className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
+              />
+              <input
+                value={newConn.url}
+                onChange={(e) => setNewConn({ ...newConn, url: e.target.value })}
+                placeholder="https://… (MCP HTTP URL)"
+                className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
+              />
+              <button
+                onClick={addConnector}
+                disabled={!newConn.name.trim() || !newConn.url.trim()}
+                className="self-start rounded-md bg-green-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-green-500 disabled:opacity-40"
+              >
+                Add connector
+              </button>
+            </div>
+            {connectors.length === 0 ? (
+              <p className="text-xs text-neutral-600">No connectors yet.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {connectors.map((c) => (
+                  <div
+                    key={c.id}
+                    className="flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm text-neutral-200">{c.name}</div>
+                      {c.url ? (
+                        <div className="truncate text-[10px] text-neutral-600">{c.url}</div>
+                      ) : null}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={async () => {
+                          await window.api.mcpSetEnabled?.(c.id, !c.enabled)
+                          refreshConnectors()
+                        }}
+                        className={`rounded px-2 py-1 text-[11px] ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
+                      >
+                        {c.enabled ? 'On' : 'Off'}
+                      </button>
+                      <button
+                        onClick={async () => {
+                          await window.api.mcpRemove?.(c.id)
+                          refreshConnectors()
+                        }}
+                        className="rounded px-2 py-1 text-[11px] text-red-400 hover:bg-red-500/10"
+                      >
+                        Remove
                       </button>
                     </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-
-          {tab === 'connectors' && (
-            <>
-              <p className="mb-3 text-[11px] text-neutral-500">
-                Connect MCP servers — your reusable tool library (web search, fetch, etc.). Add an
-                HTTP MCP endpoint:
-              </p>
-              <div className="mb-4 flex flex-col gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 p-3">
-                <input
-                  value={newConn.name}
-                  onChange={(e) => setNewConn({ ...newConn, name: e.target.value })}
-                  placeholder="Name (e.g. Brave Search)"
-                  className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
-                />
-                <input
-                  value={newConn.url}
-                  onChange={(e) => setNewConn({ ...newConn, url: e.target.value })}
-                  placeholder="https://… (MCP HTTP URL)"
-                  className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
-                />
-                <button
-                  onClick={addConnector}
-                  disabled={!newConn.name.trim() || !newConn.url.trim()}
-                  className="self-start rounded-md bg-green-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-green-500 disabled:opacity-40"
-                >
-                  Add connector
-                </button>
+                  </div>
+                ))}
               </div>
-              {connectors.length === 0 ? (
-                <p className="text-xs text-neutral-600">No connectors yet.</p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {connectors.map((c) => (
-                    <div
-                      key={c.id}
-                      className="flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate text-sm text-neutral-200">{c.name}</div>
-                        {c.url ? (
-                          <div className="truncate text-[10px] text-neutral-600">{c.url}</div>
-                        ) : null}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={async () => {
-                            await window.api.mcpSetEnabled?.(c.id, !c.enabled)
-                            refreshConnectors()
-                          }}
-                          className={`rounded px-2 py-1 text-[11px] ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
-                        >
-                          {c.enabled ? 'On' : 'Off'}
-                        </button>
-                        <button
-                          onClick={async () => {
-                            await window.api.mcpRemove?.(c.id)
-                            refreshConnectors()
-                          }}
-                          className="rounded px-2 py-1 text-[11px] text-red-400 hover:bg-red-500/10"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
+            )}
+          </>
+        )}
       </div>
     </>
+  )
+
+  if (embedded) {
+    return <div className="flex min-h-0 flex-col bg-neutral-950/20 font-mono">{content}</div>
+  }
+
+  return (
+    <SidePanel
+      ariaLabel="Model settings"
+      onClose={onClose}
+      className="w-[calc(30vw+250px)] min-w-[670px]"
+    >
+      {content}
+    </SidePanel>
   )
 }

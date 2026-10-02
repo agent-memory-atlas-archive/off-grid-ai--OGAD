@@ -104,8 +104,8 @@ describe('downloadedForCatalog', () => {
         org: 'Hugging Face',
         tags: ['Downloaded'],
         files: [
-          { name: 'hf.gguf', url: '' },
-          { name: 'hf-mmproj.gguf', url: '' }
+          { name: 'hf.gguf', url: '', sizeBytes: 0, role: 'primary' },
+          { name: 'hf-mmproj.gguf', url: '', sizeBytes: 0, role: 'mmproj' }
         ]
       }
     ])
@@ -152,6 +152,99 @@ describe('mergeCatalog — order + all three sources', () => {
     })
     expect(out).toEqual([])
   })
+  it('projects one installed row when an exact variant represents a catalog family', () => {
+    const variant = { ...dl, id: 'model-package-v1:exact', familyId: catEntry.id, files: ['cat.gguf'] }
+    const out = mergeCatalog({
+      locals: [],
+      downloaded: [variant],
+      installedDownloadedIds: [variant.id],
+      catalog: [catEntry],
+      present: presentAll
+    })
+    expect(out.map((model) => model.id)).toEqual([variant.id])
+    expect(out[0]!.files.find((file) => file.role === 'primary')?.name).toBe('cat.gguf')
+    expect(out[0]).toMatchObject({
+      id: variant.id,
+      name: catEntry.name,
+      kind: catEntry.kind
+    })
+  })
+
+  it('keeps an alternate installed variant and the catalog default as separate rows', () => {
+    const variant = { ...dl, id: 'model-package-v1:alternate', familyId: catEntry.id }
+    const out = mergeCatalog({
+      locals: [],
+      downloaded: [variant],
+      installedDownloadedIds: [variant.id],
+      catalog: [catEntry],
+      present: presentAll
+    })
+    expect(out.map((model) => model.id)).toEqual([variant.id, catEntry.id])
+    expect(installedIds({
+      locals: [],
+      installedDownloadedIds: [variant.id],
+      downloaded: [variant],
+      catalog: [catEntry],
+      present: presentAll,
+      mfluxCached: () => false
+    })).toEqual([variant.id, catEntry.id])
+  })
+
+  it('keeps a variant with an alternate projector separate from its catalog family', () => {
+    const family = {
+      ...catEntry,
+      kind: 'vision',
+      files: [
+        { name: 'vision.gguf', role: 'primary' as const },
+        { name: 'catalog-mmproj.gguf', role: 'mmproj' as const }
+      ]
+    }
+    const variant = {
+      ...dl,
+      id: 'model-package-v1:alternate-projector',
+      familyId: family.id,
+      files: ['vision.gguf', 'alternate-mmproj.gguf']
+    }
+    const out = mergeCatalog({
+      locals: [],
+      downloaded: [variant],
+      installedDownloadedIds: [variant.id],
+      catalog: [family],
+      present: presentAll
+    })
+
+    expect(out.map((model) => model.id)).toEqual([variant.id, family.id])
+  })
+
+  it('uses the current catalog role for an installed family variant', () => {
+    const family = {
+      ...catEntry,
+      id: 'bartowski/tencent_UI-Mate-9B-GGUF',
+      name: 'UI-Mate-9B',
+      kind: 'computer_use',
+      org: 'Tencent'
+    }
+    const variant = {
+      ...dl,
+      id: 'model-package-v1:ui-mate',
+      familyId: family.id,
+      name: 'tencent_UI-Mate-9B-GGUF',
+      kind: 'vision'
+    }
+    const [row] = mergeCatalog({
+      locals: [],
+      downloaded: [variant],
+      installedDownloadedIds: [variant.id],
+      catalog: [family],
+      present: presentAll
+    })
+    expect(row).toMatchObject({
+      id: variant.id,
+      name: 'UI-Mate-9B',
+      kind: 'computer_use',
+      org: 'Tencent'
+    })
+  })
 })
 
 describe('catalogEntryInstalled', () => {
@@ -192,6 +285,19 @@ describe('installedIds — order + per-source predicate', () => {
       mfluxCached: () => false
     })
     expect(out).toEqual(['cat/text'])
+  })
+  it('does not list the catalog alias beside an installed exact family variant', () => {
+    const variant = { ...dl, id: 'model-package-v1:exact', familyId: catEntry.id, files: ['cat.gguf'] }
+    expect(
+      installedIds({
+        locals: [],
+        installedDownloadedIds: [variant.id],
+        downloaded: [variant],
+        catalog: [catEntry],
+        present: presentAll,
+        mfluxCached: () => false
+      })
+    ).toEqual([variant.id])
   })
   it('includes an mflux id only when cached', () => {
     const both = installedIds({
@@ -239,7 +345,7 @@ describe('buildDiskEntry — source resolution + active flag', () => {
         'cat.gguf': 400
       }) as Record<string, number>
     )[name] ?? 0
-  const noModals = { image: null, speech: null, transcription: null }
+  const noModals = { computer_use: null, image: null, speech: null, transcription: null }
 
   it('imported local: sums primary + mmproj, kind local, active when it is the chat id', () => {
     const e = buildDiskEntry({
@@ -275,11 +381,26 @@ describe('buildDiskEntry — source resolution + active flag', () => {
       catalogById: () => undefined,
       isCatalogId: () => false,
       activeChatId: null,
-      modals: { image: null, speech: null, transcription: null },
+      modals: { computer_use: null, image: null, speech: null, transcription: null },
       sizeOf
     })
     // vision => chat LLM path (not a modality), so not active unless it is the chat id.
     expect(e).toEqual({ id: 'org/hf', name: 'HF', kind: 'vision', bytes: 360, active: false })
+  })
+  it('groups an older family download by its current catalog kind', () => {
+    const family = { ...catEntry, kind: 'vision' }
+    const variant = { ...dl, id: 'model-package-v1:older', familyId: family.id, kind: 'text' }
+    const e = buildDiskEntry({
+      id: variant.id,
+      locals: [],
+      downloaded: [variant],
+      catalogById: (id) => id === family.id ? family : undefined,
+      isCatalogId: () => false,
+      activeChatId: variant.id,
+      modals: noModals,
+      sizeOf
+    })
+    expect(e).toMatchObject({ kind: 'vision', active: true })
   })
   it('download id that IS also a catalog id falls through to the catalog branch', () => {
     const e = buildDiskEntry({
@@ -335,7 +456,12 @@ describe('buildDiskEntry — source resolution + active flag', () => {
       catalogById: () => img,
       isCatalogId: () => true,
       activeChatId: null,
-      modals: { image: 'img.safetensors', speech: null, transcription: null },
+      modals: {
+        computer_use: null,
+        image: 'img.safetensors',
+        speech: null,
+        transcription: null
+      },
       sizeOf: () => 0
     })
     expect(e.active).toBe(true)

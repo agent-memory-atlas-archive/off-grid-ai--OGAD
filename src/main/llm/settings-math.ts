@@ -5,6 +5,8 @@
 
 import type { KvCacheType, PerformanceMode } from '../model-sizing'
 
+export type SpeculativeDecodingMode = 'off' | 'ngram' | 'mtp' | 'draft' | 'dflash'
+
 // Friendly presets that decide how much of the machine the local model uses.
 // Conservative leaves lots of headroom (safest on small / busy machines); Extreme
 // pushes context/memory for max capability. The RAM clamp still applies on top, so
@@ -86,6 +88,8 @@ export interface LaunchState {
   gpuLayers: number
   threads: number | undefined
   batchSize: number | undefined
+  speculativeDecoding?: SpeculativeDecodingMode
+  draftModel?: string
 }
 
 /** The fully-resolved launch inputs the arg-builder needs. `ctxSize` is already the
@@ -102,6 +106,13 @@ export interface LaunchArgsInput {
   kvCacheType: KvCacheType
   threads: number | undefined
   batchSize: number | undefined
+  speculativeDecoding?: SpeculativeDecodingMode
+  draftModelPath?: string
+  // Floor on image tokens. GUI-grounding (Qwen-VL / UI-TARS) models need >=1024
+  // or they ground inaccurately (llama.cpp warns); undefined = engine default.
+  imageMinTokens?: number
+  /** Request llama.cpp's model-allocation report for a caller that filters request traces. */
+  reportModelPlacement?: boolean
 }
 
 /** Build the exact argv passed to `llama-server`. Pure: same inputs → same args, no I/O.
@@ -118,11 +129,15 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
     String(i.port),
     '--host',
     '127.0.0.1',
+    '--parallel',
+    '1',
     '-c',
     String(i.effectiveCtxSize),
     '-ngl',
     String(i.gpuLayers)
   )
+  // llama.cpp maps its model-allocation INFO messages to verbosity 4.
+  if (i.reportModelPlacement) args.push('-lv', '4')
   // FlashAttention: faster + lower memory. Required for a quantized KV cache.
   if (i.flashAttn || i.kvCacheType !== 'f16') {
     args.push('--flash-attn', 'on')
@@ -137,6 +152,26 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
   }
   if (typeof i.batchSize === 'number') {
     args.push('-b', String(i.batchSize))
+  }
+  if (i.speculativeDecoding === 'ngram') {
+    args.push('--spec-type', 'ngram-cache')
+  } else if (i.speculativeDecoding === 'mtp') {
+    args.push('--spec-type', 'draft-mtp')
+  } else if (
+    i.draftModelPath &&
+    (i.speculativeDecoding === 'draft' || i.speculativeDecoding === 'dflash')
+  ) {
+    args.push(
+      '--spec-type',
+      i.speculativeDecoding === 'dflash' ? 'draft-dflash' : 'draft-simple',
+      '--spec-draft-model',
+      i.draftModelPath
+    )
+  }
+  // Grounding models (UI-TARS / Qwen-VL) need a minimum image-token budget or
+  // clicks land in the wrong place; only set when a projector is present.
+  if (i.mmProjPath && typeof i.imageMinTokens === 'number') {
+    args.push('--image-min-tokens', String(i.imageMinTokens))
   }
   return args
 }
@@ -153,6 +188,8 @@ export function launchArgsChanged(
     gpuLayers?: number
     threads?: number
     batchSize?: number
+    speculativeDecoding?: SpeculativeDecodingMode
+    draftModel?: string
   },
   current: LaunchState,
   modeChanged: boolean
@@ -164,6 +201,9 @@ export function launchArgsChanged(
     (typeof patch.flashAttn === 'boolean' && patch.flashAttn !== current.flashAttn) ||
     (typeof patch.gpuLayers === 'number' && patch.gpuLayers !== current.gpuLayers) ||
     (typeof patch.threads === 'number' && patch.threads !== current.threads) ||
-    (typeof patch.batchSize === 'number' && patch.batchSize !== current.batchSize)
+    (typeof patch.batchSize === 'number' && patch.batchSize !== current.batchSize) ||
+    (patch.speculativeDecoding !== undefined &&
+      patch.speculativeDecoding !== current.speculativeDecoding) ||
+    (typeof patch.draftModel === 'string' && patch.draftModel !== current.draftModel)
   )
 }

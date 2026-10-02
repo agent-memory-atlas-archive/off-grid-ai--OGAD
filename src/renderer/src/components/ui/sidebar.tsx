@@ -1,7 +1,7 @@
 'use client'
 import { cn } from '@renderer/lib/utils'
 import React, { useState, createContext, useContext } from 'react'
-import { motion } from 'motion/react'
+import { motion, useReducedMotion } from 'motion/react'
 
 interface Links {
   label: string
@@ -81,6 +81,7 @@ export const DesktopSidebar = ({
   ...props
 }: React.ComponentProps<typeof motion.div>) => {
   const { open, animate } = useSidebar()
+  const reduceMotion = useReducedMotion()
   return (
     <>
       <motion.div
@@ -91,10 +92,14 @@ export const DesktopSidebar = ({
           'h-full px-4 py-4 flex flex-col bg-neutral-100 dark:bg-neutral-800 shrink-0',
           className
         )}
-        // Constant — width is driven by an explicit open/close toggle, NOT hover.
+        // App owns hover and keyboard-focus intent; this primitive owns only the
+        // smooth width transition between the rail and expanded navigation.
         animate={{
           width: animate ? (open ? '220px' : '60px') : '220px'
         }}
+        transition={reduceMotion ? { duration: 0 } : { duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+        data-state={open ? 'expanded' : 'collapsed'}
+        data-motion={reduceMotion ? 'reduced' : 'full'}
         {...props}
       >
         {children}

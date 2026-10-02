@@ -24,13 +24,17 @@ interface CatalogFile {
 }
 export interface CatalogEntry {
   id: string
+  sourceModelId?: string
   name: string
   kind: string
   org?: string
   params?: number
+  minRamGb?: number
   tags?: string[]
   files: CatalogFile[]
   runtime?: string
+  availability?: 'ready' | 'coming_soon'
+  availabilityNote?: string
 }
 export interface LocalModelLike {
   id: string
@@ -43,6 +47,7 @@ export interface LocalModelLike {
 }
 export interface DownloadedModelLike {
   id: string
+  familyId?: string
   name: string
   kind: string
   files: string[]
@@ -52,6 +57,12 @@ export interface DownloadedModelLike {
 export type SizeOf = (name: string) => number
 /** True when a filename exists on disk with size > 0. */
 export type FilePresent = (name: string) => boolean
+
+export const isProjectorFileName = (name: string): boolean =>
+  /(?:^|[-_.])(mmproj|projector)(?:[-_.]|$)/i.test(name)
+
+export const isDflashFileName = (name: string): boolean =>
+  /(?:^|[-_.])d-?flash(?:[-_.]|$)/i.test(name)
 
 /** A catalog-shaped view of an imported local model whose primary file is present
  *  (size > 0). Tagged "Imported" and surfaced at the top of the catalog. */
@@ -73,19 +84,34 @@ export function localsForCatalog(locals: LocalModelLike[], present: FilePresent)
  *  `installedIds` is the set of downloaded ids whose every file is present. */
 export function downloadedForCatalog(
   downloaded: DownloadedModelLike[],
-  installedIds: Iterable<string>
+  installedDownloadIds: Iterable<string>,
+  catalog: readonly CatalogEntry[] = [],
+  sizeOf: SizeOf = () => 0
 ): CatalogEntry[] {
-  const installed = new Set(installedIds)
+  const installed = new Set(installedDownloadIds)
   return downloaded
     .filter((m) => installed.has(m.id))
-    .map((m) => ({
-      id: m.id,
-      name: m.name,
-      kind: m.kind,
-      org: 'Hugging Face',
-      tags: ['Downloaded'],
-      files: m.files.map((name) => ({ name, url: '' }))
-    }))
+    .map((m) => {
+      const family = m.familyId ? catalog.find((entry) => entry.id === m.familyId) : undefined
+      return {
+        id: m.id,
+        ...(m.familyId ? { sourceModelId: m.familyId } : {}),
+        name: family?.name ?? m.name,
+        kind: family?.kind ?? m.kind,
+        org: family?.org ?? 'Hugging Face',
+        tags: [...new Set([...(family?.tags ?? []), 'Downloaded'])],
+        ...(family?.params !== undefined ? { params: family.params } : {}),
+        ...(family?.minRamGb !== undefined ? { minRamGb: family.minRamGb } : {}),
+        ...(family?.availability ? { availability: family.availability } : {}),
+        ...(family?.availabilityNote ? { availabilityNote: family.availabilityNote } : {}),
+        files: m.files.map((name) => ({
+          name,
+          url: '',
+          sizeBytes: sizeOf(name) || family?.files.find((file) => file.name === name)?.sizeBytes || 0,
+          role: isProjectorFileName(name) ? 'mmproj' : 'primary'
+        }))
+      }
+    })
 }
 
 /** The full merged catalog model list, in the exact live order:
@@ -96,23 +122,40 @@ export function mergeCatalog(opts: {
   installedDownloadedIds: Iterable<string>
   catalog: CatalogEntry[]
   present: FilePresent
+  sizeOf?: SizeOf
 }): CatalogEntry[] {
+  const installed = new Set(opts.installedDownloadedIds)
+  const representedFamilies = new Set(
+    opts.downloaded
+      .filter((model) => installed.has(model.id))
+      .filter((model) => {
+        const family = opts.catalog.find((entry) => entry.id === model.familyId)
+        return (
+          family &&
+          model.files.length === family.files.length &&
+          model.files.every((name) => family.files.some((file) => file.name === name))
+        )
+      })
+      .map((model) => model.familyId)
+      .filter((id): id is string => Boolean(id))
+  )
   return [
     ...localsForCatalog(opts.locals, opts.present),
-    ...downloadedForCatalog(opts.downloaded, opts.installedDownloadedIds),
-    ...opts.catalog
+    ...downloadedForCatalog(opts.downloaded, opts.installedDownloadedIds, opts.catalog, opts.sizeOf),
+    ...opts.catalog.filter((entry) => !representedFamilies.has(entry.id))
   ]
 }
 
 /** Whether a single catalog entry counts as installed. mflux entries defer to the
- *  runtime cache (`mfluxCached`); everything else needs every file present (size>0). */
+ *  runtime cache (`mfluxCached`); DFlash is an optional repairable companion. */
 export function catalogEntryInstalled(
   entry: CatalogEntry,
   present: FilePresent,
   mfluxCached: (id: string) => boolean
 ): boolean {
   if (entry.runtime === 'mflux') return mfluxCached(entry.id)
-  return entry.files.length > 0 && entry.files.every((f) => present(f.name))
+  const required = entry.files.filter((file) => !isDflashFileName(file.name))
+  return required.length > 0 && required.every((file) => present(file.name))
 }
 
 /** The installed-id list, in the exact live order: imported locals, installed HF
@@ -120,15 +163,33 @@ export function catalogEntryInstalled(
 export function installedIds(opts: {
   locals: LocalModelLike[]
   installedDownloadedIds: Iterable<string>
+  downloaded?: DownloadedModelLike[]
   catalog: CatalogEntry[]
   present: FilePresent
   mfluxCached: (id: string) => boolean
 }): string[] {
+  const downloadedIds = [...opts.installedDownloadedIds]
+  const installed = new Set(downloadedIds)
+  const representedFamilies = new Set(
+    (opts.downloaded ?? [])
+      .filter((model) => installed.has(model.id))
+      .filter((model) => {
+        const family = opts.catalog.find((entry) => entry.id === model.familyId)
+        return (
+          family &&
+          model.files.length === family.files.length &&
+          model.files.every((name) => family.files.some((file) => file.name === name))
+        )
+      })
+      .map((model) => model.familyId)
+      .filter((id): id is string => Boolean(id))
+  )
   const catalog = opts.catalog
+    .filter((model) => !representedFamilies.has(model.id))
     .filter((m) => catalogEntryInstalled(m, opts.present, opts.mfluxCached))
     .map((m) => m.id)
   const locals = opts.locals.filter((lm) => opts.present(lm.primary)).map((lm) => lm.id)
-  return [...locals, ...opts.installedDownloadedIds, ...catalog]
+  return [...locals, ...downloadedIds, ...catalog]
 }
 
 /** The primary filename for a catalog entry: the file tagged role 'primary', else
@@ -142,6 +203,11 @@ export function projectorFileName(entry: Pick<CatalogEntry, 'files'>): string | 
   return entry.files.find((f) => f.role === 'mmproj')?.name
 }
 
+/** The optional DFlash speculative-decoding companion for an entry, if declared. */
+export function dflashFileName(entry: Pick<CatalogEntry, 'files'>): string | undefined {
+  return entry.files.find((file) => isDflashFileName(file.name))?.name
+}
+
 export interface VisionStatus {
   /** The model ships a vision projector — it CAN read images (once the projector is
    *  present). Derived from files, never a hand-typed flag. */
@@ -149,6 +215,11 @@ export interface VisionStatus {
   /** The projector file is present on disk. A vision model with this false is the
    *  "installed but can't see yet — offer to download the projector" case. */
   projectorInstalled: boolean
+  /** Optional DFlash companion readiness. These fields exist only for models that
+   *  declare a DFlash GGUF, so existing vision-status consumers stay unchanged. */
+  supportsDflash?: boolean
+  dflashInstalled?: boolean
+  dflashFile?: string
 }
 
 /** Per-model vision capability + readiness, derived from files (does it ship a
@@ -159,7 +230,14 @@ export function visionStatus(
   present: FilePresent
 ): VisionStatus {
   const projector = projectorFileName(entry)
-  return { supportsVision: !!projector, projectorInstalled: !!projector && present(projector) }
+  const dflash = dflashFileName(entry)
+  return {
+    supportsVision: !!projector,
+    projectorInstalled: !!projector && present(projector),
+    ...(dflash
+      ? { supportsDflash: true, dflashInstalled: present(dflash), dflashFile: dflash }
+      : {})
+  }
 }
 
 /** The projector filename to heal a stale active-model config with, or undefined for
@@ -217,14 +295,15 @@ export function buildDiskEntry(opts: {
   const dl = opts.downloaded.find((m) => m.id === id)
   if (dl && !opts.isCatalogId(id)) {
     const bytes = dl.files.reduce((s, n) => s + sizeOf(n), 0)
-    const primary = dl.files[0]
+    const primary = dl.files.find((name) => !isProjectorFileName(name)) ?? dl.files[0]
+    const kind = (dl.familyId ? opts.catalogById(dl.familyId)?.kind : undefined) ?? dl.kind
     return {
       id,
       name: dl.name,
-      kind: dl.kind,
+      kind,
       bytes,
       active: isModelActive({
-        kind: dl.kind,
+        kind,
         id,
         primaryFile: primary,
         activeChatId: opts.activeChatId,
@@ -301,7 +380,9 @@ export function modalityForModel(kind?: string | null): Modality | null {
 /** Whether a kind is a per-modality pick (image/speech/transcription) as opposed to
  *  the chat LLM. Mirrors the guard in setActiveModalChoice. */
 export function isModalKind(kind: string): kind is Modality {
-  return kind === 'image' || kind === 'speech' || kind === 'transcription'
+  return (
+    kind === 'computer_use' || kind === 'image' || kind === 'speech' || kind === 'transcription'
+  )
 }
 
 /** Whether a stored per-modality selection (`chosen`) refers to the model being

@@ -54,14 +54,13 @@ describe('shouldAutoRecover', () => {
   })
 
   describe('deliberate stops stay dead', () => {
-    // Otherwise `kill llama-server` just respawns it and the engine cannot be stopped
-    // without killing the whole app.
-    it('does not recover a SIGKILL', () => {
-      expect(shouldAutoRecover({ ...HEALTHY_CRASH, signal: 'SIGKILL' })).toBe(false)
+    // External termination recovers; explicit app stops and memory pauses do not.
+    it('recovers an external SIGKILL', () => {
+      expect(shouldAutoRecover({ ...HEALTHY_CRASH, signal: 'SIGKILL' })).toBe(true)
     })
 
-    it('does not recover a SIGTERM', () => {
-      expect(shouldAutoRecover({ ...HEALTHY_CRASH, signal: 'SIGTERM' })).toBe(false)
+    it('recovers an external SIGTERM', () => {
+      expect(shouldAutoRecover({ ...HEALTHY_CRASH, signal: 'SIGTERM' })).toBe(true)
     })
 
     it('does not recover our own stop/swap', () => {

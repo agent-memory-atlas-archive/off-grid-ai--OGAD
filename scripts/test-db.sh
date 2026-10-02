@@ -18,18 +18,25 @@ restore() {
   # no-op from cache). Verify the app can actually load it; warn loudly if not.
   npx electron-rebuild -f -w better-sqlite3-multiple-ciphers >/dev/null 2>&1 \
     || npx electron-builder install-app-deps >/dev/null 2>&1 || true
-  ELECTRON_RUN_AS_NODE=1 ./node_modules/electron/dist/Electron.app/Contents/MacOS/Electron \
-    -e 'new (require("better-sqlite3-multiple-ciphers"))(":memory:")' >/dev/null 2>&1 \
-    && echo "[test:db] Electron ABI restored (app can load sqlite)." \
-    || echo "[test:db] WARNING: Electron cannot load sqlite - run 'npx electron-rebuild -f -w better-sqlite3-multiple-ciphers' before launching the app."
+  ./scripts/probe-electron-sqlite.sh '[test:db]'
 }
 trap restore EXIT
 
 echo "[test:db] rebuilding better-sqlite3-multiple-ciphers for node $(node -v)..."
-npm rebuild better-sqlite3-multiple-ciphers >/dev/null 2>&1
+# `npm rebuild <package>` also runs this app's root postinstall, which immediately
+# rebuilds native dependencies for Electron and leaves Vitest with the wrong ABI.
+# Run the dependency's build script in its own package so the Node build remains
+# installed until the tests finish. The EXIT trap restores the Electron ABI.
+npm explore better-sqlite3-multiple-ciphers -- npm run build-release >/dev/null 2>&1
 
 echo "[test:db] running DB integration tests..."
 # Native/model/UI DB journeys are intentionally serial. Parallel files compete for
 # process-wide engines, Electron module state, and timing-sensitive recorder owners,
 # which turns real integration coverage into suite-load flakes.
-npx vitest run --config vitest.db.config.ts --no-file-parallelism --maxWorkers=1 "$@"
+# Which config to run. Defaults to the full suite; OFFGRID_DB_VITEST_CONFIG selects the coverage
+# variant (vitest.db.coverage.config.ts), which skips the files with documented open failures so a
+# report gets written at all - vitest emits none when any test fails. Passing --config twice on the
+# command line breaks vitest's argument parser, hence an env var rather than an extra flag.
+DB_CONFIG="${OFFGRID_DB_VITEST_CONFIG:-vitest.db.config.ts}"
+echo "[test:db] config: $DB_CONFIG"
+npx vitest run --config "$DB_CONFIG" --no-file-parallelism --maxWorkers=1 "$@"

@@ -23,12 +23,14 @@ function runBuild(mode: FixtureMode): ReturnType<typeof spawnSync> & {
   sandbox: string
   cmakeLog: string
   otoolLog: string
+  rpathEditLog: string
 } {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-whisper-cli-build-'))
   tempRoots.push(sandbox)
   const fakeBin = path.join(sandbox, 'fake-bin')
   const cmakeLog = path.join(sandbox, 'cmake.log')
   const otoolLog = path.join(sandbox, 'otool.log')
+  const rpathEditLog = path.join(sandbox, 'rpath-edits.log')
   fs.mkdirSync(fakeBin)
 
   writeExecutable(
@@ -73,13 +75,26 @@ fi
 `
   )
   writeExecutable(path.join(fakeBin, 'sysctl'), '#!/usr/bin/env bash\nprintf "4\\n"\n')
+  writeExecutable(
+    path.join(fakeBin, 'install_name_tool'),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "${'$'}*" >> "${rpathEditLog}"
+`
+  )
   const minos = mode === 'newer-minos' ? '13.1' : '13.0'
   writeExecutable(
     path.join(fakeBin, 'otool'),
     `#!/usr/bin/env bash
 set -euo pipefail
 if [ "${'$'}1" = "-l" ]; then
-  printf 'Load command 1\n      cmd LC_BUILD_VERSION\n    minos ${minos}\n'
+  file="${'$'}2"
+  if grep -Fq -- "-add_rpath @loader_path ${'$'}file" "${rpathEditLog}" 2>/dev/null; then
+    printf 'Load command 1\n          cmd LC_RPATH\n      cmdsize 32\n         path @loader_path (offset 12)\n'
+  else
+    printf 'Load command 1\n          cmd LC_RPATH\n      cmdsize 96\n         path /var/folders/fixture/T/build/bin (offset 12)\n'
+  fi
+  printf 'Load command 2\n      cmd LC_BUILD_VERSION\n    minos ${minos}\n'
   exit 0
 fi
 file="${'$'}2"
@@ -120,7 +135,7 @@ printf '    /usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current ver
     },
     encoding: 'utf8'
   })
-  return Object.assign(result, { sandbox, cmakeLog, otoolLog })
+  return Object.assign(result, { sandbox, cmakeLog, otoolLog, rpathEditLog })
 }
 
 describe('pinned Whisper CLI build and staging', () => {
@@ -145,7 +160,7 @@ describe('pinned Whisper CLI build and staging', () => {
     expect(cmake).toContain('-DBUILD_SHARED_LIBS=ON')
     expect(cmake).toContain('--target whisper-cli')
     expect(result.stdout).toContain('built whisper-cli minos=13.0 (want <= 13.0)')
-    expect(result.stdout).toContain('no foreign deps, all @rpath libs present')
+    expect(result.stdout).toContain('@loader_path only, no foreign deps, all @rpath libs present')
     expect(fs.statSync(path.join(destination, 'whisper-cli')).mode & 0o111).not.toBe(0)
     for (const name of ['libwhisper.1.dylib', 'libggml.0.dylib', 'libggml-base.0.dylib']) {
       const stat = fs.lstatSync(path.join(destination, name))
@@ -153,6 +168,12 @@ describe('pinned Whisper CLI build and staging', () => {
       expect(stat.isSymbolicLink(), name).toBe(false)
     }
     expect(audited).toEqual(expect.arrayContaining(staged))
+    const rpathEdits = fs.readFileSync(result.rpathEditLog, 'utf8')
+    for (const name of staged) {
+      const file = path.join(destination, name)
+      expect(rpathEdits).toContain(`-delete_rpath /var/folders/fixture/T/build/bin ${file}`)
+      expect(rpathEdits).toContain(`-add_rpath @loader_path ${file}`)
+    }
   })
 
   it('rejects a Homebrew OpenMP dependency', () => {
@@ -191,13 +212,19 @@ describe('pinned Whisper CLI build and staging', () => {
   it('keeps release and local builds on the same pinned native-engine scripts', () => {
     const release = fs.readFileSync(path.join(REPO_ROOT, '.github/workflows/release.yml'), 'utf8')
     const local = fs.readFileSync(path.join(REPO_ROOT, 'scripts/build-mac-local.sh'), 'utf8')
-    const llamaBuild = 'MACOS_DEPLOYMENT_TARGET=13.0 LLAMA_REF=b9838 bash scripts/build-llama.sh'
+    // No LLAMA_REF here on purpose. The version has one owner - package.json `offgrid.llamaRef` - and a caller that
+    // passes its own would silently build a different engine than the Windows fetch pulls, which is the
+    // drift this test exists to catch.
+    const llamaBuild = 'MACOS_DEPLOYMENT_TARGET=13.0 bash scripts/build-llama.sh'
     const whisperBuild =
       'MACOS_DEPLOYMENT_TARGET=13.0 WHISPER_REF=v1.7.4 bash scripts/build-whisper-cli.sh'
 
     for (const source of [release, local]) {
       expect(source).toContain(llamaBuild)
       expect(source).toContain(whisperBuild)
+    }
+    for (const source of [release, local]) {
+      expect(source).not.toMatch(/LLAMA_REF=/)
     }
     expect(local).toContain('bash scripts/fetch-parakeet.sh')
     expect(local).toContain('node scripts/probe-packaged-helpers.mjs "$app_dir"')

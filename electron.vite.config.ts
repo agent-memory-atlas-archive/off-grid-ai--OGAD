@@ -1,5 +1,5 @@
 import { resolve } from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
@@ -22,6 +22,17 @@ const proRenderer = proExists ? resolve('pro/renderer/index.tsx') : stub
 // Baked into every bundle so runtime code can tell a pro build from a free build
 // without relying on an env var default (which can't distinguish "unset" from "pro").
 const proDefine = { __OFFGRID_PRO__: JSON.stringify(proExists) }
+
+// Sourcemaps, for one purpose: making the e2e run's coverage land on source.
+//
+// Playwright launches the BUILT app, so V8 records execution against out/main/index.ts's bundle - a
+// single 17k-statement file that says nothing about which of src/main/*.ts and pro/main/*.ts ran.
+// Without a map, e2e coverage cannot be joined to a diff, and 25 specs that drive the real app
+// (devices-sync.spec.ts stands up a synthetic peer with a real SyncEngine) go on counting for nothing.
+//
+// Gated on the same variable that turns the capture on, so a normal build - and every shipped
+// artifact - is byte-identical to what it was: no maps emitted, nothing referenced, no size cost.
+const coverageSourcemap = process.env.OFFGRID_E2E_COVERAGE ? ('inline' as const) : false
 const rendererStyleNonce = randomBytes(18).toString('base64url')
 const rendererContentSecurityPolicy = createRendererContentSecurityPolicy(rendererStyleNonce)
 
@@ -29,13 +40,21 @@ export default defineConfig({
   main: {
     define: proDefine,
     build: {
+      sourcemap: coverageSourcemap,
+      // The embedding worker is a SECOND main-process entry, bundled beside index.js so
+      // embeddings.ts can spawn it by path. It must not be folded into the main chunk: the point
+      // is that native ONNX inference runs off the thread that owns the window.
       rollupOptions: {
-        // The TTS worker must live inside app.asar beside its JavaScript
-        // dependencies. Copying the raw source into Resources makes ESM resolve
-        // from that external directory, where kokoro-js does not exist.
+        // Rollup hoists external require() calls above source imports. The CUDA
+        // pack must be selected before its first ONNX Runtime import, including
+        // in the embedding and speech workers.
+        output: {
+          banner: readFileSync(resolve('scripts/windows-onnx-cuda-preload.cjs'), 'utf8')
+        },
         input: {
           index: resolve('src/main/index.ts'),
-          'tts-worker': resolve('resources/tts-worker.mjs')
+          'embeddings-worker': resolve('src/main/embeddings-worker.ts'),
+          'tts-onnx-worker': resolve('src/main/tts-onnx-worker.ts')
         }
       }
     },
@@ -47,11 +66,7 @@ export default defineConfig({
     // vault recovery-phrase feature (pro/main/vault/vault-recovery.ts).
     plugins: [
       externalizeDepsPlugin({
-        // Kokoro owns Transformers v3 transitively. The worker imports its env
-        // directly so cache configuration and Kokoro share one module instance;
-        // keep that native Node package external instead of bundling browser shims.
-        include: ['@huggingface/transformers'],
-        exclude: ['@scure/bip39', '@noble/hashes']
+        exclude: ['@scure/bip39', '@noble/hashes', '@offgrid/executorch-speech']
       })
     ],
     resolve: {
@@ -62,10 +77,12 @@ export default defineConfig({
     }
   },
   preload: {
-    define: proDefine
+    define: proDefine,
+    build: { sourcemap: coverageSourcemap }
   },
   renderer: {
     define: proDefine,
+    build: { sourcemap: coverageSourcemap },
     html: { cspNonce: rendererStyleNonce },
     resolve: {
       alias: {

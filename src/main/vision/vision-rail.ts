@@ -1,0 +1,80 @@
+/**
+ * The vision rail's engine adapter (R2-D): turns a computer_use Action into a
+ * supervised vision run and back into an ExecuteResult. Pure and injected -
+ * the live host (screen capture + robotjs actuation + grounding model +
+ * overlay) is passed in as `runTask`, so this mapping is unit-tested without a
+ * display.
+ *
+ * computer_use registers none_fuzzy for the same reason web_use does: a GUI
+ * action on the live desktop is never safely auto-retried. The guard (kill
+ * switch and pause) plus the user's supervision IS the reliability;
+ * the model's `finished` is the executor's verdict, fired once behind the gate.
+ */
+import type { ActionRecord, ExecuteResult, HandlerRegistry } from '@offgrid/use'
+import type { VisionTaskResult } from './vision-agent'
+import type { TaskRetryCheckpoint } from '../tasks/task-retry'
+import type { VisionTaskContinuation } from './vision-agent'
+import type { VisionAction } from './vision-action'
+
+export interface VisionExecuteResult extends ExecuteResult {
+  performedActions?: readonly VisionAction[]
+}
+
+export interface VisionRailHost {
+  runTask(
+    goal: string,
+    taskId: string,
+    journeyId: string,
+    checkpoint?: TaskRetryCheckpoint,
+    continuation?: VisionTaskContinuation,
+    targetLabel?: string,
+    sessionLimitMs?: number
+  ): Promise<VisionTaskResult>
+}
+
+/** Registers the computer_use handler on the vision rail. */
+export function registerVisionRail(registry: HandlerRegistry): void {
+  registry.register({
+    type: 'computer_use',
+    attemptTimeoutMs: 2 * 60 * 60_000,
+    rail: 'vision',
+    // Gates for approval; the supervised overlay covers the run itself.
+    defaultRisk: 'mutate',
+    // Never auto-retry a GUI action on the live desktop (see the file header).
+    verification: 'none_fuzzy'
+  })
+}
+
+/** The vision executor the DeviceController calls for the 'vision' rail. */
+export function makeVisionRailExecutor(
+  host: VisionRailHost
+): (
+  action: ActionRecord,
+  checkpoint?: TaskRetryCheckpoint,
+  continuation?: VisionTaskContinuation,
+  targetLabel?: string
+) => Promise<VisionExecuteResult> {
+  return async (action, checkpoint, continuation, targetLabel) => {
+    const args = action.args as Record<string, unknown>
+    const goal = typeof args.goal === 'string' && args.goal.trim() ? args.goal : action.intent
+    const journeyId = action.sourceRef ?? action.id
+    const sessionLimitMs =
+      typeof args.sessionLimitMs === 'number' && Number.isFinite(args.sessionLimitMs)
+        ? args.sessionLimitMs
+        : undefined
+    const baseArgs = [goal, action.id, journeyId, checkpoint, continuation, targetLabel] as const
+    const result = sessionLimitMs
+      ? await host.runTask(...baseArgs, sessionLimitMs)
+      : await host.runTask(...baseArgs)
+    if (!result.ok) {
+      return { ok: false, detail: result.summary }
+    }
+    // A GUI action has no generic undo, so it lands as a verified confirmation
+    // without an Undo affordance; the action id is the effect handle.
+    return {
+      ok: true,
+      effectId: action.id,
+      ...(result.performedActions?.length ? { performedActions: result.performedActions } : {})
+    }
+  }
+}

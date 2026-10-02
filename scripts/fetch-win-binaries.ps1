@@ -3,18 +3,25 @@
 # win64 equivalents from upstream official releases at build time — laid out to
 # match exactly what the app's resolvers expect:
 #
-#   resources/bin/llama/llama-server.exe   (+ ggml/llama DLLs)   <- src/main/llm.ts
-#   resources/bin/sd/sd-cli.exe            (+ DLLs)              <- src/main/imagegen.ts
-#   resources/bin/whisper/whisper-cli.exe  (+ DLLs)             <- src/main/rag/extractors.ts
+#   resources/bin/llama-cuda/llama-server.exe (+ CUDA backend DLLs) <- NVIDIA
+#   resources/bin/llama/llama-server.exe      (+ Vulkan DLLs)       <- other GPUs
+#   resources/bin/llama-prism-cuda/llama-server.exe                <- Bonsai 2 NVIDIA
+#   resources/bin/cuda-runtime/*.dll                               <- shared CUDA runtime
+#   resources/bin/sd-cuda/sd-cli.exe       (+ shared CUDA DLLs)  <- NVIDIA image path
+#   resources/bin/sd/sd-cli.exe            (+ Vulkan DLLs)       <- other GPU path
+#   resources/bin/sd-cpu/sd-cli.exe        (+ CPU DLLs)          <- image fallback
+#   resources/bin/whisper/whisper-cli.exe  (+ CUDA DLLs)        <- STT GPU path
+#   resources/bin/whisper-cpu/whisper-cli.exe (+ DLLs)          <- STT fallback
 #   resources/bin/ffmpeg.exe                                     <- src/main/rag/extractors.ts
 #
-# On Windows the DLL loader searches the directory of the .exe first, so each
-# runtime's DLLs MUST sit next to its .exe (hence the per-runtime subdirs).
+# On Windows the DLL loader searches the directory of the .exe first. Runtime-
+# specific DLLs stay beside each executable; the shared CUDA directory is added
+# to PATH when a CUDA engine starts.
 #
 # Most runtimes are resolved DYNAMICALLY from each project's latest GitHub
 # release so the script does not go stale. llama.cpp is the EXCEPTION: it is
 # pinned to the same ref the macOS engine is built from (scripts/build-llama.sh,
-# LLAMA_REF=b9838) so grammar / native tool-call handling is byte-for-byte
+# package.json offgrid.llamaRef) so grammar / native tool-call handling is byte-for-byte
 # identical across platforms. 'latest' floats, and upstream builds have shipped
 # that reject the tool-call GBNF the app generates from MCP tool schemas.
 # Set OFFGRID_GH_TOKEN (or GITHUB_TOKEN) to avoid the unauthenticated API rate
@@ -22,6 +29,7 @@
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'  # makes Invoke-WebRequest downloads fast
+$IncludeCuda = $env:OFFGRID_INCLUDE_CUDA -ne '0'
 
 $bin = Join-Path $PSScriptRoot '..\resources\bin'
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
@@ -41,7 +49,7 @@ if ($token) { $ghHeaders['Authorization'] = "Bearer $token" }
 
 # Find the download URL of a release asset whose name matches $pattern. With no
 # $tag it uses the project's LATEST release; with $tag it pins to that exact
-# release (e.g. llama.cpp b9838, to match the macOS source build).
+# release (package.json offgrid.llamaRef, to match the macOS source build).
 function Get-AssetUrl($repo, $pattern, $tag) {
   $uri = if ($tag) { "https://api.github.com/repos/$repo/releases/tags/$tag" }
          else      { "https://api.github.com/repos/$repo/releases/latest" }
@@ -54,11 +62,14 @@ function Get-AssetUrl($repo, $pattern, $tag) {
 
 # Download + extract a zip asset, return the extraction dir. Optional $tag pins
 # to a specific release instead of latest.
-function Expand-Asset($repo, $pattern, $tag) {
+function Expand-Asset($repo, $pattern, $tag, $sha256 = $null) {
   $url = Get-AssetUrl $repo $pattern $tag
   $zip = Join-Path $tmp ([System.IO.Path]::GetRandomFileName() + '.zip')
   Write-Host "  downloading $url"
   Invoke-WebRequest -Headers $ghHeaders -Uri $url -OutFile $zip
+  if ($sha256 -and (Get-FileHash -Algorithm SHA256 -Path $zip).Hash -ne $sha256) {
+    throw "SHA256 mismatch for $url"
+  }
   $out = Join-Path $tmp ([System.IO.Path]::GetFileNameWithoutExtension($zip))
   Expand-Archive -Path $zip -DestinationPath $out -Force
   return $out
@@ -77,63 +88,123 @@ function Copy-Runtime($srcDir, $destName) {
 # PINNED to match the macOS engine (scripts/build-llama.sh). Overridable via env
 # for a coordinated cross-platform bump — keep it in lockstep with build-llama.sh.
 #
-# We ship TWO builds so Windows gets GPU speed without breaking GPU-less boxes:
-#   bin/llama      <- Vulkan (GPU) build, the app's PRIMARY. Offloads to any
-#                     Vulkan device (Intel/AMD/NVIDIA, incl. iGPUs like Radeon
-#                     740M) and still runs on CPU when no device is present.
+# We ship CUDA, Vulkan, and CPU builds in that order:
+#   bin/llama-cuda <- NVIDIA CUDA build with shared bin/cuda-runtime DLLs.
+#   bin/llama      <- Vulkan build for AMD/Intel and NVIDIA CUDA fallback.
 #                     Needs the system Vulkan loader (vulkan-1.dll, present with
 #                     any modern GPU driver).
 #   bin/llama-cpu  <- CPU-only build, the app's FALLBACK (llm.ts) for the rare
 #                     box with no Vulkan loader at all, where the Vulkan .exe
 #                     can't even load.
-$LlamaRef = if ($env:LLAMA_REF) { $env:LLAMA_REF } else { 'b9838' }
-Write-Host "== llama.cpp (pinned $LlamaRef): vulkan primary + cpu fallback =="
-try {
-  $x = Expand-Asset 'ggml-org/llama.cpp' 'bin-win-vulkan-x64\.zip$' $LlamaRef
-  Copy-Runtime $x 'llama' | Out-Null
-} catch { Write-Warning "llama.cpp (vulkan) fetch failed: $_" }
-try {
-  $x = Expand-Asset 'ggml-org/llama.cpp' 'bin-win-cpu-x64\.zip$' $LlamaRef
-  Copy-Runtime $x 'llama-cpu' | Out-Null
-} catch { Write-Warning "llama.cpp (cpu fallback) fetch failed: $_" }
+# The version has ONE owner: package.json's offgrid.llamaRef, shared with build-llama.sh. Hardcoding it in
+# both is how the macOS build and the Windows binaries drift apart within a single release.
+$PackageJson = Join-Path (Split-Path $PSScriptRoot -Parent) 'package.json'
+$DefaultLlamaRef = (Get-Content $PackageJson -Raw | ConvertFrom-Json).offgrid.llamaRef
+$LlamaRef = if ($env:LLAMA_REF) { $env:LLAMA_REF } else { $DefaultLlamaRef }
+$LlamaHashes = @{
+  cuda = 'cb6e838cad17e9920b99ab8496ca9aa7cdc3d3c218128957179bb1fbe0772c4c'
+  cudart = '8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6'
+  vulkan = 'b7b5ef4a1f47542635a3a5e3e471cbfcbaee057aa0c962f9573329ddd9168c5a'
+  cpu = 'a2668a200ca7271e66af0a54fd4376aaf8ae0b2a562cf7a63c41d8fd2a8245fa'
+}
+if ($LlamaRef -ne $DefaultLlamaRef) {
+  $overrideHashes = @{
+    cuda = $env:LLAMA_CUDA_SHA256
+    cudart = $env:LLAMA_CUDART_SHA256
+    vulkan = $env:LLAMA_VULKAN_SHA256
+    cpu = $env:LLAMA_CPU_SHA256
+  }
+  foreach ($name in $overrideHashes.Keys) {
+    if ($overrideHashes[$name] -notmatch '^[0-9a-fA-F]{64}$') {
+      throw "LLAMA_REF override requires LLAMA_${name}_SHA256 (64 hex characters) before any downloads"
+    }
+  }
+  $LlamaHashes = $overrideHashes
+}
+Write-Host "== llama.cpp (pinned $LlamaRef): CUDA + Vulkan + CPU =="
+if ($IncludeCuda) {
+  $x = Expand-Asset 'ggml-org/llama.cpp' '^llama-.+-bin-win-cuda-12\.4-x64\.zip$' $LlamaRef $LlamaHashes.cuda
+  Copy-Runtime $x 'llama-cuda' | Out-Null
+  $x = Expand-Asset 'ggml-org/llama.cpp' '^cudart-llama-bin-win-cuda-12\.4-x64\.zip$' $LlamaRef $LlamaHashes.cudart
+  Copy-Runtime $x 'cuda-runtime' | Out-Null
+}
+$x = Expand-Asset 'ggml-org/llama.cpp' 'bin-win-vulkan-x64\.zip$' $LlamaRef $LlamaHashes.vulkan
+Copy-Runtime $x 'llama' | Out-Null
+$x = Expand-Asset 'ggml-org/llama.cpp' 'bin-win-cpu-x64\.zip$' $LlamaRef $LlamaHashes.cpu
+Copy-Runtime $x 'llama-cpu' | Out-Null
 
-# --- whisper.cpp (whisper-cli.exe + DLLs) ------------------------------------
-Write-Host '== whisper.cpp =='
-try {
-  $x = Expand-Asset 'ggml-org/whisper.cpp' '^whisper-bin-x64\.zip$'
+# Bonsai 2 uses packed ternary weights that require PrismML's llama.cpp fork.
+# Try CUDA on NVIDIA, Vulkan on other GPUs, then CPU.
+# Keep these DLLs separate from the standard llama.cpp DLLs.
+$PrismLlamaRef = (Get-Content $PackageJson -Raw | ConvertFrom-Json).offgrid.prismLlamaRef
+Write-Host "== Prism llama.cpp (pinned $PrismLlamaRef): CUDA + Vulkan + CPU =="
+if ($IncludeCuda) {
+  $x = Expand-Asset 'PrismML-Eng/llama.cpp' '^llama-.+-bin-win-cuda-12\.4-x64\.zip$' $PrismLlamaRef 'f565c8428c1f108311f65ed97f02425188b3aa3c745c2bc597521bbd24bcbbc9'
+  Copy-Runtime $x 'llama-prism-cuda' | Out-Null
+}
+$x = Expand-Asset 'PrismML-Eng/llama.cpp' 'bin-win-vulkan-x64\.zip$' $PrismLlamaRef 'fabef609b588cbbed85b5f10b45809c46088f0a63caca7976054034e24b40836'
+Copy-Runtime $x 'llama-prism' | Out-Null
+$x = Expand-Asset 'PrismML-Eng/llama.cpp' 'bin-win-cpu-x64\.zip$' $PrismLlamaRef '92cd4d1cee11107593ff87d77eb57b02d804c86dd4b13224e18ba963a4271ad8'
+Copy-Runtime $x 'llama-prism-cpu' | Out-Null
+
+# --- whisper.cpp (whisper-cli.exe + DLLs): CUDA GPU + CPU fallback -----------
+# The newest semantic release can have no binary assets. Pin the current build
+# release so Windows voice cannot disappear because GitHub's "latest" moved.
+$WhisperRef = 'b5130'
+Write-Host "== whisper.cpp (pinned $WhisperRef): CUDA 12.4 + CPU =="
+if ($IncludeCuda) {
+  # The CUDA 11.8 build needs cublas64_11.dll, while the performance pack
+  # provides CUDA 12.4. Keep Whisper's CUDA major version aligned with the pack.
+  $x = Expand-Asset 'ggml-org/whisper.cpp' '^whisper-cublas-12\.4\.0-bin-x64\.zip$' $WhisperRef 'af520ddd034d985b55dfeea3e465ed93653ba2aee1a55e865033edc548c272a7'
   $dest = Copy-Runtime $x 'whisper'
   # Older releases ship the CLI as main.exe; the app expects whisper-cli.exe.
   $wc = Join-Path $dest 'whisper-cli.exe'
   $mn = Join-Path $dest 'main.exe'
   if (-not (Test-Path $wc) -and (Test-Path $mn)) { Copy-Item $mn $wc -Force }
-} catch { Write-Warning "whisper.cpp fetch failed: $_" }
+}
 
-# --- stable-diffusion.cpp (image gen), cpu x64 -------------------------------
-# CPU build ON PURPOSE, not the Vulkan/CUDA ones: the DEFAULT image path is the
-# one-shot `sd-cli` (imagegen.ts; resident sd-server is opt-in). That path spawns
-# once and reports a single exit code, so it CANNOT tell "GPU binary won't load
-# on this box" apart from "generation failed" — there's no launch-failure ladder
-# like llm.ts has (which detects load via HTTP readiness). So the one binary we
-# ship here MUST load unconditionally; only the CPU build does (the Vulkan build
-# hard-requires a Vulkan loader and would just trade "not found" for "won't load"
-# on GPU-less boxes). A Vulkan-primary + CPU-fallback ladder (mirroring the llama
-# bin/llama + bin/llama-cpu setup) is the future speed upgrade; it needs the
-# resident-server readiness seam to detect load failure first.
-#
-# NOTE: upstream renamed this asset — it was `bin-win-avx2-x64.zip`, now gone. The
-# fetch is optional (verify below only WARNS), so a stale pattern here fails
-# SILENTLY at build time and ships a Windows package with no image binary, which
-# surfaces as "Image generation binary (sd-cli) not found" at runtime. This is
-# dynamic 'latest' matching, so re-check the asset name on any upstream bump.
-Write-Host '== stable-diffusion.cpp (cpu x64) =='
 try {
-  $x = Expand-Asset 'leejet/stable-diffusion.cpp' 'bin-win-cpu-x64\.zip$'
+  $x = Expand-Asset 'ggml-org/whisper.cpp' '^whisper-bin-x64\.zip$' $WhisperRef 'f9ec6c52a2e949b62ab51fa21d0d497958f9e41c3010c157c4e42932d5316f3c'
+  $dest = Copy-Runtime $x 'whisper-cpu'
+  $wc = Join-Path $dest 'whisper-cli.exe'
+  $mn = Join-Path $dest 'main.exe'
+  if (-not (Test-Path $wc) -and (Test-Path $mn)) { Copy-Item $mn $wc -Force }
+} catch { Write-Warning "whisper.cpp CPU fetch failed: $_" }
+
+# --- stable-diffusion.cpp (image gen): CUDA, Vulkan, then CPU -------------------
+# The CUDA engine reuses bin/cuda-runtime from llama.cpp. Do not fetch the
+# separate 563 MB stable-diffusion CUDA runtime archive: it contains the same
+# three CUDA DLLs and previously made the installer too large to build.
+# Keep this release pinned: Qwen-Image 2.1 needs the current runtime and a moving
+# latest release can change the packaged DLL contract without review.
+$SdRef = 'master-920-2f88688'
+Write-Host "== stable-diffusion.cpp (pinned $SdRef): CUDA + Vulkan + CPU =="
+if ($IncludeCuda) {
+  try {
+    $x = Expand-Asset 'leejet/stable-diffusion.cpp' 'bin-win-cuda12-x64\.zip$' $SdRef '479133a03d5c861ce77e70354dbbe75dd6e8d9955d1d1c7b6b1456b4571e3039'
+    $dest = Copy-Runtime $x 'sd-cuda'
+    $cli = Join-Path $dest 'sd-cli.exe'
+    $sd = Join-Path $dest 'sd.exe'
+    if (-not (Test-Path $cli) -and (Test-Path $sd)) { Copy-Item $sd $cli -Force }
+  } catch { Write-Warning "stable-diffusion.cpp CUDA fetch failed: $_" }
+}
+
+try {
+  $x = Expand-Asset 'leejet/stable-diffusion.cpp' 'bin-win-vulkan-x64\.zip$' $SdRef '63e84439c20dde75487a933066318ae01353e9e80ee70e031acad48e857e1cb9'
   $dest = Copy-Runtime $x 'sd'
-  # Upstream names the one-shot binary sd.exe; the app resolves sd/sd-cli(.exe).
+  # Older releases named the one-shot binary sd.exe; normalize the app contract.
   $cli = Join-Path $dest 'sd-cli.exe'
   $sd = Join-Path $dest 'sd.exe'
   if (-not (Test-Path $cli) -and (Test-Path $sd)) { Copy-Item $sd $cli -Force }
-} catch { Write-Warning "stable-diffusion.cpp fetch failed: $_" }
+} catch { Write-Warning "stable-diffusion.cpp Vulkan fetch failed: $_" }
+
+try {
+  $x = Expand-Asset 'leejet/stable-diffusion.cpp' 'bin-win-cpu-x64\.zip$' $SdRef '10fc73b25bd97fb071c6bb6ba2a18e8811e6dd421c32bead98c18c84cd305d7f'
+  $dest = Copy-Runtime $x 'sd-cpu'
+  $cli = Join-Path $dest 'sd-cli.exe'
+  $sd = Join-Path $dest 'sd.exe'
+  if (-not (Test-Path $cli) -and (Test-Path $sd)) { Copy-Item $sd $cli -Force }
+} catch { Write-Warning "stable-diffusion.cpp CPU fetch failed: $_" }
 
 # --- ffmpeg (GPL, win64) — single ffmpeg.exe flat in resources/bin -----------
 Write-Host '== ffmpeg =='
@@ -153,20 +224,50 @@ Write-Host 'resources/bin now contains (win64):'
 Get-ChildItem -Path $bin -Recurse -Include *.exe |
   ForEach-Object { Write-Host "  $($_.FullName.Replace($bin, '').TrimStart('\'))" }
 
-# Verify the result so a failed fetch fails LOUD here, not as a confusing
-# "binary not found" at app startup. llama-server is REQUIRED (no chat without
-# it); whisper/sd/ffmpeg are optional (voice/image degrade gracefully if absent).
+# Verify every runtime needed for chat, speech, and image generation. A failed
+# download must stop the build before an incomplete installer is uploaded.
 $llama = Join-Path $bin 'llama\llama-server.exe'
 if (-not (Test-Path -LiteralPath $llama)) {
   Write-Error "REQUIRED binary missing: $llama (the llama.cpp fetch failed above). Cannot run the model server."
   exit 1
 }
-foreach ($p in @(
-    (Join-Path $bin 'llama-cpu\llama-server.exe'),
-    (Join-Path $bin 'whisper\whisper-cli.exe'),
-    (Join-Path $bin 'sd\sd-cli.exe'),
-    (Join-Path $bin 'ffmpeg.exe'))) {
-  if (-not (Test-Path -LiteralPath $p)) { Write-Warning "optional runtime missing (feature will be unavailable): $p" }
+$prism = Join-Path $bin 'llama-prism\llama-server.exe'
+if (-not (Test-Path -LiteralPath $prism)) {
+  Write-Error "REQUIRED binary missing: $prism (the Prism llama.cpp fetch failed above). Cannot run Bonsai 2."
+  exit 1
 }
+$prismCpu = Join-Path $bin 'llama-prism-cpu\llama-server.exe'
+if (-not (Test-Path -LiteralPath $prismCpu)) {
+  Write-Error "REQUIRED binary missing: $prismCpu (the Prism CPU fallback fetch failed above). Cannot run Bonsai 2 without Vulkan."
+  exit 1
+}
+foreach ($p in @(
+    (Join-Path $bin 'whisper-cpu\whisper-cli.exe'),
+    (Join-Path $bin 'sd\sd-cli.exe'),
+    (Join-Path $bin 'sd-cpu\sd-cli.exe'),
+    (Join-Path $bin 'ffmpeg.exe'))) {
+  if (-not (Test-Path -LiteralPath $p)) { throw "REQUIRED Windows runtime missing: $p" }
+}
+if ($IncludeCuda) {
+  foreach ($p in @(
+      (Join-Path $bin 'llama-cuda\llama-server.exe'),
+      (Join-Path $bin 'llama-prism-cuda\llama-server.exe'),
+      (Join-Path $bin 'cuda-runtime\cudart64_12.dll'),
+      (Join-Path $bin 'cuda-runtime\cublas64_12.dll'),
+      (Join-Path $bin 'cuda-runtime\cublasLt64_12.dll'),
+      (Join-Path $bin 'whisper\whisper-cli.exe'),
+      (Join-Path $bin 'whisper\ggml-cuda.dll'),
+      (Join-Path $bin 'whisper\cudart64_12.dll'),
+      (Join-Path $bin 'whisper\cublas64_12.dll'),
+      (Join-Path $bin 'whisper\cublasLt64_12.dll'),
+      (Join-Path $bin 'whisper\nvrtc64_120_0.dll'),
+      (Join-Path $bin 'sd-cuda\sd-cli.exe'),
+      (Join-Path $bin 'sd-cuda\ggml-cuda.dll'))) {
+    if (-not (Test-Path -LiteralPath $p)) { throw "REQUIRED Windows CUDA runtime missing: $p" }
+  }
+}
+$cpuLlama = Join-Path $bin 'llama-cpu\llama-server.exe'
+if (-not (Test-Path -LiteralPath $cpuLlama)) { throw "REQUIRED Windows runtime missing: $cpuLlama" }
 Write-Host ''
 Write-Host "OK: llama-server.exe present at $llama"
+Write-Host "OK: Prism llama-server.exe present at $prism"

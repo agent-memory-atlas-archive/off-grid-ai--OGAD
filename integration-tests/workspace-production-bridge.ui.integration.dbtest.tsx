@@ -5,12 +5,14 @@
  * IPC handlers, React surfaces, repositories, SQLite, and artifact store stay real.
  */
 import fs from 'node:fs'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 // The DB Vitest config uses the classic JSX transform, which reads this binding at runtime.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import React from 'react'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -31,6 +33,7 @@ type IpcListener = (event: unknown, ...args: unknown[]) => void
 
 const PROFILE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-workspace-bridge-'))
 const previousUserData = process.env.OFFGRID_USER_DATA
+const previousDataDir = process.env.OFFGRID_DATA_DIR
 const bridge = vi.hoisted(() => ({
   handlers: new Map<string, IpcHandler>(),
   mainListeners: new Map<string, IpcHandler>(),
@@ -129,17 +132,14 @@ let TooltipProvider: typeof import('../src/renderer/src/components/ui/tooltip').
 async function bootProductionMain(): Promise<void> {
   bridge.handlers.clear()
   bridge.mainListeners.clear()
-  const [{ setupIPC }, { setupRagIPC }, { llm }] = await Promise.all([
+  const [{ setupIPC }, { setupRagIPC }, { registerTaskHistoryIpc }] = await Promise.all([
     import('../src/main/ipc'),
     import('../src/main/rag-ipc'),
-    import('../src/main/llm')
+    import('../src/main/tasks/task-history-ipc')
   ])
-  const service = llm as unknown as { port: number; initialized: boolean; paused: boolean }
-  service.port = fake.port
-  service.initialized = true
-  service.paused = false
   setupIPC()
   setupRagIPC()
+  registerTaskHistoryIpc()
 }
 
 function renderChat(target?: { conversationId?: string; projectId?: string }): void {
@@ -152,9 +152,15 @@ function renderChat(target?: { conversationId?: string; projectId?: string }): v
 
 beforeAll(async () => {
   process.env.OFFGRID_USER_DATA = PROFILE_DIR
+  process.env.OFFGRID_DATA_DIR = PROFILE_DIR
   fake = await startFakeLlamaServer()
   await bootProductionMain()
   await import('../src/preload/index')
+  await window.api.setRemoteVisionServer({
+    provider: 'custom',
+    endpoint: `http://127.0.0.1:${fake.port}/v1`,
+    model: 'integration-model'
+  })
   ;({ MemoryChat } = await import('../src/renderer/src/components/MemoryChat'))
   ;({ ProjectsScreen } = await import('../src/renderer/src/components/ProjectsScreen'))
   ;({ TooltipProvider } = await import('../src/renderer/src/components/ui/tooltip'))
@@ -180,22 +186,43 @@ afterAll(async () => {
   fs.rmSync(PROFILE_DIR, { recursive: true, force: true })
   if (previousUserData === undefined) delete process.env.OFFGRID_USER_DATA
   else process.env.OFFGRID_USER_DATA = previousUserData
+  if (previousDataDir === undefined) delete process.env.OFFGRID_DATA_DIR
+  else process.env.OFFGRID_DATA_DIR = previousDataDir
 })
+
+/**
+ * The reply as the TRANSCRIPT shows it, not the copy in the history rail.
+ *
+ * The chat list shows each conversation's last message as a preview, so a reply is legitimately on
+ * screen twice - once in its bubble and once in the rail - and a bare findByText throws "found multiple
+ * elements" for a UI that is behaving correctly. Scoping to the transcript keeps the assertion about the
+ * thing under test: the answer that came back through preload, IPC, the model socket and SQLite.
+ *
+ * The rail is the <aside> (role complementary), so anything outside it is transcript.
+ */
+async function inTranscript(text: string | RegExp): Promise<HTMLElement> {
+  return waitFor(
+    () => {
+      const rail = screen.queryByRole('complementary')
+      const shown = screen.getAllByText(text).filter((node) => !rail?.contains(node))
+      expect(shown.length).toBeGreaterThan(0)
+      return shown[0]!
+    },
+    { timeout: 5_000 }
+  )
+}
 
 describe('production workspace bridge', () => {
   it('sends a rendered chat turn through preload, IPC, the model socket, and SQLite', async () => {
-    fake.enqueue(
-      { content: '{"intent":"chat","urls":[]}' },
-      { content: 'The production bridge persisted this answer.' }
-    )
+    fake.enqueue({ content: 'The production bridge persisted this answer.' })
     const user = userEvent.setup()
     renderChat()
 
     const composer = await screen.findByPlaceholderText(/^ask /i)
-    await user.type(composer, 'Prove the complete local chat path')
+    fireEvent.change(composer, { target: { value: 'Prove the complete local chat path' } })
     await user.click(screen.getByRole('button', { name: /^send$/i }))
 
-    expect(await screen.findByText('The production bridge persisted this answer.')).toBeTruthy()
+    expect(await inTranscript('The production bridge persisted this answer.')).toBeTruthy()
     const { getRagConversations, getRagMessages } = await import('../src/main/database')
     await waitFor(() => {
       const conversation = getRagConversations().find(
@@ -207,7 +234,286 @@ describe('production workspace bridge', () => {
         ['assistant', 'The production bridge persisted this answer.']
       ])
     })
-    expect(fake.requests).toHaveLength(2)
+    expect(fake.requests).toHaveLength(1)
+  })
+
+  it('reads model-written web URLs with wrappers and rejects an unsupported scheme', async () => {
+    const requestedPaths: string[] = []
+    const pageServer = http.createServer((request, response) => {
+      const requestPath = request.url ?? ''
+      requestedPaths.push(requestPath)
+      response.writeHead(200, { 'Content-Type': 'text/html' })
+      response.end(
+        requestPath === '/quoted'
+          ? '<main>Quoted wrapper content</main>'
+          : '<main>Angle wrapper content</main>'
+      )
+    })
+    await new Promise<void>((resolve) => pageServer.listen(0, '127.0.0.1', resolve))
+    const pageOrigin = `http://127.0.0.1:${(pageServer.address() as AddressInfo).port}`
+    const user = userEvent.setup()
+
+    try {
+      fake.enqueue(
+        {
+          toolCalls: [
+            { name: 'read_url', args: { url: `"${pageOrigin}/quoted"` } },
+            { name: 'read_url', args: { url: `<${pageOrigin}/angled>` } },
+            { name: 'read_url', args: { url: 'ftp://example.com' } }
+          ]
+        },
+        { content: 'The supported pages were read and the unsupported URL was rejected.' }
+      )
+      renderChat()
+
+      const composer = await screen.findByPlaceholderText(/^ask /i)
+      await user.click(screen.getByRole('button', { name: 'New chat' }))
+      fireEvent.pointerDown(screen.getByRole('button', { name: 'Composer options' }), {
+        button: 0,
+        ctrlKey: false
+      })
+      if (screen.queryByRole('menuitem', { name: 'ConnectorsOff' })) {
+        await user.click(screen.getByRole('menuitem', { name: 'ConnectorsOff' }))
+      }
+      await user.keyboard('{Escape}')
+      fireEvent.change(composer, {
+        target: { value: 'Read the supplied web addresses and reject unsupported URL schemes' }
+      })
+      await user.click(screen.getByRole('button', { name: /^send$/i }))
+      expect(
+        await inTranscript('The supported pages were read and the unsupported URL was rejected.')
+      ).toBeTruthy()
+      await user.click(await screen.findByRole('button', { name: 'Work done' }, { timeout: 5_000 }))
+
+      const toolResults = await waitFor(() => {
+        const results = screen.getAllByRole('button', {
+          name: /^Read web page, (complete|failed)$/
+        })
+        expect(screen.getAllByRole('button', { name: 'Read web page, complete' })).toHaveLength(2)
+        expect(screen.getAllByRole('button', { name: 'Read web page, failed' })).toHaveLength(1)
+        return results
+      })
+      await user.click(toolResults[0]!)
+      expect(await screen.findByText('Quoted wrapper content')).toBeTruthy()
+      await user.click(toolResults[1]!)
+      expect(await screen.findByText('Angle wrapper content')).toBeTruthy()
+      await user.click(toolResults[2]!)
+      await waitFor(() =>
+        expect(toolResults[2]!.closest('li')?.textContent).toContain(
+          'Invalid URL: unsupported scheme ftp'
+        )
+      )
+      expect(requestedPaths).toEqual(['/quoted', '/angled'])
+    } finally {
+      const composerOptions = screen.queryByRole('button', { name: 'Composer options' })
+      if (composerOptions) {
+        fireEvent.pointerDown(composerOptions, { button: 0, ctrlKey: false })
+        const enabledConnectors = screen.queryByRole('menuitem', { name: 'ConnectorsOn' })
+        if (enabledConnectors) await user.click(enabledConnectors)
+        await user.keyboard('{Escape}')
+      }
+      await new Promise<void>((resolve, reject) =>
+        pageServer.close((error) => (error ? reject(error) : resolve()))
+      )
+    }
+  }, 15_000)
+
+  it('shows the real memory-chat failure instead of a fabricated answer', async () => {
+    fake.enqueue({
+      errorStatus: 503,
+      errorBody: JSON.stringify({ error: { message: 'Memory model is unavailable.' } })
+    })
+    const user = userEvent.setup()
+    renderChat()
+
+    const composer = await screen.findByPlaceholderText(/^ask /i)
+    await user.click(screen.getByRole('button', { name: 'New chat' }))
+    fireEvent.change(composer, { target: { value: 'What did I work on today?' } })
+    await user.click(screen.getByRole('button', { name: /^send$/i }))
+
+    expect(await inTranscript(/Memory model is unavailable/)).toBeTruthy()
+    expect(screen.queryByText('Sorry, I could not generate a response right now.')).toBeNull()
+  })
+
+  it('keeps a slow reply active past the former deadline until the user stops it', async () => {
+    fake.enqueue({ content: 'This reply is still in progress.', hold: true })
+    const user = userEvent.setup()
+    renderChat()
+
+    const composer = await screen.findByPlaceholderText(/^ask /i)
+    await user.click(screen.getByRole('button', { name: 'New chat' }))
+    fireEvent.change(composer, { target: { value: 'Keep working until I stop you' } })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      fireEvent.click(screen.getByRole('button', { name: /^send$/i }))
+      for (let i = 0; i < 30 && !screen.queryByText('This reply is still in progress.'); i++) {
+        await vi.advanceTimersByTimeAsync(10)
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      expect(screen.getByText('This reply is still in progress.')).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Stop generating' })).toBeTruthy()
+      await vi.advanceTimersByTimeAsync(300_001)
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Stop generating' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Stop generating' })).toBeNull()
+    })
+    expect(await inTranscript('This reply is still in progress.')).toBeTruthy()
+  })
+
+  it('shows and saves a compaction notice when the chat reaches 80% of its context', async () => {
+    const longAnswer = `Stored answer ${'A'.repeat(54_000)}`
+    fake.enqueue({ content: longAnswer }, { content: 'The next answer still works.' })
+    const user = userEvent.setup()
+    renderChat()
+
+    const composer = await screen.findByPlaceholderText(/^ask /i)
+    await user.click(screen.getByRole('button', { name: 'New chat' }))
+    fireEvent.change(composer, { target: { value: 'Start a long conversation' } })
+    await user.click(screen.getByRole('button', { name: /^send$/i }))
+    expect(await inTranscript(longAnswer)).toBeTruthy()
+
+    fireEvent.change(composer, { target: { value: 'Continue after the context fills' } })
+    await user.click(screen.getByRole('button', { name: /^send$/i }))
+    expect(await inTranscript('The next answer still works.')).toBeTruthy()
+    expect(
+      await screen.findByText('Compacted conversation to make room for more messages.')
+    ).toBeTruthy()
+    const nextModelRequest = JSON.stringify(fake.requests.at(-1))
+    expect(nextModelRequest).toContain('Earlier chat excerpts')
+    expect(nextModelRequest).not.toContain(longAnswer)
+
+    const { getRagConversations, getRagMessages } = await import('../src/main/database')
+    const conversation = getRagConversations().find(
+      ({ title }) => title === 'Start a long conversation'
+    )
+    expect(conversation).toBeTruthy()
+    expect(getRagMessages(conversation!.id)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: '_Compacted_' })])
+    )
+  })
+
+  it('uses the same chat Thinking control for remote provider requests', async () => {
+    const endpoint = `http://127.0.0.1:${fake.port}/v1`
+    await window.api.setLlmSettings({ reasoningBudget: 1024 })
+    try {
+      for (const provider of ['openrouter', 'ollama', 'lmstudio', 'ogad'] as const) {
+        fake.reset()
+        await window.api.setRemoteVisionServer({ provider, endpoint, model: 'integration-model' })
+        fake.enqueue(
+          { content: `${provider} answered with Thinking on.` },
+          { content: `${provider} answered with Thinking off.` }
+        )
+        const user = userEvent.setup()
+        renderChat()
+        const composer = await screen.findByPlaceholderText(/^ask /i)
+        await user.click(screen.getByRole('button', { name: 'New chat' }))
+        await user.click(screen.getByRole('button', { name: /^Thinking$/i }))
+        fireEvent.change(composer, { target: { value: `Test ${provider} with Thinking on` } })
+        await user.click(screen.getByRole('button', { name: /^send$/i }))
+        expect(await inTranscript(`${provider} answered with Thinking on.`)).toBeTruthy()
+        const onRequest = fake.requests.at(-1)
+        if (provider === 'openrouter') {
+          expect(onRequest?.reasoning).toEqual({ max_tokens: 1024 })
+        } else if (provider === 'ollama') {
+          expect(onRequest?.reasoning_effort).toBe('low')
+        } else {
+          expect(onRequest?.chat_template_kwargs).toEqual({ enable_thinking: true })
+          if (provider === 'ogad') expect(onRequest?.reasoning_budget_tokens).toBe(1024)
+        }
+
+        await user.click(screen.getByRole('button', { name: /^Thinking$/i }))
+        fireEvent.change(composer, { target: { value: `Test ${provider} with Thinking off` } })
+        await user.click(screen.getByRole('button', { name: /^send$/i }))
+        expect(await inTranscript(`${provider} answered with Thinking off.`)).toBeTruthy()
+        const offRequest = fake.requests.at(-1)
+        if (provider === 'openrouter') {
+          expect(offRequest?.reasoning).toEqual({ effort: 'none' })
+        } else if (provider === 'ollama') {
+          expect(offRequest?.reasoning_effort).toBe('none')
+        } else {
+          expect(offRequest?.chat_template_kwargs).toEqual({ enable_thinking: false })
+        }
+        cleanup()
+      }
+    } finally {
+      await window.api.setRemoteVisionServer({
+        provider: 'custom',
+        endpoint,
+        model: 'integration-model'
+      })
+      await window.api.setLlmSettings({ reasoningBudget: 0 })
+    }
+  }, 15_000)
+
+  it('shows Gemini thinking and completes a signed reasoning tool round', async () => {
+    const endpoint = `http://127.0.0.1:${fake.port}/v1`
+    await window.api.setRemoteVisionServer({
+      provider: 'openrouter',
+      endpoint,
+      model: 'integration-model'
+    })
+    const user = userEvent.setup()
+    try {
+      fake.enqueue(
+        {
+          reasoningDetails: [
+            {
+              type: 'reasoning.text',
+              text: 'I will calculate this value.',
+              signature: 'signed-gemini-reasoning',
+              format: 'google-gemini-v1',
+              index: 0
+            }
+          ],
+          toolCalls: [{ name: 'calculator', args: { expression: '6*7' } }]
+        },
+        {
+          requirePriorReasoningDetails: true,
+          content: 'Gemini used the calculator and returned 42.'
+        }
+      )
+      renderChat()
+
+      const composer = await screen.findByPlaceholderText(/^ask /i)
+      await user.click(screen.getByRole('button', { name: 'New chat' }))
+      await user.click(screen.getByRole('button', { name: /^Thinking$/i }))
+      fireEvent.pointerDown(screen.getByRole('button', { name: 'Composer options' }), {
+        button: 0,
+        ctrlKey: false
+      })
+      if (screen.queryByRole('menuitem', { name: 'ConnectorsOff' })) {
+        await user.click(screen.getByRole('menuitem', { name: 'ConnectorsOff' }))
+      }
+      await user.keyboard('{Escape}')
+      fireEvent.change(composer, {
+        target: { value: 'Use calculator to multiply six times seven' }
+      })
+      await user.click(screen.getByRole('button', { name: /^send$/i }))
+
+      expect(await inTranscript('Gemini used the calculator and returned 42.')).toBeTruthy()
+      await user.click(await screen.findByRole('button', { name: 'Work done' }, { timeout: 5_000 }))
+      await user.click(await screen.findByRole('button', { name: 'Thought process' }))
+      expect(await screen.findByText('I will calculate this value.')).toBeTruthy()
+      expect(await screen.findByRole('button', { name: 'Calculator, complete' })).toBeTruthy()
+    } finally {
+      await window.api.setRemoteVisionServer({
+        provider: 'custom',
+        endpoint,
+        model: 'integration-model'
+      })
+      const composerOptions = screen.queryByRole('button', { name: 'Composer options' })
+      if (composerOptions) {
+        fireEvent.pointerDown(composerOptions, { button: 0, ctrlKey: false })
+        const enabledConnectors = screen.queryByRole('menuitem', { name: 'ConnectorsOn' })
+        if (enabledConnectors) await user.click(enabledConnectors)
+        await user.keyboard('{Escape}')
+      }
+    }
   })
 
   it('renders projects, chats, messages, and artifacts after the real database reopens', async () => {
@@ -238,7 +544,7 @@ describe('production workspace bridge', () => {
 
     cleanup()
     renderChat({ conversationId: 'reopened-chat' })
-    expect(await screen.findByText('Keep this project context')).toBeTruthy()
-    expect(await screen.findByText('Context retained locally')).toBeTruthy()
+    expect(await inTranscript('Keep this project context')).toBeTruthy()
+    expect(await inTranscript('Context retained locally')).toBeTruthy()
   })
 })

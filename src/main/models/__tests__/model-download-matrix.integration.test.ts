@@ -1,5 +1,5 @@
 // Release journeys #17-#19, #21, and #23 through the production desktop model manager.
-// Only boundaries outside Off Grid are controlled: HTTP serves small deterministic
+// Only boundaries outside Off Grid AI are controlled: HTTP serves small deterministic
 // model bytes, while tiny executable fixtures stand in for the native image, STT,
 // and TTS runtimes. Download sequencing, integrity checks, filesystem promotion,
 // installed/readiness decisions, activation, and runtime selection all stay real.
@@ -50,9 +50,12 @@ const byKind = (kind: CatalogModel['kind'], fileCount?: number): CatalogModel =>
 // model ships an mmproj so it's classified 'vision', and the vision model IS the
 // chat model (activates into the `.text` chat slot). Single-file download
 // mechanics are exercised with any single-file model (image/voice exist).
-const singleFileModels = CATALOG.filter((m) => m.files.length === 1)
+// Synthetic HTTP fixtures cannot satisfy immutable catalog checksums.
+const singleFileModels = CATALOG.filter((m) => m.files.length === 1 && !m.files[0]?.sha256)
 const chatModel = byKind('vision', 2)
 const visionModel = byKind('vision', 2)
+const holoGrounder = CATALOG.find((candidate) => candidate.id === 'mradermacher/Holo-3.1-4B-GGUF')
+if (!holoGrounder) throw new Error('Model catalog needs the dual-capability Holo3.1-4B fixture')
 const imageModel = byKind('image', 3)
 const speechModel = CATALOG.find(
   (candidate) => candidate.kind === 'transcription' && candidate.engine === 'parakeet'
@@ -152,6 +155,13 @@ async function downloadEveryRequiredFile(entry: CatalogModel): Promise<{
   return { progress, bytes }
 }
 
+function seedInstalledCatalogModel(entry: CatalogModel): void {
+  for (const [index, file] of entry.files.entries()) {
+    fs.writeFileSync(path.join(dataDir, 'models', file.name), modelBytes(file, index + 1))
+  }
+  installedByTest.add(entry.id)
+}
+
 beforeAll(() => {
   fs.mkdirSync(path.join(dataDir, 'models'), { recursive: true })
 
@@ -185,6 +195,48 @@ afterAll(() => {
 })
 
 describe('model download release matrix', () => {
+  it('downloads the GGUF selected in the file picker even when the repo is cataloged', async () => {
+    const repoId = 'prism-ml/Ternary-Bonsai-2-27B-gguf'
+    const selected = 'Ternary-Bonsai-2-27B-PTQ1_0.gguf'
+    const projector = 'Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf'
+    const requested: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      requested.push(url)
+      if (url.includes('/api/models/')) {
+        return new Response(JSON.stringify({ siblings: [
+          { rfilename: selected, size: 2048 },
+          { rfilename: projector, size: 2048 }
+        ] }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith(selected) || url.endsWith(projector)) {
+        return new Response(new Uint8Array(Buffer.concat([Buffer.from('GGUF'), Buffer.alloc(2044)])), {
+          status: 200,
+          headers: { 'content-length': '2048' }
+        })
+      }
+      throw new Error(`Unexpected download: ${url}`)
+    }))
+
+    try {
+      expect(await manager.downloadModel(repoId, undefined, selected)).toEqual({ success: true })
+      expect(requested.some((url) => url.endsWith(selected))).toBe(true)
+      expect(requested.some((url) => url.endsWith('Ternary-Bonsai-2-27B-PQ2_0.gguf'))).toBe(false)
+      expect(fs.existsSync(path.join(dataDir, 'models', selected))).toBe(true)
+      expect((await manager.getStorageInfo()).models.find((model) => model.name === 'Bonsai 2 27B')?.kind).toBe('vision')
+      const catalogPrimary = 'Ternary-Bonsai-2-27B-PQ2_0.gguf'
+      fs.writeFileSync(path.join(dataDir, 'models', catalogPrimary), 'GGUF')
+      expect(await manager.setActiveModel(repoId)).toEqual({ success: true })
+      const active = JSON.parse(fs.readFileSync(path.join(dataDir, 'models', 'active-model.json'), 'utf8'))
+      expect(active.primary).toBe(catalogPrimary)
+    } finally {
+      fs.rmSync(path.join(dataDir, 'models', selected), { force: true })
+      fs.rmSync(path.join(dataDir, 'models', projector), { force: true })
+      fs.rmSync(path.join(dataDir, 'models', 'Ternary-Bonsai-2-27B-PQ2_0.gguf'), { force: true })
+      await manager.clearDownload(repoId)
+    }
+  })
+
   it('downloads the chat (vision) model with observable progress and makes it activatable (#17)', async () => {
     const { progress } = await downloadEveryRequiredFile(chatModel)
 
@@ -211,18 +263,34 @@ describe('model download release matrix', () => {
     })
   })
 
+  it('activates Holo 4B for the product rail that the user selected', async () => {
+    // The immutable catalog checksums are proven by the shared package tests.
+    // This journey starts at the installed-model boundary and proves which
+    // active slot receives the same dual-capability package.
+    seedInstalledCatalogModel(holoGrounder)
+    expect(await manager.listInstalled()).toContain(holoGrounder.id)
+
+    expect(await manager.activateModel(holoGrounder.id, 'computer_use')).toEqual({ success: true })
+    expect(manager.getActiveModalities().computer_use).toBe(holoGrounder.id)
+    expect(manager.getActiveModalities().text).toBeNull()
+  })
+
   it('makes a complete Parakeet download selectable by the real dictation service (#19)', async () => {
     const { getActiveTranscription } = await import('../../transcription/select')
-    expect(getActiveTranscription().isAvailable()).toBe(false)
+    // No app database in this runner (it cannot load the native DB module — see
+    // vitest.config.ts), and this journey has no language preference to honor: the reader
+    // is the boundary, so it answers with the same default a fresh profile would.
+    const noStoredPreferences = <T>(_key: string, fallback: T): T => fallback
+    expect(getActiveTranscription(noStoredPreferences).isAvailable()).toBe(false)
 
     await downloadEveryRequiredFile(speechModel)
     expect(await manager.activateModel(speechModel.id)).toEqual({ success: true })
-    const dictation = getActiveTranscription()
+    const dictation = getActiveTranscription(noStoredPreferences)
 
     expect(dictation.isAvailable()).toBe(true)
     await expect(
       dictation.transcribe({ path: path.join(testRoot, 'synthetic.wav') }, { alreadyWav16k: true })
-    ).resolves.toEqual({ text: 'downloaded model dictation works', language: undefined })
+    ).resolves.toEqual({ text: 'downloaded model dictation works', language: 'en' })
   })
 
   it('keeps a multi-file image model unavailable until the whole runtime stack lands (#21)', async () => {

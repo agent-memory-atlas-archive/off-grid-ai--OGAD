@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   parseSseLine,
+  displayableReasoningDelta,
   createThinkSplitter,
   createToolCallAccumulator,
   createToolMarkupFilter,
@@ -26,6 +27,15 @@ describe('parseSseLine', () => {
   it('parses a reasoning_content delta frame', () => {
     const d = parseSseLine('data: {"choices":[{"delta":{"reasoning_content":"why"}}]}')
     expect(d).toEqual({ delta: { reasoning_content: 'why' }, finishReason: null })
+  })
+
+  it('projects OpenRouter structured reasoning text without encrypted payloads', () => {
+    const frame = parseSseLine(
+      'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"Checking the route. "},{"type":"reasoning.summary","summary":"Compared prices."},{"type":"reasoning.encrypted","data":"secret"}]}}]}'
+    )
+
+    expect(frame).not.toBeNull()
+    expect(displayableReasoningDelta(frame!.delta)).toBe('Checking the route. Compared prices.')
   })
 
   it('handles an untrimmed line with leading/trailing whitespace (trims internally)', () => {
@@ -242,6 +252,14 @@ describe('createToolMarkupFilter - hide tool-call markup from the visible stream
     expect(f.out()).toBe('One moment ')
   })
 
+  it('suppresses a Qwen tool-call wrapper across chunks', () => {
+    const f = collect()
+    f.push('Searching <|tool_call_sta')
+    f.push('rt|>web_search({"query":"x"})<|tool_call_end|>')
+    f.end()
+    expect(f.out()).toBe('Searching ')
+  })
+
   it('suppresses the <|tool_call|> variant and <invoke>', () => {
     const a = collect()
     a.push('a<|tool_call|>{}')
@@ -267,5 +285,13 @@ describe('createToolMarkupFilter - hide tool-call markup from the visible stream
     f.push('</tool_call> trailing junk')
     f.end()
     expect(f.out()).toBe('answer ')
+  })
+
+  it('removes a stray closing think tag before a text-form tool call', () => {
+    const f = collect()
+    f.push('I will search for that.</thi')
+    f.push('nk>\n<tool_call><function=web_search>raw protocol')
+    f.end()
+    expect(f.out()).toBe('I will search for that.\n')
   })
 })

@@ -1,4 +1,6 @@
 /** Electron IPC payloads shared by main, preload, and renderer type-checks. */
+import type { GenerationMetrics } from './generation-metrics'
+
 export interface UserProfileContract {
   role?: string
   companySize?: string
@@ -16,17 +18,25 @@ export interface RagConversationContract {
   id: string
   title: string | null
   project_id?: string | null
+  origin_device_id?: string | null
+  origin_device_name?: string | null
   created_at: string
   updated_at: string
   message_count?: number
+  /** The last turn, for the chat list's one-line preview (see chatListPreviewLine). */
+  last_role?: string | null
+  last_content?: string | null
 }
 
 export interface RagMessageContract {
   id: number
+  uuid?: string
   conversation_id: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
   context: string | null
+  origin_device_id?: string | null
+  origin_device_name?: string | null
   created_at: string
 }
 
@@ -39,11 +49,37 @@ export interface RagChatResultContract {
   answer: string
   context?: Record<string, unknown>
   cutoff?: ResponseCutoffContract
+  /** How the generation performed, when the run was measured. */
+  metrics?: GenerationMetrics
+}
+
+/** One reply still owned by the main process, used to reattach chat UI after navigation. */
+export interface ActiveChatStreamContract {
+  streamId: string
+  conversationId: string
+  messageId?: string
+  content: string
+  reasoning: string
+  /** The caller asked the remote/local model for thinking, even if no readable token arrived yet. */
+  reasoningRequested: boolean
+  phase:
+    | 'waiting'
+    | 'thinking'
+    | 'answering'
+    | 'loading_model'
+    | 'loading_image_model'
+    | 'generating_image'
+  tools?: Array<{
+    name: string
+    status: 'running' | 'completed' | 'failed' | 'pending'
+    result?: string
+  }>
 }
 
 export interface PermissionStatusContract {
   accessibility: boolean
   screenRecording: boolean
+  localNetwork: boolean
   allGranted: boolean
 }
 
@@ -53,6 +89,7 @@ export interface PermissionStatusContract {
  * processes. */
 export type SystemHealthComponentStatusContract =
   | 'ready'
+  | 'idle'
   | 'starting'
   | 'down'
   | 'not_installed'
@@ -64,6 +101,7 @@ export type SystemHealthComponentStatusContract =
  * independently reinterpret the same status record. */
 export const SYSTEM_HEALTH_STATUS_LABELS: Record<SystemHealthComponentStatusContract, string> = {
   ready: 'Running',
+  idle: 'Not loaded',
   starting: 'Starting',
   down: 'Error',
   not_installed: 'Not set up',

@@ -70,7 +70,10 @@ describe('runtime residency persistence', () => {
       image: 'resident',
       llm: 'resident',
       stt: 'on-demand',
-      tts: 'on-demand'
+      tts: 'on-demand',
+      grounding: 'resident',
+      decision: 'on-demand',
+      embeddings: 'resident'
     })
   })
 
@@ -94,7 +97,10 @@ describe('runtime residency persistence', () => {
       llm: 'resident',
       image: 'on-demand',
       stt: 'resident',
-      tts: 'resident'
+      tts: 'resident',
+      grounding: 'resident',
+      decision: 'on-demand',
+      embeddings: 'resident'
     })
     expect(getResidencyMode('stt')).toBe('resident')
   })

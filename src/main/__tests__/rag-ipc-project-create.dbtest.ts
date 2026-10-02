@@ -20,6 +20,7 @@ vi.mock('electron', () => ({
 }))
 
 import { setupRagIPC } from '../rag-ipc'
+import { getDB } from '../database'
 import { listProjects } from '../rag/store'
 
 afterAll(() => {
@@ -35,8 +36,8 @@ describe('project IPC persistence', () => {
     const first = create!(undefined, { name: 'First project' }) as string
     const second = create!(undefined, { name: 'Second project' }) as string
 
-    expect(first).toMatch(/^proj_[0-9a-f-]{36}$/)
-    expect(second).toMatch(/^proj_[0-9a-f-]{36}$/)
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(second).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
     expect(second).not.toBe(first)
     expect(listProjects().map(({ id, name }) => ({ id, name }))).toEqual(
       expect.arrayContaining([
@@ -80,5 +81,32 @@ describe('project IPC persistence', () => {
       icon: 'rocket',
       includeMemory: false
     })
+  })
+
+  it('returns a refusal and preserves the project when the database transaction fails', () => {
+    setupRagIPC()
+    const create = handlers.get('projects:create')
+    const remove = handlers.get('projects:delete')
+    expect(create).toBeTypeOf('function')
+    expect(remove).toBeTypeOf('function')
+
+    const projectId = create!(undefined, { name: 'Protected project' }) as string
+    getDB().exec(`
+      CREATE TRIGGER refuse_project_delete
+      BEFORE DELETE ON projects
+      BEGIN
+        SELECT RAISE(ABORT, 'knowledge cleanup did not finish');
+      END;
+    `)
+
+    expect(remove!(undefined, projectId)).toEqual({
+      ok: false,
+      reason: 'knowledge cleanup did not finish'
+    })
+    expect(listProjects()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: projectId, name: 'Protected project' })
+      ])
+    )
   })
 })

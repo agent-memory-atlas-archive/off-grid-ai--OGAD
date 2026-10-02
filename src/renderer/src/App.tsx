@@ -4,20 +4,36 @@ import { CommandPalette } from './components/CommandPalette'
 import logo from './assets/logo.png'
 import { useMeetingRecorder } from './useMeetingRecorder'
 import { MemoryChat } from './components/MemoryChat'
-import { Settings } from './components/Settings'
+import { ExploreScreen } from './components/explore/ExploreScreen'
+import type { DemoPreset } from './components/explore/presetCatalog'
+import { Settings, SETTINGS_DESTINATIONS } from './components/Settings'
+import { SettingsPanel } from './components/SettingsPanel'
+import { ModelPicker } from './components/ModelPicker'
 import { ModelsScreen } from './components/ModelsScreen'
 import { ProjectsScreen } from './components/ProjectsScreen'
 import { ConnectorsScreen } from './components/ConnectorsScreen'
 import { GatewayScreen } from './components/GatewayScreen'
 import { Onboarding } from './components/Onboarding'
 import { PermissionGate } from './components/PermissionGate'
+import { PerformancePackGate } from './components/setup/PerformancePackGate'
 import type { SearchHit } from './types'
 // Open-core: pro screens live in the private pro package and render through the
 // pro view-router; the free build shows the UpgradeScreen for those tabs.
-import { loadProFeaturesRenderer } from './bootstrap/loadProFeaturesRenderer'
+import {
+  clearProFeaturesRenderer,
+  loadProFeaturesRenderer,
+  type ProRendererActivation
+} from './bootstrap/loadProFeaturesRenderer'
+import { RendererEntitlementProvider } from './bootstrap/RendererEntitlementProvider'
+import { shouldRemovePaidRendererAccess } from './bootstrap/entitlementRegistry'
+import { useRendererEntitlement } from './bootstrap/useRendererEntitlement'
 import { renderProView, type ProViewContext } from './bootstrap/proView'
 import { UpgradeScreen } from './components/pro/UpgradeScreen'
-import { getProFeature, proFeatureComingSoon } from './components/pro/proCatalog'
+import {
+  featureSupportsPlatform,
+  getProFeature,
+  proFeatureComingSoon
+} from './components/pro/proCatalog'
 import { currentPlatform, isMac } from './lib/device'
 import { NotificationProvider } from './hooks/NotificationProvider'
 import { useNotifications } from './hooks/useNotifications'
@@ -37,30 +53,46 @@ import {
   IconPlug,
   IconServer2,
   IconLock,
-  IconLayoutSidebarLeftCollapse,
-  IconLayoutSidebarLeftExpand,
   IconLoader2,
   IconArrowLeft,
   IconArrowRight,
   IconActivityHeartbeat,
   IconDeviceMobile,
-  IconExternalLink
+  IconExternalLink,
+  IconSparkles,
+  IconBriefcase,
+  IconShieldLock,
+  IconTool
 } from '@tabler/icons-react'
+import { PushPin, PushPinSlash } from '@phosphor-icons/react'
 import { OFF_GRID_MOBILE_URL, openExternal } from './constants/links'
 import { cn } from './lib/utils'
 import { normalizeProNavigationIntent, type ProNavigationIntent } from './lib/pro-navigation'
 import { navigateSearchHit } from './lib/search-navigation'
-import { callHook } from './bootstrap/hookRegistry'
+import { internalTabPaletteScreens } from './lib/paletteScreens'
+import { getSlot, SLOTS } from './bootstrap/slotRegistry'
+import { SidebarNavigationMenu } from './components/navigation/SidebarNavigationMenu'
+import { StartupNotice } from './components/StartupNotice'
+import { CHAT_VIEW, setCurrentView } from './lib/current-view'
 import {
-  NOTIFICATION_METADATA_HOOK,
+  OPEN_ACTIVE_MODELS_PANEL_EVENT,
+  OPEN_MODEL_SETTINGS_PANEL_EVENT,
+  type ModelSettingsPanelTab
+} from './lib/model-settings-panel'
+import { callHook } from './bootstrap/hookRegistry'
+import { internalTabLocation, internalTabPath, isInternalTabView } from './lib/internal-tab-route'
+import {
   NOTIFICATION_OPEN_TARGET_CHANNEL,
   NOTIFICATION_RESOLVE_TARGET_HOOK,
-  type NotificationRoutingMetadata,
-  type NotificationSourceRecord
+  NOTIFICATION_SUBSCRIBE_EXTERNAL_ITEMS_HOOK,
+  NOTIFICATION_SUBSCRIBE_EXTERNAL_UNREAD_HOOK,
+  type NotificationExternalItemSubscriber,
+  type NotificationExternalUnreadSubscriber
 } from './lib/notification-hooks'
 
 type ViewMode =
   | 'dashboard'
+  | 'explore'
   | 'day'
   | 'replay'
   | 'reflect'
@@ -71,6 +103,7 @@ type ViewMode =
   | 'memories'
   | 'entities'
   | 'memory-chat'
+  | 'tasks'
   | 'models'
   | 'gateway'
   | 'projects'
@@ -80,10 +113,21 @@ type ViewMode =
   | 'clipboard'
   | 'voice'
   | 'vault'
+  | 'devices'
+
+interface NavigationIntent {
+  view: ViewMode
+  section?: string
+  subroute?: string
+  conversationId?: string
+  draftPrompt?: string
+}
 
 // Navigation state type for history tracking
 interface NavigationState {
   viewMode: ViewMode
+  subroute: string | null
+  settingsSection: string | null
   selectedSessionId: string | null
   selectedMemoryId: number | null
   selectedEntityId: number | null
@@ -133,10 +177,26 @@ function ReprocessingBanner() {
   )
 }
 
-// Model-server health dot for the sidebar. Uses the SAME live probe as the System
-// Health panel (system:health → real /health check), not llm.isReady() (an internal
-// flag that lags). Green = running, amber = starting, red = stopped (e.g. a SIGKILL
-// we can't auto-recover) → click goes to Settings to restart.
+// One rule for the look of EVERY sidebar row - nav items, the model-status row, the mobile-app
+// link. The Tailwind palette is remapped onto the theme-aware --og-* tokens in assets/main.css,
+// so these classes already flip with data-theme and no `dark:` variant belongs here: `dark:` is
+// Tailwind's own prefers-color-scheme media query, a SECOND source of truth for the theme that
+// disagrees with data-theme whenever the app theme and the OS theme differ.
+// The tell that made this visible: neutral-900 is a SURFACE token here (#f5f5f5 in light), not a
+// text token, so `hover:text-neutral-900` painted the label near-white on a near-white row.
+const navRowClass = (expanded: boolean, active = false): string =>
+  cn(
+    'group/nav relative flex items-center gap-3 rounded-lg py-2 text-sm transition-colors',
+    expanded ? 'px-3' : 'justify-center px-0',
+    active
+      ? 'bg-green-500/10 text-emerald-400'
+      : 'text-neutral-400 hover:bg-neutral-500/10 hover:text-white'
+  )
+
+// Model-server health dot for the sidebar. Uses the same authoritative chat probe
+// as the full System Health panel, through a narrow IPC projection that does not
+// re-check permissions, the gateway, image generation, and native helpers every
+// five seconds. Green = running, amber = starting, red = stopped.
 type ChatHealth = 'ready' | 'starting' | 'down' | null
 function ModelStatusDot({
   open,
@@ -148,25 +208,43 @@ function ModelStatusDot({
   const [status, setStatus] = useState<ChatHealth>(null)
   useEffect(() => {
     let live = true
+    let refreshInFlight: Promise<void> | null = null
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const api = (window as any).api
-    const poll = async (): Promise<void> => {
-      try {
-        const h = await api?.systemHealth?.()
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const chat = h?.components?.find((c: any) => c.id === 'chat')
-        const s: ChatHealth =
-          chat?.status === 'ready' ? 'ready' : chat?.status === 'starting' ? 'starting' : 'down'
-        if (live) setStatus(s)
-      } catch {
-        if (live) setStatus('down')
-      }
+    const applyHealth = (chat: { status?: string } | null | undefined): void => {
+      const next: ChatHealth =
+        chat?.status === 'ready' ? 'ready' : chat?.status === 'starting' ? 'starting' : 'down'
+      if (live) setStatus(next)
     }
-    void poll()
-    const id = setInterval(poll, 5000)
+    const refresh = (): void => {
+      if (refreshInFlight !== null) return
+      refreshInFlight = Promise.resolve(api?.chatHealth?.())
+        .then(applyHealth)
+        .catch(() => {
+          if (live) setStatus('down')
+        })
+        .finally(() => {
+          refreshInFlight = null
+        })
+    }
+    const refreshWhenVisible = (): void => {
+      if (document.visibilityState === 'visible') refresh()
+    }
+    const offChanged = api?.onChatHealthChanged?.(applyHealth)
+    refresh()
+    window.addEventListener('focus', refreshWhenVisible)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    const id = setInterval(refreshWhenVisible, 60_000)
     return () => {
       live = false
       clearInterval(id)
+      window.removeEventListener('focus', refreshWhenVisible)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      try {
+        offChanged?.()
+      } catch {
+        /* preload subscription already closed */
+      }
     }
   }, [])
   const color =
@@ -185,22 +263,17 @@ function ModelStatusDot({
         : status === 'starting'
           ? 'Model starting'
           : 'Model stopped'
-  // Collapsed: clicking opens the sidebar (the label/restart action lives there).
-  // Expanded: clicking goes to Settings to restart.
-  const label = open
-    ? status === 'down'
-      ? 'Model server stopped. Open Settings to restart.'
-      : `Model server: ${text.toLowerCase()}`
-    : `${text} - expand for details`
+  const label =
+    status === 'down'
+      ? 'Model server stopped. Open Setup and health.'
+      : `Model server: ${text.toLowerCase()}. Open Setup and health.`
   return (
     <button
+      type="button"
       onClick={onClick}
       title={label}
       aria-label={label}
-      className={cn(
-        'flex items-center gap-3 rounded-lg py-2 text-sm text-neutral-500 transition-colors hover:bg-neutral-500/10 hover:text-neutral-300',
-        open ? 'px-3' : 'justify-center px-0'
-      )}
+      className={navRowClass(open)}
     >
       <IconActivityHeartbeat className={cn('h-5 w-5 shrink-0', color)} />
       {open && <span className="flex-1 text-left text-xs">{text}</span>}
@@ -209,26 +282,62 @@ function ModelStatusDot({
 }
 
 function AppContent() {
-  const { addNotification } = useNotifications()
+  const { addNotification, unreadCount } = useNotifications()
 
-  // Pro entitlement (preload reads OFFGRID_PRO; absent submodule => false at runtime).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const isPro = !!(window as any).api?.isPro
+  // Main owns entitlement truth. The preload value seeds this renderer, then
+  // license:changed keeps it live without a restart.
+  const { isPro, setIsPro } = useRendererEntitlement()
   // Re-render once pro renderer features have activated (registers the view-router).
   const [proReady, setProReady] = useState(false)
-  useEffect(() => {
-    let mounted = true
-    void loadProFeaturesRenderer().finally(() => {
-      if (mounted) setProReady(true)
-    })
-    return () => {
-      mounted = false
-    }
+  const [proActivation, setProActivation] = useState<ProRendererActivation>('none')
+  const proActivationRevision = useRef(0)
+  const activateRendererFeatures = useCallback(async (): Promise<void> => {
+    const revision = ++proActivationRevision.current
+    const activation = await loadProFeaturesRenderer()
+    if (revision !== proActivationRevision.current) return
+    setProActivation(activation)
+    setProReady(true)
   }, [])
+  const TaskWorkspace = proReady ? getSlot(SLOTS.taskWorkspace) : undefined
+  // Rendered at the app root, NOT inside the route switch: a running task follows the user across
+  // navigation, so a route-scoped mount would unmount it exactly when it is wanted.
+  const TaskFloatingView = proReady ? getSlot(SLOTS.taskFloatingView) : undefined
+  const [externalUnreadCount, setExternalUnreadCount] = useState(0)
+  useEffect(() => {
+    void activateRendererFeatures()
+    return () => {
+      proActivationRevision.current += 1
+    }
+  }, [activateRendererFeatures])
+
+  useEffect(() => {
+    if (!proReady || !isPro) {
+      setExternalUnreadCount(0)
+      return
+    }
+    return callHook<ReturnType<NotificationExternalUnreadSubscriber>>(
+      NOTIFICATION_SUBSCRIBE_EXTERNAL_UNREAD_HOOK,
+      setExternalUnreadCount
+    )
+  }, [isPro, proReady])
+
+  useEffect(() => {
+    if (!proReady || !isPro) return
+    return callHook<ReturnType<NotificationExternalItemSubscriber>>(
+      NOTIFICATION_SUBSCRIBE_EXTERNAL_ITEMS_HOOK,
+      addNotification
+    )
+  }, [addNotification, isPro, proReady])
 
   // Free users land on Models (download a model first, with the sidebar to
   // explore); Mac Pro users land on Day. Never land on a locked or unavailable tab.
-  const [viewMode, setViewMode] = useState<ViewMode>(isPro && isMac() ? 'day' : 'models')
+  const [viewMode, commitViewMode] = useState<ViewMode>(isPro && isMac() ? 'day' : 'models')
+  const [settingsSection, setSettingsSection] = useState<string | null>(null)
+  const [settingsNavigationKey, setSettingsNavigationKey] = useState(0)
+  const [navigationSubroute, setNavigationSubroute] = useState<string | null>(null)
+  const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
+  const [activeModelsOpen, setActiveModelsOpen] = useState(false)
+  const [modelSettingsTab, setModelSettingsTab] = useState<ModelSettingsPanelTab>('model')
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [selectedMemoryId, setSelectedMemoryId] = useState<number | null>(null)
   // Version of a downloaded-and-staged update (null = none). Surfaced as a banner
@@ -258,10 +367,34 @@ function AppContent() {
   // existing conversation, or a request to start a new chat scoped to a project.
   const [chatTarget, setChatTarget] = useState<{
     conversationId?: string
+    approvalId?: number
     projectId?: string
+    openGallery?: boolean
+    presetId?: string
+    draftPrompt?: string
   } | null>(null)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
+  // Navigation is unconditional. Leaving a chat with a task running used to prompt, because the
+  // live view was lost on the way out; a running task now follows you in a floating card
+  // (tasks.floatingView), so there is nothing left to warn about.
+  const navigateTo = useCallback((destination: ViewMode, prepare?: () => void): void => {
+    setNavigationSubroute(null)
+    prepare?.()
+    commitViewMode(destination)
+  }, [])
+  const [sidebarHovered, setSidebarHovered] = useState(false)
+  const [sidebarPinned, setSidebarPinned] = useState(() => readSidebarPinned())
+  const sidebarOpen = sidebarPinned || sidebarHovered
+  const toggleSidebarPinned = (): void => {
+    setSidebarPinned((pinned) => {
+      writeSidebarPinned(!pinned)
+      return !pinned
+    })
+  }
   const rec = useMeetingRecorder()
+
+  const setTaskDetailSidebarMode = useCallback((detailOpen: boolean): void => {
+    if (detailOpen) setSidebarHovered(false)
+  }, [])
 
   // The meeting recording lifecycle (detect → record → warn → stop → finalize) is
   // owned by the main-process MeetingController. This view just reflects rec.* and
@@ -287,18 +420,82 @@ function AppContent() {
     setCanGoForward(forwardHistory.current.length > 0)
   }, [])
 
+  const removePaidRendererAccess = useCallback((): void => {
+    // Remove capability seams before React changes the route. No paid view,
+    // slot, settings section, hook, screen, or nav entry can run after this.
+    clearProFeaturesRenderer()
+    proActivationRevision.current += 1
+    setIsPro(false)
+    setProActivation('none')
+    setProReady(false)
+    void activateRendererFeatures()
+
+    navigationHistory.current = []
+    forwardHistory.current = []
+    isNavigatingHistory.current = false
+    setCanGoBack(false)
+    setCanGoForward(false)
+    setSettingsSection(null)
+    setNavigationSubroute(null)
+    setActiveModelsOpen(false)
+    setModelSettingsOpen(false)
+    setModelSettingsTab('model')
+    setSelectedSessionId(null)
+    setSelectedMemoryId(null)
+    setSelectedEntityId(null)
+    setSelectedProjectId(null)
+    setSearchQuery('')
+    setSearchSources([])
+    setSearchSort('relevance')
+    setReplayTarget(null)
+    setMeetingTarget(null)
+    setActionsMode(null)
+    setActionTarget(null)
+    setApprovalTarget(null)
+    setCalendarEventTarget(null)
+    setActionsEntity(null)
+    setChatTarget(null)
+    commitViewMode('day')
+  }, [activateRendererFeatures, setIsPro])
+
+  useEffect(() => {
+    const license = window.api.license
+    if (!license || typeof license.onChanged !== 'function') return
+    let active = true
+    const applyStatus = (info: ProLicenseInfo): void => {
+      if (!active) return
+      if (info.isPro) {
+        setIsPro(true)
+        void activateRendererFeatures()
+        return
+      }
+      if (!shouldRemovePaidRendererAccess(info)) return
+      removePaidRendererAccess()
+    }
+    const off = license.onChanged(applyStatus)
+    void license
+      .status()
+      .then(applyStatus)
+      .catch(() => {})
+    return () => {
+      active = false
+      off()
+    }
+  }, [activateRendererFeatures, removePaidRendererAccess, setIsPro])
+
   // Handle browser URL changes
   useEffect(() => {
     const path = window.location.pathname
     const viewMap: Record<string, ViewMode> = {
       '/': 'day',
+      '/explore': 'explore',
       '/day': 'day',
       '/replay': 'replay',
       '/reflect': 'reflect',
       '/actions': 'actions',
       '/connectors': 'connectors',
       '/meetings': 'meetings',
-      '/chat': 'memory-chat',
+      '/chat': CHAT_VIEW,
       '/chats': 'chats',
       '/memories': 'memories',
       '/entities': 'entities',
@@ -308,11 +505,30 @@ function AppContent() {
       '/notifications': 'notifications',
       '/search': 'search',
       '/settings': 'settings',
-      '/voice': 'voice'
+      '/voice': 'voice',
+      '/vault': 'vault',
+      '/devices': 'devices'
     }
 
-    if (viewMap[path]) {
-      setViewMode(viewMap[path])
+    const internalTab = internalTabLocation(path)
+    if (internalTab) {
+      setNavigationSubroute(internalTab.subroute)
+      setSettingsSection(null)
+      commitViewMode(internalTab.view)
+    } else if (path.startsWith('/settings/')) {
+      let section: string | null = null
+      try {
+        section = decodeURIComponent(path.slice('/settings/'.length)) || null
+      } catch {
+        section = null
+      }
+      setSettingsSection(section)
+      setNavigationSubroute(null)
+      commitViewMode('settings')
+    } else if (viewMap[path]) {
+      setNavigationSubroute(null)
+      setSettingsSection(null)
+      commitViewMode(viewMap[path])
     }
   }, [])
 
@@ -320,21 +536,73 @@ function AppContent() {
   // "pick a model yourself" CTA) — switch the active view without a remount.
   useEffect(() => {
     const onNav = (e: Event): void => {
-      const v = (e as CustomEvent).detail as ViewMode | undefined
-      if (v) setViewMode(v)
+      const intent = (e as CustomEvent<unknown>).detail
+      if (typeof intent === 'string') {
+        navigateTo(intent as ViewMode, () => {
+          setSettingsSection(null)
+          setNavigationSubroute(null)
+        })
+        return
+      }
+      if (!intent || typeof intent !== 'object' || !('view' in intent)) return
+      const navigation = intent as NavigationIntent
+      navigateTo(navigation.view, () => {
+        setSettingsSection(navigation.view === 'settings' ? (navigation.section ?? null) : null)
+        if (navigation.view === 'settings') setSettingsNavigationKey((value) => value + 1)
+        setNavigationSubroute(
+          isInternalTabView(navigation.view) ? (navigation.subroute ?? null) : null
+        )
+        if (
+          navigation.view === 'memory-chat' &&
+          (navigation.conversationId || navigation.draftPrompt)
+        ) {
+          setChatTarget({
+            conversationId: navigation.conversationId,
+            draftPrompt: navigation.draftPrompt
+          })
+        }
+      })
     }
     window.addEventListener('og:navigate', onNav)
     // Main-driven navigation (tray → a screen).
-    const offNav = window.api.onNavigate?.((v: string) => setViewMode(v as ViewMode))
+    const offNav = window.api.onNavigate?.((v: string) => {
+      navigateTo(v as ViewMode, () => {
+        setNavigationSubroute(null)
+        setSettingsSection(null)
+      })
+    })
     return () => {
       window.removeEventListener('og:navigate', onNav)
       offNav?.()
     }
+  }, [navigateTo])
+
+  useEffect(() => {
+    const open = (event: Event): void => {
+      const detail = (event as CustomEvent<{ tab?: ModelSettingsPanelTab } | undefined>).detail
+      const requestedTab = detail ? detail.tab : undefined
+      setActiveModelsOpen(false)
+      setModelSettingsTab(requestedTab ?? 'model')
+      setModelSettingsOpen(true)
+    }
+    window.addEventListener(OPEN_MODEL_SETTINGS_PANEL_EVENT, open)
+    return () => window.removeEventListener(OPEN_MODEL_SETTINGS_PANEL_EVENT, open)
   }, [])
+
+  useEffect(() => {
+    if (viewMode === 'memory-chat') return
+    const open = (): void => {
+      setModelSettingsOpen(false)
+      setActiveModelsOpen(true)
+    }
+    window.addEventListener(OPEN_ACTIVE_MODELS_PANEL_EVENT, open)
+    return () => window.removeEventListener(OPEN_ACTIVE_MODELS_PANEL_EVENT, open)
+  }, [viewMode])
 
   // Update browser URL when view mode changes
   useEffect(() => {
     const urlMap: Record<ViewMode, string> = {
+      explore: '/explore',
       day: '/day',
       replay: '/replay',
       reflect: '/reflect',
@@ -344,6 +612,7 @@ function AppContent() {
       dashboard: '/dashboard',
       'memory-chat': '/chat',
       chats: '/chats',
+      tasks: '/tasks',
       memories: '/memories',
       entities: '/entities',
       models: '/models',
@@ -354,14 +623,23 @@ function AppContent() {
       settings: '/settings',
       clipboard: '/clipboard',
       voice: '/voice',
-      vault: '/vault'
+      vault: '/vault',
+      devices: '/devices'
     }
 
-    const newPath = urlMap[viewMode]
+    let newPath = urlMap[viewMode]
+    if (viewMode === 'settings' && settingsSection) {
+      newPath = `/settings/${encodeURIComponent(settingsSection)}`
+    } else if (isInternalTabView(viewMode)) {
+      newPath = internalTabPath(viewMode, navigationSubroute)
+    }
     if (window.location.pathname !== newPath) {
       window.history.replaceState(null, '', newPath)
     }
-  }, [viewMode])
+    // Publish the view for anything that needs to reason about the current screen. replaceState
+    // fires no event, so the URL alone is not observable.
+    setCurrentView(viewMode)
+  }, [navigationSubroute, settingsSection, viewMode])
 
   // Record the committed destination before paint so an immediate keyboard/back-button action
   // cannot observe the new screen while history still points at the previous screen. A passive
@@ -375,6 +653,8 @@ function AppContent() {
     // Avoid duplicating the same state
     const currentState: NavigationState = {
       viewMode,
+      subroute: isInternalTabView(viewMode) ? navigationSubroute : null,
+      settingsSection: viewMode === 'settings' ? settingsSection : null,
       selectedSessionId,
       selectedMemoryId,
       selectedEntityId,
@@ -385,6 +665,8 @@ function AppContent() {
     const isSameState =
       lastState &&
       lastState.viewMode === currentState.viewMode &&
+      lastState.subroute === currentState.subroute &&
+      lastState.settingsSection === currentState.settingsSection &&
       lastState.selectedSessionId === currentState.selectedSessionId &&
       lastState.selectedMemoryId === currentState.selectedMemoryId &&
       lastState.selectedEntityId === currentState.selectedEntityId &&
@@ -402,6 +684,8 @@ function AppContent() {
     syncNavFlags()
   }, [
     viewMode,
+    navigationSubroute,
+    settingsSection,
     selectedSessionId,
     selectedMemoryId,
     selectedEntityId,
@@ -409,45 +693,11 @@ function AppContent() {
     syncNavFlags
   ])
 
-  // Subscribe to notification events from the main process
+  // Subscribe to informational notification events from the main process. Action
+  // approvals live only in Actions and never create a notification copy.
   useEffect(() => {
     if (!proReady || !isPro) return
     const unsubscribers: (() => void)[] = []
-
-    // Proactive approval queued — needs the user's decision
-    unsubscribers.push(
-      window.api.onNewApproval((data) => {
-        const routing = callHook<NotificationRoutingMetadata>(NOTIFICATION_METADATA_HOOK, {
-          source: 'approval',
-          recordId: data.approvalId
-        } satisfies NotificationSourceRecord)
-        addNotification({
-          type: 'approval',
-          title: data.entityName ? `Approval — ${data.entityName}` : 'Approval needed',
-          message: data.detail ? `${data.title} — ${data.detail}` : data.title,
-          approvalId: data.approvalId,
-          ...routing
-        })
-      })
-    )
-
-    // New to-do extracted from your activity
-    unsubscribers.push(
-      window.api.onNewAction((data) => {
-        const routing = callHook<NotificationRoutingMetadata>(NOTIFICATION_METADATA_HOOK, {
-          source: 'action',
-          recordId: data.actionId
-        } satisfies NotificationSourceRecord)
-        const where = [data.entityName, data.sourceApp].filter(Boolean).join(' · ')
-        addNotification({
-          type: 'todo',
-          title: data.due ? `New to-do — due ${data.due}` : 'New to-do',
-          message: where ? `${data.text} (${where})` : data.text,
-          actionId: data.actionId,
-          ...routing
-        })
-      })
-    )
 
     // A new version finished downloading and is staged — show the restart banner.
     // Seed from main too: on macOS the app can keep running with no windows, so a
@@ -468,69 +718,75 @@ function AppContent() {
     return () => {
       unsubscribers.forEach((unsub) => unsub())
     }
-  }, [addNotification, isPro, proReady])
+  }, [isPro, proReady])
 
   // Navigate back using history stack
   const navigateBack = useCallback(() => {
     if (navigationHistory.current.length > 1) {
-      isNavigatingHistory.current = true
-      // Pop current state and push to forward history
-      const currentState = navigationHistory.current.pop()
-      if (currentState) {
-        forwardHistory.current.push(currentState)
-      }
-      // Get previous state
-      const previousState = navigationHistory.current[navigationHistory.current.length - 1]
+      const previousState = navigationHistory.current[navigationHistory.current.length - 2]
       if (previousState) {
-        setViewMode(previousState.viewMode)
-        setSelectedSessionId(previousState.selectedSessionId)
-        setSelectedMemoryId(previousState.selectedMemoryId)
-        setSelectedEntityId(previousState.selectedEntityId)
-        setSelectedProjectId(previousState.selectedProjectId)
+        navigateTo(previousState.viewMode, () => {
+          isNavigatingHistory.current = true
+          const currentState = navigationHistory.current.pop()
+          if (currentState) forwardHistory.current.push(currentState)
+          setNavigationSubroute(previousState.subroute)
+          setSettingsSection(previousState.settingsSection)
+          setSelectedSessionId(previousState.selectedSessionId)
+          setSelectedMemoryId(previousState.selectedMemoryId)
+          setSelectedEntityId(previousState.selectedEntityId)
+          setSelectedProjectId(previousState.selectedProjectId)
+          syncNavFlags()
+        })
       }
-      syncNavFlags()
     }
-  }, [syncNavFlags])
+  }, [navigateTo, syncNavFlags])
 
   // Navigate forward using forward history stack
   const navigateForward = useCallback(() => {
     if (forwardHistory.current.length > 0) {
-      isNavigatingHistory.current = true
-      // Pop from forward history
-      const nextState = forwardHistory.current.pop()
+      const nextState = forwardHistory.current[forwardHistory.current.length - 1]
       if (nextState) {
-        // Push to back history
-        navigationHistory.current.push(nextState)
-        // Apply the state
-        setViewMode(nextState.viewMode)
-        setSelectedSessionId(nextState.selectedSessionId)
-        setSelectedMemoryId(nextState.selectedMemoryId)
-        setSelectedEntityId(nextState.selectedEntityId)
-        setSelectedProjectId(nextState.selectedProjectId)
+        navigateTo(nextState.viewMode, () => {
+          isNavigatingHistory.current = true
+          forwardHistory.current.pop()
+          navigationHistory.current.push(nextState)
+          setNavigationSubroute(nextState.subroute)
+          setSettingsSection(nextState.settingsSection)
+          setSelectedSessionId(nextState.selectedSessionId)
+          setSelectedMemoryId(nextState.selectedMemoryId)
+          setSelectedEntityId(nextState.selectedEntityId)
+          setSelectedProjectId(nextState.selectedProjectId)
+          syncNavFlags()
+        })
       }
-      syncNavFlags()
     }
-  }, [syncNavFlags])
+  }, [navigateTo, syncNavFlags])
 
   const handleBack = useCallback(() => {
     navigateBack()
   }, [navigateBack])
 
   // Navigation handlers for Dashboard and MemoryChat
-  const handleSelectChat = useCallback((sessionId: string) => {
-    setViewMode('chats')
-    setSelectedSessionId(sessionId)
-  }, [])
+  const handleSelectChat = useCallback(
+    (sessionId: string) => {
+      navigateTo('chats', () => setSelectedSessionId(sessionId))
+    },
+    [navigateTo]
+  )
 
-  const handleSelectMemory = useCallback((memoryId: number) => {
-    setViewMode('memories')
-    setSelectedMemoryId(memoryId)
-  }, [])
+  const handleSelectMemory = useCallback(
+    (memoryId: number) => {
+      navigateTo('memories', () => setSelectedMemoryId(memoryId))
+    },
+    [navigateTo]
+  )
 
-  const handleSelectEntity = useCallback((entityId: number) => {
-    setViewMode('entities')
-    setSelectedEntityId(entityId)
-  }, [])
+  const handleSelectEntity = useCallback(
+    (entityId: number) => {
+      navigateTo('entities', () => setSelectedEntityId(entityId))
+    },
+    [navigateTo]
+  )
 
   // Universal-search result → jump to the exact thing: open its source URL, the
   // owning entity/memory/meeting, or seek Replay to that captured moment.
@@ -540,45 +796,61 @@ function AppContent() {
         selectEntity: handleSelectEntity,
         selectMemory: handleSelectMemory,
         openMeeting: (meetingId) => {
-          setMeetingTarget(meetingId)
-          setViewMode('meetings')
+          navigateTo('meetings', () => setMeetingTarget(meetingId))
         },
         openChat: (target) => {
-          setChatTarget(target)
-          setViewMode('memory-chat')
+          navigateTo('memory-chat', () => setChatTarget(target))
         },
         openReplay: (timestamp) => {
-          setReplayTarget(timestamp)
-          setViewMode('replay')
+          navigateTo('replay', () => setReplayTarget(timestamp))
         }
       })
     },
-    [handleSelectEntity, handleSelectMemory]
+    [handleSelectEntity, handleSelectMemory, navigateTo]
   )
 
-  const openSearch = useCallback((q: string) => {
-    setSearchQuery(q)
-    setViewMode('search')
-  }, [])
+  const openSearch = useCallback(
+    (q: string) => {
+      navigateTo('search', () => setSearchQuery(q))
+    },
+    [navigateTo]
+  )
 
-  const handleProNavigate = useCallback((rawIntent: ProNavigationIntent): void => {
-    const intent = normalizeProNavigationIntent(rawIntent)
-    if (!intent) return
+  const handleProNavigate = useCallback(
+    (rawIntent: ProNavigationIntent): void => {
+      const intent = normalizeProNavigationIntent(rawIntent)
+      if (!intent) return
 
-    if (intent.view === 'actions') {
-      setActionTarget(intent.actionId ?? null)
-      setApprovalTarget(intent.approvalId ?? null)
-      setActionsMode(intent.mode ?? (intent.approvalId ? 'approvals' : 'todo'))
-      setActionsEntity(intent.entity ?? null)
-    } else if (intent.view === 'day') {
-      setCalendarEventTarget(intent.calendarEventId ?? null)
-    } else if (intent.view === 'replay') {
-      setReplayTarget(intent.seekMs ?? null)
-    } else {
-      setMeetingTarget(intent.meetingId ?? null)
-    }
-    setViewMode(intent.view)
-  }, [])
+      if (intent.view === 'chat') {
+        if ('conversationId' in intent) {
+          navigateTo('memory-chat', () => setChatTarget({ conversationId: intent.conversationId }))
+          return
+        }
+        void window.api.approvalsExecutionChat(intent.approvalId).then((conversationId) => {
+          if (!conversationId) return
+          navigateTo('memory-chat', () =>
+            setChatTarget({ conversationId, approvalId: intent.approvalId })
+          )
+        })
+        return
+      }
+      navigateTo(intent.view, () => {
+        if (intent.view === 'actions') {
+          setActionTarget(intent.actionId ?? null)
+          setApprovalTarget(intent.approvalId ?? null)
+          setActionsMode(intent.mode ?? (intent.approvalId ? 'approvals' : 'todo'))
+          setActionsEntity(intent.entity ?? null)
+        } else if (intent.view === 'day') {
+          setCalendarEventTarget(intent.calendarEventId ?? null)
+        } else if (intent.view === 'replay') {
+          setReplayTarget(intent.seekMs ?? null)
+        } else {
+          setMeetingTarget(intent.meetingId ?? null)
+        }
+      })
+    },
+    [navigateTo]
+  )
 
   useEffect(() => {
     if (!proReady || !isPro) return
@@ -612,10 +884,32 @@ function AppContent() {
   // Open a project chat in the main Chat screen (existing convo or new-in-project).
   const handleOpenProjectChat = useCallback(
     (target: { conversationId?: string; projectId?: string }) => {
-      setChatTarget(target)
-      setViewMode('memory-chat')
+      navigateTo('memory-chat', () => setChatTarget(target))
     },
-    []
+    [navigateTo]
+  )
+
+  const handleOpenChatOwner = useCallback(
+    (target: { conversationId?: string; openGallery?: boolean }) => {
+      navigateTo('memory-chat', () => setChatTarget(target))
+    },
+    [navigateTo]
+  )
+
+  // Run an Explore preset: open a fresh chat with its catalog-owned intake form. The form collects
+  // the complete brief before one detailed user message reaches the model.
+  const handleRunPreset = useCallback(
+    (preset: DemoPreset) => {
+      navigateTo('memory-chat', () => setChatTarget({ presetId: preset.id }))
+    },
+    [navigateTo]
+  )
+
+  const handleOpenSkillPreset = useCallback(
+    (preset: DemoPreset) => {
+      navigateTo('memory-chat', () => setChatTarget({ presetId: preset.id }))
+    },
+    [navigateTo]
   )
 
   // Global keyboard shortcuts for back/forward navigation (Cmd+[ and Cmd+])
@@ -623,7 +917,9 @@ function AppContent() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === '[') {
         e.preventDefault()
-        navigateBack()
+        if (activeModelsOpen) setActiveModelsOpen(false)
+        else if (modelSettingsOpen) setModelSettingsOpen(false)
+        else navigateBack()
       } else if ((e.metaKey || e.ctrlKey) && e.key === ']') {
         e.preventDefault()
         navigateForward()
@@ -631,7 +927,7 @@ function AppContent() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [navigateBack, navigateForward])
+  }, [activeModelsOpen, modelSettingsOpen, navigateBack, navigateForward])
 
   // Original sidebar order preserved. Pro tabs pull their icon/label from the
   // static catalogue and are marked locked in the free build (open the
@@ -641,9 +937,8 @@ function AppContent() {
   // wraps the nav, so a TypeError here white-screens every user on boot (0.0.34).
   // If a route has no ProFeature, skip that item and warn; a dropped tab is
   // recoverable, a render-time throw is not.
-  const proItem = (
-    route: string
-  ): { label: string; icon: React.ReactNode; view: ViewMode; locked: boolean } | null => {
+  type NavItem = { label: string; icon: React.ReactNode; view: ViewMode; locked?: boolean }
+  const proItem = (route: string): NavItem | null => {
     const f = getProFeature(route)
     if (!f) {
       console.warn(`[nav] no pro catalog entry for "${route}" — skipping nav item`)
@@ -653,51 +948,73 @@ function AppContent() {
       label: f.label,
       icon: <f.icon className="h-5 w-5 shrink-0 text-neutral-400" weight="regular" />,
       view: f.route as ViewMode,
-      locked: !isPro
+      locked:
+        !featureSupportsPlatform(f, currentPlatform()) ||
+        (!isPro &&
+          !(route === 'tasks' && TaskWorkspace) &&
+          !(route === 'devices' && proActivation === 'entitlement-bootstrap'))
     }
   }
   // Icons take no color — the nav button drives it (emerald when active).
-  const mainNav: { label: string; icon: React.ReactNode; view: ViewMode; locked?: boolean }[] = [
-    proItem('search'),
-    proItem('day'),
-    proItem('replay'),
-    proItem('reflect'),
-    proItem('meetings'),
-    proItem('actions'),
-    proItem('entities'),
+  const navItems = (...items: Array<NavItem | null>): NavItem[] =>
+    items.filter((item): item is NavItem => item !== null)
+  const navigationGroups = [
     {
-      label: 'Projects',
-      icon: <IconFolders className="h-5 w-5 shrink-0" />,
-      view: 'projects' as ViewMode
+      label: 'Discover',
+      icon: <IconSparkles className="h-5 w-5 shrink-0" />,
+      items: navItems(proItem('search'), proItem('day'), proItem('replay'), proItem('reflect'))
     },
     {
-      label: 'Chat',
-      icon: <IconMessageCircle className="h-5 w-5 shrink-0" />,
-      view: 'memory-chat' as ViewMode
+      label: 'Work',
+      icon: <IconBriefcase className="h-5 w-5 shrink-0" />,
+      items: navItems(
+        proItem('meetings'),
+        proItem('actions'),
+        proItem('entities'),
+        {
+          label: 'Projects',
+          icon: <IconFolders className="h-5 w-5 shrink-0" />,
+          view: 'projects' as ViewMode
+        },
+        {
+          label: 'Chat',
+          icon: <IconMessageCircle className="h-5 w-5 shrink-0" />,
+          view: 'memory-chat' as ViewMode
+        },
+        proItem('explore'),
+        proItem('tasks'),
+        proItem('voice')
+      )
     },
-    proItem('voice'),
-    proItem('vault'),
-    proItem('clipboard'),
     {
-      label: 'Integrations',
-      icon: <IconPlug className="h-5 w-5 shrink-0" />,
-      view: 'connectors' as ViewMode
+      label: 'Private Data',
+      icon: <IconShieldLock className="h-5 w-5 shrink-0" />,
+      items: navItems(proItem('vault'), proItem('clipboard'), proItem('devices'))
     },
     {
-      label: 'Models',
-      icon: <IconDownload className="h-5 w-5 shrink-0" />,
-      view: 'models' as ViewMode
-    },
-    {
-      label: 'Gateway',
-      icon: <IconServer2 className="h-5 w-5 shrink-0" />,
-      view: 'gateway' as ViewMode
-    },
-    proItem('notifications')
-  ].filter(
-    (i): i is { label: string; icon: React.ReactNode; view: ViewMode; locked: boolean } =>
-      i !== null
-  )
+      label: 'System',
+      icon: <IconTool className="h-5 w-5 shrink-0" />,
+      items: navItems(
+        {
+          label: 'Integrations',
+          icon: <IconPlug className="h-5 w-5 shrink-0" />,
+          view: 'connectors' as ViewMode
+        },
+        {
+          label: 'Models',
+          icon: <IconDownload className="h-5 w-5 shrink-0" />,
+          view: 'models' as ViewMode
+        },
+        {
+          label: 'Gateway',
+          icon: <IconServer2 className="h-5 w-5 shrink-0" />,
+          view: 'gateway' as ViewMode
+        },
+        proItem('notifications')
+      )
+    }
+  ].filter((group) => group.items.length > 0)
+  const navigationItems = navigationGroups.flatMap((group) => group.items)
   const bottomNav: { label: string; icon: React.ReactNode; view: ViewMode; locked?: boolean }[] = [
     {
       label: 'Settings',
@@ -705,6 +1022,18 @@ function AppContent() {
       view: 'settings' as ViewMode
     }
   ]
+  // One way in to a screen, used by the sidebar and by the command palette: switching screens also
+  // drops whatever row was selected in the old one, so a stale detail pane never rides along.
+  const goToView = (view: ViewMode, subroute: string | null = null): void => {
+    navigateTo(view, () => {
+      setNavigationSubroute(isInternalTabView(view) ? subroute : null)
+      setSettingsSection(view === 'settings' ? subroute : null)
+      setSelectedSessionId(null)
+      setSelectedMemoryId(null)
+      setSelectedEntityId(null)
+      setReplayTarget(null)
+    })
+  }
   const renderNavItem = (item: {
     label: string
     icon: React.ReactNode
@@ -712,32 +1041,37 @@ function AppContent() {
     locked?: boolean
   }): React.ReactElement => {
     const active = viewMode === item.view
+    const notificationCount = item.view === 'notifications' ? unreadCount + externalUnreadCount : 0
+    const notificationCountLabel = notificationCount > 9 ? '9+' : String(notificationCount)
     return (
       <button
         key={item.view}
-        onClick={() => {
-          setViewMode(item.view)
-          setSelectedSessionId(null)
-          setSelectedMemoryId(null)
-          setSelectedEntityId(null)
-          setReplayTarget(null)
-        }}
+        onClick={() => goToView(item.view)}
+        aria-label={item.label}
         title={!sidebarOpen ? item.label : undefined}
-        className={cn(
-          'group/nav relative flex items-center gap-3 rounded-lg py-2 text-sm transition-colors',
-          sidebarOpen ? 'px-3' : 'justify-center px-0',
-          active
-            ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-            : 'text-neutral-500 hover:bg-neutral-500/10 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'
-        )}
+        className={navRowClass(sidebarOpen, active)}
       >
         {active && (
           <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-green-500" />
         )}
         {item.icon}
         {sidebarOpen && <span className="flex-1 text-left whitespace-pre">{item.label}</span>}
+        {notificationCount > 0 && (
+          <span
+            aria-label={`${notificationCount} unread notifications`}
+            className={cn(
+              'flex h-4 min-w-4 items-center justify-center border border-green-500 bg-green-500 px-1 font-mono text-[9px] leading-none text-black',
+              !sidebarOpen && 'absolute right-0 top-0'
+            )}
+          >
+            {notificationCountLabel}
+          </span>
+        )}
         {sidebarOpen && item.locked && (
-          <IconLock className="h-3.5 w-3.5 shrink-0 text-neutral-400/60" title="Pro" />
+          <IconLock
+            className="h-3.5 w-3.5 shrink-0 text-neutral-400/60"
+            title={proFeatureComingSoon(item.view, currentPlatform(), true) ? 'Coming soon' : 'Pro'}
+          />
         )}
       </button>
     )
@@ -745,7 +1079,25 @@ function AppContent() {
 
   return (
     <div className="h-screen w-full overflow-hidden bg-neutral-950 relative">
-      <CommandPalette onOpenHit={handleOpenHit} onSeeAll={openSearch} />
+      <StartupNotice />
+      <CommandPalette
+        onOpenHit={handleOpenHit}
+        onSeeAll={openSearch}
+        /* The sidebar IS the list of screens - the palette searches that, never a second copy. */
+        screens={[
+          ...[...navigationItems, ...bottomNav].map(({ label, view, locked }) => ({
+            label,
+            view,
+            locked
+          })),
+          ...internalTabPaletteScreens([...navigationItems, ...bottomNav]),
+          ...SETTINGS_DESTINATIONS
+        ]}
+        onGoTo={(view, subroute) => {
+          goToView(view as ViewMode, subroute)
+          setSidebarHovered(false)
+        }}
+      />
       {/* Recording indicator — auto-records detected meetings; always visible. */}
       {(rec.recording || rec.busy) && (
         <button
@@ -805,7 +1157,7 @@ function AppContent() {
               }
             }}
             disabled={installing}
-            className="flex items-center gap-1.5 rounded-sm border border-green-500/50 bg-green-500/10 px-2.5 py-1 text-green-400 hover:bg-green-500/20 disabled:opacity-60"
+            className="flex items-center gap-1.5 rounded-sm border border-green-500/50 bg-green-500/10 px-2.5 py-1 text-emerald-400 hover:bg-green-500/20 disabled:opacity-60"
           >
             {installing ? (
               <>
@@ -817,50 +1169,44 @@ function AppContent() {
           </button>
         </div>
       )}
-      {/* Background — flat Off Grid terminal grid (theme-aware), with a dark-mode
+      {/* Background — flat Off Grid AI terminal grid (theme-aware), with a dark-mode
           starfield + periodic shooting star layered on top. */}
       <GridBackdrop className="z-0" />
       <StarfieldBackdrop className="z-0" />
 
       <div className="flex h-full relative z-10">
         {/* Aceternity Sidebar */}
-        <Sidebar open={sidebarOpen} setOpen={setSidebarOpen}>
+        <Sidebar open={sidebarOpen} setOpen={setSidebarHovered}>
           <SidebarBody
             role="navigation"
             aria-label="Primary navigation"
+            aria-expanded={sidebarOpen}
             className="justify-between gap-3 bg-neutral-900/80 backdrop-blur-xl border-r border-neutral-800"
+            onMouseEnter={() => setSidebarHovered(true)}
+            onMouseLeave={() => setSidebarHovered(false)}
+            onFocusCapture={() => setSidebarHovered(true)}
+            onBlurCapture={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) setSidebarHovered(false)
+            }}
           >
             <div className="flex min-h-0 flex-1 flex-col">
-              {/* Brand + a dedicated collapse/expand toggle */}
-              {sidebarOpen ? (
-                <div className="flex items-center gap-2 py-2">
-                  <img src={logo} alt="Off Grid AI" className="h-8 w-8 shrink-0 rounded-lg" />
+              {/* The rail expands only while hovered or keyboard-focused. */}
+              <div
+                className={cn('flex items-center py-2', sidebarOpen ? 'gap-2' : 'justify-center')}
+              >
+                <img src={logo} alt="Off Grid AI" className="h-8 w-8 shrink-0 rounded-lg" />
+                {sidebarOpen ? (
                   <span className="flex-1 text-left font-semibold text-white whitespace-pre">
                     Off Grid AI
                   </span>
-                  <button
-                    onClick={() => setSidebarOpen(false)}
-                    aria-label="Collapse sidebar"
-                    title="Collapse"
-                    className="shrink-0 rounded-lg p-1.5 text-neutral-400 transition-colors hover:bg-neutral-800/60 hover:text-white"
-                  >
-                    <IconLayoutSidebarLeftCollapse className="h-5 w-5" />
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setSidebarOpen(true)}
-                  aria-label="Expand sidebar"
-                  title="Expand"
-                  className="group/exp flex w-full flex-col items-center gap-1.5 py-2"
-                >
-                  <img src={logo} alt="Off Grid AI" className="h-8 w-8 shrink-0 rounded-lg" />
-                  <IconLayoutSidebarLeftExpand className="h-5 w-5 text-neutral-500 transition-colors group-hover/exp:text-white" />
-                </button>
-              )}
+                ) : null}
+              </div>
 
               {/* Back / forward — a distinct control (filled), available everywhere (⌘[ / ⌘]) */}
               <div className={cn('mt-3 flex items-center gap-1', !sidebarOpen && 'justify-center')}>
+                {sidebarOpen && (
+                  <SidebarPinButton pinned={sidebarPinned} onToggle={toggleSidebarPinned} />
+                )}
                 <button
                   onClick={navigateBack}
                   disabled={!canGoBack}
@@ -888,16 +1234,34 @@ function AppContent() {
               </div>
 
               {/* Navigation (scrolls; Settings is pinned to the bottom) */}
-              <div className="mt-6 flex flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden pr-0.5">
-                {mainNav.map(renderNavItem)}
+              <div className="mt-5 flex flex-1 flex-col overflow-y-auto overflow-x-hidden pr-0.5">
+                {sidebarOpen && (
+                  <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                    Menu
+                  </div>
+                )}
+                <SidebarNavigationMenu
+                  activeView={viewMode}
+                  expanded={sidebarOpen}
+                  groups={navigationGroups}
+                  renderItem={renderNavItem}
+                />
               </div>
             </div>
 
             {/* Pinned bottom */}
-            <div className="flex flex-col gap-1 border-t border-neutral-200 pt-2 dark:border-neutral-800">
+            {/* neutral-800 is the surface token, theme-aware on its own - neutral-200 is the TEXT
+                token, which drew a hard black rule here in light mode. See navRowClass. */}
+            <div className="flex flex-col gap-1 border-t border-neutral-800 pt-2">
               <ModelStatusDot
                 open={sidebarOpen}
-                onClick={() => (sidebarOpen ? setViewMode('settings') : setSidebarOpen(true))}
+                onClick={() => {
+                  navigateTo('settings', () => {
+                    setNavigationSubroute(null)
+                    setSettingsSection('setup')
+                    setSettingsNavigationKey((key) => key + 1)
+                  })
+                }}
               />
               <NavThemeToggle expanded={sidebarOpen} />
               {bottomNav.map(renderNavItem)}
@@ -905,12 +1269,9 @@ function AppContent() {
                   (App Store + Google Play). Mirrors mobile's link back to desktop. */}
               <button
                 onClick={() => openExternal(OFF_GRID_MOBILE_URL)}
+                aria-label="Mobile app"
                 title={!sidebarOpen ? 'Get the mobile app' : undefined}
-                className={cn(
-                  'group/nav relative flex items-center gap-3 rounded-lg py-2 text-sm transition-colors',
-                  sidebarOpen ? 'px-3' : 'justify-center px-0',
-                  'text-neutral-500 hover:bg-neutral-500/10 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'
-                )}
+                className={navRowClass(sidebarOpen)}
               >
                 <IconDeviceMobile className="h-5 w-5 shrink-0" />
                 {sidebarOpen && <span className="flex-1 text-left whitespace-pre">Mobile app</span>}
@@ -922,120 +1283,203 @@ function AppContent() {
           </SidebarBody>
         </Sidebar>
 
-        {/* Main Content */}
-        <div className="flex-1 flex flex-col h-full overflow-hidden">
-          {/* Global reprocessing banner */}
-          <AnimatePresence>
-            <ReprocessingBanner />
-          </AnimatePresence>
-          {/* Content Area */}
-          <div className="flex-1 overflow-hidden">
-            <AnimatePresence mode="wait">
-              {viewMode === 'chats' && selectedSessionId ? (
-                <motion.div
-                  key={`chat-detail-${selectedSessionId}`}
-                  initial={{ opacity: 0, filter: 'blur(10px)' }}
-                  animate={{ opacity: 1, filter: 'blur(0px)' }}
-                  exit={{ opacity: 0, filter: 'blur(5px)' }}
-                  transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
-                  className="h-full"
-                >
-                  <ChatDetail
-                    sessionId={selectedSessionId}
-                    onBack={handleBack}
-                    onSelectEntity={(entityId) => {
-                      setSelectedEntityId(entityId)
-                      setViewMode('entities')
-                      setSelectedSessionId(null)
-                    }}
-                    onSelectMemory={(memoryId) => {
-                      setSelectedMemoryId(memoryId)
-                      setViewMode('memories')
-                      setSelectedSessionId(null)
-                    }}
-                  />
-                </motion.div>
-              ) : (
-                <motion.div
-                  key={viewMode}
-                  initial={{ opacity: 0, filter: 'blur(10px)' }}
-                  animate={{ opacity: 1, filter: 'blur(0px)' }}
-                  exit={{ opacity: 0, filter: 'blur(5px)' }}
-                  transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
-                  className="p-6 h-full overflow-y-auto"
-                >
-                  {viewMode === 'memory-chat' ? (
-                    <MemoryChat
-                      onNavigateToMemory={handleSelectMemory}
-                      onNavigateToChat={handleSelectChat}
-                      onNavigateToEntity={handleSelectEntity}
-                      onOpenProject={(id) => {
-                        setSelectedProjectId(id)
-                        setViewMode('projects')
-                      }}
-                      onSeekReplay={(ts) => {
-                        setReplayTarget(ts || Date.now())
-                        setViewMode('replay')
-                      }}
-                      openTarget={chatTarget}
-                      onTargetConsumed={() => setChatTarget(null)}
-                    />
-                  ) : viewMode === 'chats' ? (
-                    <ChatList onSelectSession={setSelectedSessionId} />
-                  ) : viewMode === 'models' ? (
-                    <ModelsScreen />
-                  ) : viewMode === 'projects' ? (
-                    <ProjectsScreen
-                      onOpenChat={handleOpenProjectChat}
-                      selectedProjectId={selectedProjectId}
-                      onSelectProject={setSelectedProjectId}
-                    />
-                  ) : viewMode === 'connectors' ? (
-                    <ConnectorsScreen />
-                  ) : viewMode === 'gateway' ? (
-                    <GatewayScreen />
-                  ) : viewMode === 'settings' ? (
-                    <Settings />
-                  ) : proFeatureComingSoon(viewMode, currentPlatform(), isPro) ? (
-                    <UpgradeScreen variant="coming-soon" feature={getProFeature(viewMode)} />
-                  ) : (
-                    // Pro tabs: render through the pro view-router when active,
-                    // otherwise show the upgrade writeup for that feature.
-                    (renderProView(viewMode, {
-                      setView: (v) => setViewMode(v as ViewMode),
-                      onNavigate: handleProNavigate,
-                      replayTarget,
-                      meetingTarget,
-                      actionTarget,
-                      approvalTarget,
-                      calendarEventTarget,
-                      actionsMode,
-                      actionsEntity,
-                      searchQuery,
-                      onSearchQueryChange: setSearchQuery,
-                      searchSources,
-                      onSearchSourcesChange: setSearchSources,
-                      searchSort,
-                      onSearchSortChange: setSearchSort,
-                      selectedMemoryId,
-                      setSelectedMemoryId,
-                      selectedEntityId,
-                      rec,
-                      onSelectEntity: handleSelectEntity,
-                      onSelectMemory: handleSelectMemory,
-                      onOpenHit: handleOpenHit
-                    } satisfies ProViewContext) ?? (
-                      <UpgradeScreen feature={getProFeature(viewMode)} />
-                    ))
-                  )}
-                </motion.div>
-              )}
+        <div className="min-w-0 flex-1" data-testid="main-workspace">
+          <div className="flex h-full flex-col overflow-hidden">
+            {/* Global reprocessing banner */}
+            <AnimatePresence>
+              <ReprocessingBanner />
             </AnimatePresence>
+            {/* Content Area */}
+            <div className="flex-1 overflow-hidden">
+              <AnimatePresence mode="wait">
+                {viewMode === 'chats' && selectedSessionId ? (
+                  <motion.div
+                    key={`chat-detail-${selectedSessionId}`}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.12, ease: [0.25, 0.46, 0.45, 0.94] }}
+                    className="h-full"
+                  >
+                    <ChatDetail
+                      sessionId={selectedSessionId}
+                      onBack={handleBack}
+                      onSelectEntity={(entityId) => {
+                        navigateTo('entities', () => {
+                          setSelectedEntityId(entityId)
+                          setSelectedSessionId(null)
+                        })
+                      }}
+                      onSelectMemory={(memoryId) => {
+                        navigateTo('memories', () => {
+                          setSelectedMemoryId(memoryId)
+                          setSelectedSessionId(null)
+                        })
+                      }}
+                    />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key={viewMode}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.12, ease: [0.25, 0.46, 0.45, 0.94] }}
+                    className="p-6 h-full overflow-y-auto"
+                  >
+                    {proFeatureComingSoon(viewMode, currentPlatform(), true) ? (
+                      <UpgradeScreen variant="coming-soon" feature={getProFeature(viewMode)} />
+                    ) : viewMode === 'explore' ? (
+                      isPro ? (
+                        <ExploreScreen onRunPreset={handleRunPreset} />
+                      ) : (
+                        <UpgradeScreen feature={getProFeature(viewMode)} />
+                      )
+                    ) : viewMode === 'memory-chat' ? (
+                      <MemoryChat
+                        onNavigateToMemory={handleSelectMemory}
+                        onNavigateToChat={handleSelectChat}
+                        onNavigateToMeeting={(meetingId) =>
+                          handleProNavigate({ view: 'meetings', meetingId })
+                        }
+                        onNavigateToEntity={handleSelectEntity}
+                        onOpenProject={(id) => {
+                          navigateTo('projects', () => setSelectedProjectId(id))
+                        }}
+                        onSeekReplay={(ts) => {
+                          navigateTo('replay', () => setReplayTarget(ts || Date.now()))
+                        }}
+                        onOpenSkillPreset={handleOpenSkillPreset}
+                        onOpenConnectors={() => navigateTo('connectors')}
+                        onOpenAssistantUpgrade={() => navigateTo('tasks')}
+                        openTarget={chatTarget}
+                        onTargetConsumed={() => setChatTarget(null)}
+                        onTaskDetailModeChange={setTaskDetailSidebarMode}
+                      />
+                    ) : viewMode === 'tasks' ? (
+                      TaskWorkspace ? (
+                        <TaskWorkspace standalone onDetailModeChange={setTaskDetailSidebarMode} />
+                      ) : (
+                        <UpgradeScreen feature={getProFeature(viewMode)} />
+                      )
+                    ) : viewMode === 'chats' ? (
+                      <ChatList onSelectSession={setSelectedSessionId} />
+                    ) : viewMode === 'models' ? (
+                      <ModelsScreen
+                        navigationSubroute={navigationSubroute}
+                        onNavigateSubroute={setNavigationSubroute}
+                      />
+                    ) : viewMode === 'projects' ? (
+                      <ProjectsScreen
+                        onOpenChat={handleOpenProjectChat}
+                        selectedProjectId={selectedProjectId}
+                        onSelectProject={setSelectedProjectId}
+                      />
+                    ) : viewMode === 'connectors' ? (
+                      <ConnectorsScreen />
+                    ) : viewMode === 'gateway' ? (
+                      <GatewayScreen />
+                    ) : viewMode === 'settings' ? (
+                      <Settings
+                        key={settingsNavigationKey}
+                        activeSection={settingsSection}
+                        onSectionChange={setSettingsSection}
+                      />
+                    ) : !isPro ? (
+                      <UpgradeScreen feature={getProFeature(viewMode)} />
+                    ) : (
+                      // Pro tabs: render through the pro view-router when active,
+                      // otherwise show the upgrade writeup for that feature.
+                      (renderProView(viewMode, {
+                        setView: (v) => navigateTo(v as ViewMode),
+                        onNavigate: handleProNavigate,
+                        navigationSubroute,
+                        setNavigationSubroute,
+                        navigateBack,
+                        replayTarget,
+                        meetingTarget,
+                        actionTarget,
+                        approvalTarget,
+                        calendarEventTarget,
+                        actionsMode,
+                        actionsEntity,
+                        searchQuery,
+                        onSearchQueryChange: setSearchQuery,
+                        searchSources,
+                        onSearchSourcesChange: setSearchSources,
+                        searchSort,
+                        onSearchSortChange: setSearchSort,
+                        selectedMemoryId,
+                        setSelectedMemoryId,
+                        selectedEntityId,
+                        rec,
+                        onSelectEntity: handleSelectEntity,
+                        onSelectMemory: handleSelectMemory,
+                        onOpenHit: handleOpenHit,
+                        openChatOwner: handleOpenChatOwner
+                      } satisfies ProViewContext) ?? (
+                        <UpgradeScreen feature={getProFeature(viewMode)} />
+                      ))
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
       </div>
+      <AnimatePresence>
+        {activeModelsOpen && <ModelPicker onClose={() => setActiveModelsOpen(false)} />}
+        {modelSettingsOpen && (
+          <SettingsPanel
+            key={modelSettingsTab}
+            initialTab={modelSettingsTab}
+            onClose={() => setModelSettingsOpen(false)}
+          />
+        )}
+      </AnimatePresence>
+      {TaskFloatingView ? <TaskFloatingView /> : null}
     </div>
   )
+}
+
+const SIDEBAR_PINNED_KEY = 'sidebar_pinned'
+
+function SidebarPinButton({
+  pinned,
+  onToggle
+}: Readonly<{ pinned: boolean; onToggle: () => void }>): React.JSX.Element {
+  const Icon = pinned ? PushPinSlash : PushPin
+  return (
+    <button
+      onClick={onToggle}
+      aria-label={pinned ? 'Unpin sidebar' : 'Pin sidebar'}
+      aria-pressed={pinned}
+      title={pinned ? 'Unpin: open on hover' : 'Pin: keep the sidebar open'}
+      className={cn(
+        'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-neutral-800 bg-neutral-800/40 transition-colors hover:border-neutral-700 hover:bg-neutral-800 hover:text-white',
+        pinned ? 'text-green-500' : 'text-neutral-400'
+      )}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+    </button>
+  )
+}
+
+function readSidebarPinned(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_PINNED_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function writeSidebarPinned(pinned: boolean): void {
+  try {
+    localStorage.setItem(SIDEBAR_PINNED_KEY, pinned ? 'true' : 'false')
+  } catch {
+    // A private window forgets the choice; the sidebar remains usable.
+  }
 }
 
 function App() {
@@ -1050,15 +1494,19 @@ function App() {
   if (!onboarded) return <Onboarding onComplete={() => setOnboarded(true)} />
 
   return (
-    <PermissionGate>
-      <NotificationProvider>
-        <ToastProvider>
-          <ReprocessingProvider>
-            <AppContent />
-          </ReprocessingProvider>
-        </ToastProvider>
-      </NotificationProvider>
-    </PermissionGate>
+    <RendererEntitlementProvider>
+      <PerformancePackGate>
+        <PermissionGate>
+          <NotificationProvider>
+            <ToastProvider>
+              <ReprocessingProvider>
+                <AppContent />
+              </ReprocessingProvider>
+            </ToastProvider>
+          </NotificationProvider>
+        </PermissionGate>
+      </PerformancePackGate>
+    </RendererEntitlementProvider>
   )
 }
 

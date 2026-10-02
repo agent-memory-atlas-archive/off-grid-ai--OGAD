@@ -30,13 +30,17 @@ interface FakeTurn {
   finishReason?: string
   /** Reasoning streamed on the reasoning_content channel before the answer. */
   reasoning?: string
+  /** OpenRouter-compatible structured reasoning, including Gemini signatures. */
+  reasoningDetails?: Array<Record<string, unknown>>
+  /** Reject this turn unless the prior assistant tool-call message kept those details. */
+  requirePriorReasoningDetails?: boolean
   /** Tool calls emitted on this turn (the agentic loop then runs them and calls back). */
   toolCalls?: FakeToolCall[]
   /** Force a non-200 to exercise the error path (body is surfaced by describeServerError). */
   errorStatus?: number
   errorBody?: string
   /** Delay the native-engine response after the request is admitted. Lifecycle tests use
-   *  this to exercise cancellation/drain ownership without replacing any Off Grid service. */
+   *  this to exercise cancellation/drain ownership without replacing any Off Grid AI service. */
   delayMs?: number
   /** Stream the frames then HANG (never send [DONE] / close) — so a client abort fires
    *  mid-turn. The real engine's socket stays open until the client cancels; this lets a
@@ -62,6 +66,9 @@ function sseFramesFor(turn: FakeTurn): string[] {
     `data: ${JSON.stringify({ choices: [{ delta: d }] })}\n\n`
   if (turn.reasoning) {
     frames.push(delta({ reasoning_content: turn.reasoning }))
+  }
+  if (turn.reasoningDetails?.length) {
+    frames.push(delta({ reasoning_details: turn.reasoningDetails }))
   }
   turn.toolCalls?.forEach((tc, i) => {
     const args = tc.argsRaw ?? JSON.stringify(tc.args ?? {})
@@ -105,7 +112,32 @@ export async function startFakeLlamaServer(): Promise<FakeLlamaServer> {
   const server = http.createServer((req, res) => {
     if (req.method === 'GET' && (req.url === '/health' || req.url === '/v1/models')) {
       res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify(req.url === '/health' ? { status: 'ok' } : { data: [{ id: 'fake' }] }))
+      res.end(
+        JSON.stringify(
+          req.url === '/health'
+            ? { status: 'ok' }
+            : {
+                data: [
+                  { id: 'fake' },
+                  {
+                    id: 'integration-model',
+                    reasoning: { mandatory: false },
+                    supported_parameters: ['tools']
+                  }
+                ]
+              }
+        )
+      )
+      return
+    }
+    if (req.method === 'GET' && req.url === '/props') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ chat_template: '{% if enable_thinking %}<think>{% endif %}' }))
+      return
+    }
+    if (req.method === 'POST' && req.url === '/api/show') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ capabilities: ['thinking'] }))
       return
     }
     if (req.method === 'POST' && req.url === '/v1/chat/completions') {
@@ -122,6 +154,20 @@ export async function startFakeLlamaServer(): Promise<FakeLlamaServer> {
         }
         requests.push(parsed)
         const turn = queue.shift() ?? { content: '' }
+        if (turn.requirePriorReasoningDetails) {
+          const messages = Array.isArray(parsed.messages) ? parsed.messages : []
+          const keptReasoning = messages.some(
+            (message) =>
+              typeof message === 'object' &&
+              message !== null &&
+              Array.isArray((message as { reasoning_details?: unknown }).reasoning_details)
+          )
+          if (!keptReasoning) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: { message: 'Missing Gemini reasoning details.' } }))
+            return
+          }
+        }
         if (turn.errorStatus) {
           res.writeHead(turn.errorStatus, { 'Content-Type': 'application/json' })
           res.end(turn.errorBody ?? JSON.stringify({ error: { message: 'fake error' } }))
@@ -138,6 +184,7 @@ export async function startFakeLlamaServer(): Promise<FakeLlamaServer> {
                   {
                     message: {
                       content: turn.content ?? '',
+                      ...(turn.reasoning ? { reasoning_content: turn.reasoning } : {}),
                       ...(turn.toolCalls?.length
                         ? {
                             tool_calls: turn.toolCalls.map((tc, i) => ({

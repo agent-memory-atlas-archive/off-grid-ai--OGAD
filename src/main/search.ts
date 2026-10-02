@@ -1,10 +1,11 @@
-// Universal search — the single front door over everything Off Grid has seen.
+// Universal search — the single front door over everything Off Grid AI has seen.
 // Hybrid: FTS5 keyword (exact words you saw) + LanceDB semantic (NLP recall),
 // fused with reciprocal-rank fusion. Plus a background backfill that embeds the
 // observation/frame/transcript backlog (using the in-app MiniLM model) so the
 // semantic half actually covers your captured life. All local, all offline.
 import { getDB } from './database'
 import { embeddings } from './embeddings'
+import { ensureRagStoreSchema } from './rag/store'
 import { addChunks, searchVectors, vectorCount, type VecChunk } from './vectors'
 import {
   applyBoosts,
@@ -33,11 +34,11 @@ const SOURCES_SQL = `
   SELECT 'frame:'||id AS key, 'screen' AS kind, id AS refId, text AS text,
          COALESCE(surface,'') AS surface, COALESCE(url,'') AS url,
          ${epochMsSql('ts')} AS ts
-    FROM frames WHERE text IS NOT NULL AND length(text) > 20
+    FROM frames WHERE text IS NOT NULL
   UNION ALL
   SELECT 'obs:'||id, 'screen', id, summary, COALESCE(surface,''), COALESCE(url,''),
          ${epochMsSql('ts')}
-    FROM observations WHERE summary IS NOT NULL AND length(summary) > 0
+    FROM observations WHERE summary IS NOT NULL
   UNION ALL
   SELECT 'sum:'||rowid, 'meeting', rowid, summary, 'Meeting', '', 0
     FROM chat_summaries WHERE summary IS NOT NULL
@@ -94,7 +95,10 @@ async function indexBatch(limit = 48): Promise<{ indexed: number; remaining: num
   const chunks: VecChunk[] = []
   for (const r of rows) {
     const text = (r.text || '').trim().slice(0, 1000)
-    if (!text) continue
+    // Keep the frame noise threshold without asking SQLite to read every large OCR value just to
+    // calculate length(text). On a multi-gigabyte capture database that synchronous scan blocked
+    // Electron's main thread for seconds. Rows skipped here are still marked below, once only.
+    if (!text || (r.key.startsWith('frame:') && text.length <= 20)) continue
     const vector = await embeddings.generateEmbedding(text)
     chunks.push({
       key: r.key,
@@ -141,6 +145,7 @@ export async function searchStatus(): Promise<{ vectors: number; pending: number
 
 /** Data sources available to filter by (surfaces seen, busiest first, + meetings). */
 export function searchSources(): { source: string; count: number }[] {
+  ensureRagStoreSchema()
   const db = getDB()
   const rows = db
     .prepare(
@@ -162,6 +167,7 @@ export function searchSources(): { source: string; count: number }[] {
  *  the numbers reflect the current search (Chat: 1, Knowledge base: 0, …). Empty
  *  query → total counts (searchSources). Only sources with ≥1 match are returned. */
 export function searchFacets(query: string): { source: string; count: number }[] {
+  ensureRagStoreSchema()
   const q = query.trim()
   if (!q) return searchSources()
   const db = getDB()
@@ -431,10 +437,13 @@ export async function universalSearch(
     limit?: number
     semantic?: boolean
     sources?: string[]
+    kinds?: SearchKind[]
+    collapseScreenMoments?: boolean
     sort?: SearchSort
     excludeChatId?: string
   } = {}
 ): Promise<SearchResult[]> {
+  ensureRagStoreSchema()
   const q = query.trim()
   if (!q) return []
   const limit = opts.limit ?? 30
@@ -462,11 +471,29 @@ export async function universalSearch(
   const ordered = rankResults(Array.from(fused.values()), {
     query: q,
     sources: opts.sources,
+    kinds: opts.kinds,
     excludeChatId: opts.excludeChatId,
     sort: opts.sort
   })
-  const ranked = ordered.slice(0, limit)
-  for (const r of ranked)
+  for (const r of ordered)
     r.imagePath = thumbFor({ key: r.key, kind: r.kind, refId: r.refId } as RawHit)
-  return ranked
+
+  if (!opts.collapseScreenMoments) return ordered.slice(0, limit)
+
+  // One captured moment is indexed twice: its raw OCR frame and its distilled
+  // observation. Replay shows moments, not index records, so collapse both forms
+  // after ranking and thumbnail resolution. General search keeps both records.
+  const seenMoments = new Set<string>()
+  const moments: SearchResult[] = []
+  for (const result of ordered) {
+    const identity =
+      result.kind === 'screen'
+        ? result.imagePath || `${String(result.ts)}:${result.surface}`
+        : result.key
+    if (seenMoments.has(identity)) continue
+    seenMoments.add(identity)
+    moments.push(result)
+    if (moments.length === limit) break
+  }
+  return moments
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { AnimatePresence } from 'motion/react'
 import {
   IconDownload,
   IconCircleCheck,
@@ -17,10 +18,18 @@ import {
   IconClock
 } from '@tabler/icons-react'
 import { StoragePanel } from './setup/StoragePanel'
+import { SidePanel } from './SidePanel'
 import { deviceNoun } from '@renderer/lib/device'
-import { modelKindLabel } from '@renderer/lib/model-kind-labels'
 import { collectTags, matchesAllTags, toggleTag } from '@renderer/lib/model-tag-filter'
 import { companionDownloadLabel } from '@renderer/lib/download-label'
+import { formatTransferSpeed } from '@offgrid/sync'
+import { projectProgress } from '@offgrid/ui'
+import { downloadTimeRemaining } from '@renderer/lib/download-progress'
+import {
+  modelSettingsTabForKind,
+  openModelSettingsPanel,
+  supportsModelSettings
+} from '@renderer/lib/model-settings-panel'
 import { fitTier, type FitTier, fitLevel, FIT_OK_FRAC } from '../../../shared/model-fit'
 import {
   filterAndSort,
@@ -31,10 +40,21 @@ import {
   determineCredibility,
   hasActiveFilters,
   initialFilterState,
+  modelSupportsKind,
   recommendedImageModelId,
   type FilterState,
-  type Credibility
+  type Credibility,
+  type ModelKind
 } from '@offgrid/models'
+import {
+  useModelDownloadProgress,
+  type ModelDownloadProgressEvent
+} from '@renderer/hooks/useModelDownloadProgress'
+import {
+  internalTabFromSubroute,
+  internalTabRoutes,
+  internalTabSubroute
+} from '@renderer/lib/internal-tab-route'
 
 function Sel({
   value,
@@ -109,11 +129,19 @@ interface ModelFile {
   name: string
   url: string
   sizeBytes?: number
+  role?: string
+}
+interface DownloadableModelFile {
+  fileName: string
+  quant: string
+  sizeBytes: number
+  mmproj?: { fileName: string }
 }
 interface ModelEntry {
   id: string
+  sourceModelId?: string
   name: string
-  kind: string
+  kind: ModelKind
   org?: string
   description?: string
   params?: number
@@ -124,6 +152,11 @@ interface ModelEntry {
   tags?: string[]
   releaseDate?: string
   quant?: string
+  availability?: 'ready' | 'coming_soon'
+  availabilityNote?: string
+  grounder?: boolean
+  remoteServerId?: string
+  remoteModelId?: string
 }
 
 interface UseCase {
@@ -179,13 +212,18 @@ function fmtReleaseDate(iso?: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
 }
 
+const BONSAI_2_ID = 'prism-ml/Ternary-Bonsai-2-27B-gguf'
+const KEV_4B_ID = 'jaredpalmer/kev-4b'
+
 function featureRank(
-  m: { id?: string; credibility?: string; tags?: string[] },
-  recommendedId?: string | null
+  m: { id?: string; sourceModelId?: string; credibility?: string; tags?: string[] },
+  recommendedId?: string | null,
+  bonsaiRecommended = false
 ): number {
   // The model recommended for THIS machine's RAM sorts to the very top (above a
   // plain 'Fast' pick). Then distilled few-step models (tagged "Fast") render in
   // ~30s vs ~100s, so surface them next. Then our own org's models, then the rest.
+  if (bonsaiRecommended && (m.sourceModelId ?? m.id) === BONSAI_2_ID) return -2
   if (recommendedId && m.id === recommendedId) return -1
   if (m.tags?.some((t) => /^fast/i.test(t))) return 0
   if (m.credibility !== 'offgrid') return 2
@@ -194,35 +232,131 @@ function featureRank(
 
 const MODE_LABELS: Record<string, string> = { txt2img: 'Text→Image', img2img: 'Image→Image' }
 
+/** What the card needs to describe a download honestly: one percent for the WHOLE job, the bytes
+ *  behind it, which file is in flight and how many the job has, and why it failed if it did. */
+interface DownloadCardProgress {
+  percent: number
+  status?: string
+  currentFile?: string
+  error?: string
+  downloadedMB?: string
+  totalMB?: string
+  downloadedBytes?: number
+  totalBytes?: number
+  bytesPerSecond?: number
+  fileIndex?: number
+  fileCount?: number
+}
+
 function withoutProgressEntry(
-  progress: Record<string, { percent: number; status?: string; currentFile?: string }>,
+  progress: Record<string, DownloadCardProgress>,
   modelId: string
-): Record<string, { percent: number; status?: string; currentFile?: string }> {
+): Record<string, DownloadCardProgress> {
   const next = { ...progress }
   delete next[modelId]
   return next
 }
 
+/**
+ * A byte count at human scale, in decimal GB - the ONE size rule on this screen.
+ *
+ * It was two. The card's meta line divided bytes by 1e9 and the progress line divided megabytes by
+ * 1024, so the same file was printed twice on one card in two different units under one label:
+ * "25.4GB" above "23.7 GB". Decimal is the correct half - sizeBytes comes from Hugging Face, and
+ * that is the number the publisher quotes - so the progress line was the one that lied.
+ *
+ * Below a gigabyte, MB reads better than "0.4 GB".
+ */
+function formatSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return ''
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`
+}
+
+/**
+ * The progress feed counts in MEBIbytes (1024 * 1024), which is why dividing it by 1024 produced
+ * 23.7 for the same 25.4 GB file the meta line described. Convert to bytes on the way in, then the
+ * one rule above decides how it reads.
+ */
+const BYTES_PER_MIB = 1024 * 1024
+
+function formatTransferred(megabytes: string): string {
+  const mib = Number(megabytes)
+  if (!Number.isFinite(mib)) return `${megabytes} MB`
+  return formatSize(mib * BYTES_PER_MIB)
+}
+
+/** What part of the model is moving right now, as a quiet tail on the progress line. Empty for the
+ *  ordinary single-file case, where naming it adds words and no information. */
+function downloadPartLabel(prog: DownloadCardProgress): string {
+  const companion = companionDownloadLabel(prog.currentFile)
+  if (companion) return `· adding ${companion}`
+  if ((prog.fileCount ?? 0) > 1) return `· file ${prog.fileIndex} of ${prog.fileCount}`
+  return ''
+}
+
+/** Plain words for a download that failed. You need two things from this line: what happened, and
+ *  whether trying again is worth it. The raw engine string stays in the title attribute, where it
+ *  helps a bug report without shouting at everyone else. */
+function downloadFailureText(error?: string): string {
+  if (!error) return 'The download did not start.'
+  if (error.startsWith('interrupted')) return 'The download stopped before it finished.'
+  if (error === 'unknown model') return 'This model is not available to download.'
+  return error
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (window as any).api
 
-export function ModelsScreen(): React.JSX.Element {
+export function ModelsScreen({
+  navigationSubroute,
+  onNavigateSubroute
+}: {
+  navigationSubroute?: string | null
+  onNavigateSubroute?: (subroute: string | null) => void
+} = {}): React.JSX.Element {
   const [kinds, setKinds] = useState<string[]>([])
   const [models, setModels] = useState<ModelEntry[]>([])
   const [installed, setInstalled] = useState<string[]>([])
-  // Per-model vision readiness from the backend (derived from files + disk): which
-  // vision-capable models have their projector downloaded. Drives the "add vision
-  // support" affordance for a model installed before it gained a projector.
+  // Per-model optional companion readiness from the backend (derived from files + disk).
+  // Drives repair actions for projectors and DFlash draft models.
   const [visionSt, setVisionSt] = useState<
-    Record<string, { supportsVision: boolean; projectorInstalled: boolean }>
+    Record<
+      string,
+      {
+        supportsVision: boolean
+        projectorInstalled: boolean
+        supportsDflash?: boolean
+        dflashInstalled?: boolean
+      }
+    >
   >({})
   const refreshVision = (): void => {
     void api.getModelVisionStatus?.().then((s) => setVisionSt(s ?? {}))
   }
-  const [activeKind, setActiveKind] = useState<string>('text')
-  const [progress, setProgress] = useState<
-    Record<string, { percent: number; status?: string; currentFile?: string }>
-  >({})
+  const initialRequestedKind = useRef<string | null>(null)
+  const [activeKind, setActiveKind] = useState<string>(() => {
+    const requested = window.sessionStorage.getItem('offgrid:models:initial-kind')
+    window.sessionStorage.removeItem('offgrid:models:initial-kind')
+    initialRequestedKind.current = requested
+    return requested || internalTabFromSubroute('models', navigationSubroute ?? null).id
+  })
+  const selectKind = useCallback(
+    (kind: string): void => {
+      setActiveKind(kind)
+      onNavigateSubroute?.(internalTabSubroute('models', kind))
+    },
+    [onNavigateSubroute]
+  )
+  useEffect(() => {
+    if (!onNavigateSubroute) return
+    if (initialRequestedKind.current) {
+      onNavigateSubroute(internalTabSubroute('models', initialRequestedKind.current))
+      initialRequestedKind.current = null
+      return
+    }
+    setActiveKind(internalTabFromSubroute('models', navigationSubroute ?? null).id)
+  }, [navigationSubroute, onNavigateSubroute])
+  const [progress, setProgress] = useState<Record<string, DownloadCardProgress>>({})
   // Active model ids across ALL modalities (chat + image/voice/transcription) —
   // one truth from the backend; the UI never re-derives "active" per kind.
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set())
@@ -242,7 +376,6 @@ export function ModelsScreen(): React.JSX.Element {
     setSelectedTags([])
   }, [activeKind])
   const [detail, setDetail] = useState<ModelEntry | null>(null)
-  const [detailVisible, setDetailVisible] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [hfResults, setHfResults] = useState<
@@ -257,28 +390,55 @@ export function ModelsScreen(): React.JSX.Element {
     }[]
   >([])
   const [searching, setSearching] = useState(false)
+  const [variantModel, setVariantModel] = useState<ModelEntry | null>(null)
+  const [variants, setVariants] = useState<DownloadableModelFile[]>([])
+  const [variantLoading, setVariantLoading] = useState(false)
+  const [variantError, setVariantError] = useState<string | null>(null)
+  const [detailFiles, setDetailFiles] = useState<DownloadableModelFile[]>([])
+  const [detailFilesLoading, setDetailFilesLoading] = useState(false)
+  const [detailFilesError, setDetailFilesError] = useState<string | null>(null)
+  const [chosenVariants, setChosenVariants] = useState<Record<string, string>>({})
   const [filterState, setFilterState] = useState<FilterState>(initialFilterState)
   const [sizeBucket, setSizeBucket] = useState<number | null>(null)
   const SIZE_BUCKETS = [2, 4, 6, 8, 16] as const
 
   const openDetail = useCallback((m: ModelEntry) => {
+    setDetailFiles([])
+    setDetailFilesError(null)
+    setDetailFilesLoading(true)
     setDetail(m)
-    requestAnimationFrame(() => requestAnimationFrame(() => setDetailVisible(true)))
   }, [])
 
   const closeDetail = useCallback(() => {
-    setDetailVisible(false)
-    setTimeout(() => setDetail(null), 220)
+    setDetail(null)
   }, [])
 
   useEffect(() => {
-    if (!detail) return undefined
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') closeDetail()
+    if (
+      !detail ||
+      detail.id === KEV_4B_ID ||
+      detail.id.startsWith('local:') ||
+      !['text', 'vision', 'computer_use'].includes(detail.kind)
+    ) {
+      setDetailFilesLoading(false)
+      return
     }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [closeDetail, detail])
+    let cancelled = false
+    setDetailFiles([])
+    setDetailFilesError(null)
+    setDetailFilesLoading(true)
+    void Promise.resolve(api.getModelFiles?.(detail.id))
+      .then((files: DownloadableModelFile[] | undefined) => {
+        if (!cancelled) setDetailFiles(files ?? [])
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setDetailFilesError(error instanceof Error ? error.message : 'Could not load model files.')
+      })
+      .finally(() => {
+        if (!cancelled) setDetailFilesLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [detail])
 
   const importModel = async (): Promise<void> => {
     if (importing) return
@@ -292,7 +452,7 @@ export function ModelsScreen(): React.JSX.Element {
           setModels(c.models)
         }
         setInstalled(await api.getInstalledModels?.())
-        setActiveKind('text')
+        selectKind('text')
       } else if (res && !res.canceled && res.error) {
         window.alert(`Import failed: ${res.error}`)
       }
@@ -309,45 +469,87 @@ export function ModelsScreen(): React.JSX.Element {
     api.getModelCatalog?.().then((c: { kinds: string[]; models: ModelEntry[] }) => {
       setKinds(c.kinds)
       setModels(c.models)
-      if (c.kinds[0]) setActiveKind(c.kinds[0])
+      setActiveKind((current) =>
+        current === 'storage' || c.kinds.includes(current) ? current : (c.kinds[0] ?? 'text')
+      )
     })
     api.getInstalledModels?.().then(setInstalled)
     refreshVision()
     refreshActive()
-    const off = api.onModelProgress?.(
-      (d: { modelId: string; percent?: number; status?: string; currentFile?: string }) => {
-        if (d.status === 'cancelled') {
-          setProgress((p) => withoutProgressEntry(p, d.modelId))
-          return
-        }
-        setProgress((p) => ({
-          ...p,
-          [d.modelId]: {
-            percent: d.percent ?? p[d.modelId]?.percent ?? 0,
-            status: d.status,
-            currentFile: d.currentFile ?? p[d.modelId]?.currentFile
-          }
-        }))
-        if (d.status === 'completed') {
-          api.getInstalledModels?.().then(setInstalled)
-          refreshVision()
-          // Adding a projector for the active model turns its vision on in MAIN
-          // (reconcileActiveModelProjector, runs regardless of which screen is open);
-          // just refresh active state so this screen reflects it.
-          refreshActive()
+  }, [])
+
+  useModelDownloadProgress((d: ModelDownloadProgressEvent) => {
+    if (d.status === 'cancelled') {
+      setProgress((p) => withoutProgressEntry(p, d.modelId))
+      return
+    }
+    const { modelId, ...fields } = d
+    setProgress((p) => {
+      const prev = p[modelId]
+      return {
+        ...p,
+        [modelId]: {
+          ...prev,
+          ...fields,
+          percent: fields.percent ?? prev?.percent ?? 0,
+          currentFile: fields.currentFile ?? prev?.currentFile
         }
       }
-    )
-    return off
-  }, [])
+    })
+    if (d.status === 'completed') {
+      api.getModelCatalog?.().then((c: { kinds: string[]; models: ModelEntry[] }) => {
+        setKinds(c.kinds)
+        setModels(c.models)
+      })
+      api.getInstalledModels?.().then(setInstalled)
+      refreshVision()
+      refreshActive()
+    }
+  })
 
   const cancelDownload = (id: string): void => {
     void api.cancelModelDownload?.(id)
     setProgress((p) => withoutProgressEntry(p, id))
   }
-  const download = (id: string): void => {
-    setProgress((p) => ({ ...p, [id]: { percent: 0, status: 'downloading' } }))
-    api.downloadModel?.(id)
+  const download = (id: string, fileName?: string): void => {
+    // 'queued', not 'downloading': nothing has been downloaded yet, and claiming otherwise is what
+    // left a refused request showing a spinner at 0% forever. The main process moves it to
+    // 'downloading' when bytes actually start, and to 'failed' if it never gets that far.
+    setProgress((p) => ({ ...p, [id]: { percent: 0, status: 'queued' } }))
+    void Promise.resolve(api.downloadModel?.(id, fileName)).then(
+      (r?: { success: boolean; error?: string }) => {
+        if (!r || r.success) return
+        // You cancelled it, so there is nothing to report: the download resolves unsuccessfully by
+        // design, and the progress channel has already cleared the card. Treating that as a failure
+        // put a red "cancelled" box under a model you had just chosen to stop.
+        if (r.error === 'cancelled') return
+        // A refusal also arrives on the progress channel; recording it here too means the card
+        // still tells the truth if this window was not listening when the event went out.
+        setProgress((p) => ({
+          ...p,
+          [id]: { ...p[id], percent: 0, status: 'failed', error: r.error }
+        }))
+      }
+    )
+  }
+  const retryDownload = (id: string): void => {
+    setProgress((p) => withoutProgressEntry(p, id))
+    download(id, chosenVariants[id])
+  }
+  const chooseVariant = async (model: ModelEntry): Promise<void> => {
+    setVariantModel(model)
+    setVariantLoading(true)
+    setVariantError(null)
+    setVariants([])
+    try {
+      const files = await api.getModelFiles?.(model.id)
+      if (!files?.length) throw new Error('No GGUF files found in this repository.')
+      setVariants(files)
+    } catch (error) {
+      setVariantError(error instanceof Error ? error.message : 'Could not load model files.')
+    } finally {
+      setVariantLoading(false)
+    }
   }
   const removeModel = async (id: string, label: string): Promise<void> => {
     if (!window.confirm(`Delete "${label}"? This removes its files from disk.`)) return
@@ -374,7 +576,10 @@ export function ModelsScreen(): React.JSX.Element {
     setSwitching(id)
     try {
       // Single activation seam — main process routes by kind (chat LLM vs modal default).
-      const res = await api.activateModel?.(id)
+      const res =
+        activeKind === 'computer_use'
+          ? await api.activateModel?.(id, activeKind)
+          : await api.activateModel?.(id)
       if (res?.success) refreshActive()
       else setSwitchError(res?.error ? `Couldn't switch: ${res.error}` : "Couldn't switch model")
     } catch (e) {
@@ -382,6 +587,9 @@ export function ModelsScreen(): React.JSX.Element {
     } finally {
       setSwitching(null)
     }
+  }
+  const openModelSettings = (kind?: string): void => {
+    openModelSettingsPanel(modelSettingsTabForKind(kind))
   }
 
   const searchEnabled = activeKind !== 'voice' && activeKind !== 'transcription'
@@ -405,12 +613,19 @@ export function ModelsScreen(): React.JSX.Element {
   }, [query, activeKind, searchEnabled])
 
   const list = models.filter(
-    (m) => m.kind === activeKind || (activeKind === 'text' && m.kind === 'vision')
+    (model) =>
+      modelSupportsKind(model, activeKind as Parameters<typeof modelSupportsKind>[1]) ||
+      (activeKind === 'text' && modelSupportsKind(model, 'vision'))
   )
 
   // The image model recommended for this machine's RAM (Light Q4 on <=16GB, full
   // Q8 above) — one pure rule, reused for both the badge and the top-of-list sort.
   const recommendedImageId = recommendedImageModelId(models, ramGb)
+  const bonsaiFits = (m: ModelEntry): boolean =>
+    (m.sourceModelId ?? m.id) === BONSAI_2_ID &&
+    ramGb !== null &&
+    ramGb >= (m.minRamGb ?? 0) &&
+    ['easy', 'fits'].includes(fitTier(totalBytes(m) / 1e9, ramGb))
 
   const displayed = filterAndSort(
     hfResults.map((r) => ({
@@ -448,11 +663,15 @@ export function ModelsScreen(): React.JSX.Element {
       const rank = (x: { id: string }): number =>
         isActive(x.id) ? 0 : installed.includes(x.id) ? 1 : 2
       return (
-        rank(a) - rank(b) || featureRank(a, recommendedImageId) - featureRank(b, recommendedImageId)
+        rank(a) - rank(b) ||
+        featureRank(a, recommendedImageId, bonsaiFits(a)) -
+          featureRank(b, recommendedImageId, bonsaiFits(b))
       )
     })
 
-  const tabs = [...kinds.filter((k) => k !== 'vision'), 'storage']
+  const tabs = internalTabRoutes('models').filter(
+    ({ id }) => id === 'storage' || kinds.includes(id)
+  )
 
   // Live download summary for the Storage tab label. The manager owns queued vs
   // transferring; this surface only counts its emitted statuses.
@@ -477,24 +696,30 @@ export function ModelsScreen(): React.JSX.Element {
     isHf = false
   ): React.JSX.Element => {
     const isInstalled = installed.includes(m.id)
+    const isRemote = Boolean(m.remoteServerId)
     const active = isActive(m.id)
     const prog = progress[m.id]
     const downloading = prog && prog.status !== 'completed' && prog.status !== 'failed'
+    const downloadProgress = prog ? projectProgress(prog) : null
+    const timeRemaining = downloadProgress ? downloadTimeRemaining(downloadProgress) : null
     // Installed, vision-capable, but the projector isn't on disk (e.g. downloaded before
     // the model gained vision) → offer to fetch just the projector. downloadModel skips
     // files already present, so this pulls only the mmproj.
     const vs = visionSt[m.id]
     const projectorMissing = isInstalled && !!vs?.supportsVision && !vs.projectorInstalled
+    const dflashMissing = isInstalled && !!vs?.supportsDflash && !vs.dflashInstalled
     const bytes = totalBytes(m)
-    const size = bytes > 0 ? `${(bytes / 1e9).toFixed(1)}GB` : null
+    const size = formatSize(bytes) || null
     const meta = [m.org, m.params ? `${m.params}B` : null, size, fmtReleaseDate(m.releaseDate)]
       .filter(Boolean)
       .join(' · ')
     const tier: FitTier = isHf ? 'easy' : ramTier(m)
     const tags = (m.tags ?? []).filter((t) => !/tight|risky|fit/i.test(t))
+    const comingSoon = m.availability === 'coming_soon'
+    const worksBest = bonsaiFits(m) || /(?:^|[\s/_-])UI[\s_-]?Mate(?:[\s/_-]|$)/i.test(`${m.id} ${m.name}`)
     // The single image pick best-suited to THIS machine's RAM (Light on <=16GB,
     // full above) — a prominent filled-emerald badge, distinct from the outlined tags.
-    const recommended = !isHf && !!recommendedImageId && m.id === recommendedImageId
+    const recommended = !isHf && (bonsaiFits(m) || (!!recommendedImageId && m.id === recommendedImageId))
 
     return (
       <div
@@ -508,10 +733,15 @@ export function ModelsScreen(): React.JSX.Element {
             <div className="flex flex-wrap items-center gap-1">
               <button
                 onClick={() => openDetail(m)}
-                className="truncate text-left text-xs text-neutral-100 transition-colors duration-100 hover:text-green-400"
+                className="truncate text-left text-xs text-neutral-100 transition-colors duration-100 hover:text-emerald-500"
               >
                 {m.name}
               </button>
+              {worksBest && (
+                <span className="shrink-0 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
+                  Works best
+                </span>
+              )}
               {m.kind === 'vision' && (
                 <span className="flex shrink-0 items-center gap-0.5 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
                   <IconEye className="h-2 w-2" /> Vision
@@ -535,8 +765,17 @@ export function ModelsScreen(): React.JSX.Element {
         </div>
 
         {/* Badges row */}
-        {(recommended || tags.length > 0 || tier === 'tight' || tier === 'wontFit') && (
+        {(comingSoon ||
+          recommended ||
+          tags.length > 0 ||
+          tier === 'tight' ||
+          tier === 'wontFit') && (
           <div className="flex flex-wrap items-center gap-1">
+            {comingSoon && (
+              <span className="shrink-0 rounded-sm border border-amber-400/60 px-1 py-px text-[8px] uppercase tracking-wide text-amber-400">
+                Coming soon
+              </span>
+            )}
             {recommended && (
               // Prominent FILLED emerald badge — the pick for this machine's RAM,
               // set apart from the outlined capability tags below.
@@ -576,8 +815,8 @@ export function ModelsScreen(): React.JSX.Element {
                 }`}
                 title={
                   tier === 'tight'
-                    ? 'Fits, but context will be tight on this Mac'
-                    : "Past this Mac's comfortable ceiling — you can still Load anyway"
+                    ? `Fits, but context will be tight on this ${deviceNoun()}`
+                    : `Past this ${deviceNoun()}'s comfortable ceiling — you can still Load anyway`
                 }
               >
                 {tier === 'tight' ? 'Tight on RAM' : "Won't fit — Load anyway"}
@@ -586,9 +825,17 @@ export function ModelsScreen(): React.JSX.Element {
           </div>
         )}
 
+        {comingSoon && m.availabilityNote && (
+          <p className="text-[9px] leading-relaxed text-neutral-600">{m.availabilityNote}</p>
+        )}
+
         {/* Action row */}
         <div className="mt-auto flex items-center justify-between gap-2 pt-1">
-          {active ? (
+          {comingSoon ? (
+            <span className="text-[10px] text-neutral-500">
+              Available after support is fully tested
+            </span>
+          ) : active ? (
             <span className="flex items-center gap-1 text-[11px] text-green-500">
               <IconCircleCheck className="h-3.5 w-3.5" /> Active
             </span>
@@ -599,7 +846,7 @@ export function ModelsScreen(): React.JSX.Element {
             <button
               onClick={() => activateModel(m.id)}
               disabled={!!switching}
-              className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-green-400 active:scale-95 disabled:opacity-40"
+              className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:opacity-40"
             >
               {switching === m.id ? (
                 <>
@@ -610,48 +857,113 @@ export function ModelsScreen(): React.JSX.Element {
               )}
             </button>
           ) : downloading ? (
-            <button
-              onClick={() => cancelDownload(m.id)}
-              className="group/dl flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-400 transition-all duration-150 hover:border-red-500/60 hover:text-red-400 active:scale-95"
-            >
-              {prog.status === 'queued' ? (
-                <IconClock className="h-3 w-3 group-hover/dl:hidden" />
-              ) : (
-                <IconLoader2 className="h-3 w-3 animate-spin group-hover/dl:hidden" />
-              )}
-              <IconX className="hidden h-3 w-3 group-hover/dl:block" />
-              <span className="group-hover/dl:hidden">
-                {prog.status === 'queued' ? 'Queued' : `${prog.percent}%`}
+            // Status left, action right, across the full width of the card. Stacked in a column on
+            // the left they left half the card empty and the whole thing read as lopsided; the row
+            // is already justify-between, so the pair simply uses the space that was there.
+            // The percent is NOT in the button: a control whose meaning is "Cancel" is the one place
+            // the card's main number should not live.
+            <>
+              <div className="flex min-w-0 items-baseline gap-1.5 text-[10px] text-neutral-500">
+                <span className="text-neutral-300">
+                  {prog.status === 'queued'
+                    ? 'Queued'
+                    : downloadProgress?.determinate
+                      ? `${Math.round(downloadProgress.percentage ?? 0)}%`
+                      : 'Downloading'}
+                </span>
+                {downloadProgress && downloadProgress.totalBytes !== undefined ? (
+                  <span className="whitespace-nowrap">
+                    {formatSize(downloadProgress.currentBytes)} of{' '}
+                    {formatSize(downloadProgress.totalBytes)}
+                  </span>
+                ) : prog.downloadedMB && prog.totalMB ? (
+                  <span className="whitespace-nowrap">
+                    {formatTransferred(prog.downloadedMB)} of {formatTransferred(prog.totalMB)}
+                  </span>
+                ) : null}
+                {downloadProgress?.bytesPerSecond !== undefined ? (
+                  <span className="whitespace-nowrap">
+                    · {formatTransferSpeed(downloadProgress.bytesPerSecond)}
+                  </span>
+                ) : null}
+                {timeRemaining ? (
+                  <span className="whitespace-nowrap">· {timeRemaining}</span>
+                ) : null}
+                <span className="min-w-0 truncate">{downloadPartLabel(prog)}</span>
+              </div>
+              <button
+                onClick={() => cancelDownload(m.id)}
+                className="flex shrink-0 items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-400 transition-all duration-150 hover:border-red-500/60 hover:text-red-400 active:scale-95"
+              >
+                {prog.status === 'queued' ? (
+                  <IconClock className="h-3 w-3" />
+                ) : (
+                  <IconX className="h-3 w-3" />
+                )}
+                Cancel
+              </button>
+            </>
+          ) : prog?.status === 'failed' ? (
+            // A failure is a STATE of the action row, not a banner under it. As its own block it
+            // stacked a second button beneath "Download" and asked you to choose between two ways
+            // of doing the same thing. Reason left, one button right, on the row that was already
+            // there.
+            <>
+              <span
+                className="min-w-0 truncate text-[10px] text-red-400/90"
+                title={prog.error}
+                role="status"
+              >
+                {downloadFailureText(prog.error)}
               </span>
-              <span className="hidden group-hover/dl:inline">Cancel</span>
-            </button>
+              <button
+                onClick={() => retryDownload(m.id)}
+                className="flex shrink-0 items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
+              >
+                <IconDownload className="h-3 w-3" /> Try again
+              </button>
+            </>
           ) : (
             <button
-              onClick={() => download(m.id)}
-              className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-green-400 active:scale-95"
+              onClick={() => isHf ? void chooseVariant(m) : download(m.id)}
+              className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
             >
               <IconDownload className="h-3 w-3" /> Download
             </button>
           )}
           {isInstalled && (
-            <button
-              onClick={() => removeModel(m.id, m.name)}
-              disabled={deleting === m.id || active}
-              title={active ? 'Switch to another model before deleting' : 'Delete from disk'}
-              className="rounded p-1 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
-            >
-              {deleting === m.id ? (
-                <IconLoader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <IconTrash className="h-3 w-3" />
+            <div className="flex shrink-0 items-center gap-1">
+              {active && !isRemote && supportsModelSettings(m.kind) && (
+                <button
+                  onClick={() => openModelSettings(m.kind)}
+                  aria-label="Open model settings"
+                  title="Open settings for the active model"
+                  className="rounded border border-neutral-800 px-1.5 py-1 text-[9px] text-neutral-500 transition-all duration-150 hover:border-green-500/60 hover:text-emerald-500 active:scale-95"
+                >
+                  Settings
+                </button>
               )}
-            </button>
+              {!isRemote && (
+                <button
+                  onClick={() => removeModel(m.id, m.name)}
+                  disabled={deleting === m.id || active}
+                  title={active ? 'Switch to another model before deleting' : 'Delete from disk'}
+                  className="rounded p-1 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
+                >
+                  {deleting === m.id ? (
+                    <IconLoader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <IconTrash className="h-3 w-3" />
+                  )}
+                </button>
+              )}
+            </div>
           )}
         </div>
 
         {/* Vision-capable but projector not downloaded — offer to add it. Hidden while a
             download is in flight (the progress UI covers that). */}
-        {projectorMissing && !downloading && (
+        {!comingSoon && projectorMissing && !dflashMissing && !downloading && (
           <button
             onClick={() => download(m.id)}
             title="Download the vision projector so this model can read images"
@@ -660,24 +972,28 @@ export function ModelsScreen(): React.JSX.Element {
             <IconEye className="h-3 w-3" /> Add vision support
           </button>
         )}
+        {!comingSoon && dflashMissing && !downloading && (
+          <button
+            onClick={() => download(m.id)}
+            title="Download the missing DFlash model for speculative decoding"
+            className="flex items-center gap-1 rounded border border-amber-400/50 px-2 py-1 text-[10px] text-amber-300 transition-all duration-150 hover:border-amber-400 hover:bg-amber-400/10 active:scale-95"
+          >
+            <IconDownload className="h-3 w-3" /> Repair
+          </button>
+        )}
 
-        {/* Download progress. Name the companion when that's all that's downloading
-            (e.g. adding a vision projector to a model already on disk) so it doesn't
-            read as a full re-download. */}
+        {/* Download progress: one bar, one line. It used to be four stacked rows — a percent chip,
+            a shouted status, the bytes, then the bar — which said the same thing three times and
+            grew the card by half while it ran. The bar carries the shape of the progress, the line
+            carries the exact amount, and the part being fetched is named at the end of it where it
+            belongs (adding a projector to a model already on disk is not a re-download). */}
         {downloading && (
-          <>
-            {companionDownloadLabel(prog.currentFile) && (
-              <div className="text-[9px] uppercase tracking-wide text-emerald-300">
-                Adding {companionDownloadLabel(prog.currentFile)} · {prog.percent}%
-              </div>
-            )}
-            <div className="h-0.5 w-full overflow-hidden rounded-full bg-neutral-800">
-              <div
-                className="h-full bg-green-500 transition-all"
-                style={{ width: `${prog.percent}%` }}
-              />
-            </div>
-          </>
+          <div className="h-0.5 w-full overflow-hidden rounded-full bg-neutral-800">
+            <div
+              className="h-full w-full origin-left bg-green-500 transition-transform duration-300 ease-out motion-reduce:transition-none"
+              style={{ transform: `scaleX(${(downloadProgress?.percentage ?? 0) / 100})` }}
+            />
+          </div>
         )}
       </div>
     )
@@ -694,7 +1010,7 @@ export function ModelsScreen(): React.JSX.Element {
           <button
             onClick={importModel}
             disabled={importing}
-            className="flex items-center gap-1.5 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-400 transition-all duration-150 hover:border-green-500/60 hover:text-green-400 active:scale-95 disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-400 transition-all duration-150 hover:border-green-500/60 hover:text-emerald-500 active:scale-95 disabled:opacity-50"
           >
             {importing ? (
               <IconLoader2 className="h-3 w-3 animate-spin" />
@@ -708,13 +1024,14 @@ export function ModelsScreen(): React.JSX.Element {
 
       {/* Tabs */}
       <div className="flex shrink-0 items-end gap-0 border-b border-neutral-800 px-6">
-        {tabs.map((k) => (
+        {tabs.map(({ id: kind, label }) => (
           <button
-            key={k}
-            onClick={() => setActiveKind(k)}
-            className={`flex items-center gap-1.5 px-3 py-2 text-[10px] uppercase tracking-wider transition-colors duration-150 ${activeKind === k ? 'border-b-2 border-green-500 text-white' : 'text-neutral-500 hover:text-neutral-300'}`}
+            key={kind}
+            aria-current={activeKind === kind ? 'page' : undefined}
+            onClick={() => selectKind(kind)}
+            className={`flex items-center gap-1.5 px-3 py-2 text-[10px] uppercase tracking-wider transition-colors duration-150 ${activeKind === kind ? 'border-b-2 border-green-500 text-white' : 'text-neutral-500 hover:text-neutral-300'}`}
           >
-            {k === 'storage' ? (
+            {kind === 'storage' ? (
               <>
                 <IconDatabase className="h-3 w-3" /> Storage
                 {/* Live counts: installed, transferring, queued, and failed. */}
@@ -738,7 +1055,7 @@ export function ModelsScreen(): React.JSX.Element {
                 )}
               </>
             ) : (
-              modelKindLabel(k)
+              label
             )}
           </button>
         ))}
@@ -762,7 +1079,10 @@ export function ModelsScreen(): React.JSX.Element {
           {/* Filter bar */}
           <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-neutral-800/60 px-6 py-2">
             {searchEnabled && (
-              <div className="flex items-center gap-1.5 rounded border border-neutral-800 bg-neutral-900/60 px-2 py-1 focus-within:border-neutral-600">
+              <div
+                data-focus-surface="models-search"
+                className="flex items-center gap-1.5 rounded border border-neutral-800 bg-neutral-900/60 px-2 py-1 focus-within:border-neutral-600"
+              >
                 <IconSearch className="h-3 w-3 shrink-0 text-neutral-600" />
                 <input
                   value={query}
@@ -809,7 +1129,7 @@ export function ModelsScreen(): React.JSX.Element {
                   setFilterState(initialFilterState)
                   setSizeBucket(null)
                 }}
-                className="rounded border border-neutral-800 px-2 py-0.5 text-[9px] text-neutral-500 transition-all duration-150 hover:border-green-500/60 hover:text-green-400 active:scale-95"
+                className="rounded border border-neutral-800 px-2 py-0.5 text-[9px] text-neutral-500 transition-all duration-150 hover:border-green-500/60 hover:text-emerald-500 active:scale-95"
               >
                 Clear
               </button>
@@ -888,7 +1208,7 @@ export function ModelsScreen(): React.JSX.Element {
                       {
                         id: r.id,
                         name: r.name,
-                        kind: activeKind,
+                        kind: activeKind as ModelKind,
                         org: r.org,
                         files: [],
                         params: r.params ?? undefined,
@@ -908,8 +1228,15 @@ export function ModelsScreen(): React.JSX.Element {
                     </p>
                   )
                 }
-                const installedModels = displayedCatalog.filter((m) => installed.includes(m.id))
-                const availableModels = displayedCatalog.filter((m) => !installed.includes(m.id))
+                const installedModels = displayedCatalog.filter(
+                  (m) => installed.includes(m.id) && m.availability !== 'coming_soon'
+                )
+                const availableModels = displayedCatalog.filter(
+                  (m) => !installed.includes(m.id) && m.availability !== 'coming_soon'
+                )
+                const comingSoonModels = displayedCatalog.filter(
+                  (m) => m.availability === 'coming_soon'
+                )
                 return (
                   <>
                     {installedModels.length > 0 && (
@@ -932,6 +1259,20 @@ export function ModelsScreen(): React.JSX.Element {
                         </div>
                       </>
                     )}
+                    {comingSoonModels.length > 0 && (
+                      <>
+                        <div className="px-6 pt-2 text-[9px] uppercase tracking-widest text-neutral-600">
+                          Coming soon
+                        </div>
+                        <div
+                          role="list"
+                          aria-label="Computer Use models coming soon"
+                          className={GRID}
+                        >
+                          {comingSoonModels.map((m) => renderCard(m))}
+                        </div>
+                      </>
+                    )}
                   </>
                 )
               })()
@@ -941,32 +1282,34 @@ export function ModelsScreen(): React.JSX.Element {
       )}
 
       {/* Detail slide-over */}
-      {detail &&
-        (() => {
-          const m = detail
-          const isLocal = m.id.startsWith('local:')
-          const hfUrl = !isLocal && m.id.includes('/') ? `https://huggingface.co/${m.id}` : null
-          const bytes = totalBytes(m)
-          const isInstalled = installed.includes(m.id)
-          const active = isActive(m.id)
-          const prog = progress[m.id]
-          const downloading = prog && prog.status !== 'completed' && prog.status !== 'failed'
-          const rows: [string, string | null][] = [
-            ['Source', m.org || (isLocal ? 'Imported' : '—')],
-            ['Parameters', m.params ? `${m.params}B` : null],
-            ['Quantization', m.quant || null],
-            ['Download', bytes > 0 ? `${(bytes / 1e9).toFixed(1)} GB` : null],
-            ['Released', fmtReleaseDate(m.releaseDate) || null],
-            ['Min RAM', m.minRamGb ? `${m.minRamGb} GB` : null]
-          ]
-          return (
-            <div className="fixed inset-0 z-50 flex justify-end">
-              <div
-                onClick={closeDetail}
-                className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${detailVisible ? 'opacity-100' : 'opacity-0'}`}
-              />
-              <div
-                className={`relative z-10 flex h-full w-[26vw] min-w-[380px] flex-col border-l border-neutral-800 bg-neutral-950 font-mono shadow-2xl transition-transform duration-200 ease-out ${detailVisible ? 'translate-x-0' : 'translate-x-full'}`}
+      <AnimatePresence>
+        {detail &&
+          (() => {
+            const m = detail
+            const isLocal = m.id.startsWith('local:')
+            const hfRepo = m.sourceModelId ?? m.id
+            const hfUrl =
+              !isLocal && hfRepo.includes('/') ? `https://huggingface.co/${hfRepo}` : null
+            const bytes = totalBytes(m)
+            const isInstalled = installed.includes(m.id)
+            const active = isActive(m.id)
+            const prog = progress[m.id]
+            const downloading = prog && prog.status !== 'completed' && prog.status !== 'failed'
+            const comingSoon = m.availability === 'coming_soon'
+            const downloadProgress = prog ? projectProgress(prog) : null
+            const rows: [string, string | null][] = [
+              ['Source', m.org || (isLocal ? 'Imported' : '—')],
+              ['Parameters', m.params ? `${m.params}B` : null],
+              ['Quantization', m.quant || null],
+              ['Download', formatSize(bytes) || null],
+              ['Released', fmtReleaseDate(m.releaseDate) || null],
+              ['Min RAM', m.minRamGb ? `${m.minRamGb} GB` : null]
+            ]
+            return (
+              <SidePanel
+                ariaLabel={`${m.name} details`}
+                onClose={closeDetail}
+                className="w-[26vw] min-w-[380px] font-mono"
               >
                 <div className="flex items-start justify-between gap-3 border-b border-neutral-800 px-5 py-4">
                   <div className="min-w-0">
@@ -991,6 +1334,16 @@ export function ModelsScreen(): React.JSX.Element {
                 <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
                   {m.description && (
                     <p className="text-xs leading-relaxed text-neutral-300">{m.description}</p>
+                  )}
+                  {comingSoon && (
+                    <div className="mt-3 rounded border border-amber-400/30 bg-amber-400/5 px-3 py-2">
+                      <p className="text-[9px] uppercase tracking-wide text-amber-400">
+                        Coming soon
+                      </p>
+                      <p className="mt-1 text-[10px] leading-relaxed text-neutral-400">
+                        {m.availabilityNote ?? 'Support is still being prepared and tested.'}
+                      </p>
+                    </div>
                   )}
                   <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2">
                     {rows
@@ -1032,15 +1385,91 @@ export function ModelsScreen(): React.JSX.Element {
                           window as { api?: { openExternal?: (u: string) => void } }
                         ).api?.openExternal?.(hfUrl)
                       }
-                      className="mt-4 flex items-center gap-1 text-[10px] text-green-500 transition-colors duration-150 hover:text-green-400"
+                      className="mt-4 flex items-center gap-1 text-[10px] text-green-500 transition-colors duration-150 hover:text-emerald-500"
                     >
                       <IconExternalLink className="h-3 w-3" /> View on Hugging Face
                     </button>
                   )}
+                  {m.id === KEV_4B_ID && (
+                    <section
+                      aria-label="Kev model format"
+                      className="mt-5 border-t border-neutral-800 pt-4"
+                    >
+                      <h3 className="text-[10px] uppercase tracking-wide text-neutral-400">
+                        Model format
+                      </h3>
+                      <p className="mt-2 text-[10px] leading-relaxed text-neutral-400">
+                        Kev uses the original Qwen3.5-4B-Base SafeTensors weights. The Qwen 3.5 4B
+                        GGUF chat model cannot be reused. GGUF contains quantized weights for
+                        llama.cpp, while Kev loads SafeTensors through MLX or Torch.
+                      </p>
+                      <p className="mt-2 text-[10px] leading-relaxed text-neutral-500">
+                        One Qwen base: 9.34 GB across two SafeTensors files, plus a 135 MB Kev
+                        adapter. If the compatible SafeTensors base is already on this device, Off
+                        Grid AI reuses it.
+                      </p>
+                    </section>
+                  )}
+                  {hfUrl &&
+                    m.id !== KEV_4B_ID &&
+                    ['text', 'vision', 'computer_use'].includes(m.kind) && (
+                      <section
+                        aria-label="Available model files"
+                        className="mt-5 border-t border-neutral-800 pt-4"
+                      >
+                        <h3 className="mb-2 text-[10px] uppercase tracking-wide text-neutral-400">
+                          Available GGUF files
+                          {detailFiles.length > 0 ? ` · ${detailFiles.length}` : ''}
+                        </h3>
+                        {detailFilesLoading && (
+                          <p className="text-xs text-neutral-500">Loading available files…</p>
+                        )}
+                        {detailFilesError && (
+                          <p role="alert" className="text-xs text-red-400">
+                            {detailFilesError}
+                          </p>
+                        )}
+                        {!detailFilesLoading && !detailFilesError && detailFiles.length === 0 && (
+                          <p className="text-xs text-neutral-500">
+                            No GGUF files found in this repository.
+                          </p>
+                        )}
+                        <div className="space-y-2">
+                          {detailFiles.map((file) => (
+                            <div
+                              key={file.fileName}
+                              className="flex items-start justify-between gap-2 rounded border border-neutral-800 px-3 py-2"
+                            >
+                              <div className="min-w-0">
+                                <p className="break-all text-[11px] text-neutral-200">
+                                  {file.fileName}
+                                </p>
+                                <p className="mt-1 text-[10px] text-neutral-500">
+                                  {file.quant} · {formatSize(file.sizeBytes)}
+                                  {file.mmproj ? ` · includes ${file.mmproj.fileName}` : ''}
+                                </p>
+                              </div>
+                              <button
+                                onClick={() => download(m.id, file.fileName)}
+                                disabled={comingSoon || !!downloading}
+                                aria-label={`Download ${file.fileName}`}
+                                className="shrink-0 rounded border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 hover:border-green-500 hover:text-green-500 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                Download
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
                 </div>
 
                 <div className="flex items-center gap-2 border-t border-neutral-800 px-5 py-3">
-                  {active ? (
+                  {comingSoon ? (
+                    <span className="text-xs text-neutral-500">
+                      Download and Use unlock after support is fully tested.
+                    </span>
+                  ) : active ? (
                     <span className="flex items-center gap-1 text-xs text-green-500">
                       <IconCircleCheck className="h-4 w-4" /> Active
                     </span>
@@ -1052,7 +1481,7 @@ export function ModelsScreen(): React.JSX.Element {
                           closeDetail()
                         }}
                         disabled={!!switching}
-                        className="rounded border border-neutral-700 px-3 py-1.5 text-xs text-white transition-all duration-150 hover:border-green-500 hover:text-green-400 active:scale-95 disabled:opacity-50"
+                        className="rounded border border-neutral-700 px-3 py-1.5 text-xs text-white transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:opacity-50"
                       >
                         Use this model
                       </button>
@@ -1068,28 +1497,75 @@ export function ModelsScreen(): React.JSX.Element {
                     </>
                   ) : downloading ? (
                     <span className="text-xs text-neutral-400">
+                      {/* Same rule as the card: the percent is the whole download, and the part
+                          being fetched is named beside it, never given a percent of its own. */}
                       {prog.status === 'queued'
                         ? 'Queued'
                         : companionDownloadLabel(prog.currentFile)
-                          ? `Adding ${companionDownloadLabel(prog.currentFile)} ${prog.percent}%…`
-                          : `Downloading ${prog.percent}%…`}
+                          ? `Downloading ${downloadProgress?.determinate ? `${Math.round(downloadProgress.percentage ?? 0)}%` : ''} · adding ${companionDownloadLabel(prog.currentFile)}`
+                          : downloadProgress?.determinate
+                            ? `Downloading ${Math.round(downloadProgress.percentage ?? 0)}%…`
+                            : 'Downloading…'}
                     </span>
                   ) : (
                     <button
                       onClick={() => {
-                        download(m.id)
+                        if (hfUrl && !models.some((catalogModel) => catalogModel.id === m.id)) {
+                          void chooseVariant(m)
+                        } else {
+                          download(m.id)
+                        }
                         closeDetail()
                       }}
-                      className="flex items-center gap-1 rounded border border-neutral-700 px-3 py-1.5 text-xs text-white transition-all duration-150 hover:border-green-500 hover:text-green-400 active:scale-95"
+                      className="flex items-center gap-1 rounded border border-neutral-700 px-3 py-1.5 text-xs text-white transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
                     >
                       <IconDownload className="h-3.5 w-3.5" /> Download
                     </button>
                   )}
                 </div>
+              </SidePanel>
+            )
+          })()}
+      </AnimatePresence>
+      <AnimatePresence>
+        {variantModel && (
+          <SidePanel
+            key="model-file-picker"
+            ariaLabel={`Choose a file for ${variantModel.name}`}
+            onClose={() => setVariantModel(null)}
+            className="w-[26vw] min-w-[380px]"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-neutral-800 px-5 py-4">
+              <div>
+                <h2 className="text-sm font-medium text-white">Choose a model file</h2>
+                <p className="mt-1 text-[10px] text-neutral-500">{variantModel.name}</p>
+              </div>
+              <button onClick={() => setVariantModel(null)} aria-label="Close file picker" className="text-neutral-500 hover:text-white"><IconX className="h-4 w-4" /></button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              {variantLoading && <p className="text-xs text-neutral-400">Loading available files…</p>}
+              {variantError && <p className="text-xs text-red-400" role="alert">{variantError}</p>}
+              <div className="space-y-2">
+                {variants.map((variant) => (
+                  <button
+                    key={variant.fileName}
+                    onClick={() => {
+                      setChosenVariants((current) => ({ ...current, [variantModel.id]: variant.fileName }))
+                      download(variantModel.id, variant.fileName)
+                      setVariantModel(null)
+                    }}
+                    className="flex w-full flex-col gap-1 rounded border border-neutral-800 px-3 py-2 text-left transition-colors hover:border-green-500 hover:bg-green-500/5"
+                  >
+                    <span className="break-all text-[11px] text-neutral-200">{variant.fileName}</span>
+                    <span className="text-[10px] text-neutral-400">{formatSize(variant.sizeBytes)}</span>
+                    {variant.mmproj && <span className="break-all text-[9px] text-neutral-500">Includes {variant.mmproj.fileName}</span>}
+                  </button>
+                ))}
               </div>
             </div>
-          )
-        })()}
+          </SidePanel>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

@@ -97,7 +97,7 @@ describe('macOS application trust', () => {
         OFFGRID_REQUIRE_RELEASE_TRUST: '1',
         APPLE_TEAM_ID: 'OTHERTEAM'
       })
-    ).toThrow("must match Off Grid's pinned signing team")
+    ).toThrow("must match Off Grid AI's pinned signing team")
   })
 
   it('accepts only the intended Developer ID team with hardened runtime', () => {
@@ -133,7 +133,7 @@ describe('macOS application trust', () => {
     )
   })
 
-  it('runs strict signature, fuse, Developer ID, staple and Gatekeeper checks in one seam', async () => {
+  it('runs strict signature, fuse, Developer ID, staple, distribution and Gatekeeper checks in one seam', async () => {
     const { boundary, commands } = trustedBoundary()
     const bundle = '/tmp/Off Grid AI Desktop.app'
 
@@ -156,6 +156,10 @@ describe('macOS application trust', () => {
       {
         executable: '/usr/bin/xcrun',
         args: ['stapler', 'validate', bundle]
+      },
+      {
+        executable: '/usr/bin/syspolicy_check',
+        args: ['distribution', bundle]
       },
       {
         executable: '/usr/sbin/spctl',

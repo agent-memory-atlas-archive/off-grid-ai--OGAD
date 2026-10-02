@@ -1,6 +1,9 @@
-// Off Grid local inference gateway — ONE OpenAI-compatible endpoint for every
-// modality, on 127.0.0.1:7878. Any local tool (IDE, app, script) points here
-// and gets the on-device models. No cloud, no keys, no LAN listener.
+// Off Grid AI local inference gateway — ONE OpenAI-compatible endpoint for every
+// modality, on :7878. Any local tool (IDE, app, script) points here and gets the
+// on-device models, and so does a phone on the same LAN - Off Grid AI Mobile scans the
+// subnet for this port. No cloud, no keys. It listens on every interface and does NOT
+// authenticate, so treat the machine's network as the trust boundary; the routes that
+// must stay private (settings mutations) check the peer address themselves.
 //
 //   GET  /                       -> gateway info + live modality status
 //   GET  /v1/models              -> the ACTIVE model per modality (text/vision +
@@ -20,12 +23,15 @@
 // documentation is served at GET /docs (and lives in docs/API.md).
 
 import http from 'http'
+import { AIRequestHandle } from './ai-request-log'
+import { observeAIResponse } from './ai-request-log-http'
 import https from 'https'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { randomUUID } from 'crypto'
-import { desktopExtraction } from './rag/extractors'
+import { getActiveTranscription } from './transcription/select'
+import { transcriptionRequestOptions } from './model-server/transcription-request'
 import * as tts from './tts'
 import { generateImage, imageGenStatus, activeImageModel, type ImageGenParams } from './imagegen'
 import { whisperModel } from './rag/extractors'
@@ -33,9 +39,10 @@ import { getActiveModal } from './active-models'
 import { embeddings } from './embeddings'
 import { docsText, docsHtml, openApiSpec } from './api-docs'
 import { handleMcpRequest } from './mcp-server'
+import { logActionTokenForDev } from './mcp-auth'
 import { llm, type LlmSettings } from './llm'
-import { GATEWAY_HOST, GATEWAY_PORT } from '../shared/ports'
-import { pickFreePort } from './free-port'
+import { GATEWAY_HOST, GATEWAY_BIND_HOST, GATEWAY_PORT } from '../shared/ports'
+import { isPortFree, pickFreePort } from './free-port'
 import { retryWithDeadline } from './lib/retry'
 import { resolveDims } from './model-server/dimensions'
 import { guardProxyStreams } from './stream-guards'
@@ -50,11 +57,19 @@ import {
 import { errBody, errMeta } from './model-server/errors'
 import { isAsync, matchPollRoute } from './model-server/async-request'
 import { sanitizeChatMessages } from './model-server/chat-messages'
+import { applyThinkingPayload, requestedThinking } from './llm/chat-payload'
 import { parseMultipart } from './model-server/multipart'
 import { tagLlmEntries, modelEntry, ollamaMirror } from './model-server/models-list'
 import { buildGatewayModalities, type GatewayModalities } from './model-server/health'
 import { safeProxyResponse } from './model-server/proxy-response'
 import { writeDiagnosticLog } from './diagnostics-log'
+import { parseRemoteVisionModelId, remoteVisionModelId } from '../shared/remote-vision-server'
+import {
+  getActiveRemoteVisionServer,
+  getActiveRemoteVisionServerForModality
+} from './vision/remote-vision-server'
+import { REASONING_BUDGET_AUTO, openRouterReasoningPayload } from '@offgrid/models'
+import { remoteReasoningCapability, remoteTextModelProviderError } from './llm/remote-chat'
 
 const UPSTREAM_HOST = '127.0.0.1'
 // The upstream llama-server port is LIVE, not fixed: llm.getPort() moves off LLAMA_SERVER_PORT when
@@ -113,6 +128,7 @@ interface ApiRequest {
   updated_at: number
   result?: unknown
   error?: { message: string; type: string }
+  progress?: { step: number; total: number }
 }
 
 const requests = new Map<string, ApiRequest>()
@@ -182,6 +198,7 @@ function handlePoll(res: http.ServerResponse, id: string): void {
   }
   if (r.status === 'completed') body.result = r.result
   if (r.status === 'failed') body.error = r.error
+  if (r.progress) body.progress = r.progress
   json(res, 200, body)
 }
 
@@ -199,7 +216,8 @@ function proxyToLlama(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   bodyOverride?: Buffer,
-  retryUntil = 0
+  retryUntil = 0,
+  activity?: AIRequestHandle
 ): void {
   const headers = { ...req.headers, host: `${UPSTREAM_HOST}:${upstreamPort()}` }
   if (bodyOverride) {
@@ -226,6 +244,7 @@ function proxyToLlama(
           // uncaught exception that crashes the main process. Does not re-settle this promise —
           // it has already resolved once piping begins.
           guardProxyStreams(proxyRes, res)
+          observeAIResponse(proxyRes, res, activity)
           proxyRes.pipe(res)
           resolve()
         }
@@ -239,8 +258,122 @@ function proxyToLlama(
     })
   // Piped requests aren't replayable, so they fail fast (replayable=false).
   retryWithDeadline(attempt, { deadlineMs: retryUntil, replayable: !!bodyOverride }).catch(() => {
+    activity?.finish(undefined, new Error('Local model not ready'))
     json(res, 502, errBody('Local model not ready (llama-server unavailable).', 'upstream_error'))
   })
+}
+
+/** Forward an inventory-selected remote model through the Desktop connection that owns it.
+ * Mobile sees the stable inventory id, while the provider must receive its native model id. */
+function proxyToSelectedRemote(
+  res: http.ServerResponse,
+  body: Record<string, unknown>,
+  activity?: AIRequestHandle
+): boolean {
+  const requested = typeof body.model === 'string' ? parseRemoteVisionModelId(body.model) : null
+  if (!requested) return false
+  const remote = getActiveRemoteVisionServer()
+  if (!remote || requested.serverId !== remote.id || requested.modelId !== remote.model) {
+    activity?.finish(undefined, new Error('The selected remote model is not active.'))
+    json(res, 400, errBody('The selected remote model is not active.', 'invalid_request_error'))
+    return true
+  }
+
+  const target = new URL(`${remote.endpoint.replace(/\/+$/, '')}/chat/completions`)
+  const thinkingRequested = requestedThinking(body)
+  const forwarded: Record<string, unknown> = { ...body, model: remote.model }
+  // The phone sends llama.cpp controls to this gateway. OpenRouter needs its
+  // reasoning control for both OFF and the selected thinking budget.
+  if (remote.provider === 'openrouter' && thinkingRequested !== undefined) {
+    const budget =
+      typeof body.reasoning_budget_tokens === 'number' && body.reasoning_budget_tokens > 0
+        ? body.reasoning_budget_tokens
+        : REASONING_BUDGET_AUTO
+    delete forwarded.chat_template_kwargs
+    delete forwarded.reasoning_format
+    delete forwarded.reasoning_budget_tokens
+    forwarded.reasoning = thinkingRequested
+      ? openRouterReasoningPayload(true, budget).reasoning
+      : { effort: 'none' }
+  }
+  writeDiagnosticLog('gateway', 'remote_chat.thinking_control', {
+    requestId: String(res.getHeader('X-Request-Id') ?? ''),
+    provider: remote.provider,
+    thinkingRequested: thinkingRequested ?? null,
+    control:
+      remote.provider === 'openrouter' && thinkingRequested !== undefined
+        ? thinkingRequested
+          ? 'openrouter-on'
+          : 'openrouter-off'
+        : 'passthrough'
+  })
+  const payload = Buffer.from(JSON.stringify(forwarded))
+  activity?.update({ model: remote.model, backend: 'Remote', effectiveRequest: forwarded })
+  const client = target.protocol === 'https:' ? https : http
+  const proxyReq = client.request(
+    target,
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(payload.length),
+        ...(remote.apiKey ? { authorization: `Bearer ${remote.apiKey}` } : {})
+      }
+    },
+    (proxyRes) => {
+      observeAIResponse(proxyRes, res, activity)
+      const status = proxyRes.statusCode ?? 502
+      let providerErrorBody = ''
+      if (status >= 400) {
+        proxyRes.on('data', (chunk: Buffer | string) => {
+          if (providerErrorBody.length >= 4_096) return
+          providerErrorBody += chunk.toString().slice(0, 4_096 - providerErrorBody.length)
+        })
+        proxyRes.on('end', () => {
+          const error = remoteTextModelProviderError(status, providerErrorBody)
+          writeDiagnosticLog(
+            'gateway',
+            'remote_chat.provider_failed',
+            {
+              requestId: String(res.getHeader('X-Request-Id') ?? ''),
+              provider: remote.provider,
+              model: remote.model,
+              status,
+              error: error.message
+            },
+            status >= 500 ? 'error' : 'warn'
+          )
+        })
+      }
+      const safeResponse = safeProxyResponse(proxyRes.statusCode, proxyRes.headers)
+      res.writeHead(safeResponse.statusCode, safeResponse.headers)
+      guardProxyStreams(proxyRes, res)
+      proxyRes.pipe(res)
+    }
+  )
+  proxyReq.on('error', (error) => {
+    activity?.finish(undefined, error)
+    const errorCode = (error as NodeJS.ErrnoException).code
+    writeDiagnosticLog(
+      'gateway',
+      'remote_chat.connection_failed',
+      {
+        requestId: String(res.getHeader('X-Request-Id') ?? ''),
+        provider: remote.provider,
+        model: remote.model,
+        error: error.message,
+        errorCode: typeof errorCode === 'string' ? errorCode : undefined
+      },
+      'error'
+    )
+    if (!res.headersSent) {
+      json(res, 502, errBody('Remote model connection failed.', 'upstream_error'))
+    } else {
+      res.end()
+    }
+  })
+  proxyReq.end(payload)
+  return true
 }
 
 // Fetch an image reference into a Buffer. Accepts data: URLs, http(s):// URLs,
@@ -461,11 +594,27 @@ async function handleChat(
     // Gemma 4 (and others) reject system messages that aren't at position 0.
     // Consolidate them before forwarding so any client's ordering works.
     if (sanitizeChatMessages(body)) changed = true
+    // A client says WHETHER it wants thinking; this server decides HOW, because the second half
+    // of the answer (reasoning_format) is a property of the model server running here, not of the
+    // request. Without this a phone could ask for thinking and get a reply with nothing in it.
+    if (applyThinkingPayload(body)) changed = true
     if (changed) forward = Buffer.from(JSON.stringify(body))
   } catch {
     // Image fetch failed — forward the original valid request unchanged so the
     // model process can return its own stable input error.
   }
+
+  // A paired Mobile sends the stable remote inventory id advertised by Desktop.
+  // Route that id through the configured remote server instead of llama-server.
+  res.setHeader('X-Request-Id', rid)
+  const activity = new AIRequestHandle({
+    modality: 'text',
+    source: 'API chat',
+    model: typeof body.model === 'string' ? body.model : undefined,
+    request: body
+  })
+  activity.update({ effectiveRequest: body, backend: llm.activeAccelerator() ?? 'Unknown' })
+  if (proxyToSelectedRemote(res, body, activity)) return
 
   // Async chat: run a non-streaming completion in the background and poll for it.
   if (isAsync(req, body)) {
@@ -476,7 +625,16 @@ async function handleChat(
       'chat',
       '/v1/chat/completions',
       true,
-      () => callLlamaJson(inlined, Date.now() + 45_000),
+      async () => {
+        try {
+          const result = await callLlamaJson(inlined, Date.now() + 45_000)
+          activity.finish(result)
+          return result
+        } catch (error) {
+          activity.finish(undefined, error)
+          throw error
+        }
+      },
       () => {}
     )
     return
@@ -484,8 +642,7 @@ async function handleChat(
 
   // Sync: stream straight through. Retry for up to 45s if llama-server is mid-reload
   // (e.g. just after an image generation freed and is respawning it, ~16s).
-  res.setHeader('X-Request-Id', rid)
-  proxyToLlama(req, res, forward, Date.now() + 45_000)
+  proxyToLlama(req, res, forward, Date.now() + 45_000, activity)
 }
 
 // ─── Embeddings (local MiniLM) ───────────────────────────────────────────────
@@ -557,17 +714,41 @@ function fetchUpstreamModels(): Promise<Record<string, unknown>> {
   })
 }
 
-async function handleModelsList(res: http.ServerResponse): Promise<void> {
+async function handleModelsList(
+  res: http.ServerResponse,
+  outputModalities?: string
+): Promise<void> {
   const now = Math.floor(Date.now() / 1000)
   const upstream = await fetchUpstreamModels()
   const upData = Array.isArray(upstream.data) ? (upstream.data as Record<string, unknown>[]) : []
   // Tag the LLM entries chat vs vision from their advertised capabilities.
   let text: Record<string, unknown>[] = tagLlmEntries(upData)
+  const activeRemote = getActiveRemoteVisionServer()
+  if (activeRemote) {
+    const reasoning = await remoteReasoningCapability(activeRemote)
+    const supportsReasoning = reasoning.control !== 'none'
+    text = [
+      {
+        id: remoteVisionModelId(activeRemote.id, activeRemote.model),
+        name: activeRemote.model,
+        object: 'model',
+        created: now,
+        owned_by: activeRemote.name,
+        kind: 'chat',
+        remote: true,
+        // The Desktop gateway has already validated this OpenAI-compatible route.
+        // Mobile must not probe the local llama /props endpoint for capabilities of
+        // this remote model, because that reports the wrong active model.
+        capabilities: ['vision', 'tools', ...(supportsReasoning ? ['reasoning'] : [])],
+        ...(supportsReasoning ? { reasoning: { mandatory: reasoning.mandatory === true } } : {})
+      }
+    ]
+  }
   // Fall back to the on-disk active model when the upstream llama-server hasn't
   // loaded one yet (idle app, headless gateway, or a server that came up without
   // a model). Without this, /v1/models reports an empty chat model even though one
   // is installed and would load on the next request.
-  if (text.length === 0) {
+  if (!activeRemote && text.length === 0) {
     const info = llm.activeModelInfo()
     if (info) {
       text = [
@@ -599,20 +780,46 @@ async function handleModelsList(res: http.ServerResponse): Promise<void> {
   } catch {
     /* TTS may be unavailable */
   }
-  const speechId = getActiveModal('speech') || (voices.length ? 'kokoro' : null)
-  const speech = speechId ? [tag(speechId, 'speech', { voices })] : []
+  const remoteVoice = getActiveRemoteVisionServerForModality('voice')
+  const speechId = remoteVoice
+    ? remoteVisionModelId(remoteVoice.id, remoteVoice.selectedModel)
+    : getActiveModal('speech') || (voices.length ? 'kokoro' : null)
+  const speech = speechId
+    ? [
+        tag(speechId, 'speech', {
+          voices,
+          supported_voices: voices,
+          architecture: { input_modalities: ['text'], output_modalities: ['speech'] },
+          ...(remoteVoice ? { remote: true } : {})
+        })
+      ]
+    : []
 
   // Active transcription (STT) model (chosen pick, else the resolved whisper model).
-  const sttId =
-    getActiveModal('transcription') ||
-    (whisperModel() ? path.basename(whisperModel() as string) : null)
+  const remoteStt = getActiveRemoteVisionServerForModality('transcription')
+  const sttId = remoteStt
+    ? remoteVisionModelId(remoteStt.id, remoteStt.selectedModel)
+    : getActiveModal('transcription') ||
+      (whisperModel() ? path.basename(whisperModel() as string) : null)
   const transcription = sttId ? [tag(sttId, 'transcription')] : []
 
   const data: Record<string, unknown>[] = [...text, ...images, ...speech, ...transcription]
+  const requested = outputModalities
+    ?.split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+  const visible =
+    requested?.length && !requested.includes('all')
+      ? data.filter((entry) =>
+          requested.includes(
+            entry.kind === 'speech' || entry.kind === 'image' ? entry.kind : 'text'
+          )
+        )
+      : data
   // Mirror into the ollama-style `models` array some clients read, so both shapes
   // stay in sync.
-  const models = ollamaMirror(data)
-  json(res, 200, { object: 'list', data, models })
+  const models = ollamaMirror(visible)
+  json(res, 200, { object: 'list', data: visible, models })
 }
 
 // ─── Speech-to-text (whisper) ────────────────────────────────────────────────
@@ -641,15 +848,23 @@ async function handleTranscription(
   }
   const ext = path.extname(file.filename) || '.audio'
   const tmp = path.join(os.tmpdir(), `offgrid-stt-${process.pid}-${body.length}${ext}`)
+  let transcriptionOptions: ReturnType<typeof transcriptionRequestOptions>
+  try {
+    transcriptionOptions = transcriptionRequestOptions(fields)
+  } catch (error) {
+    json(
+      res,
+      400,
+      errBody(error instanceof Error ? error.message : 'Invalid transcription options')
+    )
+    return
+  }
   const run = async (): Promise<unknown> => {
     try {
       await fs.promises.writeFile(tmp, file.data)
-      if (!desktopExtraction.transcribeAudio) {
-        const err = new Error('Transcription runtime not available.') as Error & { status?: number }
-        err.status = 501
-        throw err
-      }
-      const text = (await desktopExtraction.transcribeAudio(tmp)).trim()
+      const text = (
+        await getActiveTranscription().transcribe({ path: tmp }, transcriptionOptions)
+      ).text.trim()
       return { text }
     } finally {
       fs.promises.unlink(tmp).catch(() => {})
@@ -723,7 +938,8 @@ async function handleSpeech(
 async function executeImage(
   params: ImageGenParams,
   responseFormat: string,
-  cleanup?: () => void
+  cleanup?: () => void,
+  onProgress?: (progress: { step: number; total: number }) => void
 ): Promise<unknown> {
   try {
     const status = imageGenStatus()
@@ -734,12 +950,21 @@ async function executeImage(
       err.status = 501
       throw err
     }
-    const out = await generateImage(params)
+    const out = await generateImage(params, (update) => {
+      if (update.stage === 'generating' && update.progress) {
+        onProgress?.({ step: update.progress.step, total: update.progress.total })
+      }
+    })
     const b64 = out.dataUrl.slice(out.dataUrl.indexOf(',') + 1)
     const datum =
       responseFormat === 'url'
-        ? { url: `file://${out.path}`, seed: out.seed, model: out.model }
-        : { b64_json: b64, seed: out.seed, model: out.model }
+        ? {
+            url: `file://${out.path}`,
+            revised_prompt: out.prompt,
+            seed: out.seed,
+            model: out.model
+          }
+        : { b64_json: b64, revised_prompt: out.prompt, seed: out.seed, model: out.model }
     return {
       created: Math.floor(Date.now() / 1000),
       data: [datum],
@@ -777,7 +1002,8 @@ async function handleImageGeneration(
     steps: typeof payload.steps === 'number' ? payload.steps : undefined,
     seed: typeof payload.seed === 'number' ? payload.seed : undefined,
     cfgScale: typeof payload.cfg_scale === 'number' ? payload.cfg_scale : undefined,
-    model: typeof payload.model === 'string' ? payload.model : undefined
+    model: typeof payload.model === 'string' ? payload.model : undefined,
+    allowUnsafeMemoryOverride: payload.allow_unsafe_memory_override === true
   }
   const fmt = String(payload.response_format ?? 'b64_json')
   await serve(
@@ -786,7 +1012,14 @@ async function handleImageGeneration(
     'image',
     '/v1/images/generations',
     isAsync(req, payload),
-    () => executeImage(params, fmt),
+    () =>
+      executeImage(params, fmt, undefined, (progress) => {
+        const request = requests.get(rid)
+        if (request) {
+          request.progress = progress
+          request.updated_at = Date.now()
+        }
+      }),
     (r) => jsonWithId(res, rid, r)
   )
 }
@@ -822,7 +1055,8 @@ async function handleImagesUnified(
     seed: typeof payload.seed === 'number' ? payload.seed : undefined,
     cfgScale: typeof payload.cfg_scale === 'number' ? payload.cfg_scale : undefined,
     model: typeof payload.model === 'string' ? payload.model : undefined,
-    strength: typeof payload.strength === 'number' ? payload.strength : undefined
+    strength: typeof payload.strength === 'number' ? payload.strength : undefined,
+    allowUnsafeMemoryOverride: payload.allow_unsafe_memory_override === true
   }
 
   // image-to-image: first input_reference becomes the init image.
@@ -912,7 +1146,8 @@ async function handleImageEdit(
     steps: fields.steps ? parseInt(fields.steps, 10) : undefined,
     seed: fields.seed ? parseInt(fields.seed, 10) : undefined,
     cfgScale: fields.cfg_scale ? parseFloat(fields.cfg_scale) : undefined,
-    model: fields.model || undefined
+    model: fields.model || undefined,
+    allowUnsafeMemoryOverride: fields.allow_unsafe_memory_override === 'true'
   }
   const cleanup = (): void => {
     fs.promises.unlink(tmp).catch(() => {})
@@ -943,12 +1178,22 @@ let startingGateway = false
 export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
   if (server || startingGateway) return
   startingGateway = true
-  boundGatewayPort = (await pickFreePort(port)) ?? port
+  try {
+    const availablePort = await pickFreePort(port, (candidate) =>
+      isPortFree(candidate, GATEWAY_BIND_HOST)
+    )
+    if (availablePort === null) throw new Error(`No free gateway port on ${GATEWAY_BIND_HOST}.`)
+    boundGatewayPort = availablePort
+  } catch (error) {
+    startingGateway = false
+    throw error
+  }
 
   server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*')
     res.setHeader('Access-Control-Allow-Headers', '*')
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    res.setHeader('Access-Control-Allow-Private-Network', 'true')
     if (req.method === 'OPTIONS') {
       res.writeHead(204)
       res.end()
@@ -1100,8 +1345,9 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
     // llama-server when launch-time args change.
     if (url === '/v1/settings' && method === 'GET') return json(res, 200, llm.getSettings())
     if (url === '/v1/settings' && method === 'POST') {
-      // Mutating launch-time LLM args triggers a llama-server respawn. Keep the
-      // route-level check as defense in depth behind the loopback-only listener.
+      // Mutating launch-time LLM args triggers a llama-server respawn. The listener is
+      // on every interface so a phone can reach the models, which makes this check the
+      // ONLY thing standing between the LAN and a respawn - not defense in depth.
       const remote = req.socket.remoteAddress
       const isLocalhost =
         remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
@@ -1178,10 +1424,21 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
           if (url === '/v1/models/activate' && method === 'POST') {
             const { id, kind } = await readJson(req)
             if (!id) return json(res, 400, { error: 'id required' })
-            const r =
-              kind && kind !== 'text' && kind !== 'vision'
-                ? await mm.setActiveModalChoice(String(kind), String(id))
-                : await mm.setActiveModel(String(id))
+            const modelId = String(id)
+            const r = await mm.activateModel(modelId, typeof kind === 'string' ? kind : undefined)
+            if (r.success && !parseRemoteVisionModelId(modelId)) {
+              void llm.init().catch((error) => {
+                writeDiagnosticLog(
+                  'gateway',
+                  'model_activation.start_failed',
+                  {
+                    model: modelId,
+                    error: error instanceof Error ? error.message : String(error)
+                  },
+                  'error'
+                )
+              })
+            }
             return json(res, r.success ? 200 : 400, r)
           }
           // DELETE /v1/models/{id}  (or POST /v1/models/delete {id})
@@ -1206,9 +1463,32 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
     // which llama-server can't fetch itself, then forward (response still streams).
     if (url === '/v1/chat/completions' && method === 'POST') return void handleChat(req, res, rid)
     // Full local model surface across all modalities (not just the LLM).
-    if (url === '/v1/models' && method === 'GET') return void handleModelsList(res)
+    if (url === '/v1/models' && method === 'GET')
+      return void handleModelsList(
+        res,
+        new URLSearchParams(req.url?.split('?')[1]).get('output_modalities') ?? undefined
+      )
 
-    // Everything else (completions/embeddings) -> llama-server.
+    // Raw completion clients bypass handleChat, but still belong in local AI history.
+    if (url === '/v1/completions' && method === 'POST') {
+      void (async () => {
+        try {
+          const bytes = await readBody(req, MAX_UPLOAD)
+          const body: unknown = JSON.parse(bytes.toString('utf8'))
+          const activity = new AIRequestHandle({
+            modality: 'text',
+            source: 'API completion',
+            request: body
+          })
+          activity.update({ backend: llm.activeAccelerator() ?? 'Unknown' })
+          proxyToLlama(req, res, bytes, 0, activity)
+        } catch {
+          json(res, 400, errBody('Invalid or oversized completion request.'))
+        }
+      })()
+      return
+    }
+    // Non-inference routes pass through without generating activity rows.
     proxyToLlama(req, res)
   })
 
@@ -1239,11 +1519,12 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
         console.log(
           `[model-server] multimodal gateway at http://${GATEWAY_HOST}:${boundGatewayPort}/v1`
         )
+        logActionTokenForDev(`http://${GATEWAY_HOST}:${boundGatewayPort}/mcp`)
         resolve()
       }
       listening.once('error', onError)
       listening.once('listening', onListening)
-      listening.listen(boundGatewayPort, GATEWAY_HOST)
+      listening.listen(boundGatewayPort, GATEWAY_BIND_HOST)
     })
   } catch (e) {
     // Bind failed — drop the dead server and reset so a retry starts clean.

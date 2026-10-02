@@ -1,46 +1,72 @@
+import type { RuntimeBackend } from '../shared/runtime-backends'
+import { parseNativeBackend } from './runtime-backends'
 import { spawn, execSync, ChildProcess } from 'child_process'
-import os from 'os'
 import { Mutex } from 'async-mutex'
+import { prepareModelMemory, registerModelEvictor } from './model-memory'
 import { callHook } from './bootstrap/hookRegistry'
 import path from 'path'
+import { recordAIRequest, currentAIRequest } from './ai-request-log'
 import * as fs from 'fs'
 import { modelsDir as getModelsDir, binRoots, isPackaged, exe } from './runtime-env'
 import { reapOrphanProcessesOnPort, type PortReapResult } from './kill-orphan-port'
-import {
-  computeSafeCtx,
-  modeBudget,
-  loadAttempts,
-  capContextToModel,
-  type KvCacheType,
-  type PerformanceMode
-} from './model-sizing'
+import { loadAttempts, type KvCacheType, type PerformanceMode } from './model-sizing'
 import { resolveMaxTokens, maxTokensForWire, MAX_TOKENS_AUTO } from './llm/gen-params'
 import { classifyLlamaError, modelPortConflictReason } from './llama-error'
 import type { ManagedRuntime } from './runtime-manager'
 import { LLAMA_SERVER_PORT } from '../shared/ports'
-import { DEFAULT_CTX_SIZE } from '../shared/llm-defaults'
+import {
+  DEFAULT_CTX_SIZE,
+  DEFAULT_MAX_TOOL_CALLS,
+  normalizeMaxToolCalls
+} from '../shared/llm-defaults'
+import { REASONING_BUDGET_AUTO, reasoningBudgetPayload } from '@offgrid/models'
+import type { EngineAccelerator } from '../shared/engine-accelerator'
 import {
   applyModePreset,
   samplingPayload,
   launchArgsChanged,
   buildLaunchArgs,
-  type PresetField
+  type PresetField,
+  type SpeculativeDecodingMode
 } from './llm/settings-math'
-import { buildMessages, imageMime, thinkingPayload, type DecodedImage } from './llm/chat-payload'
+import { buildMessages, thinkingPayload, type ChatMessage } from './llm/chat-payload'
+import { readImages } from './llm/read-images'
+import { detectThinkingDialect, type ThinkingDialect } from './llm/thinking-dialect'
 import { isValidGgufFile } from './models/gguf'
-import { readGgufContextLength } from './models/gguf-metadata'
+import { CATALOG, isGrounderModel } from '@offgrid/models'
+import { readGgufContextLength, readGgufMtpSupport } from './models/gguf-metadata'
+import { dflashFileName, primaryFileName, type CatalogEntry } from './models/catalog-logic'
 import { pickFreePort, isPortFree } from './free-port'
 import { postCompletionOnce } from './llm/http-post'
 import { engineSpawnEnv } from './llm/spawn-env'
+import { gpuDeviceAvailable } from './llm/gpu-device-probe'
 import { shouldAutoRecover } from './llm/crash-policy'
+import { enginePriority } from './llm/engine-priority'
+import { modelStartupTimeout } from './llm/startup-timeout'
+import { getBackendPreference } from './backend-preferences'
+import { prioritizeBackend, type BackendPreference } from '../shared/backend-preferences'
 import { streamCompletion, type StreamResult } from './llm/stream'
+import {
+  nativeToolPlannerUnavailableMessage,
+  remoteNativeToolCapability,
+  streamRemoteChatCompletion,
+  type RemoteTextModelConnection
+} from './llm/remote-chat'
 import {
   terminateEngine,
   ENGINE_TEARDOWN_GRACE_MS,
   type TeardownOutcome
 } from './llm/engine-teardown'
+import { emitChangedLlmSettings } from './sync-mutation'
+import { loadGatedVisionModelAdapter } from './vision/model-adapters/registry'
+import type { VisionModelArtifacts } from './vision/model-adapters/types'
+import { getActiveRemoteVisionServer } from './vision/remote-vision-server'
+import {
+  currentRemoteScreenTaskSession,
+  screenTaskRequestSource
+} from './actions/remote-screen-session'
 
-export type { KvCacheType, PerformanceMode }
+export type { KvCacheType, PerformanceMode, SpeculativeDecodingMode }
 
 export interface LlmSettings {
   performanceMode?: PerformanceMode
@@ -51,13 +77,25 @@ export interface LlmSettings {
   minP?: number
   repeatPenalty?: number
   maxTokens?: number
+  maxToolCalls?: number
+  reasoningBudget?: number
   systemPrompt?: string
   // Launch-time (require a server respawn to take effect):
   kvCacheType?: KvCacheType // quantize the KV cache to cut memory (needs flash-attn)
   flashAttn?: boolean // FlashAttention: faster + lower memory; required for quantized KV
-  gpuLayers?: number // -ngl: layers offloaded to GPU (Metal). 99 = all.
+  gpuLayers?: number // -ngl: layers offloaded to the GPU. 99 = all.
   threads?: number // CPU threads for inference
   batchSize?: number // -b: prompt batch size
+  speculativeDecoding?: SpeculativeDecodingMode
+  draftModel?: string // filename of an installed GGUF in the app's model directory
+  supportsMtp?: boolean // read-only capability of the selected GGUF
+  compatibleDraftModels?: string[] // read-only filenames with the same tokenizer/vocabulary
+  compatibleDflashModels?: string[] // read-only compatible DFlash companions
+}
+
+export interface LlmSettingsUpdateOptions {
+  /** Remote sync applies the winning value without creating a new local op. */
+  emitSync?: boolean
 }
 
 export interface ChatStreamResult extends StreamResult {
@@ -65,7 +103,109 @@ export interface ChatStreamResult extends StreamResult {
   maxTokens: number
 }
 
+export interface OptionDecision {
+  choice: number
+  confidence: number
+  probabilities: number[]
+}
+
+const DECISION_LABELS = 'ABCDEFGHIJ'
+// llama.cpp's top-probability list also contains punctuation and alternate
+// token forms. Asking only for the option count can omit a valid A-J token and
+// silently turn a full distribution into zeros. Keep this bounded, but large
+// enough to retain every grammar-valid option before normalization.
+const DECISION_PROBABILITY_SLOTS = 64
+
+export function buildDecisionPrompt(
+  context: string,
+  question: string,
+  options: readonly string[]
+): string {
+  if (options.length < 2 || options.length > DECISION_LABELS.length) {
+    throw new Error('A decision needs between 2 and 10 options.')
+  }
+  return [
+    `Context:\n${context}`,
+    `Question: ${question}`,
+    'Options:',
+    ...options.map((option, index) => `(${DECISION_LABELS[index]}) ${option}`),
+    'Answer: ('
+  ].join('\n')
+}
+
+export function parseOptionDecision(raw: string, optionCount: number): OptionDecision {
+  const data = JSON.parse(raw) as {
+    completion_probabilities?: Array<{
+      top_logprobs?: Array<{ token?: string; prob?: number }>
+      top_probs?: Array<{ token?: string; prob?: number }>
+    }>
+  }
+  const first = data.completion_probabilities?.[0]
+  const top = first?.top_probs ?? first?.top_logprobs ?? []
+  const probabilities = Array.from({ length: optionCount }, () => 0)
+  for (const item of top) {
+    const label = item.token?.trim()
+    const index = label ? DECISION_LABELS.indexOf(label) : -1
+    if (index >= 0 && index < optionCount && typeof item.prob === 'number') {
+      probabilities[index] = item.prob
+    }
+  }
+  const total = probabilities.reduce((sum, value) => sum + value, 0)
+  if (!(total > 0)) throw new Error('The Decision model returned no option probabilities.')
+  const normalized = probabilities.map((value) => value / total)
+  const choice = normalized.reduce(
+    (best, value, index) => (value > normalized[best]! ? index : best),
+    0
+  )
+  return { choice, confidence: normalized[choice]!, probabilities: normalized }
+}
+
+export function buildDecisionRequest(
+  prompt: string,
+  optionCount: number,
+  imageBase64?: string,
+  mediaMarker?: string
+): Record<string, unknown> {
+  if (imageBase64 && !mediaMarker) {
+    throw new Error('The local model server did not publish its media marker.')
+  }
+  const labels = DECISION_LABELS.slice(0, optionCount)
+  return {
+    prompt: imageBase64
+      ? { prompt_string: `${mediaMarker}\n${prompt}`, multimodal_data: [imageBase64] }
+      : prompt,
+    n_predict: 1,
+    n_probs: DECISION_PROBABILITY_SLOTS,
+    post_sampling_probs: true,
+    temperature: 1.3,
+    top_k: 0,
+    top_p: 1,
+    min_p: 0,
+    grammar: `root ::= [${labels}]`
+  }
+}
+
+function withContextMetrics(
+  result: StreamResult,
+  messages: unknown[],
+  options: { contextWindowTokens?: number; tools?: unknown[]; computeBackend?: string | null }
+): StreamResult {
+  const { contextWindowTokens, tools, computeBackend } = options
+  return {
+    ...result,
+    metrics: {
+      ...result.metrics,
+      ...(computeBackend ? { computeBackend } : {}),
+      ...(contextWindowTokens && contextWindowTokens > 0 ? { contextWindowTokens } : {}),
+      ...(result.metrics?.promptTokens
+        ? {}
+        : { estimatedPromptTokens: Math.ceil(JSON.stringify({ messages, tools }).length / 4) })
+    }
+  }
+}
+
 export class LLMService {
+  private readonly healthInvalidationListeners = new Set<() => void>()
   private server: ChildProcess | null = null
   // Off the contested 8080 (collides with other local dev servers) onto a
   // less-trafficked port so the model server reliably binds.
@@ -73,14 +213,20 @@ export class LLMService {
   // Single-flight init guard: concurrent chat() calls (e.g. the capture
   // extractor firing rapidly) must share ONE spawn, not each launch a server.
   private initPromise: Promise<void> | null = null
+  private launchGeneration = 0
+  private initGeneration = 0
   private modelPath = ''
   private mmProjPath = '' // empty for text-only models (no vision projector)
-  // The model's TRAINED context window (from GGUF metadata), memoized per model path. Used as the
-  // ceiling so a user can run up to the model's own limit (like LM Studio) instead of an arbitrary
-  // cap — and so we never exceed the trained window, which is what "breaks above 16k". null = unknown.
+  private runtimeModelOverride: { id: string; primary: string; mmproj: string | null } | null = null
+  // The model's trained context window (from GGUF metadata), memoized per model path.
+  // Reported to the settings UI; the selected launch context is never silently reduced.
   private modelMaxCtx: number | null = null
   private modelMaxCtxFor = ''
   private initialized = false
+  private backendOutput = ''
+  private backendModelPath = ''
+  private backendPlacement: ReturnType<typeof parseNativeBackend>
+  private backendFallbackReason: string | undefined
   // A model selection is durable as soon as the manager writes active-model.json, but
   // replacing llama-server while it is answering destroys the user's in-flight turn.
   // LLMService owns that process, so it also owns the handoff: admitted generations
@@ -117,9 +263,12 @@ export class LLMService {
   // Auto by default: a reply runs until the model stops (EOS) or the window fills, instead of a
   // fixed 2048-token cap that truncated long answers regardless of the (large) context window.
   private maxTokens = MAX_TOKENS_AUTO
+  private maxToolCalls = DEFAULT_MAX_TOOL_CALLS
+  // Thinking budget: caps the tokens a reasoning model spends thinking before it answers.
+  // Auto (0) = unrestricted. Applied per request; no reload needed.
+  private reasoningBudget = REASONING_BUDGET_AUTO
   private systemPrompt = ''
-  // Resource-usage preset. Governs the RAM budget the context clamp targets and
-  // the default ctx/KV preset. 'balanced' preserves prior behavior.
+  // Resource-usage preset. Governs model choice and default context/KV settings.
   private performanceMode: PerformanceMode = 'balanced'
   // Launch-time params (need a respawn). Defaults match prior hardcoded behavior.
   private kvCacheType: KvCacheType = 'f16'
@@ -133,6 +282,8 @@ export class LLMService {
   private gpuLayers = 99
   private threads: number | undefined
   private batchSize: number | undefined
+  private speculativeDecoding: SpeculativeDecodingMode = 'off'
+  private draftModel = ''
   // Crash recovery: distinguish an intentional kill (stop/reload/settings respawn)
   // from an unexpected crash so we only auto-restart on real crashes.
   private intentionalStop = false
@@ -160,6 +311,9 @@ export class LLMService {
       if (typeof s.minP === 'number') this.minP = s.minP
       if (typeof s.repeatPenalty === 'number') this.repeatPenalty = s.repeatPenalty
       if (typeof s.maxTokens === 'number') this.maxTokens = s.maxTokens
+      if (typeof s.maxToolCalls === 'number')
+        this.maxToolCalls = normalizeMaxToolCalls(s.maxToolCalls)
+      if (typeof s.reasoningBudget === 'number') this.reasoningBudget = s.reasoningBudget
       if (typeof s.systemPrompt === 'string') this.systemPrompt = s.systemPrompt
       if (s.kvCacheType === 'f16' || s.kvCacheType === 'q8_0' || s.kvCacheType === 'q4_0')
         this.kvCacheType = s.kvCacheType
@@ -167,6 +321,15 @@ export class LLMService {
       if (typeof s.gpuLayers === 'number') this.gpuLayers = s.gpuLayers
       if (typeof s.threads === 'number') this.threads = s.threads
       if (typeof s.batchSize === 'number') this.batchSize = s.batchSize
+      if (
+        s.speculativeDecoding === 'off' ||
+        s.speculativeDecoding === 'ngram' ||
+        s.speculativeDecoding === 'mtp' ||
+        s.speculativeDecoding === 'draft' ||
+        s.speculativeDecoding === 'dflash'
+      )
+        this.speculativeDecoding = s.speculativeDecoding
+      if (typeof s.draftModel === 'string') this.draftModel = path.basename(s.draftModel)
       if (
         s.performanceMode === 'conservative' ||
         s.performanceMode === 'balanced' ||
@@ -182,18 +345,37 @@ export class LLMService {
     } catch {
       /* defaults */
     }
+    if (!this.speculativeModeSupported(this.speculativeDecoding, this.draftModel)) {
+      this.speculativeDecoding = 'off'
+      try {
+        this.persist()
+      } catch (error) {
+        console.error('[LLMService] could not save the corrected speculative setting:', error)
+      }
+    }
   }
 
-  // Clamp the requested context window to what THIS machine + THIS model can hold
-  // without overcommitting unified memory. A big -c allocates a KV cache up front
-  // (with -ngl 99 it's resident in unified memory alongside the weights); on a
-  // 16GB Mac an 8B model at 64k blew past physical RAM and FROZE macOS. We size a
-  // KV budget from total RAM minus the model weights minus headroom for the OS,
-  // Electron, and Metal compute, then cap context to fit. Better a shorter context
-  // than a hard freeze; users on big machines still get a large window (it scales).
+  /** Subscribe to process-lifecycle invalidations. This does not define health
+   * status; setup.getChatHealth remains the one owner that resolves the current
+   * process facts and live endpoint probe into a product status. */
+  onHealthInvalidated(listener: () => void): () => void {
+    this.healthInvalidationListeners.add(listener)
+    return () => this.healthInvalidationListeners.delete(listener)
+  }
+
+  private invalidateHealth(): void {
+    for (const listener of this.healthInvalidationListeners) {
+      try {
+        listener()
+      } catch (error) {
+        console.error('[LLMService] health listener failed:', error)
+      }
+    }
+  }
+
   /** The current model's trained context window (GGUF `<arch>.context_length`), memoized per model
    *  path so we read the file's header at most once per model. null when it can't be determined
-   *  (unreadable file / missing key) — in which case only the RAM clamp applies. */
+   *  (unreadable file / missing key). */
   private trainedContext(): number | null {
     if (this.modelMaxCtxFor !== this.modelPath) {
       this.modelMaxCtx = this.modelPath ? readGgufContextLength(this.modelPath, fs) : null
@@ -208,6 +390,39 @@ export class LLMService {
     return this.trainedContext()
   }
 
+  private supportsMtp(): boolean {
+    return !!this.modelPath && readGgufMtpSupport(this.modelPath, fs)
+  }
+
+  private speculativeModelCapabilities(): {
+    compatibleDraftModels: string[]
+    compatibleDflashModels: string[]
+  } {
+    const selectedFile = path.basename(this.modelPath)
+    const selectedEntry = (CATALOG as unknown as CatalogEntry[]).find(
+      (entry) => primaryFileName(entry) === selectedFile
+    )
+    const dflash = selectedEntry ? dflashFileName(selectedEntry) : undefined
+    const installedDflash = dflash && isValidGgufFile(path.join(getModelsDir(), dflash), fs)
+    return {
+      // No ordinary draft pair is declared by the catalog. Do not guess from an arbitrary
+      // installed GGUF: llama.cpp also requires an exact vocabulary contract.
+      compatibleDraftModels: [],
+      compatibleDflashModels: installedDflash ? [dflash] : []
+    }
+  }
+
+  private speculativeModeSupported(mode: SpeculativeDecodingMode, draftModel: string): boolean {
+    if (mode === 'off' || mode === 'ngram') return true
+    if (mode === 'mtp') return this.supportsMtp()
+    const candidate = path.basename(draftModel)
+    if (!candidate || candidate !== draftModel) return false
+    const capabilities = this.speculativeModelCapabilities()
+    return (
+      mode === 'dflash' ? capabilities.compatibleDflashModels : capabilities.compatibleDraftModels
+    ).includes(candidate)
+  }
+
   /** The port llama-server is actually on. Usually LLAMA_SERVER_PORT, but prepareModelPort moves it
    *  to a free port when another app owns the preferred one — so consumers (the gateway upstream)
    *  must read this LIVE value, never the constant. */
@@ -215,53 +430,37 @@ export class LLMService {
     return this.port
   }
 
-  private safeCtxSize(requestedRaw: number): number {
-    // First cap to the model's trained window (pure), THEN clamp to what RAM can hold.
-    const trained = this.trainedContext()
-    const requested = capContextToModel(requestedRaw, trained)
-    try {
-      const totalGb = os.totalmem() / 1e9
-      let weightsGb = 0
-      try {
-        weightsGb += fs.statSync(this.modelPath).size / 1e9
-      } catch {
-        /* unknown */
-      }
-      try {
-        if (this.mmProjPath) weightsGb += fs.statSync(this.mmProjPath).size / 1e9
-      } catch {
-        /* unknown */
-      }
-      const { frac, reserveGb } = modeBudget(this.performanceMode)
-      const rounded = computeSafeCtx({
-        requested,
-        totalGb,
-        weightsGb,
-        kvType: this.kvCacheType,
-        frac,
-        reserveGb
-      })
-      if (rounded < requested) {
-        console.warn(
-          `[LLMService] Clamping context ${requested} -> ${rounded} (RAM ${totalGb.toFixed(0)}GB, weights ${weightsGb.toFixed(1)}GB) to avoid memory overcommit`
-        )
-      }
-      // computeSafeCtx has a 2048-token floor (Math.max(2048, …)); re-cap to the trained window so a
-      // model trained BELOW that floor (e.g. 1024) is never run past its context.
-      return capContextToModel(rounded, trained)
-    } catch {
-      // If anything goes wrong reading sizes, fall back to a universally-safe value.
-      return capContextToModel(Math.min(requested, 8192), trained)
+  /** The selected app context cap for local and remote inference. */
+  effectiveContextSize(): number {
+    return this.ctxSize
+  }
+
+  /** The accelerator the RUNNING engine offloads to, or null when none is up (or when the
+   *  platform ships no engine of ours to name). The UI renders this instead of assuming
+   *  Metal, which is what made a Windows box claim a Metal GPU. */
+  runtimeBackend(): RuntimeBackend {
+    const placement = this.initialized ? this.backendPlacement : undefined
+    return {
+      id: 'chat', model: this.backendModelPath,
+      state: this.initialized ? 'loaded' : this.isStarting() ? 'loading' : this.lastError() ? 'error' : 'stopped',
+      backend: placement?.backend,
+      device: placement?.device,
+      detail: this.lastError() ?? this.backendFallbackReason
     }
   }
 
-  /** The EFFECTIVE (RAM-clamped) context window the server is actually running
-   *  with — the real ceiling for prompt + tools + answer. */
-  effectiveContextSize(): number {
-    return this.safeCtxSize(this.ctxSize)
+  activeAccelerator(): EngineAccelerator | null {
+    if (!this.initialized) return null
+    const backend = this.backendPlacement?.backend
+    if (!backend) return null
+    if (backend.includes('CUDA')) return 'CUDA'
+    if (backend.includes('Vulkan')) return 'Vulkan'
+    if (backend.includes('Metal')) return 'Metal'
+    return backend === 'CPU' ? 'CPU' : null
   }
 
   getSettings(): LlmSettings {
+    const speculativeCapabilities = this.speculativeModelCapabilities()
     return {
       temperature: this.temperature,
       ctxSize: this.ctxSize,
@@ -270,32 +469,41 @@ export class LLMService {
       minP: this.minP,
       repeatPenalty: this.repeatPenalty,
       maxTokens: this.maxTokens,
+      maxToolCalls: this.maxToolCalls,
+      reasoningBudget: this.reasoningBudget,
       systemPrompt: this.systemPrompt,
       kvCacheType: this.kvCacheType,
       flashAttn: this.flashAttn,
       gpuLayers: this.gpuLayers,
       threads: this.threads,
       batchSize: this.batchSize,
+      speculativeDecoding: this.speculativeDecoding,
+      draftModel: this.draftModel,
+      supportsMtp: this.supportsMtp(),
+      ...speculativeCapabilities,
       performanceMode: this.performanceMode,
-      // Report the EFFECTIVE (clamped) context so the UI can show what's really used, plus the
-      // model's trained maximum so the UI can offer the slider up to it (not a hardcoded cap).
-      effectiveCtxSize: this.safeCtxSize(this.ctxSize),
-      modelMaxCtx: this.trainedContext()
-    } as LlmSettings & { effectiveCtxSize: number; modelMaxCtx: number | null }
+      // Report the selected context so the UI can show what's used, plus the
+      // model's trained maximum so the UI can offer the slider up to it (not a hardcoded cap),
+      // plus the accelerator the running engine chose so the UI never has to guess one.
+      effectiveCtxSize: this.ctxSize,
+      modelMaxCtx: this.trainedContext(),
+      gpuAccelerator: this.activeAccelerator()
+    } as LlmSettings & {
+      effectiveCtxSize: number
+      modelMaxCtx: number | null
+      gpuAccelerator: EngineAccelerator | null
+    }
   }
 
-  /** The exact argv handed to `llama-server` for the CURRENT settings — the terminal
-   *  artifact of the whole settings→persist→reload path. Delegates to the pure
-   *  `buildLaunchArgs` (single source of truth) after applying the impure RAM clamp,
-   *  so `_doInit` and tests build args the same way. */
+  /** The exact argv handed to `llama-server` for the current settings.
+   *  Both `_doInit` and tests use the same `buildLaunchArgs` path. */
   launchArgs(): string[] {
-    return this.launchArgsFor(this.safeCtxSize(this.ctxSize), this.gpuLayers)
+    return this.launchArgsFor(this.ctxSize, this.gpuLayers)
   }
 
-  /** Build the argv for a SPECIFIC context size + GPU-layer count — the single
-   *  source used by both `launchArgs()` and the OOM fallback ladder, so every
-   *  attempt is constructed the same way (only ctx + ngl vary). */
+  /** Build argv for the selected context and a GPU-layer count. */
   private launchArgsFor(effectiveCtxSize: number, gpuLayers: number): string[] {
+    const useSelectedModelSpeculation = this.runtimeModelOverride === null
     return buildLaunchArgs({
       modelPath: this.modelPath,
       mmProjPath: this.mmProjPath,
@@ -305,22 +513,47 @@ export class LLMService {
       flashAttn: this.flashAttn,
       kvCacheType: this.kvCacheType,
       threads: this.threads,
-      batchSize: this.batchSize
+      batchSize: this.batchSize,
+      speculativeDecoding: useSelectedModelSpeculation ? this.speculativeDecoding : 'off',
+      draftModelPath: useSelectedModelSpeculation ? this.draftModelPath() : undefined,
+      imageMinTokens: this.imageMinTokensForModel(),
+      reportModelPlacement: true
     })
+  }
+
+  private draftModelPath(): string | undefined {
+    if (!this.speculativeModeSupported(this.speculativeDecoding, this.draftModel)) return undefined
+    if (!this.draftModel || path.basename(this.draftModel) !== this.draftModel) return undefined
+    const candidate = path.join(getModelsDir(), this.draftModel)
+    return candidate !== this.modelPath && isValidGgufFile(candidate, fs) ? candidate : undefined
+  }
+
+  /** Grounding models (UI-TARS / Qwen-VL) need a floor on image tokens for
+   *  accurate clicks; the weight filename carries enough for the grounder
+   *  heuristic. Only meaningful when a vision projector is loaded. */
+  private imageMinTokensForModel(): number | undefined {
+    return this.mmProjPath && isGrounderModel(path.basename(this.modelPath)) ? 1024 : undefined
   }
 
   /** Persist settings to disk. Writes the public settings PLUS the internal
    *  `userExplicit` pin-set (which fields the user set granularly), so a plain restart
    *  restores the pins and a mode preset can't reclobber an explicit KV/ctx choice. */
   private persist(): void {
+    fs.mkdirSync(path.dirname(this.settingsFile), { recursive: true })
+    const temporaryFile = `${this.settingsFile}.tmp-${process.pid}`
     try {
-      fs.mkdirSync(path.dirname(this.settingsFile), { recursive: true })
       fs.writeFileSync(
-        this.settingsFile,
+        temporaryFile,
         JSON.stringify({ ...this.getSettings(), userExplicit: [...this.userExplicit] })
       )
-    } catch {
-      /* ignore */
+      fs.renameSync(temporaryFile, this.settingsFile)
+    } catch (error) {
+      try {
+        fs.rmSync(temporaryFile, { force: true })
+      } catch {
+        /* keep the original error */
+      }
+      throw error
     }
   }
 
@@ -337,42 +570,45 @@ export class LLMService {
   /** Read each image off disk and decode to base64 + mime (the one impure step of
    *  payload building). A file that can't be read is logged and skipped so a broken
    *  path never fails the whole request. */
-  private decodeImages(images: string[]): DecodedImage[] {
-    const out: DecodedImage[] = []
-    for (const imgPath of images) {
-      try {
-        out.push({ base64: fs.readFileSync(imgPath).toString('base64'), mime: imageMime(imgPath) })
-      } catch (readErr) {
-        console.error(`[LLMService] Failed to read image ${imgPath}:`, readErr)
-      }
-    }
-    return out
-  }
 
   /** Update inference settings; respawns the server if any launch-time arg changed
    *  (context, KV-cache type, flash-attn, GPU layers, threads, batch). */
-  async setSettings(s: LlmSettings): Promise<void> {
+  async setSettings(s: LlmSettings, options: LlmSettingsUpdateOptions = {}): Promise<void> {
+    this.resolveModel()
+    const requestedMode = s.speculativeDecoding ?? this.speculativeDecoding
+    const requestedDraft =
+      typeof s.draftModel === 'string' ? path.basename(s.draftModel) : this.draftModel
+    const compatibleSettings = this.speculativeModeSupported(requestedMode, requestedDraft)
+      ? s
+      : { ...s, speculativeDecoding: 'off' as const }
+    const priorSettings = this.getSettings()
+    const priorExplicit = new Set(this.userExplicit)
+    const before = options.emitSync === false ? undefined : priorSettings
     // Granular launch-time fields the user sets in THIS patch become pinned: a mode
     // preset (now or on a future restart / mode re-pick) must NOT clobber them. Pin
     // BEFORE applying the preset so an explicit q8_0 in the same patch survives.
-    if (s.kvCacheType === 'f16' || s.kvCacheType === 'q8_0' || s.kvCacheType === 'q4_0')
+    if (
+      compatibleSettings.kvCacheType === 'f16' ||
+      compatibleSettings.kvCacheType === 'q8_0' ||
+      compatibleSettings.kvCacheType === 'q4_0'
+    )
       this.userExplicit.add('kvCacheType')
-    if (typeof s.flashAttn === 'boolean') this.userExplicit.add('flashAttn')
-    if (typeof s.ctxSize === 'number') this.userExplicit.add('ctxSize')
+    if (typeof compatibleSettings.flashAttn === 'boolean') this.userExplicit.add('flashAttn')
+    if (typeof compatibleSettings.ctxSize === 'number') this.userExplicit.add('ctxSize')
     // A resource-usage mode change applies its preset by MERGING: it fills only the
     // preset fields the user has NOT pinned, so it can't wipe an explicit KV choice.
     // Always treated as a launch change.
     let modeChanged = false
     if (
-      (s.performanceMode === 'conservative' ||
-        s.performanceMode === 'balanced' ||
-        s.performanceMode === 'extreme') &&
-      s.performanceMode !== this.performanceMode
+      (compatibleSettings.performanceMode === 'conservative' ||
+        compatibleSettings.performanceMode === 'balanced' ||
+        compatibleSettings.performanceMode === 'extreme') &&
+      compatibleSettings.performanceMode !== this.performanceMode
     ) {
-      this.performanceMode = s.performanceMode
+      this.performanceMode = compatibleSettings.performanceMode
       const merged = applyModePreset(
         { ctxSize: this.ctxSize, kvCacheType: this.kvCacheType, flashAttn: this.flashAttn },
-        s.performanceMode,
+        compatibleSettings.performanceMode,
         this.userExplicit
       )
       this.ctxSize = merged.ctxSize
@@ -382,34 +618,91 @@ export class LLMService {
     }
     // Launch-time args: changing any of these requires a server respawn.
     const launchChanged = launchArgsChanged(
-      s,
+      compatibleSettings,
       {
         ctxSize: this.ctxSize,
         kvCacheType: this.kvCacheType,
         flashAttn: this.flashAttn,
         gpuLayers: this.gpuLayers,
         threads: this.threads,
-        batchSize: this.batchSize
+        batchSize: this.batchSize,
+        speculativeDecoding: this.speculativeDecoding,
+        draftModel: this.draftModel
       },
       modeChanged
     )
-    if (typeof s.temperature === 'number') this.temperature = s.temperature
-    if (typeof s.ctxSize === 'number') this.ctxSize = s.ctxSize
-    if (typeof s.topP === 'number') this.topP = s.topP
-    if (typeof s.topK === 'number') this.topK = s.topK
-    if (typeof s.minP === 'number') this.minP = s.minP
-    if (typeof s.repeatPenalty === 'number') this.repeatPenalty = s.repeatPenalty
-    if (typeof s.maxTokens === 'number') this.maxTokens = s.maxTokens
-    if (typeof s.systemPrompt === 'string') this.systemPrompt = s.systemPrompt
-    if (s.kvCacheType === 'f16' || s.kvCacheType === 'q8_0' || s.kvCacheType === 'q4_0')
-      this.kvCacheType = s.kvCacheType
-    if (typeof s.flashAttn === 'boolean') this.flashAttn = s.flashAttn
-    if (typeof s.gpuLayers === 'number') this.gpuLayers = s.gpuLayers
-    if (typeof s.threads === 'number') this.threads = s.threads
-    if (typeof s.batchSize === 'number') this.batchSize = s.batchSize
+    if (typeof compatibleSettings.temperature === 'number')
+      this.temperature = compatibleSettings.temperature
+    if (typeof compatibleSettings.ctxSize === 'number') this.ctxSize = compatibleSettings.ctxSize
+    if (typeof compatibleSettings.topP === 'number') this.topP = compatibleSettings.topP
+    if (typeof compatibleSettings.topK === 'number') this.topK = compatibleSettings.topK
+    if (typeof compatibleSettings.minP === 'number') this.minP = compatibleSettings.minP
+    if (typeof compatibleSettings.repeatPenalty === 'number')
+      this.repeatPenalty = compatibleSettings.repeatPenalty
+    if (typeof compatibleSettings.maxTokens === 'number')
+      this.maxTokens = compatibleSettings.maxTokens
+    if (typeof compatibleSettings.maxToolCalls === 'number')
+      this.maxToolCalls = normalizeMaxToolCalls(compatibleSettings.maxToolCalls)
+    if (typeof compatibleSettings.reasoningBudget === 'number')
+      this.reasoningBudget = compatibleSettings.reasoningBudget
+    if (typeof compatibleSettings.systemPrompt === 'string')
+      this.systemPrompt = compatibleSettings.systemPrompt
+    if (
+      compatibleSettings.kvCacheType === 'f16' ||
+      compatibleSettings.kvCacheType === 'q8_0' ||
+      compatibleSettings.kvCacheType === 'q4_0'
+    )
+      this.kvCacheType = compatibleSettings.kvCacheType
+    if (typeof compatibleSettings.flashAttn === 'boolean')
+      this.flashAttn = compatibleSettings.flashAttn
+    if (typeof compatibleSettings.gpuLayers === 'number')
+      this.gpuLayers = compatibleSettings.gpuLayers
+    if (typeof compatibleSettings.threads === 'number') this.threads = compatibleSettings.threads
+    if (typeof compatibleSettings.batchSize === 'number')
+      this.batchSize = compatibleSettings.batchSize
+    if (
+      compatibleSettings.speculativeDecoding === 'off' ||
+      compatibleSettings.speculativeDecoding === 'ngram' ||
+      compatibleSettings.speculativeDecoding === 'mtp' ||
+      compatibleSettings.speculativeDecoding === 'draft' ||
+      compatibleSettings.speculativeDecoding === 'dflash'
+    )
+      this.speculativeDecoding = compatibleSettings.speculativeDecoding
+    if (typeof compatibleSettings.draftModel === 'string')
+      this.draftModel = path.basename(compatibleSettings.draftModel)
     // Quantized KV cache requires FlashAttention — auto-enable it so the pair is valid.
     if (this.kvCacheType !== 'f16' && !this.flashAttn) this.flashAttn = true
-    this.persist()
+    try {
+      this.persist()
+    } catch (error) {
+      this.performanceMode = priorSettings.performanceMode ?? this.performanceMode
+      this.temperature = priorSettings.temperature ?? this.temperature
+      this.ctxSize = priorSettings.ctxSize ?? this.ctxSize
+      this.topP = priorSettings.topP ?? this.topP
+      this.topK = priorSettings.topK ?? this.topK
+      this.minP = priorSettings.minP ?? this.minP
+      this.repeatPenalty = priorSettings.repeatPenalty ?? this.repeatPenalty
+      this.maxTokens = priorSettings.maxTokens ?? this.maxTokens
+      this.maxToolCalls = priorSettings.maxToolCalls ?? this.maxToolCalls
+      this.reasoningBudget = priorSettings.reasoningBudget ?? this.reasoningBudget
+      this.systemPrompt = priorSettings.systemPrompt ?? this.systemPrompt
+      this.kvCacheType = priorSettings.kvCacheType ?? this.kvCacheType
+      this.flashAttn = priorSettings.flashAttn ?? this.flashAttn
+      this.gpuLayers = priorSettings.gpuLayers ?? this.gpuLayers
+      this.threads = priorSettings.threads ?? this.threads
+      this.batchSize = priorSettings.batchSize ?? this.batchSize
+      this.speculativeDecoding = priorSettings.speculativeDecoding ?? this.speculativeDecoding
+      this.draftModel = priorSettings.draftModel ?? this.draftModel
+      this.userExplicit.clear()
+      priorExplicit.forEach((field) => this.userExplicit.add(field))
+      throw error
+    }
+    if (before) {
+      emitChangedLlmSettings(
+        before as Record<string, unknown>,
+        this.getSettings() as Record<string, unknown>
+      )
+    }
     if (launchChanged && !this.paused) {
       this.stop()
       await this.init()
@@ -421,6 +714,13 @@ export class LLMService {
   // bundled Qwen3-VL vision model when nothing is selected yet.
   private resolveModel(): void {
     const modelsDir = getModelsDir()
+    if (this.runtimeModelOverride) {
+      this.modelPath = path.join(modelsDir, this.runtimeModelOverride.primary)
+      this.mmProjPath = this.runtimeModelOverride.mmproj
+        ? path.join(modelsDir, this.runtimeModelOverride.mmproj)
+        : ''
+      return
+    }
     try {
       const cfg = JSON.parse(fs.readFileSync(this.activeModelFile, 'utf-8'))
       if (cfg?.primary) {
@@ -449,6 +749,7 @@ export class LLMService {
     this.initialized = false
     this.restartTimes = [] // new model — start its crash budget fresh
     this.resolveModel()
+    this.invalidateHealth()
   }
 
   /** Switch the active model without terminating a generation already using it. */
@@ -458,6 +759,18 @@ export class LLMService {
       return
     }
     this.applyModelReload()
+  }
+
+  /** Load a Computer Use specialist without changing the saved Text model. */
+  useRuntimeModel(model: { id: string; primary: string; mmproj: string | null }): void {
+    this.runtimeModelOverride = { ...model }
+    this.reloadModel()
+  }
+
+  /** Return the shared process to the Text model saved in active-model.json. */
+  restoreSelectedModel(): void {
+    this.runtimeModelOverride = null
+    this.reloadModel()
   }
 
   private async beginGeneration(): Promise<void> {
@@ -512,14 +825,44 @@ export class LLMService {
   activeModelInfo(): { id: string; vision: boolean } | null {
     this.resolveModel()
     if (!fs.existsSync(this.modelPath)) return null
-    let id = path.basename(this.modelPath)
+    let id = this.runtimeModelOverride?.id ?? path.basename(this.modelPath)
     try {
-      const cfg = JSON.parse(fs.readFileSync(this.activeModelFile, 'utf-8'))
-      if (cfg?.id) id = cfg.id
+      if (!this.runtimeModelOverride) {
+        const cfg = JSON.parse(fs.readFileSync(this.activeModelFile, 'utf-8'))
+        if (cfg?.id) id = cfg.id
+      }
     } catch {
       /* fall back to the filename */
     }
     return { id, vision: !!this.mmProjPath && fs.existsSync(this.mmProjPath) }
+  }
+
+  /** Exact active artifacts for a model-family policy adapter. */
+  activeModelArtifacts(): VisionModelArtifacts | null {
+    this.resolveModel()
+    if (!fs.existsSync(this.modelPath)) return null
+    let id = this.runtimeModelOverride?.id ?? path.basename(this.modelPath)
+    try {
+      if (!this.runtimeModelOverride) {
+        const cfg = JSON.parse(fs.readFileSync(this.activeModelFile, 'utf-8'))
+        if (cfg?.id) id = cfg.id
+      }
+    } catch {
+      /* fall back to the filename */
+    }
+    const primaryFile = path.basename(this.modelPath)
+    const projectorFile = this.mmProjPath ? path.basename(this.mmProjPath) : null
+    return {
+      id,
+      primaryFile,
+      projectorFile,
+      availableFiles: [
+        ...(fs.existsSync(this.modelPath) ? [primaryFile] : []),
+        ...(this.mmProjPath && fs.existsSync(this.mmProjPath) && projectorFile
+          ? [projectorFile]
+          : [])
+      ]
+    }
   }
 
   /** Cheap integrity check: a real GGUF starts with the "GGUF" magic and is more
@@ -531,6 +874,7 @@ export class LLMService {
   }
 
   async init(): Promise<void> {
+    await prepareModelMemory('chat')
     if (this.paused) {
       // A chat/tool turn needs the LLM NOW, but it's paused for a resident image
       // server (unified memory can't hold both). Ask the image server to evict
@@ -547,7 +891,12 @@ export class LLMService {
     }
     if (this.initialized) return
     // Coalesce concurrent inits into one spawn.
-    if (this.initPromise !== null) return this.initPromise
+    if (this.initPromise !== null) {
+      if (this.initGeneration === this.launchGeneration) return this.initPromise
+      await this.initPromise.catch(() => {})
+      return this.init()
+    }
+    this.initGeneration = this.launchGeneration
     this.initPromise = this._doInit().finally(() => {
       this.initPromise = null
     })
@@ -556,6 +905,7 @@ export class LLMService {
 
   private async _doInit(): Promise<void> {
     if (this.initialized) return
+    const generation = this.launchGeneration
 
     this.resolveModel()
 
@@ -577,31 +927,53 @@ export class LLMService {
         'The model file looks corrupt or incomplete. Re-download it from the Models screen.'
       )
     }
-    // mmproj is optional — if it's corrupt, drop it (text still works) rather than fail.
+    const activeArtifacts = this.activeModelArtifacts()
+    const loadGatedAdapter = activeArtifacts ? loadGatedVisionModelAdapter(activeArtifacts) : null
+    if (activeArtifacts && loadGatedAdapter) {
+      // UI-Mate is a screenshot policy, not a text fallback. The exact paired
+      // projector is mandatory at the engine boundary.
+      loadGatedAdapter.assertCapabilities(activeArtifacts)
+      if (!this.mmProjPath || !this.validateGguf(this.mmProjPath)) {
+        throw new Error('The UI-Mate mmproj file is corrupt or incomplete. Re-download it.')
+      }
+    }
+    // Other model families keep the existing optional-projector behavior.
     if (this.mmProjPath && !this.validateGguf(this.mmProjPath)) {
       console.warn(`[LLMService] mmproj failed validation; loading text-only: ${this.mmProjPath}`)
       this.mmProjPath = ''
     }
 
-    // ONE engine: bin/llama/llama-server, built in CI from source with a pinned
-    // macOS deployment target (scripts/build-llama.sh) so it both supports the
-    // newest model archs (gemma4/qwen35) AND runs on macOS 13+. The old dual-
-    // engine setup shipped a second, older binary as a "fallback" that silently
-    // couldn't load those models — removed.
-    // Engines to try, IN ORDER. On Windows we ship a Vulkan (GPU) build in
-    // bin/llama and a CPU-only fallback in bin/llama-cpu: if the Vulkan server
-    // can't start (e.g. no Vulkan loader on the box) we fall through to CPU. On
-    // macOS/Linux only bin/llama exists, so this is a single-entry list and the
-    // behaviour is unchanged.
+    // Bonsai 2's packed ternary weights require PrismML's llama.cpp fork. Never
+    // fall through to the stock server: it may accept a Q2_0 pack but produce
+    // incorrect output without the fork's Hadamard activation runtime.
+    const requiresPrism = /^Ternary-Bonsai-2-27B-(?!mmproj).+\.gguf$/i.test(
+      path.basename(this.modelPath)
+    )
+    // Try CUDA on NVIDIA, Vulkan on other GPUs, then the CPU-only engine.
+    // macOS has its own Metal engines, so the absent CUDA/Vulkan paths are skipped.
     const roots = binRoots()
     const serverPaths = roots
-      .flatMap((r) => [
-        path.join(r, 'llama', exe('llama-server')),
-        path.join(r, 'llama-cpu', exe('llama-server')),
-        path.join(r, exe('llama-server'))
-      ])
+      .flatMap((r) =>
+        requiresPrism
+          ? [
+              path.join(r, 'llama-prism-cuda', exe('llama-server')),
+              path.join(r, 'llama-prism', exe('llama-server')),
+              path.join(r, 'llama-prism-cpu', exe('llama-server'))
+            ]
+          : [
+              path.join(r, 'llama-cuda', exe('llama-server')),
+              path.join(r, 'llama', exe('llama-server')),
+              path.join(r, 'llama-cpu', exe('llama-server')),
+              path.join(r, exe('llama-server'))
+            ]
+      )
       .filter((p) => fs.existsSync(p))
     if (!serverPaths.length) {
+      if (requiresPrism) {
+        throw new Error(
+          'Bonsai 2 requires the bundled Prism llama.cpp engine, which is missing from this build.'
+        )
+      }
       console.error(`[LLMService] llama-server binary not found under: ${roots.join(', ')}`)
       return
     }
@@ -624,21 +996,64 @@ export class LLMService {
     // prepareModelPort records an actionable conflict for System Health and aborts this startup.
     await this.prepareModelPort()
 
-    if (await this.launchWithFallback(serverPaths)) return
-    console.error('[LLMService] all llama-server engines failed to load the model')
+    if (generation !== this.launchGeneration) return
+    if (await this.launchWithFallback(serverPaths, generation)) return
+    if (generation !== this.launchGeneration) return
+    this.lastErrorMsg = 'All model engines failed to load the model.'
+    this.invalidateHealth()
+    throw new Error(this.lastErrorMsg)
   }
 
-  /** Try to load the model, degrading instead of failing so the user is never told
-   *  "can't load". For each engine binary we walk the loadAttempts ladder (requested
-   *  context on GPU → smaller contexts → CPU-only at 2048). We only step DOWN the
-   *  ladder on an out-of-memory failure — any other failure (unsupported arch,
-   *  missing dylib) won't be fixed by less context, so we move to the next engine.
-   *  launchArgs()/buildLaunchArgs stays the single source for the argv shape. */
-  private async launchWithFallback(serverPaths: string[]): Promise<boolean> {
-    const attempts = loadAttempts(this.safeCtxSize(this.ctxSize), this.gpuLayers)
-    for (const serverPath of serverPaths) {
+  /** Try all accelerated engines before CPU at the selected context. */
+  private async launchWithFallback(
+    serverPaths: string[],
+    generation = this.launchGeneration
+  ): Promise<boolean> {
+    this.backendFallbackReason = undefined
+    const preference = getBackendPreference('llm')
+    const ordered = prioritizeBackend(
+      [...serverPaths].sort((a, b) => enginePriority(a) - enginePriority(b)),
+      preference === 'cpu' ? 'auto' : preference,
+      (serverPath): BackendPreference => {
+        const directory = path.basename(path.dirname(serverPath))
+        if (directory.endsWith('-cpu')) return 'cpu'
+        if (directory.endsWith('-cuda')) return 'cuda'
+        return process.platform === 'darwin' ? 'metal' : 'vulkan'
+      }
+    )
+    const candidates = preference === 'cpu'
+      ? ordered.map((serverPath) => ({ serverPath, cpuOnly: true }))
+      : [
+          ...ordered.map((serverPath) => ({ serverPath, cpuOnly: false })),
+          ...ordered
+            .filter((p) => !p.includes('llama-cpu') && !p.includes('llama-prism-cpu'))
+            .map((serverPath) => ({ serverPath, cpuOnly: true }))
+        ]
+    for (const { serverPath, cpuOnly } of candidates) {
+      const attempts = loadAttempts(
+        this.ctxSize,
+        cpuOnly || enginePriority(serverPath) === 2 ? 0 : this.gpuLayers
+      ).slice(0, 1)
+      if (generation !== this.launchGeneration) return false
       if (!serverPath) continue
+      const engineDir = path.basename(path.dirname(serverPath))
+      const backend = engineDir.endsWith('-cuda')
+        ? 'CUDA'
+        : engineDir === 'llama' || engineDir === 'llama-prism'
+          ? 'Vulkan'
+          : null
+      if (!cpuOnly && (process.platform === 'win32' || process.platform === 'linux') && backend) {
+        if (this.gpuLayers === 0) continue
+        if (!(await gpuDeviceAvailable(serverPath, backend, process.platform))) {
+          this.backendFallbackReason = `${backend} did not report a usable device. Another engine was selected.`
+          console.warn(
+            `[LLMService] no usable ${backend} device for ${serverPath}; trying next engine`
+          )
+          continue
+        }
+      }
       for (let a = 0; a < attempts.length; a++) {
+        if (generation !== this.launchGeneration) return false
         const at = attempts[a]
         if (!at) continue
         if (a > 0) {
@@ -651,10 +1066,30 @@ export class LLMService {
           }
           return true
         }
+        if (generation !== this.launchGeneration) return false
+        const failure = classifyLlamaError(this.stderrTail.join('\n'))
+        this.backendFallbackReason = failure?.reason ?? 'The previous engine could not load the model.'
+        if (failure?.code === 'speculation_unsupported') {
+          console.warn(
+            `[LLMService] ${failure.reason} Retrying the selected model with speculative decoding off.`
+          )
+          this.speculativeDecoding = 'off'
+          try {
+            this.persist()
+          } catch (error) {
+            console.error('[LLMService] could not save the corrected speculative setting:', error)
+          }
+          await this.prepareModelPort()
+          if (generation !== this.launchGeneration) return false
+          if (
+            await this.launchServer(serverPath, this.launchArgsFor(at.ctxSize, at.gpuLayers))
+          ) {
+            return true
+          }
+        }
         // launchServer already tore its process down; free the port before any retry.
         await this.prepareModelPort()
-        // Advance down the ladder ONLY for a memory failure; anything else means a
-        // smaller context won't help, so give up on this engine and try the next.
+        // Try CPU only for a memory failure; other failures move to the next engine.
         if (classifyLlamaError(this.stderrTail.join('\n'))?.code !== 'out_of_memory') break
       }
     }
@@ -703,7 +1138,11 @@ export class LLMService {
     // deliberate and auto-recovery is skipped.
     this.intentionalStop = false
     this.server = proc
+    this.backendOutput = ''
+    this.backendModelPath = this.modelPath
+    this.backendPlacement = undefined
     this.stderrTail = []
+    this.invalidateHealth()
     let abandoned = false // set when we give up on this proc so its close handler is inert
     // True until waitForReady() confirms THIS engine. A close while probing is a failed
     // LAUNCH, which launchWithFallback is already walking past - see crash-policy.ts.
@@ -719,7 +1158,11 @@ export class LLMService {
 
     proc.stderr?.on('data', (data) => {
       const text = String(data)
+      // Verbosity 4 also emits request traces. Read and log it only during model
+      // load so user prompts cannot enter the app log or its diagnostic tail.
+      if (!probing || this.server !== proc) return
       console.log(`[llama-server] ${text}`)
+      this.backendOutput = (this.backendOutput + text).slice(-65536)
       // Keep a rolling tail so we can classify a load failure after it exits.
       for (const line of text.split(/\r?\n/)) if (line.trim()) this.stderrTail.push(line)
       if (this.stderrTail.length > 50) this.stderrTail = this.stderrTail.slice(-50)
@@ -736,9 +1179,10 @@ export class LLMService {
       this.initialized = false
       // If it died on its own (not our stop/swap), translate the stderr into a
       // human reason so the Health panel can say WHY instead of a blank "Down".
-      const deliberateClose = wasIntentional || signal === 'SIGKILL' || signal === 'SIGTERM'
+      const deliberateClose = wasIntentional
       if (!deliberateClose && !this.paused) {
         const failure = classifyLlamaError(this.stderrTail.join('\n'))
+        this.backendFallbackReason = failure?.reason ?? 'The previous engine could not load the model.'
         if (failure) {
           this.lastErrorMsg = failure.reason
           console.error(
@@ -746,21 +1190,34 @@ export class LLMService {
           )
         }
       }
-      // Only recover from a genuine crash of an engine that WAS healthy. A deliberate
-      // kill stays dead (otherwise llama-server cannot be stopped without killing the
-      // app), and a launch-time failure belongs to launchWithFallback's ladder.
+      this.invalidateHealth()
+      // Recover unexpected exits of a previously healthy engine, including OS kills.
+      // App stops and memory pauses stay stopped; launch failures use the engine ladder.
       if (shouldAutoRecover({ probing, wasIntentional, paused: this.paused, signal })) {
-        this.handleCrash(code ?? -1)
+        void this.handleCrash(code ?? -1).catch((error) => {
+          console.error('[LLMService] automatic recovery failed:', error)
+        })
       }
     })
 
     try {
-      await this.waitForReady()
+      // A cold CUDA load can spend over a minute on model weights and CLIP
+      // initialization while the server is still healthy. Do not kill it and
+      // fall back to CPU at the normal one-minute deadline.
+      await this.waitForReady(modelStartupTimeout(path.basename(binDir)))
+      if (this.server !== proc) throw new Error('Model load was cancelled')
       // Confirmed healthy: from here a close IS a crash worth recovering from.
       probing = false
+      this.stderrTail = []
       console.log('[LLMService] Vision server ready!')
+      const engineDir = path.basename(binDir)
+      this.backendPlacement = parseNativeBackend(this.backendOutput)
+      console.log(
+        `[LLMService] model ready: engine=${engineDir}, backend=${this.backendPlacement?.backend ?? 'unconfirmed'}`
+      )
       this.initialized = true
       this.lastErrorMsg = null // healthy again — clear any prior failure reason
+      this.invalidateHealth()
       return true
     } catch (e) {
       console.error(`[LLMService] engine at ${binDir} failed to start:`, e)
@@ -777,6 +1234,7 @@ export class LLMService {
         this.server = null
         this.initialized = false
       }
+      this.invalidateHealth()
       return false
     }
   }
@@ -785,6 +1243,7 @@ export class LLMService {
    *  init, and fail loudly if init didn't take. Single source of truth so the
    *  three chat methods don't each re-implement it. */
   private async ensureReady(): Promise<void> {
+    await prepareModelMemory('chat')
     if (this.paused) throw new Error('LLM paused during image generation — deferred')
     if (!this.initialized) {
       await this.init()
@@ -809,7 +1268,7 @@ export class LLMService {
       await new Promise((resolve) => setTimeout(resolve, 400))
     }
     // If the port is now free (nothing held it, or we reclaimed our own orphan) keep it. Otherwise
-    // it's held by SOMETHING we must not kill — another live Off Grid engine, LM Studio, or any
+    // it's held by SOMETHING we must not kill — another live Off Grid AI engine, LM Studio, or any
     // unrelated app — so don't fight it or dead-end: scan upward for the next free port and move
     // there. The gateway proxies to llm.getPort() (live) and the app talks to this.port directly, so
     // both follow. (Keying on "is the port free?" rather than "is the holder a live llama?" is what
@@ -821,6 +1280,7 @@ export class LLMService {
     if (free === null) {
       this.lastErrorMsg = modelPortConflictReason(this.port)
       console.error(`[LLMService] ${this.lastErrorMsg}`)
+      this.invalidateHealth()
       throw new Error(this.lastErrorMsg)
     }
     console.warn(
@@ -830,38 +1290,35 @@ export class LLMService {
     this.lastErrorMsg = null
   }
 
-  /** Auto-recover from an unexpected llama-server crash. Backs off, and on repeated
-   *  crashes shrinks the context (the usual culprit is memory pressure) before
-   *  retrying. Gives up after a few attempts so we never spin forever. */
+  /** Auto-recover from an unexpected llama-server crash without changing saved settings. */
   private async handleCrash(code: number): Promise<void> {
     // Rolling 2-minute window: if it has already died 3× recently, STOP recovering.
     // Prevents thrash-respawning a multi-GB process when the model is too heavy for
     // the machine (memory-pressure kills). Surface it; the user can pick a smaller
     // model / Conservative mode or hit Health → Restart.
+    const generation = this.launchGeneration
     const now = Date.now()
     this.restartTimes = this.restartTimes.filter((t) => now - t < 120_000)
     if (this.restartTimes.length >= 3) {
       console.error(
         `[LLMService] llama-server died ${this.restartTimes.length + 1}× in 2min (last code ${code}); NOT auto-restarting — likely memory pressure. Pick a smaller model or Conservative mode.`
       )
+      this.lastErrorMsg =
+        'Model server stopped repeatedly. Automatic restart limit reached. Check GPU memory and use Restart after fixing the cause.'
+      this.invalidateHealth()
       return
     }
     this.restartTimes.push(now)
-    // On a repeat death in the window, halve the context — usually OOM/overcommit.
-    if (this.restartTimes.length >= 2) {
-      const reduced = Math.max(2048, Math.floor(this.ctxSize / 2 / 1024) * 1024)
-      if (reduced < this.ctxSize) {
-        console.warn(
-          `[LLMService] reducing context ${this.ctxSize} -> ${reduced} after repeated crashes`
-        )
-        this.ctxSize = reduced
-        this.persist()
-      }
-    }
     await new Promise((r) => setTimeout(r, 1000 * this.restartTimes.length))
-    if (this.paused || this.intentionalStop) return
+    if (this.paused || this.intentionalStop || generation !== this.launchGeneration || this.server)
+      return
     console.log(`[LLMService] auto-restarting llama-server (attempt ${this.restartTimes.length})`)
-    this.init().catch(() => {})
+    try {
+      await this.init()
+    } catch (error) {
+      console.error('[LLMService] recovery startup failed:', error)
+      if (generation === this.launchGeneration && !this.server) await this.handleCrash(code)
+    }
   }
 
   // Ready = the model is actually LOADED, not merely that the server answers.
@@ -870,6 +1327,33 @@ export class LLMService {
   // a 200 server with an empty /v1/models. So we additionally require /v1/models
   // to list a model before declaring ready, and we bail immediately if the server
   // process exits (a model that fails to load takes the process down with it).
+  /** Which thinking controls the LOADED model understands. Resolved once per load from the
+   *  template llama-server publishes at /props; 'enable-thinking' until then, which is the
+   *  behaviour every model got before this was resolved at all. */
+  private thinkingDialect: ThinkingDialect = 'enable-thinking'
+  private mediaMarker: string | null = null
+
+  /** Read the loaded model's properties and remember its request dialects.
+   *  Best-effort: a server that will not answer /props keeps the safe default rather than
+   *  retaining values from the model that was loaded before it. */
+  private async resolveServerProperties(): Promise<void> {
+    this.thinkingDialect = 'enable-thinking'
+    this.mediaMarker = null
+    try {
+      const res = await fetch(`http://127.0.0.1:${this.port}/props`)
+      if (!res.ok) return
+      const body = (await res.json()) as { chat_template?: string; media_marker?: unknown }
+      this.thinkingDialect = detectThinkingDialect(body.chat_template)
+      this.mediaMarker =
+        typeof body.media_marker === 'string' && body.media_marker.length > 0
+          ? body.media_marker
+          : null
+      console.log(`[LLMService] thinking dialect: ${this.thinkingDialect}`)
+    } catch (e) {
+      console.warn('[LLMService] could not read /props:', e)
+    }
+  }
+
   private async waitForReady(timeout = 60000): Promise<void> {
     const start = Date.now()
     let healthOk = false
@@ -885,13 +1369,16 @@ export class LLMService {
           const res = await fetch(`http://127.0.0.1:${this.port}/v1/models`)
           if (res.ok) {
             const body = await res.json().catch(() => null)
-            if (Array.isArray(body?.data) && body.data.length > 0) return
+            if (Array.isArray(body?.data) && body.data.length > 0) {
+              await this.resolveServerProperties()
+              return
+            }
           }
         }
       } catch {
         /* not up yet */
       }
-      await new Promise((r) => setTimeout(r, 500))
+      await new Promise((r) => setTimeout(r, 500)) // NOSONAR: wait between sequential startup probes.
     }
     throw new Error('Server started but no model was loaded within the timeout')
   }
@@ -900,73 +1387,331 @@ export class LLMService {
   // which kills long-running LLM requests before they can respond. Delegates to the
   // electron-free postCompletionOnce so the fresh-connection contract lives in one place
   // (see llm/http-post.ts) and is integration-tested against a real socket-closing server.
-  private httpPost(body: string, timeoutMs: number, signal?: AbortSignal): Promise<string> {
+  private httpPost(
+    body: string,
+    timeoutMs: number | undefined,
+    signal?: AbortSignal
+  ): Promise<string> {
     return postCompletionOnce(this.port, body, timeoutMs, signal)
+  }
+
+  /** Score one typed decision with the resident Decision model. The raw completion
+   * endpoint preserves the model's trained answer-slot prompt and returns the
+   * grammar-restricted option distribution without free-text generation. */
+  async decideOptions(
+    context: string,
+    question: string,
+    options: readonly string[],
+    signal?: AbortSignal,
+    screenshotPath?: string
+  ): Promise<OptionDecision> {
+    const prompt = buildDecisionPrompt(context, question, options)
+    return recordAIRequest(
+      {
+        modality: 'text',
+        source: screenTaskRequestSource('Decision model swap', 'decider'),
+        request: { context, question, options },
+        signal
+      },
+      async (log) => {
+        await this.beginGeneration()
+        try {
+          this.assertImageInputSupported(screenshotPath ? [screenshotPath] : [])
+          await this.ensureReady()
+          return await this.chatMutex.runExclusive(async () => {
+            const image = screenshotPath ? readImages([screenshotPath])[0] : undefined
+            if (screenshotPath && !image) {
+              throw new Error('The Decision model screenshot could not be read.')
+            }
+            const body = JSON.stringify(
+              buildDecisionRequest(
+                prompt,
+                options.length,
+                image?.base64,
+                this.mediaMarker ?? undefined
+              )
+            )
+            log.useRuntime(this.runtimeBackend())
+            const raw = await postCompletionOnce(this.port, body, undefined, signal, '/completion')
+            log.update({
+              model: this.modelPath,
+              backend: this.activeAccelerator(),
+              effectiveRequest: JSON.parse(body),
+              response: JSON.parse(raw)
+            })
+            return parseOptionDecision(raw, options.length)
+          })
+        } finally {
+          this.finishGeneration()
+        }
+      }
+    )
+  }
+
+  /** Resolve the selected text model once at request admission. Every text
+   * method uses this seam, so no caller needs local/remote branches. */
+  private activeRemoteTextModel(): RemoteTextModelConnection | null {
+    const screenTask = currentRemoteScreenTaskSession()
+    return screenTask ? screenTask.activeServer : getActiveRemoteVisionServer()
+  }
+
+  /** A tool turn must fail before generation when the selected remote model cannot plan actions. */
+  async toolPlannerPreflight(): Promise<string | null> {
+    const remote = this.activeRemoteTextModel()
+    if (!remote) return null
+    const capability = await remoteNativeToolCapability(remote)
+    return capability.status === 'unsupported'
+      ? nativeToolPlannerUnavailableMessage(capability)
+      : null
+  }
+
+  private completeRemote(
+    remote: RemoteTextModelConnection,
+    messages: unknown[],
+    onDelta: (text: string, kind: 'content' | 'reasoning') => void,
+    options: {
+      timeoutMs?: number
+      maxTokens?: number
+      temperature?: number
+      topP?: number
+      topK?: number
+      minP?: number
+      presencePenalty?: number
+      repeatPenalty?: number
+      thinking?: boolean
+      signal?: AbortSignal
+      responseFormat?: unknown
+      tools?: unknown[]
+      toolChoice?: string
+      onToolCallStart?: (name?: string) => void
+    }
+  ): Promise<StreamResult> {
+    return streamRemoteChatCompletion({
+      remote,
+      request: {
+        messages,
+        maxTokens: maxTokensForWire(resolveMaxTokens(options.maxTokens, this.maxTokens)),
+        temperature: options.temperature ?? this.temperature,
+        topP: options.topP ?? this.topP,
+        topK: options.topK ?? this.topK,
+        minP: options.minP ?? this.minP,
+        presencePenalty: options.presencePenalty,
+        repeatPenalty: options.repeatPenalty ?? this.repeatPenalty,
+        thinking: options.thinking,
+        // Same setting the local engine gets — one remote seam, so every remote caller
+        // (chat, Web Use, Computer Use) honours the configured thinking cap.
+        reasoningBudget: this.reasoningBudget,
+        responseFormat: options.responseFormat,
+        tools: options.tools,
+        toolChoice: options.toolChoice
+      },
+      onDelta,
+      options: {
+        signal: options.signal,
+        timeoutMs: options.timeoutMs,
+        onToolCallStart: options.onToolCallStart
+      }
+    })
   }
 
   async chat(
     message: string,
     images: string[] = [],
-    timeoutMs: number = 300000,
+    timeoutMs?: number,
     maxTokens?: number,
     opts: {
       responseFormat?: unknown
       temperature?: number
+      enableThinking?: boolean
       disableThinking?: boolean
+      separateReasoning?: boolean
       signal?: AbortSignal
     } = {}
   ): Promise<string> {
-    await this.beginGeneration()
-    try {
-      this.assertImageInputSupported(images)
-      await this.ensureReady()
-
-      return await this.chatMutex.runExclusive(async () => {
+    const messages = buildMessages(message, readImages(images), this.systemPrompt)
+    return recordAIRequest(
+      {
+        modality: 'text',
+        source: screenTaskRequestSource('Chat'),
+        model: this.modelPath,
+        request: { messages, ...opts, maxTokens },
+        signal: opts.signal
+      },
+      async () => {
+        const remote = this.activeRemoteTextModel()
+        if (remote) {
+          return (
+            await this.completeRemote(remote, messages, () => {}, {
+              timeoutMs,
+              maxTokens,
+              temperature: opts.temperature,
+              thinking: opts.disableThinking ? false : opts.enableThinking,
+              signal: opts.signal,
+              responseFormat: opts.responseFormat
+            })
+          ).content
+        }
+        await this.beginGeneration()
         try {
-          const messages = buildMessages(message, this.decodeImages(images), this.systemPrompt)
-          const payload: Record<string, unknown> = {
-            messages: messages,
-            max_tokens: maxTokensForWire(resolveMaxTokens(maxTokens, this.maxTokens)),
-            temperature: opts.temperature ?? this.temperature,
-            ...this.samplingPayload()
+          this.assertImageInputSupported(images)
+          return await this.completeMessages(messages, timeoutMs, maxTokens, opts)
+        } finally {
+          this.finishGeneration()
+        }
+      }
+    )
+  }
+
+  /** Send an exact OpenAI-style message history for model-family policy adapters. */
+  async chatMessages(
+    messages: ChatMessage[],
+    timeoutMs?: number,
+    maxTokens?: number,
+    opts: {
+      responseFormat?: unknown
+      temperature?: number
+      topP?: number
+      topK?: number
+      minP?: number
+      presencePenalty?: number
+      repeatPenalty?: number
+      enableThinking?: boolean
+      disableThinking?: boolean
+      separateReasoning?: boolean
+      signal?: AbortSignal
+    } = {}
+  ): Promise<string> {
+    const remote = this.activeRemoteTextModel()
+    return recordAIRequest(
+      {
+        modality: 'text',
+        source: screenTaskRequestSource('Messages'),
+        model: remote?.model ?? this.modelPath,
+        request: { messages, ...opts, maxTokens },
+        signal: opts.signal
+      },
+      async () => {
+        if (remote) {
+          return (
+            await this.completeRemote(remote, messages, () => {}, {
+              timeoutMs,
+              maxTokens,
+              temperature: opts.temperature,
+              topP: opts.topP,
+              thinking: opts.disableThinking ? false : opts.enableThinking,
+              signal: opts.signal,
+              responseFormat: opts.responseFormat
+            })
+          ).content
+        }
+        await this.beginGeneration()
+        try {
+          const hasImages = messages.some(
+            (message) =>
+              Array.isArray(message.content) &&
+              message.content.some((part) => part.type === 'image_url')
+          )
+          this.assertImageInputSupported(hasImages ? ['message-image'] : [])
+          return await this.completeMessages(messages, timeoutMs, maxTokens, opts)
+        } finally {
+          this.finishGeneration()
+        }
+      }
+    )
+  }
+
+  private async completeMessages(
+    messages: ChatMessage[],
+    timeoutMs: number | undefined,
+    maxTokens: number | undefined,
+    opts: {
+      responseFormat?: unknown
+      temperature?: number
+      topP?: number
+      topK?: number
+      minP?: number
+      presencePenalty?: number
+      repeatPenalty?: number
+      enableThinking?: boolean
+      disableThinking?: boolean
+      separateReasoning?: boolean
+      signal?: AbortSignal
+    }
+  ): Promise<string> {
+    await this.ensureReady()
+    return this.chatMutex.runExclusive(async () => {
+      try {
+        const payload: Record<string, unknown> = {
+          messages: messages,
+          max_tokens: maxTokensForWire(resolveMaxTokens(maxTokens, this.maxTokens)),
+          temperature: opts.temperature ?? this.temperature,
+          ...samplingPayload({
+            topP: opts.topP ?? this.topP,
+            topK: opts.topK ?? this.topK,
+            minP: opts.minP ?? this.minP,
+            repeatPenalty: opts.repeatPenalty ?? this.repeatPenalty
+          }),
+          ...(opts.presencePenalty === undefined ? {} : { presence_penalty: opts.presencePenalty })
+        }
+        // Grammar-constrained output: llama.cpp converts the JSON schema to a
+        // GBNF grammar so the model can ONLY emit valid matching JSON.
+        if (opts.responseFormat) payload.response_format = opts.responseFormat
+        // Specialist adapters can require inline <think> output as part of
+        // their official protocol. General models use the separated reasoning
+        // channel so a long thought does not hide the final policy answer.
+        if (opts.enableThinking !== undefined) {
+          Object.assign(payload, reasoningBudgetPayload(opts.enableThinking, this.reasoningBudget))
+          if (opts.separateReasoning) {
+            Object.assign(payload, thinkingPayload(opts.enableThinking, this.thinkingDialect))
+          } else {
+            payload.chat_template_kwargs = { enable_thinking: opts.enableThinking }
           }
-          // Grammar-constrained output: llama.cpp converts the JSON schema to a
-          // GBNF grammar so the model can ONLY emit valid matching JSON.
-          if (opts.responseFormat) payload.response_format = opts.responseFormat
+        } else if (opts.disableThinking) {
           // Turn off the model's reasoning channel for fast, direct output (its
           // chain-of-thought otherwise eats the token budget and leaves content empty).
-          if (opts.disableThinking) payload.chat_template_kwargs = { enable_thinking: false }
-          const body = JSON.stringify(payload)
-
-          console.log(
-            `[LLMService] Starting LLM request (timeout: ${timeoutMs / 1000}s, body: ${body.length} chars)...`
-          )
-
-          const raw = await this.httpPost(body, timeoutMs, opts.signal)
-          const data = JSON.parse(raw) as {
-            usage?: { total_tokens?: number }
-            choices?: { message?: { content?: string } }[]
-          }
-          console.log('[LLMService] LLM request completed')
-          // Best-effort fleet audit: record the local model call if enrolled in a
-          // console. The fleet console is a pro feature — it registers this hook in
-          // its activation; the free build has no hook and this is a no-op.
-          try {
-            const tokens = data.usage?.total_tokens ?? 0
-            const modelName = path.basename(this.modelPath) || 'local-llm'
-            callHook('console.recordModelCall', modelName, tokens, 'ok', false)
-          } catch {
-            /* audit is never load-bearing */
-          }
-          return data.choices?.[0]?.message?.content ?? ''
-        } catch (e: unknown) {
-          console.error('[LLMService] Chat error:', e instanceof Error ? e.message : e)
-          throw e
+          Object.assign(payload, thinkingPayload(false, this.thinkingDialect))
         }
-      })
-    } finally {
-      this.finishGeneration()
-    }
+        const body = JSON.stringify(payload)
+        currentAIRequest()?.useRuntime(this.runtimeBackend())
+        currentAIRequest()?.update({
+          effectiveRequest: payload,
+          model: this.modelPath,
+          backend: this.activeAccelerator()
+        })
+
+        console.log(
+          `[LLMService] Starting LLM request (timeout: ${timeoutMs === undefined ? 'none' : `${timeoutMs / 1000}s`}, body: ${body.length} chars)...`
+        )
+
+        const raw = await this.httpPost(body, timeoutMs, opts.signal)
+        currentAIRequest()?.update({ response: JSON.parse(raw) })
+        const data = JSON.parse(raw) as {
+          usage?: { total_tokens?: number }
+          choices?: { message?: { content?: string; reasoning_content?: string } }[]
+        }
+        console.log('[LLMService] LLM request completed')
+        // Best-effort fleet audit: record the local model call if enrolled in a
+        // console. The fleet console is a pro feature — it registers this hook in
+        // its activation; the free build has no hook and this is a no-op.
+        try {
+          const tokens = data.usage?.total_tokens ?? 0
+          const modelName = path.basename(this.modelPath) || 'local-llm'
+          callHook('console.recordModelCall', modelName, tokens, 'ok', false)
+        } catch {
+          /* audit is never load-bearing */
+        }
+        const message = data.choices?.[0]?.message
+        const content = message?.content ?? ''
+        const reasoning = message?.reasoning_content?.trim() ?? ''
+        if (opts.enableThinking && reasoning && !/<think\b[^>]*>/i.test(content)) {
+          return `<think>${reasoning}</think>\n${content}`
+        }
+        return content
+      } catch (e: unknown) {
+        console.error('[LLMService] Chat error:', e instanceof Error ? e.message : e)
+        throw e
+      }
+    })
   }
 
   // Streaming variant of chat(): posts with stream:true and invokes `onDelta`
@@ -980,38 +1725,81 @@ export class LLMService {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     opts: { temperature?: number; thinking?: boolean; signal?: AbortSignal } = {},
     maxTokens?: number,
-    timeoutMs: number = 300000
+    timeoutMs?: number
   ): Promise<ChatStreamResult> {
-    await this.beginGeneration()
-    try {
-      this.assertImageInputSupported(images)
-      await this.ensureReady()
+    const messages = buildMessages(message, readImages(images), this.systemPrompt)
+    return recordAIRequest(
+      {
+        modality: 'text',
+        source: screenTaskRequestSource('Chat stream'),
+        model: this.modelPath,
+        request: { messages, ...opts, maxTokens },
+        signal: opts.signal
+      },
+      async (log) => {
+        const resolvedMaxTokens = resolveMaxTokens(maxTokens, this.maxTokens)
+        const remote = this.activeRemoteTextModel()
+        if (remote) {
+          const result = await this.completeRemote(remote, messages, onDelta, {
+            timeoutMs,
+            maxTokens: resolvedMaxTokens,
+            temperature: opts.temperature,
+            thinking: opts.thinking,
+            signal: opts.signal
+          })
+          return {
+            ...withContextMetrics(result, messages, {
+              contextWindowTokens: this.effectiveContextSize(),
+              computeBackend: 'Remote'
+            }),
+            maxTokens: resolvedMaxTokens
+          }
+        }
+        await this.beginGeneration()
+        try {
+          this.assertImageInputSupported(images)
+          await this.ensureReady()
+          const payload: Record<string, unknown> = {
+            messages,
+            max_tokens: maxTokensForWire(resolvedMaxTokens),
+            temperature: opts.temperature ?? this.temperature,
+            ...this.samplingPayload(),
+            stream: true,
+            // Ask for the token counts. Without this the final chunk carries no usage, so the app can
+            // report how long a generation took but never how many tokens it produced.
+            stream_options: { include_usage: true },
+            // Thinking control: when on, ask the template to emit reasoning and have
+            // llama.cpp split it into reasoning_content (deepseek-style); when off,
+            // suppress it so the token budget goes to the answer.
+            ...thinkingPayload(!!opts.thinking, this.thinkingDialect),
+            ...reasoningBudgetPayload(!!opts.thinking, this.reasoningBudget)
+          }
+          const body = JSON.stringify(payload)
+          log.update({
+            effectiveRequest: payload,
+            model: this.modelPath,
+            backend: this.activeAccelerator()
+          })
 
-      const messages = buildMessages(message, this.decodeImages(images), this.systemPrompt)
-      const resolvedMaxTokens = resolveMaxTokens(maxTokens, this.maxTokens)
-      const payload: Record<string, unknown> = {
-        messages,
-        max_tokens: maxTokensForWire(resolvedMaxTokens),
-        temperature: opts.temperature ?? this.temperature,
-        ...this.samplingPayload(),
-        stream: true,
-        // Thinking control: when on, ask the template to emit reasoning and have
-        // llama.cpp split it into reasoning_content (deepseek-style); when off,
-        // suppress it so the token budget goes to the answer.
-        ...thinkingPayload(!!opts.thinking)
+          // Single SSE transport (llm/stream.ts). The plain chat path sends no tools, so
+          // the returned toolCalls are always empty — take only the answer text.
+          log.useRuntime(this.runtimeBackend())
+          const result = await streamCompletion(this.port, body, onDelta, {
+            signal: opts.signal,
+            timeoutMs
+          })
+          return {
+            ...withContextMetrics(result, messages, {
+              contextWindowTokens: this.effectiveContextSize(),
+              computeBackend: this.activeAccelerator()
+            }),
+            maxTokens: resolvedMaxTokens
+          }
+        } finally {
+          this.finishGeneration()
+        }
       }
-      const body = JSON.stringify(payload)
-
-      // Single SSE transport (llm/stream.ts). The plain chat path sends no tools, so
-      // the returned toolCalls are always empty — take only the answer text.
-      const result = await streamCompletion(this.port, body, onDelta, {
-        signal: opts.signal,
-        timeoutMs
-      })
-      return { ...result, maxTokens: resolvedMaxTokens }
-    } finally {
-      this.finishGeneration()
-    }
+    )
   }
 
   // Lower-level streaming turn over a RAW messages array with optional tool-calling.
@@ -1025,48 +1813,118 @@ export class LLMService {
     onDelta: (text: string, kind: 'content' | 'reasoning') => void,
     opts: {
       temperature?: number
+      topP?: number
+      topK?: number
+      minP?: number
+      presencePenalty?: number
+      repeatPenalty?: number
       thinking?: boolean
       signal?: AbortSignal
       tools?: unknown[]
       toolChoice?: string
       maxTokens?: number
+      responseFormat?: unknown
+      onToolCallStart?: (name?: string) => void
     } = {},
-    timeoutMs: number = 300000
+    timeoutMs?: number
   ): Promise<StreamResult> {
-    await this.beginGeneration()
-    try {
-      await this.ensureReady()
-      const payload: Record<string, unknown> = {
-        messages,
-        max_tokens: maxTokensForWire(resolveMaxTokens(opts.maxTokens, this.maxTokens)),
-        temperature: opts.temperature ?? this.temperature,
-        ...this.samplingPayload(),
-        stream: true,
-        ...thinkingPayload(!!opts.thinking)
-      }
-      if (opts.tools && opts.tools.length) {
-        payload.tools = opts.tools
-        payload.tool_choice = opts.toolChoice ?? 'auto'
-      }
-      const body = JSON.stringify(payload)
+    const remote = this.activeRemoteTextModel()
+    return recordAIRequest(
+      {
+        modality: 'text',
+        source: screenTaskRequestSource('Tool / task turn'),
+        model: remote?.model ?? this.modelPath,
+        request: { messages, ...opts },
+        signal: opts.signal
+      },
+      async (log) => {
+        if (remote) {
+          const result = await this.completeRemote(remote, messages, onDelta, {
+            timeoutMs,
+            maxTokens: opts.maxTokens,
+            temperature: opts.temperature,
+            topP: opts.topP,
+            topK: opts.topK,
+            minP: opts.minP,
+            presencePenalty: opts.presencePenalty,
+            repeatPenalty: opts.repeatPenalty,
+            thinking: opts.thinking,
+            signal: opts.signal,
+            responseFormat: opts.responseFormat,
+            tools: opts.tools,
+            toolChoice: opts.toolChoice,
+            onToolCallStart: opts.onToolCallStart
+          })
+          return withContextMetrics(result, messages, {
+            contextWindowTokens: this.effectiveContextSize(),
+            tools: opts.tools,
+            computeBackend: 'Remote'
+          })
+        }
+        await this.beginGeneration()
+        try {
+          await this.ensureReady()
+          const payload: Record<string, unknown> = {
+            messages,
+            max_tokens: maxTokensForWire(resolveMaxTokens(opts.maxTokens, this.maxTokens)),
+            temperature: opts.temperature ?? this.temperature,
+            ...samplingPayload({
+              topP: opts.topP ?? this.topP,
+              topK: opts.topK ?? this.topK,
+              minP: opts.minP ?? this.minP,
+              repeatPenalty: opts.repeatPenalty ?? this.repeatPenalty
+            }),
+            ...(opts.presencePenalty === undefined
+              ? {}
+              : { presence_penalty: opts.presencePenalty }),
+            stream: true,
+            // Ask for the token counts. Without this the final chunk carries no usage, so the app can
+            // report how long a generation took but never how many tokens it produced.
+            stream_options: { include_usage: true },
+            ...thinkingPayload(!!opts.thinking, this.thinkingDialect),
+            ...reasoningBudgetPayload(!!opts.thinking, this.reasoningBudget)
+          }
+          if (opts.responseFormat) payload.response_format = opts.responseFormat
+          if (opts.tools && opts.tools.length) {
+            payload.tools = opts.tools
+            payload.tool_choice = opts.toolChoice ?? 'auto'
+          }
+          const body = JSON.stringify(payload)
+          log.update({
+            effectiveRequest: payload,
+            model: this.modelPath,
+            backend: this.activeAccelerator()
+          })
 
-      // Single SSE transport (llm/stream.ts) — same path as chatStream, but the
-      // assembled tool calls are surfaced too (this powers the agentic loop).
-      return await streamCompletion(this.port, body, onDelta, {
-        signal: opts.signal,
-        timeoutMs
-      })
-    } finally {
-      this.finishGeneration()
-    }
+          // Single SSE transport (llm/stream.ts) — same path as chatStream, but the
+          // assembled tool calls are surfaced too (this powers the agentic loop).
+          log.useRuntime(this.runtimeBackend())
+          const result = await streamCompletion(this.port, body, onDelta, {
+            signal: opts.signal,
+            timeoutMs,
+            onToolCallStart: opts.onToolCallStart
+          })
+          return withContextMetrics(result, messages, {
+            contextWindowTokens: this.effectiveContextSize(),
+            tools: opts.tools,
+            computeBackend: this.activeAccelerator()
+          })
+        } finally {
+          this.finishGeneration()
+        }
+      }
+    )
   }
 
   stop(): void {
+    this.launchGeneration++
+    this.initialized = false
     if (this.server) {
       this.intentionalStop = true // deliberate shutdown — don't auto-restart
       this.server.kill()
       this.server = null
       this.initialized = false
+      this.invalidateHealth()
     }
   }
 
@@ -1114,7 +1972,8 @@ export class LLMService {
     )
   }
 
-  async unload(): Promise<{ outcome: TeardownOutcome; portFree: boolean }> {
+  async unload(keepPaused = false): Promise<{ outcome: TeardownOutcome; portFree: boolean }> {
+    this.launchGeneration++
     this.paused = true // stop the on-demand respawn path from warming a new server mid-teardown
     let outcome: TeardownOutcome = 'already-dead'
     // Terminate the current engine AND any that an in-flight init assigns after our snapshot: an
@@ -1135,7 +1994,7 @@ export class LLMService {
       if (pending === null) {
         break // no in-flight init to race with — done
       }
-      await pending.catch(() => {}) // let the in-flight spawn finish, then loop to kill it
+      await pending.catch(() => {}) // NOSONAR: finish this spawn before checking for another process.
     }
     this.initialized = false
     // Safety net: reap any llama-server WE own still holding the port (a forked/stuck child).
@@ -1143,7 +2002,8 @@ export class LLMService {
     const reap = this.reapOrphansOnPort(this.port)
     // Leave the engine down but allow a future explicit start; releasePause clears the block
     // without warming a server (on-demand — the next chat/tool turn respawns).
-    this.paused = false
+    if (!keepPaused) this.paused = false
+    this.invalidateHealth()
     return { outcome, portFree: outcome !== 'stuck' && reap.liveOwners.length === 0 }
   }
 
@@ -1159,6 +2019,15 @@ export class LLMService {
   pause(): void {
     this.paused = true
     this.stop()
+  }
+
+  /** Eviction must finish before a competing model starts. pause() only signals the
+   *  child, while unload() waits for exit and handles an in-flight init. */
+  private async pauseAndWait(): Promise<void> {
+    const { portFree } = await this.unload(true)
+    if (!portFree) {
+      throw new Error('The chat model port is still occupied; image generation cannot start safely.')
+    }
   }
 
   /** Resume after image generation and warm the server back up (resident mode). */
@@ -1179,13 +2048,7 @@ export class LLMService {
   get runtime(): ManagedRuntime {
     return {
       modality: 'llm',
-      evict: () => {
-        try {
-          this.pause()
-        } catch {
-          /* ignore */
-        }
-      },
+      evict: () => this.pauseAndWait(),
       warm: () => {
         this.resume()
       },
@@ -1233,3 +2096,7 @@ export class LLMService {
 }
 
 export const llm = new LLMService()
+registerModelEvictor('chat', async () => {
+  const result = await llm.unload()
+  if (!result.portFree) throw new Error('Chat model did not stop; cannot free memory for Decision.')
+})

@@ -15,6 +15,7 @@ describe('rendered storage usage', () => {
     retryDownload: ReturnType<typeof vi.fn>
     cancelModelDownload: ReturnType<typeof vi.fn>
     clearAppCache: ReturnType<typeof vi.fn>
+    deleteModel: ReturnType<typeof vi.fn>
   }
 
   beforeEach(() => {
@@ -61,7 +62,8 @@ describe('rendered storage usage', () => {
       onModelProgress: vi.fn(() => () => {}),
       retryDownload: vi.fn(async () => ({ success: false })),
       cancelModelDownload: vi.fn(async () => true),
-      clearAppCache: vi.fn(async () => ({ success: true, freedBytes: 3_000_000 }))
+      clearAppCache: vi.fn(async () => ({ success: true, freedBytes: 3_000_000 })),
+      deleteModel: vi.fn(async () => ({ success: true }))
     }
     ;(globalThis as unknown as { window: Window }).window.api = api as never
   })
@@ -89,6 +91,67 @@ describe('rendered storage usage', () => {
     expect(screen.getByText(/Captured frames and OCR.*120 items.*2 MB/)).toBeTruthy()
     expect(screen.getByText('Generated images & artifacts')).toBeTruthy()
     expect(screen.getByText(/Images, artifacts, and thumbnails.*3 items.*8 MB/)).toBeTruthy()
+  })
+
+  it('shows Computer Use models in Storage with their delete actions', async () => {
+    api.getStorageInfo.mockResolvedValue({
+      dir: '/tmp/offgrid/models',
+      totalBytes: 3_600_000_000,
+      freeBytes: 6_000_000_000,
+      models: [
+        {
+          id: 'decider',
+          name: 'Decider 2B',
+          kind: 'computer_use',
+          bytes: 2_000_000_000,
+          active: false
+        },
+        {
+          id: 'decider-vision',
+          name: 'Decider 2B Vision',
+          kind: 'computer_use',
+          bytes: 1_600_000_000,
+          active: false
+        }
+      ],
+      orphans: []
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    try {
+      const user = userEvent.setup()
+      render(<StoragePanel />)
+
+      expect(await screen.findByText('Computer Use')).toBeTruthy()
+      expect(screen.getByText('Decider 2B')).toBeTruthy()
+      expect(screen.getByText('Decider 2B Vision')).toBeTruthy()
+      expect(screen.getByText('2.0 GB')).toBeTruthy()
+      expect(screen.getByText('1.6 GB')).toBeTruthy()
+
+      await user.click(screen.getByRole('button', { name: 'Delete Decider 2B Vision' }))
+      expect(api.deleteModel).toHaveBeenCalledWith('decider-vision')
+    } finally {
+      confirm.mockRestore()
+    }
+  })
+
+  it('opens model settings only from the active installed model', async () => {
+    const openSettings = vi.fn()
+    window.addEventListener('og:open-model-settings-panel', openSettings)
+    try {
+      const user = userEvent.setup()
+      render(<StoragePanel />)
+
+      expect(
+        await screen.findByRole('button', { name: 'Settings for Local text model' })
+      ).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Settings for Local vision model' })).toBeNull()
+      await user.click(screen.getByRole('button', { name: 'Settings for Local text model' }))
+
+      expect(openSettings).toHaveBeenCalledOnce()
+      expect((openSettings.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({ tab: 'model' })
+    } finally {
+      window.removeEventListener('og:open-model-settings-panel', openSettings)
+    }
   })
 
   it('explains a disk-full download and keeps its retry action reachable', async () => {
@@ -131,22 +194,22 @@ describe('rendered storage usage', () => {
     expect(api.cancelModelDownload).toHaveBeenCalledWith('model-queued-2')
   })
 
-  it('clears only temporary cache and explains which durable stores remain (#134)', async () => {
+  it('clears temporary storage and explains which durable stores remain (#134)', async () => {
     const user = userEvent.setup()
     render(<StoragePanel />)
 
-    expect(await screen.findByText('Temporary app cache')).toBeTruthy()
+    expect(await screen.findByText('Temporary Storage')).toBeTruthy()
     expect(
       screen.getByText(
-        'Safe to clear. Chats, projects, models, vault, settings, and Pro access stay.'
+        'Clears app cache and incomplete model downloads. Installed models and your data stay.'
       )
     ).toBeTruthy()
 
-    await user.click(screen.getByRole('button', { name: 'Clear cache' }))
+    await user.click(screen.getByRole('button', { name: 'Clear storage' }))
 
     expect(api.clearAppCache).toHaveBeenCalledTimes(1)
     expect((await screen.findByRole('status')).textContent).toBe(
-      'Temporary cache cleared. 3 MB reclaimed. Your data and models were kept.'
+      'Temporary storage cleared. 3 MB reclaimed. Your data and models were kept.'
     )
   })
 
@@ -155,10 +218,10 @@ describe('rendered storage usage', () => {
     const user = userEvent.setup()
     render(<StoragePanel />)
 
-    await user.click(await screen.findByRole('button', { name: 'Clear cache' }))
+    await user.click(await screen.findByRole('button', { name: 'Clear storage' }))
 
     expect((await screen.findByRole('status')).textContent).toBe(
-      'Cache could not be cleared. Your data and models were not changed.'
+      'Temporary storage could not be fully cleared. Installed models were kept.'
     )
   })
 
@@ -167,10 +230,10 @@ describe('rendered storage usage', () => {
     const user = userEvent.setup()
     render(<StoragePanel />)
 
-    await user.click(await screen.findByRole('button', { name: 'Clear cache' }))
+    await user.click(await screen.findByRole('button', { name: 'Clear storage' }))
 
     expect((await screen.findByRole('status')).textContent).toBe(
-      'Temporary cache cleared. Your data and models were kept.'
+      'Temporary storage cleared. Your data and models were kept.'
     )
   })
 })

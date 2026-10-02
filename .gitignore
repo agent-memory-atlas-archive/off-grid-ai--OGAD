@@ -13,9 +13,12 @@ component-library-animations/
 
 # Bundled MLX (mflux) Python env — large, rebuilt via scripts/build-mflux-env.sh
 resources/bin/mflux/
+resources/bin/kev-runtime/
 
-# Off Grid SD-GGUF conversion build dir
+# Off Grid AI SD-GGUF conversion build dir
 build-sd-gguf/
+build/linux-bin/
+build/image-macos/
 
 # Swift build artifacts (embedded repos)
 electron/coreml-sd/.build/
@@ -29,14 +32,20 @@ resources/bin/mflux/
 # Parakeet STT runtime — CI-staged via scripts/fetch-parakeet.sh (like mflux/coreml-sd),
 # not committed. Devs stage it locally with the same script.
 resources/bin/parakeet/
+# Pro MultipeerConnectivity helper - built from the private Pro repo and staged for packaging.
+resources/bin/proximity-helper
+resources/bin/keychain-bootstrap.node
+resources/bin/location.node
 # Gateway probe scratch output
 .gateway-probe/
 # TS build cache
 *.tsbuildinfo
 
-# Private pro features — separate repo, added as a git submodule once the remote
-# exists. Ignored for now so the open repo never tracks pro source.
-/pro/
+# Private pro features — a separate repo, tracked as a git submodule now that the remote exists.
+# The submodule records only a URL and a commit, so this open repo still never carries pro source -
+# while pinning exactly which pro revision belongs with this branch. NOT ignored any more: while it
+# was, six licensing tests under pro/ stayed tracked here AND in desktop-pro, so an edit showed up in
+# both repos and the two could diverge with no signal.
 
 # Vendored @offgrid packages ship their built dist
 !packages/*/dist/
@@ -46,10 +55,12 @@ resources/bin/parakeet/
 .env
 .env.local
 test-results/
+outputs/video-verification/
 
 # Marketing material (dev.to drafts, emails, assets) — publishing, not app code
 /marketing/
 scripts/dictation-hotkey/dictation-hotkey
+scripts/actions-helper/actions-helper
 
 # Local demo profile — synthetic-data run target for `npm run demo` (never real userData)
 .demo-profile/
@@ -66,3 +77,10 @@ swift-tests/**/.build/
 
 # Off Grid AI Pro early-bird campaign (customer PII + send tooling - do not commit)
 marketing/emails/pro-earlybird/
+
+# Coverage report from the DB journey suite (npm run test:db --coverage)
+coverage-db/
+
+# Raw V8 output and the converted report from the e2e coverage capture
+coverage-e2e-raw/
+coverage-e2e/

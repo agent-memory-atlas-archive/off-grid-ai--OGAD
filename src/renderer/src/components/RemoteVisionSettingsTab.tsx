@@ -1,0 +1,651 @@
+import { useEffect, useMemo, useState } from 'react'
+import {
+  remoteVisionApiBase,
+  remoteVisionProviderForEndpoint,
+  type RemoteVisionConnectionResult,
+  type RemoteVisionCatalogModel,
+  type RemoteVisionSelections,
+  type RemoteVisionRoleSelections,
+  type RemoteVisionSavedServer,
+  type RemoteVisionServerSettings,
+  type RemoteVisionServerUpdate
+} from '../../../shared/remote-vision-server'
+import { providerNeedsScreenDisclosure } from '../../../shared/remote-screen-privacy'
+import { SettingsRow as Row } from './SettingsRow'
+import { SettingsSelect } from './SettingsSelect'
+
+const EMPTY_SETTINGS: RemoteVisionServerSettings = {
+  provider: 'local',
+  endpoint: '',
+  model: '',
+  hasApiKey: false,
+  activeServerId: null,
+  servers: []
+}
+
+interface ServerForm {
+  id: string | null
+  name: string
+  endpoint: string
+  model: string
+  mediaModels: RemoteVisionSelections
+  roleModels: RemoteVisionRoleSelections
+  modelCatalog: RemoteVisionCatalogModel[]
+  hasApiKey: boolean
+  screenFramesAllowed: boolean
+}
+
+const EMPTY_FORM: ServerForm = {
+  id: null,
+  name: '',
+  endpoint: '',
+  model: '',
+  mediaModels: {},
+  roleModels: {},
+  modelCatalog: [],
+  hasApiKey: false,
+  screenFramesAllowed: false
+}
+
+function formFromServer(server: RemoteVisionSavedServer): ServerForm {
+  return {
+    id: server.id,
+    name: server.name,
+    endpoint: server.endpoint,
+    model: server.model,
+    mediaModels: server.mediaModels ?? { text: server.model },
+    roleModels: server.roleModels ?? {},
+    modelCatalog: server.modelCatalog ?? [],
+    hasApiKey: server.hasApiKey,
+    screenFramesAllowed: server.screenFramesAllowed
+  }
+}
+
+function serverNameFromEndpoint(endpoint: string): string {
+  try {
+    return new URL(endpoint).host
+  } catch {
+    return 'Remote server'
+  }
+}
+
+function normalizeSettings(value: RemoteVisionServerSettings): RemoteVisionServerSettings {
+  if (Array.isArray(value.servers)) return value
+  const legacyServer: RemoteVisionSavedServer | null =
+    value.provider !== 'local' && value.endpoint && value.model
+      ? {
+          id: 'migrated-server',
+          name: serverNameFromEndpoint(value.endpoint),
+          provider: value.provider,
+          endpoint: value.endpoint,
+          model: value.model,
+          hasApiKey: value.hasApiKey,
+          screenFramesAllowed: false
+        }
+      : null
+  return {
+    ...value,
+    activeServerId: legacyServer?.id ?? null,
+    servers: legacyServer ? [legacyServer] : []
+  }
+}
+
+export function RemoteVisionSettingsTab(): React.JSX.Element {
+  const [settings, setSettings] = useState(EMPTY_SETTINGS)
+  const [form, setForm] = useState<ServerForm>(EMPTY_FORM)
+  const [remoteEnabled, setRemoteEnabled] = useState(false)
+  const [apiKey, setApiKey] = useState('')
+  const [models, setModels] = useState<RemoteVisionCatalogModel[]>([])
+  const [modelQuery, setModelQuery] = useState('')
+  const [showModels, setShowModels] = useState(false)
+  const [status, setStatus] = useState('Checking saved settings')
+  const [busy, setBusy] = useState(false)
+
+  const selectServer = (server: RemoteVisionSavedServer): void => {
+    setForm(formFromServer(server))
+    setApiKey('')
+    setModels(
+      server.modelCatalog ??
+        (server.model ? [{ id: server.model, name: server.model, kind: 'text' }] : [])
+    )
+    setModelQuery(server.model)
+    setShowModels(false)
+    setStatus(server.id === settings.activeServerId ? 'This server is active.' : 'Ready to edit.')
+  }
+
+  const applySettings = (value: RemoteVisionServerSettings): void => {
+    const normalized = normalizeSettings(value)
+    setSettings(normalized)
+    setRemoteEnabled(normalized.activeServerId !== null)
+    const selected =
+      normalized.servers.find((server) => server.id === normalized.activeServerId) ??
+      normalized.servers[0]
+    if (selected) selectServer(selected)
+    else {
+      setForm(EMPTY_FORM)
+      setModels([])
+      setModelQuery('')
+    }
+  }
+
+  useEffect(() => {
+    window.api
+      .getRemoteVisionServer()
+      .then((value: RemoteVisionServerSettings) => {
+        const normalized = normalizeSettings(value)
+        setSettings(normalized)
+        setRemoteEnabled(normalized.activeServerId !== null)
+        const selected =
+          normalized.servers.find((server) => server.id === normalized.activeServerId) ??
+          normalized.servers[0]
+        if (selected) {
+          setForm(formFromServer(selected))
+          setModels(
+            selected.modelCatalog ??
+              (selected.model ? [{ id: selected.model, name: selected.model, kind: 'text' }] : [])
+          )
+          setModelQuery(selected.model)
+        }
+        setStatus(normalized.activeServerId ? 'Remote server is active.' : 'Local model is active.')
+      })
+      .catch(() => setStatus('Remote server settings could not be read.'))
+  }, [])
+
+  const filteredModels = useMemo(() => {
+    const query = modelQuery.trim().toLowerCase()
+    return models
+      .filter(
+        (model) =>
+          model.kind === 'text' &&
+          (!query || `${model.name} ${model.id}`.toLowerCase().includes(query))
+      )
+      .slice(0, 75)
+  }, [modelQuery, models])
+
+  const payload = (): RemoteVisionServerUpdate => {
+    if (!remoteEnabled) return { provider: 'local', endpoint: '', model: '' }
+    const endpoint = remoteVisionApiBase(form.endpoint)
+    return {
+      provider: remoteVisionProviderForEndpoint(endpoint),
+      endpoint,
+      model: form.model,
+      mediaModels: form.mediaModels,
+      roleModels: form.roleModels,
+      modelCatalog: form.modelCatalog,
+      serverId: form.id ?? undefined,
+      name: form.name,
+      ...(apiKey ? { apiKey } : {}),
+      screenFramesAllowed: form.screenFramesAllowed
+    }
+  }
+
+  const discoverModels = async (
+    update: RemoteVisionServerUpdate,
+    selectedModel: string
+  ): Promise<void> => {
+    setBusy(true)
+    setStatus('Loading models...')
+    try {
+      const result = (await window.api.testRemoteVisionServer(
+        update
+      )) as RemoteVisionConnectionResult
+      if (!result.ok) {
+        setStatus(result.error || 'Connection failed.')
+        return
+      }
+      const discovered = result.models ?? []
+      const nextModel = discovered.some(
+        (model) => model.id === selectedModel && model.kind === 'text'
+      )
+        ? selectedModel
+        : ''
+      setModels(discovered)
+      setForm((current) => ({
+        ...current,
+        model: nextModel,
+        modelCatalog: discovered,
+        mediaModels: Object.fromEntries(
+          (['text', 'image', 'transcription', 'voice'] as const).flatMap((kind) => {
+            const id = kind === 'text' ? nextModel : current.mediaModels[kind]
+            return id && discovered.some((model) => model.id === id && model.kind === kind)
+              ? [[kind, id]]
+              : []
+          })
+        ) as RemoteVisionSelections,
+        roleModels: Object.fromEntries(
+          (['grounding', 'decision'] as const).flatMap((role) => {
+            const id = current.roleModels[role]
+            return id && discovered.some((model) => model.id === id && model.kind === 'text')
+              ? [[role, id]]
+              : []
+          })
+        ) as RemoteVisionRoleSelections
+      }))
+      setModelQuery(nextModel)
+      setShowModels(true)
+      setStatus(
+        discovered.length > 0
+          ? `Connected in ${result.latencyMs} ms. ${discovered.length} model${discovered.length === 1 ? '' : 's'} found.`
+          : `Connected in ${result.latencyMs} ms, but no models were found.`
+      )
+    } catch {
+      setStatus('Connection failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const test = async (): Promise<void> => {
+    if (!form.endpoint.trim()) {
+      setStatus('Enter a server address first.')
+      return
+    }
+    await discoverModels(payload(), form.model)
+  }
+
+  const changeModel = async (server: RemoteVisionSavedServer): Promise<void> => {
+    selectServer(server)
+    setRemoteEnabled(true)
+    await discoverModels(
+      {
+        provider: server.provider,
+        endpoint: server.endpoint,
+        model: server.model,
+        serverId: server.id,
+        name: server.name
+      },
+      server.model
+    )
+    requestAnimationFrame(() => {
+      const input = document.getElementById('remote-server-model-search')
+      const scrollable = input as {
+        scrollIntoView?: (options?: ScrollIntoViewOptions) => void
+      } | null
+      scrollable?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+      input?.focus()
+    })
+  }
+
+  const save = async (): Promise<void> => {
+    if (remoteEnabled && !form.name.trim()) {
+      setStatus('Enter a server name first.')
+      return
+    }
+    if (
+      remoteEnabled &&
+      ![...Object.values(form.mediaModels), ...Object.values(form.roleModels)].some(Boolean)
+    ) {
+      setStatus('Test the connection and select at least one model first.')
+      return
+    }
+    setBusy(true)
+    setStatus('Saving...')
+    try {
+      const saved = (await window.api.setRemoteVisionServer(
+        payload()
+      )) as RemoteVisionServerSettings
+      applySettings(saved)
+      setApiKey('')
+      setStatus(saved.activeServerId ? 'Server saved and active.' : 'Local model is active.')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Settings could not be saved.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (serverId: string): Promise<void> => {
+    setBusy(true)
+    try {
+      const saved = (await window.api.removeRemoteVisionServer(
+        serverId
+      )) as RemoteVisionServerSettings
+      applySettings(saved)
+      setStatus('Server removed.')
+    } catch {
+      setStatus('Server could not be removed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const addServer = (): void => {
+    setRemoteEnabled(true)
+    setForm(EMPTY_FORM)
+    setApiKey('')
+    setModels([])
+    setModelQuery('')
+    setShowModels(false)
+    setStatus('Enter the new server details.')
+  }
+
+  return (
+    <>
+      <p className="mb-3 text-[11px] leading-4 text-neutral-500">
+        Save model servers once, then switch between them when you need one.
+      </p>
+
+      <div className="mb-3 border-b border-neutral-800 pb-3">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <p className="text-[11px] uppercase tracking-wide text-neutral-400">Saved servers</p>
+          <button
+            type="button"
+            onClick={addServer}
+            className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:border-neutral-600 hover:text-white"
+          >
+            Add server
+          </button>
+        </div>
+        {settings.servers.length > 0 ? (
+          <div className="space-y-2">
+            {settings.servers.map((server) => (
+              <div
+                key={server.id}
+                className={`flex items-center gap-3 border p-2 ${form.id === server.id ? 'border-green-500/60 bg-green-500/5' : 'border-neutral-800 bg-neutral-950/40'}`}
+              >
+                <button
+                  type="button"
+                  onClick={() => selectServer(server)}
+                  className="min-w-0 flex-1 text-left"
+                >
+                  <span className="block truncate text-xs text-neutral-200">{server.name}</span>
+                  <span className="block truncate text-[10px] text-neutral-600">
+                    {server.endpoint} · {server.model}
+                  </span>
+                </button>
+                {settings.activeServerId === server.id ? (
+                  <span className="text-[9px] uppercase tracking-wide text-green-500">Active</span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => void changeModel(server)}
+                  disabled={busy}
+                  className="text-[10px] text-neutral-400 hover:text-white disabled:opacity-40"
+                >
+                  Change model
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void remove(server.id)}
+                  disabled={busy}
+                  className="text-[10px] text-neutral-600 hover:text-red-400 disabled:opacity-40"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-[10px] text-neutral-600">No saved servers.</p>
+        )}
+      </div>
+
+      <div
+        role="group"
+        aria-label="Remote server details"
+        className="grid grid-cols-1 gap-x-3 lg:grid-cols-2 [&>div]:mb-2"
+      >
+        <Row
+          label="Use remote server"
+          controlId="remote-server-enabled"
+          hint="Off uses models on this device."
+        >
+          <button
+            id="remote-server-enabled"
+            type="button"
+            role="switch"
+            aria-checked={remoteEnabled}
+            onClick={() => {
+              setRemoteEnabled((enabled) => !enabled)
+              setStatus('Not saved.')
+            }}
+            className={`relative h-6 w-11 rounded-full border transition-colors ${remoteEnabled ? 'border-green-500 bg-green-500/20' : 'border-neutral-700 bg-neutral-900'}`}
+          >
+            <span
+              className={`absolute left-1 top-1 h-3.5 w-3.5 rounded-full transition-transform ${remoteEnabled ? 'translate-x-5 bg-green-500' : 'translate-x-0 bg-neutral-500'}`}
+            />
+          </button>
+        </Row>
+
+        {remoteEnabled ? (
+          <>
+            <Row label="Server name" controlId="remote-server-name">
+              <input
+                id="remote-server-name"
+                value={form.name}
+                onChange={(event) => {
+                  setForm((current) => ({ ...current, name: event.target.value }))
+                  setStatus('Not saved.')
+                }}
+                placeholder="e.g., Home server"
+                className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 text-xs text-neutral-200 outline-none placeholder:text-neutral-600 focus-visible:border-green-500"
+              />
+            </Row>
+            <Row
+              label="Address"
+              controlId="remote-server-address"
+              hint={
+                form.endpoint.trim()
+                  ? `Will connect to: ${remoteVisionApiBase(form.endpoint)}/models`
+                  : 'Base address. /v1 is added when needed.'
+              }
+            >
+              <input
+                id="remote-server-address"
+                value={form.endpoint}
+                onChange={(event) => {
+                  setForm((current) => ({
+                    ...current,
+                    endpoint: event.target.value,
+                    model: '',
+                    mediaModels: {},
+                    roleModels: {},
+                    modelCatalog: [],
+                    screenFramesAllowed: false
+                  }))
+                  setModels([])
+                  setModelQuery('')
+                  setStatus('Not tested.')
+                }}
+                placeholder="https://models.example"
+                className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 text-xs text-neutral-200 outline-none placeholder:text-neutral-600 focus-visible:border-green-500"
+              />
+            </Row>
+            <Row
+              label="API key (optional)"
+              controlId="remote-server-api-key"
+              hint={
+                form.hasApiKey
+                  ? 'A key is stored in the system credential store (••••••••).'
+                  : 'Optional for servers that do not require a key.'
+              }
+            >
+              <input
+                id="remote-server-api-key"
+                type="password"
+                value={apiKey}
+                onChange={(event) => {
+                  setApiKey(event.target.value)
+                  setStatus('Not tested.')
+                }}
+                autoComplete="off"
+                placeholder={
+                  form.hasApiKey ? 'Stored key - enter a new value to replace it' : 'API key'
+                }
+                className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 text-xs text-neutral-200 outline-none placeholder:text-neutral-600 focus-visible:border-green-500"
+              />
+            </Row>
+            {providerNeedsScreenDisclosure(remoteVisionProviderForEndpoint(form.endpoint)) ? (
+              <div className="lg:col-span-2 [&>div]:mb-0">
+                <Row
+                  label="Allow screen images"
+                  controlId="remote-server-screen-frames"
+                  hint={
+                    form.screenFramesAllowed
+                      ? `Allowed after Save. Web Use and Computer Use can send screen images with visible text, apps, and other content to ${form.name || serverNameFromEndpoint(form.endpoint)} at ${serverNameFromEndpoint(form.endpoint)}.`
+                      : 'Blocked until you allow it. Web Use and Computer Use can send screen images with visible text, apps, and other content to this server.'
+                  }
+                >
+                  <button
+                    id="remote-server-screen-frames"
+                    type="button"
+                    role="switch"
+                    aria-checked={form.screenFramesAllowed}
+                    onClick={() => {
+                      setForm((current) => ({
+                        ...current,
+                        screenFramesAllowed: !current.screenFramesAllowed
+                      }))
+                      setStatus('Not saved.')
+                    }}
+                    className={`relative h-6 w-11 rounded-full border transition-colors ${form.screenFramesAllowed ? 'border-green-500 bg-green-500/20' : 'border-neutral-700 bg-neutral-900'}`}
+                  >
+                    <span
+                      className={`absolute left-1 top-1 h-3.5 w-3.5 rounded-full transition-transform ${form.screenFramesAllowed ? 'translate-x-5 bg-green-500' : 'translate-x-0 bg-neutral-500'}`}
+                    />
+                  </button>
+                </Row>
+              </div>
+            ) : null}
+            <Row
+              label="Text + Vision"
+              controlId="remote-server-model-search"
+              hint={form.model ? `Selected: ${form.model}` : 'Search and select one model.'}
+            >
+              <div className="relative">
+                <input
+                  id="remote-server-model-search"
+                  value={modelQuery}
+                  onFocus={() => setShowModels(true)}
+                  onChange={(event) => {
+                    setModelQuery(event.target.value)
+                    setForm((current) => ({
+                      ...current,
+                      model: '',
+                      mediaModels: { ...current.mediaModels, text: undefined }
+                    }))
+                    setShowModels(true)
+                  }}
+                  placeholder="Search models"
+                  autoComplete="off"
+                  className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 text-xs text-neutral-200 outline-none placeholder:text-neutral-600 focus-visible:border-green-500"
+                />
+                {showModels ? (
+                  <div className="mt-1 max-h-56 overflow-y-auto border border-neutral-800 bg-neutral-950 p-1">
+                    {filteredModels.length > 0 ? (
+                      filteredModels.map((model) => (
+                        <button
+                          key={model.id}
+                          type="button"
+                          onClick={() => {
+                            setForm((current) => ({
+                              ...current,
+                              model: model.id,
+                              mediaModels: { ...current.mediaModels, text: model.id }
+                            }))
+                            setModelQuery(model.name)
+                            setShowModels(false)
+                            setStatus('Not saved.')
+                          }}
+                          className="block w-full px-2 py-1.5 text-left text-xs text-neutral-300 hover:bg-neutral-900 hover:text-white"
+                        >
+                          <span className="block truncate">{model.name}</span>
+                          {model.name !== model.id ? (
+                            <span className="block truncate text-[9px] text-neutral-600">
+                              {model.id}
+                            </span>
+                          ) : null}
+                        </button>
+                      ))
+                    ) : (
+                      <p className="px-2 py-3 text-[10px] text-neutral-600">No matching models.</p>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </Row>
+            {(['grounding', 'decision'] as const).map((role) => (
+              <Row
+                key={role}
+                label={role === 'grounding' ? 'Grounding specialist' : 'Decision model'}
+                controlId={`remote-server-${role}-model`}
+                hint="Only this selection appears in Tasks."
+              >
+                <SettingsSelect
+                  id={`remote-server-${role}-model`}
+                  label={`${role} model`}
+                  value={form.roleModels[role] ?? ''}
+                  searchable
+                  options={[
+                    { value: '', label: `No remote ${role} model` },
+                    ...models
+                      .filter((model) => model.kind === 'text')
+                      .map((model) => ({ value: model.id, label: model.name }))
+                  ]}
+                  onValueChange={(value) => {
+                    setForm((current) => ({
+                      ...current,
+                      roleModels: { ...current.roleModels, [role]: value || undefined }
+                    }))
+                    setStatus('Not saved.')
+                  }}
+                />
+              </Row>
+            ))}
+            {(['image', 'transcription', 'voice'] as const).map((kind) => (
+              <Row
+                key={kind}
+                label={kind === 'image' ? 'Image' : kind === 'voice' ? 'Voice' : 'Transcription'}
+                controlId={`remote-server-${kind}-model`}
+              >
+                <SettingsSelect
+                  id={`remote-server-${kind}-model`}
+                  label={`${kind} model`}
+                  value={form.mediaModels[kind] ?? ''}
+                  searchable
+                  options={[
+                    { value: '', label: `No ${kind} model` },
+                    ...models
+                      .filter((model) => model.kind === kind)
+                      .map((model) => ({ value: model.id, label: model.name }))
+                  ]}
+                  onValueChange={(value) => {
+                    setForm((current) => ({
+                      ...current,
+                      mediaModels: { ...current.mediaModels, [kind]: value || undefined }
+                    }))
+                    setStatus('Not saved.')
+                  }}
+                />
+              </Row>
+            ))}
+          </>
+        ) : null}
+      </div>
+
+      <div className="mt-3 flex items-center justify-between gap-3 border-t border-neutral-800 pt-3">
+        <p role="status" aria-live="polite" className="min-w-0 flex-1 text-[10px] text-neutral-500">
+          {status}
+        </p>
+        {remoteEnabled ? (
+          <button
+            type="button"
+            onClick={() => void test()}
+            disabled={busy}
+            className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:border-neutral-600 hover:text-white disabled:opacity-40"
+          >
+            Test connection
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={busy}
+          className="rounded-md border border-green-500 px-3 py-1.5 text-xs text-green-500 hover:bg-green-500/10 disabled:opacity-40"
+        >
+          Save
+        </button>
+      </div>
+    </>
+  )
+}

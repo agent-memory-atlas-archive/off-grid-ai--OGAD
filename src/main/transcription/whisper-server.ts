@@ -1,3 +1,4 @@
+import { beginRuntimeBackend } from '../runtime-backends'
 // Resident whisper.cpp HTTP server (the bundled `whisper-server`).
 //
 // Unlike the one-shot whisper-cli in whisper-cli.ts (which spawns, RELOADS the
@@ -20,16 +21,12 @@ import { spawn, type ChildProcess, execSync } from 'child_process'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
-import { promisify } from 'util'
-import { execFile } from 'child_process'
-import { binRoots, isPackaged, exe } from '../runtime-env'
-import { existing } from './bin-resolution'
-import { whisperModel, ffmpegBin } from './whisper-cli'
-import { decodeToWavArgs, DECODE_TIMEOUT_MS } from './ffmpeg-decode'
-import type { TranscriptionService, Transcript, TranscribeOptions } from './types'
+import { isPackaged } from '../runtime-env'
+import { findWhisperBinary, whisperRuntimeLibraryEnv } from './whisper-runtime'
+import { getBackendPreference } from '../backend-preferences'
+import type { Transcript } from './types'
 import { killOrphansOnPort as reapOrphansOnPort } from '../kill-orphan-port'
-
-const execFileAsync = promisify(execFile)
+import { Mutex } from 'async-mutex'
 
 // Off the LLM (8439) and image (8440) ports so the resident STT engine can bind
 // alongside them - they may all be warm at once (chat + dictation together).
@@ -53,6 +50,8 @@ export interface WhisperInferenceRequest {
   language?: string
   /** Initial prompt biasing recognition toward custom vocabulary. */
   prompt?: string
+  /** Aborts the request and response body. The shared server has no per-job native cancel API. */
+  signal?: AbortSignal
 }
 
 /** Build the whisper-server launch argv (context/model args only; per-request
@@ -119,14 +118,17 @@ export function parseInferenceResponse(body: unknown): { text: string } {
 }
 
 /** The resident whisper server. One instance (the exported `whisperServer`). */
-class WhisperServerService {
+export class WhisperServerService {
   private server: ChildProcess | null = null
-  private port = WHISPER_SERVER_PORT
+  private backendState?: ReturnType<typeof beginRuntimeBackend>
+  private readonly inferenceMutex = new Mutex()
   private activeKey: string | null = null // whisperContextKey of the loaded model, null when down
   private startPromise: Promise<void> | null = null
   private idleTimer: ReturnType<typeof setTimeout> | null = null
   private idleMs = 5 * 60_000 // keep the model hot for 5 min of inactivity, then evict
   private stderrTail: string[] = []
+
+  constructor(private readonly port = WHISPER_SERVER_PORT) {}
 
   /** Tune the idle window (mainly for tests). */
   setIdleMs(ms: number): void {
@@ -143,9 +145,7 @@ class WhisperServerService {
 
   /** Resolve the bundled whisper-server binary across dev / packaged layouts. */
   findBinary(): string | null {
-    // Shared first-existing-path resolver (bin-resolution), instead of a hand-rolled
-    // existsSync loop that duplicated it. exe() adds the .exe suffix on Windows.
-    return existing(binRoots().map((r) => path.join(r, 'whisper-server', exe('whisper-server'))))
+    return findWhisperBinary('whisper-server', getBackendPreference('stt'))
   }
 
   /** Ensure a server is up with EXACTLY this context; restart on a model/thread
@@ -194,27 +194,34 @@ class WhisperServerService {
       // the ggml/whisper DLLs next to the exe resolve.
       env: {
         ...process.env,
-        DYLD_LIBRARY_PATH: binDir,
-        ...(process.platform === 'win32'
-          ? { PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}` }
-          : {})
+        ...whisperRuntimeLibraryEnv(process.platform, bin, process.env)
       }
     })
+    const backendState = beginRuntimeBackend('transcription', ctx.modelPath)
+    this.backendState = backendState
     this.server = proc
     this.stderrTail = []
     const capture = (d: Buffer): void => {
+      backendState.observe(String(d))
       for (const line of String(d).split(/\r?\n/)) if (line.trim()) this.stderrTail.push(line)
       if (this.stderrTail.length > 50) this.stderrTail = this.stderrTail.slice(-50)
     }
     proc.stdout.on('data', capture)
     proc.stderr.on('data', capture)
     proc.on('close', () => {
+      backendState.stop()
       if (this.server !== proc) return // an already-replaced instance
       this.server = null
       this.activeKey = null
     })
 
-    await this.waitForReady()
+    try {
+      await this.waitForReady()
+      backendState.ready()
+    } catch (error) {
+      backendState.fail(error)
+      throw error
+    }
     this.activeKey = key
   }
 
@@ -239,19 +246,43 @@ class WhisperServerService {
     throw new Error('whisper-server failed to become ready in time.')
   }
 
-  /** Transcribe a 16 kHz mono WAV on the resident server. Assumes ensureUp() has
-   *  already loaded the intended model. */
-  async inference(req: WhisperInferenceRequest): Promise<Transcript> {
+  /** Run one request against the shared resident process. whisper-server has no
+   *  per-job cancellation API, so this owner serializes native inference. Cancelling
+   *  the active request can then stop its process without terminating another request;
+   *  the next queued request restarts the resident process through ensureUp(). */
+  async transcribe(ctx: WhisperServerContext, req: WhisperInferenceRequest): Promise<Transcript> {
+    return this.inferenceMutex.runExclusive(async () => {
+      req.signal?.throwIfAborted()
+      const cancelNativeInference = (): void => this.stopProcess()
+      req.signal?.addEventListener('abort', cancelNativeInference, { once: true })
+      try {
+        req.signal?.throwIfAborted()
+        await this.ensureUp(ctx)
+        req.signal?.throwIfAborted()
+        this.backendState?.recordRequest()
+        return await this.inference(req)
+      } finally {
+        req.signal?.removeEventListener('abort', cancelNativeInference)
+      }
+    })
+  }
+
+  /** Transcribe a 16 kHz mono WAV after the serialized owner loads its context. */
+  private async inference(req: WhisperInferenceRequest): Promise<Transcript> {
     this.clearIdleTimer()
     try {
       const fields = buildInferenceFields(req)
       const form = new FormData()
-      const bytes = await fs.promises.readFile(req.wavPath)
+      const bytes = await fs.promises.readFile(req.wavPath, { signal: req.signal })
       // FormData wants a Blob; the audio part is named `file` (whisper-server's field).
       form.append('file', new Blob([bytes], { type: 'audio/wav' }), path.basename(req.wavPath))
       for (const [k, v] of Object.entries(fields)) form.append(k, v)
 
-      const res = await fetch(`${this.base()}/inference`, { method: 'POST', body: form })
+      const res = await fetch(`${this.base()}/inference`, {
+        method: 'POST',
+        body: form,
+        signal: req.signal
+      })
       if (!res.ok) throw new Error(`whisper-server rejected the request (HTTP ${res.status}).`)
       // Prefer JSON; fall back to raw text so a plain-text build still parses.
       const ctype = res.headers.get('content-type') ?? ''
@@ -271,6 +302,7 @@ class WhisperServerService {
   }
 
   private stopProcess(): void {
+    this.backendState?.stop()
     if (this.server) {
       try {
         this.server.kill('SIGKILL')
@@ -318,60 +350,3 @@ class WhisperServerService {
 
 /** Shared singleton - callers depend on this, not on the class. */
 export const whisperServer = new WhisperServerService()
-
-/** TranscriptionService backed by the resident whisper-server. Same contract as
- *  WhisperCliTranscription (isAvailable / transcribe), so it drops in behind the
- *  select.ts seam. When the server binary isn't staged, isAvailable() is false and
- *  select.ts degrades to the one-shot whisper-cli - exactly like Parakeet does. */
-class WhisperServerTranscription implements TranscriptionService {
-  constructor(private readonly svc: WhisperServerService = whisperServer) {}
-
-  isAvailable(): boolean {
-    // Available only when BOTH the resident binary and a whisper ggml model exist.
-    // (whisperModel() returns null when no ggml model is downloaded.)
-    return !!this.svc.findBinary() && !!whisperModel()
-  }
-
-  async transcribe(input: { path: string }, opts: TranscribeOptions = {}): Promise<Transcript> {
-    const model =
-      opts.model && path.isAbsolute(opts.model) && fs.existsSync(opts.model)
-        ? opts.model
-        : whisperModel()
-    if (!model)
-      throw new Error('No transcription model found - download Whisper from Models first.')
-
-    // Ensure the resident server is warm on the intended model (loads once; a
-    // subsequent call with the same model is a no-op).
-    await this.svc.ensureUp({ modelPath: model })
-
-    // The server expects a decoded 16 kHz mono WAV. Reuse the exact ffmpeg re-encode
-    // whisper-cli.ts uses; skip it when the caller pre-converted (dictation interim ticks).
-    let wav = input.path
-    let tmp: string | null = null
-    if (!opts.alreadyWav16k) {
-      const ff = ffmpegBin()
-      if (!ff) throw new Error('ffmpeg is required to decode audio and was not found.')
-      tmp = path.join(os.tmpdir(), `offgrid-stt-srv-${Date.now()}-${process.pid}.wav`)
-      try {
-        await execFileAsync(ff, decodeToWavArgs(input.path, tmp), { timeout: DECODE_TIMEOUT_MS })
-      } catch (e) {
-        fs.promises.unlink(tmp).catch(() => {})
-        throw e
-      }
-      wav = tmp
-    }
-
-    try {
-      return await this.svc.inference({
-        wavPath: wav,
-        language: opts.language,
-        prompt: opts.prompt
-      })
-    } finally {
-      if (tmp) fs.promises.unlink(tmp).catch(() => {})
-    }
-  }
-}
-
-/** Shared singleton for the resident-whisper TranscriptionService. */
-export const whisperServerTranscription: TranscriptionService = new WhisperServerTranscription()

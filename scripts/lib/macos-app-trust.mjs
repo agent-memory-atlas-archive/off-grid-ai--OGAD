@@ -14,7 +14,10 @@ export const OFFGRID_APPLE_TEAM_ID = '84V6KCAC49'
 export const CRITICAL_SIGNED_CODE = Object.freeze([
   'Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework',
   'Contents/Resources/bin/llama/llama-server',
+  'Contents/Resources/bin/llama-prism/llama-server',
+  'Contents/Resources/bin/kev-runtime/python/bin/python3',
   'Contents/Resources/bin/meeting-recorder',
+  'Contents/Resources/bin/computer-use-capture',
   'Contents/Resources/bin/dictation-hotkey'
 ])
 
@@ -71,7 +74,7 @@ export function releaseTeamIdForEnvironment(environment) {
   }
   if (teamId !== OFFGRID_APPLE_TEAM_ID) {
     throw new Error(
-      `APPLE_TEAM_ID must match Off Grid's pinned signing team ${OFFGRID_APPLE_TEAM_ID}`
+      `APPLE_TEAM_ID must match Off Grid AI's pinned signing team ${OFFGRID_APPLE_TEAM_ID}`
     )
   }
   return OFFGRID_APPLE_TEAM_ID
@@ -150,6 +153,7 @@ export async function verifyReleaseAppTrust(bundle, expectedTeamId, boundary = s
     if (code === bundle) appDetails = details
   }
   await boundary.execFile('/usr/bin/xcrun', ['stapler', 'validate', bundle])
+  await boundary.execFile('/usr/bin/syspolicy_check', ['distribution', bundle])
   const gatekeeper = await boundary.execFile('/usr/sbin/spctl', [
     '--assess',
     '--type',

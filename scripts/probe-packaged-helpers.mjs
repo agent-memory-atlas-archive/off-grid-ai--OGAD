@@ -29,6 +29,13 @@ const probes = [
     libraryPath: true
   },
   {
+    name: 'Prism llama-server',
+    relative: 'bin/llama-prism/llama-server',
+    args: ['--help'],
+    output: /-+\s*common params|--help,\s*--usage|LLAMA_ARG_THREADS|usage:.*llama-server/is,
+    libraryPath: true
+  },
+  {
     name: 'ffmpeg',
     relative: 'bin/ffmpeg',
     args: ['-version'],
@@ -39,6 +46,12 @@ const probes = [
     relative: 'bin/whisper/whisper-cli',
     args: ['--help'],
     output: /usage:.*whisper-cli[\s\S]*options:/i
+  },
+  {
+    name: 'Computer Use capture',
+    relative: 'bin/computer-use-capture',
+    args: ['--help'],
+    output: /usage: computer-use-capture/i
   },
   {
     name: 'image server',

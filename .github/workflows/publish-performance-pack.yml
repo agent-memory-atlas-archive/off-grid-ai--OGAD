@@ -1,0 +1,172 @@
+name: Publish optional CUDA pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Pack an existing Windows or Linux build artifact'
+        type: choice
+        options: [win32, linux]
+        required: true
+      version:
+        description: 'Immutable pack version (letters, numbers, dot, dash, underscore)'
+        type: string
+        required: true
+      source_run:
+        description: 'Build and Release run with the installer artifact (empty uses the pinned source run)'
+        type: string
+        required: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(github.event_name == 'push' && '["linux","win32"]' || format('["{0}"]', inputs.platform)) }}
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      VERSION: ${{ inputs.version || '2026-09-29-v1' }}
+      SOURCE_RUN_INPUT: ${{ inputs.source_run }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Check input and source artifact
+        run: |
+          [[ "$VERSION" =~ ^[a-zA-Z0-9._-]+$ ]]
+          source_run="$SOURCE_RUN_INPUT"
+          if [ -n "$source_run" ]; then
+            [[ "$source_run" =~ ^[0-9]+$ ]]
+          elif [ "$PLATFORM" = linux ]; then
+            source_run=36450913791
+          else
+            source_run=36448396362
+          fi
+          echo "source_run=$source_run" >> "$GITHUB_ENV"
+          if [ "$PLATFORM" = linux ]; then
+            echo 'source_name=off-grid-ai-linux-deb' >> "$GITHUB_ENV"
+          else
+            echo 'source_name=off-grid-ai-windows' >> "$GITHUB_ENV"
+          fi
+      - name: Download existing build artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p source
+          gh run download "$source_run" --repo "$GITHUB_REPOSITORY" --name "$source_name" --dir source
+          find source -maxdepth 3 -type f -printf '%p %s bytes\n'
+      - name: Extract CUDA directories
+        run: |
+          mkdir -p extracted
+          if [ "$PLATFORM" = linux ]; then
+            deb="$(find source -name '*.deb' -type f -print -quit)"
+            test -s "$deb"
+            dpkg-deb --fsys-tarfile "$deb" | tar -x -C extracted --wildcards --no-anchored \
+              '*/resources/bin/llama-cuda/*' \
+              '*/resources/bin/llama-prism-cuda/*' \
+              '*/resources/bin/cuda-runtime/*' \
+              '*/resources/bin/sd-cuda/*' \
+              '*/resources/bin/whisper-cuda/*' \
+              '*/resources/bin/kev-runtime/*'
+          else
+            payload="$(find source -name '*.7z' -type f -print -quit)"
+            test -s "$payload"
+            7z l -slt "$payload" | sed -n 's/^Path = //p' | \
+              grep -E '(^|[/\\])resources[/\\]bin[/\\](llama-cuda|llama-prism-cuda|cuda-runtime|sd-cuda|whisper|kev-runtime)([/\\]|$)' \
+              > "$RUNNER_TEMP/cuda-files.txt"
+            test -s "$RUNNER_TEMP/cuda-files.txt"
+            7z x -y "$payload" "-o$PWD/extracted" "-i@$RUNNER_TEMP/cuda-files.txt"
+          fi
+          bin_root="$(find extracted -type d -path '*/resources/bin' -print -quit)"
+          test -n "$bin_root"
+          echo "BIN_ROOT=$PWD/$bin_root" >> "$GITHUB_ENV"
+          du -sh "$bin_root"/*
+      - name: Replace Windows Whisper engine with pinned CUDA 12.4 build
+        if: matrix.platform == 'win32'
+        run: |
+          curl -fL --retry 3 --silent --show-error \
+            'https://github.com/ggml-org/whisper.cpp/releases/download/b5130/whisper-cublas-12.4.0-bin-x64.zip' \
+            -o "$RUNNER_TEMP/whisper-cublas-12.4.0-bin-x64.zip"
+          python3 scripts/stage-win-whisper-cuda-pack.py \
+            "$RUNNER_TEMP/whisper-cublas-12.4.0-bin-x64.zip" \
+            "$BIN_ROOT/whisper"
+      - name: Add prebuilt ONNX CUDA libraries
+        if: matrix.platform == 'linux'
+        run: |
+          python3 -m pip install --no-cache-dir --no-deps --target "$RUNNER_TEMP/onnx-nvidia" \
+            'nvidia-cuda-runtime==13.2.86' 'nvidia-cublas==13.2.2.2' \
+            'nvidia-curand==10.4.2.66' 'nvidia-cudnn-cu13==9.23.1.3'
+          mkdir -p "$BIN_ROOT/onnx-cuda"
+          for folder in cu13 cudnn; do
+            find "$RUNNER_TEMP/onnx-nvidia/nvidia/$folder/lib" -maxdepth 1 -type f -name '*.so.*' \
+              -exec mv '{}' "$BIN_ROOT/onnx-cuda/" ';'
+          done
+          test -s "$BIN_ROOT/onnx-cuda/libcublasLt.so.13"
+          test -s "$BIN_ROOT/onnx-cuda/libcudnn.so.9"
+      - name: Add pinned Windows ONNX CUDA libraries
+        if: matrix.platform == 'win32'
+        run: |
+          git lfs pull --include="resources/bin/onnx-cuda/onnxruntime_binding.node" --exclude=""
+          mkdir -p "$RUNNER_TEMP/onnx-wheels"
+          curl -fL --retry 3 --silent --show-error \
+            'https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-win-x64-gpu_cuda12-1.30.0.zip' \
+            -o "$RUNNER_TEMP/onnxruntime-win-x64-gpu_cuda12-1.30.0.zip"
+          python3 -m pip download --no-deps --only-binary=:all: \
+            --platform win_amd64 --python-version 3.12 --implementation cp --abi cp312 \
+            -d "$RUNNER_TEMP/onnx-wheels" \
+            'nvidia-cuda-runtime-cu12==12.8.90' \
+            'nvidia-cublas-cu12==12.8.5.5' \
+            'nvidia-cuda-nvrtc-cu12==12.8.93' \
+            'nvidia-cufft-cu12==11.3.3.83' \
+            'nvidia-cudnn-cu12==9.19.0.56'
+          python3 scripts/stage-win-onnx-cuda-pack.py \
+            "$RUNNER_TEMP/onnxruntime-win-x64-gpu_cuda12-1.30.0.zip" \
+            "$RUNNER_TEMP/onnx-wheels" \
+            resources/bin/onnx-cuda/onnxruntime_binding.node \
+            "$BIN_ROOT/onnx-cuda"
+      - name: Make and check versioned pack
+        run: |
+          node scripts/package-performance-pack.mjs "$PLATFORM" "$BIN_ROOT" "$RUNNER_TEMP/$VERSION.tar.gz" "$VERSION"
+          tar -tzf "$RUNNER_TEMP/$VERSION.tar.gz" | grep -q '^bin/llama-cuda/'
+          sha256sum "$RUNNER_TEMP/$VERSION.tar.gz"
+          cat "$RUNNER_TEMP/$VERSION.tar.gz.json"
+      - name: Install S3 client
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install AWS CLI
+        run: python3 -m pip install --user awscli
+      - name: Upload to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          endpoint='https://0693da34a224264a4ec10f07fc8336ae.r2.cloudflarestorage.com'
+          key="desktop/cuda/$PLATFORM/$VERSION.tar.gz"
+          if "$HOME/.local/bin/aws" s3api head-object --bucket offgrid-desktop-runtime-packs --key "$key" --endpoint-url "$endpoint" >/dev/null 2>&1; then
+            echo 'This pack version already exists. Choose a new version.' >&2
+            exit 1
+          fi
+          "$HOME/.local/bin/aws" s3 cp "$RUNNER_TEMP/$VERSION.tar.gz" "s3://offgrid-desktop-runtime-packs/$key" \
+            --endpoint-url "$endpoint" --no-progress --content-type application/gzip \
+            --cache-control 'public, max-age=31536000, immutable'
+          remote_size="$("$HOME/.local/bin/aws" s3api head-object --bucket offgrid-desktop-runtime-packs --key "$key" --endpoint-url "$endpoint" --query ContentLength --output text)"
+          test "$remote_size" = "$(stat -c %s "$RUNNER_TEMP/$VERSION.tar.gz")"
+      - name: Keep manifest for app pinning
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
+        with:
+          name: cuda-${{ matrix.platform }}-${{ env.VERSION }}-manifest
+          path: ${{ runner.temp }}/${{ env.VERSION }}.tar.gz.json
+          if-no-files-found: error

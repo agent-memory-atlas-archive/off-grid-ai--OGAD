@@ -1,0 +1,224 @@
+import { describe, expect, it } from 'vitest'
+import { generalVisionOperatorAdapter } from '../model-adapters/general-vision-operator'
+import { uiMateAdapter } from '../model-adapters/ui-mate'
+import { uiTarsAdapter } from '../model-adapters/ui-tars'
+import { remoteVisionModelId } from '../../../shared/remote-vision-server'
+import { matchSpecialistVisionModelAdapter } from '../vision-task-model-strategy'
+
+const bounds = { width: 960, height: 544 }
+
+function uiMate(action: string, parameters = ''): string {
+  return `<think>The visible control is ready.</think><action>Use the visible control.</action><tool_call><function=computer_use><parameter=action>${action}</parameter>${parameters}</function></tool_call>`
+}
+
+describe('specialist vision protocols', () => {
+  it('keeps remote GUI specialists on their native protocols', () => {
+    const serverId = 'openrouter-server'
+    const remoteUiTars = matchSpecialistVisionModelAdapter(
+      remoteVisionModelId(serverId, 'bytedance/ui-tars-1.5-7b')
+    )
+    const remoteUiMate = matchSpecialistVisionModelAdapter(
+      remoteVisionModelId(serverId, 'tencent/ui-mate-9b')
+    )
+
+    expect(remoteUiTars).toBe(uiTarsAdapter)
+    expect(remoteUiMate).toBe(uiMateAdapter)
+    expect(
+      remoteUiTars.buildRequest({
+        goal: 'Use the visible control.',
+        currentScreenshotDataUrl: 'data:image/png;base64,current',
+        coordinateFrame: { encoded: bounds, source: bounds },
+        history: [],
+        recentSteps: [],
+        olderVisualFacts: []
+      }).tools
+    ).toBeUndefined()
+    expect(
+      remoteUiMate.buildRequest({
+        goal: 'Use the visible control.',
+        currentScreenshotDataUrl: 'data:image/png;base64,current',
+        coordinateFrame: { encoded: bounds, source: bounds },
+        history: [],
+        recentSteps: [],
+        olderVisualFacts: []
+      }).tools
+    ).toBeUndefined()
+  })
+
+  it('keeps UI-Mate on its native XML trajectory and execution-plan extension', () => {
+    const request = uiMateAdapter.buildRequest({
+      goal: 'Use the visible control.',
+      operatorEnvironment: 'embedded_browser',
+      currentMilestone: 'Open the menu.',
+      currentScreenshotDataUrl: 'data:image/png;base64,current',
+      coordinateFrame: { encoded: bounds, source: bounds },
+      history: [],
+      recentSteps: ['The page is ready.'],
+      olderVisualFacts: [],
+      continuation: {
+        done: ['Attempted: Click reel A.'],
+        next: 'Open a different relevant reel.',
+        remember: 'Do not repeat an earlier target.'
+      },
+      verifiedActions: []
+    })
+    const serialized = JSON.stringify(request.messages)
+
+    expect(request.tools).toBeUndefined()
+    expect(request.responseFormat).toBeUndefined()
+    expect(serialized).toContain('<function=computer_use>')
+    expect(serialized).toContain('Current milestone: Open the menu.')
+    expect(serialized).toContain('Only active instruction: Open the menu.')
+    expect(serialized).toContain('If this result is already visible, return subtask_complete now.')
+    expect(serialized).toContain(
+      'Bounded task context for constraints only: Use the visible control.'
+    )
+    expect(serialized.indexOf('Only active instruction: Open the menu.')).toBeLessThan(
+      serialized.indexOf('Bounded task context for constraints only: Use the visible control.')
+    )
+    expect(serialized).toContain('subtask_complete')
+    expect(serialized).toContain('exact web page viewport')
+    expect(serialized).toContain('does not include a browser address bar')
+    expect(serialized).toContain('Do not add an offset')
+    expect(serialized).toContain('Attempted: Click reel A.')
+    expect(serialized).toContain('Open a different relevant reel.')
+  })
+
+  it('uses the exact display frame for desktop Computer Use', () => {
+    const request = uiMateAdapter.buildRequest({
+      goal: 'Open the visible desktop control.',
+      operatorEnvironment: 'desktop',
+      currentScreenshotDataUrl: 'data:image/png;base64,current',
+      coordinateFrame: { encoded: bounds, source: bounds },
+      history: [],
+      recentSteps: [],
+      olderVisualFacts: [],
+      verifiedActions: []
+    })
+    const serialized = JSON.stringify(request.messages)
+
+    expect(serialized).toContain('exact current display frame')
+    expect(serialized).not.toContain('exact web page viewport')
+  })
+
+  it('uses one current visual frame as the coordinate source of truth', () => {
+    const request = uiMateAdapter.buildRequest({
+      goal: 'Use the visible control.',
+      currentScreenshotDataUrl: 'data:image/png;base64,current',
+      coordinateFrame: { encoded: bounds, source: bounds },
+      history: [
+        {
+          response: uiMate('left_click', '<parameter=coordinate>[500, 250]</parameter>'),
+          actionText: 'Click the old control.',
+          screenshotDataUrl: 'data:image/png;base64,stale'
+        }
+      ],
+      recentSteps: ['The page changed after the click.'],
+      olderVisualFacts: [],
+      verifiedActions: ['click at (480, 136)']
+    })
+    const serialized = JSON.stringify(request.messages)
+
+    expect(serialized).toContain('data:image/png;base64,current')
+    expect(serialized).not.toContain('data:image/png;base64,stale')
+    expect(serialized).toContain('<action>Use the visible control.</action>')
+  })
+
+  it('maps UI-Mate actions, milestone completion, and handoff through its native parser', () => {
+    expect(
+      uiMateAdapter.parseResponse(
+        uiMate('left_click', '<parameter=coordinate>[500, 250]</parameter>'),
+        bounds
+      )
+    ).toMatchObject({
+      kind: 'actions',
+      actions: [{ type: 'click', point: { x: 480, y: 136 } }],
+      decisionRationale: 'The visible control is ready.'
+    })
+    expect(uiMateAdapter.parseResponse(uiMate('subtask_complete'), bounds)).toMatchObject({
+      kind: 'phase_complete',
+      summary: 'Use the visible control.'
+    })
+    expect(
+      uiMateAdapter.parseResponse(
+        uiMate('call_user', '<parameter=text>Enter the one-time code.</parameter>'),
+        bounds
+      )
+    ).toMatchObject({ kind: 'handoff', reason: 'Enter the one-time code.' })
+  })
+
+  it('converts UI-Mate wheel steps into a visible scroll distance', () => {
+    expect(
+      uiMateAdapter.parseResponse(
+        uiMate(
+          'scroll',
+          '<parameter=direction>vertical</parameter><parameter=pixels>-3</parameter>'
+        ),
+        bounds
+      )
+    ).toMatchObject({
+      kind: 'actions',
+      actions: [{ type: 'scroll_by', axis: 'vertical', amount: -360 }]
+    })
+    expect(
+      uiMateAdapter.parseResponse(
+        uiMate(
+          'scroll',
+          '<parameter=direction>horizontal</parameter><parameter=pixels>5</parameter>'
+        ),
+        bounds
+      )
+    ).toMatchObject({
+      kind: 'actions',
+      actions: [{ type: 'scroll_by', axis: 'horizontal', amount: 600 }]
+    })
+  })
+
+  it('keeps UI-TARS on its native single action-text protocol', () => {
+    const request = uiTarsAdapter.buildRequest({
+      goal: 'Use the visible control.',
+      currentMilestone: 'Open the menu.',
+      currentScreenshotDataUrl: 'data:image/png;base64,current',
+      coordinateFrame: { encoded: bounds, source: bounds },
+      history: [],
+      recentSteps: ['The page is ready.'],
+      olderVisualFacts: [],
+      verifiedActions: []
+    })
+
+    expect(request.tools).toBeUndefined()
+    expect(request.disableThinking).toBe(true)
+    expect(JSON.stringify(request.messages)).toContain('Only active instruction: Open the menu.')
+    expect(JSON.stringify(request.messages)).toContain(
+      'Full task context for reference only: Use the visible control.'
+    )
+    expect(JSON.stringify(request.messages)).toContain('This screenshot is 960 by 544 pixels')
+    expect(
+      uiTarsAdapter.parseResponse("Action: click(point='<point>500 250</point>')", bounds)
+    ).toMatchObject({
+      kind: 'actions',
+      actions: [{ type: 'click', point: { x: 500, y: 250 } }]
+    })
+    expect(
+      uiTarsAdapter.parseResponse("action effect: click(start_box='(500,250)')", bounds)
+    ).toMatchObject({
+      kind: 'actions',
+      actions: [{ type: 'click', point: { x: 500, y: 250 } }]
+    })
+    expect(uiTarsAdapter.parseResponse('Action: subtask_complete()', bounds)).toMatchObject({
+      kind: 'phase_complete'
+    })
+  })
+
+  it('does not let general models control the graph with answer text', () => {
+    expect(
+      generalVisionOperatorAdapter.parseResponse(
+        '{"command":{"name":"complete_milestone"}}',
+        bounds
+      )
+    ).toMatchObject({
+      kind: 'invalid',
+      error: 'The general vision model did not return a native tool decision.'
+    })
+  })
+})

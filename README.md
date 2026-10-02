@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/off-grid-ai/desktop/releases/latest">Download (macOS · Windows)</a> ·
+  <a href="https://github.com/off-grid-ai/OGAD/releases/latest">Download (macOS · Windows · Linux)</a> ·
   <a href="docs/FEATURES.md">Features</a> ·
   <a href="https://getoffgridai.co">getoffgridai.co</a> ·
   <a href="https://getoffgridai.co/pro/#buy">Get Pro</a>
@@ -24,6 +24,7 @@
 <p align="center">
   <img alt="platform" src="https://img.shields.io/badge/macOS-Apple%20Silicon-black" />
   <img alt="platform" src="https://img.shields.io/badge/Windows-x64-black" />
+  <img alt="platform" src="https://img.shields.io/badge/Linux-x64-black" />
   <img alt="license" src="https://img.shields.io/badge/license-AGPL--3.0-blue" />
   <img alt="local" src="https://img.shields.io/badge/100%25-on--device-34D399" />
 </p>
@@ -62,7 +63,7 @@ Three things in one app:
    Claude/LM-Studio/Ollama with everything on-device.
 2. **A gateway** — one local OpenAI-compatible API (`http://127.0.0.1:7878/v1`, no key)
    for chat, vision, image, audio, and embeddings. Run it headless as just the gateway.
-3. **Off Grid Pro** — an always-on private layer that _sees_ your work (screen → OCR),
+3. **Off Grid AI Pro** — an always-on private layer that _sees_ your work (screen → OCR),
    _remembers_ it, helps you _reflect_, and _acts_ with your approval. On-device, opt-in.
 
 ## A look inside
@@ -81,7 +82,7 @@ Three things in one app:
 <td width="50%"><strong>Artifacts</strong> — HTML, React, SVG &amp; Mermaid in a local sandbox<br><img src="docs/screenshots/09-artifacts.png" width="100%" alt="Artifacts" /></td>
 </tr>
 <tr>
-<td width="50%"><strong>Off Grid Pro</strong> — the sees/remembers/reflects/acts layer<br><img src="docs/screenshots/07-pro-upgrade.png" width="100%" alt="Pro" /></td>
+<td width="50%"><strong>Off Grid AI Pro</strong> — the sees/remembers/reflects/acts layer<br><img src="docs/screenshots/07-pro-upgrade.png" width="100%" alt="Pro" /></td>
 <td width="50%"><strong>Private by default</strong> — runs on your machine, no account<br><img src="docs/screenshots/08-onboarding.png" width="100%" alt="Private by default" /></td>
 </tr>
 </table>
@@ -174,7 +175,7 @@ curl -X POST http://127.0.0.1:7878/v1/models/activate \
   -H 'Content-Type: application/json' -d '{"id":"unsloth/gemma-4-E4B-it-GGUF"}'
 ```
 
-## Off Grid Pro — available now
+## Off Grid AI Pro — available now
 
 The free app **runs** models. **Pro** adds the always-on layer that turns your own work
 into private, on-device memory — and an assistant that helps you act on it. Everything is
@@ -232,16 +233,19 @@ locked until a valid key is activated.
 
 ## Install
 
-Grab the latest build from [Releases](https://github.com/off-grid-ai/desktop/releases/latest):
+Grab the latest build from [Releases](https://github.com/off-grid-ai/OGAD/releases/latest):
 
 - **macOS** (Apple Silicon) - signed + notarized `.dmg`
 - **Windows** (x64) — NSIS installer (`.exe`)
+- **Linux** (x64, Ubuntu 24.04 or newer) - AppImage or `.deb`. This package
+  contains the core app, including chat text, vision, image generation, voice
+  input and output, and chat tools. Off Grid AI Pro is not bundled.
 
 ## Build from source
 
 ```bash
-git clone https://github.com/off-grid-ai/desktop.git
-cd desktop
+git clone https://github.com/off-grid-ai/OGAD.git
+cd OGAD
 git lfs install && git lfs pull   # pull the bundled native binaries (LFS) - REQUIRED
 npm install
 npm run dev          # full app
@@ -260,8 +264,8 @@ upstream releases at build time. **Build on a Windows machine** (native modules
 must compile there - cross-building from macOS is not supported):
 
 ```powershell
-git clone https://github.com/off-grid-ai/desktop.git
-cd desktop
+git clone https://github.com/off-grid-ai/OGAD.git
+cd OGAD
 npm install
 ./scripts/fetch-win-binaries.ps1   # pull win64 llama/whisper/sd/ffmpeg into resources/bin
 npm run dev                         # run locally, or:
@@ -269,9 +273,24 @@ npm run build:win                  # package the NSIS installer → dist\*-setup
 ```
 
 Prereqs on Windows: Node 20, Python 3.12 (node-gyp can't parse VS 2026 yet — use
-the **VS 2022** Build Tools), and Git. CI also builds Windows on every push to
-`feat/windows-support` (`.github/workflows/windows-build.yml`) and uploads the
-installer as a downloadable artifact.
+the **VS 2022** Build Tools), and Git. The **Branch Builds (Windows and Linux)**
+workflow can build Windows, Linux, or both from any selected branch without a
+version bump or release. It uploads the installers as downloadable workflow
+artifacts. Set `build_ref` to build a different branch, tag, or commit while you
+run the workflow from `main`. Pushes to `feat/windows-support` continue to build
+Windows automatically.
+
+### Build for Linux
+
+Run `scripts/Setup-OGAD-Source.sh` on Ubuntu 24.04 x64 to install the build tools
+and build the app. Set `OGAD_BRANCH=main` to use the current main branch.
+`npm run build:linux` requires a running Docker engine to compile the CUDA
+Whisper and image binaries with the pinned NVIDIA toolkit. The build uses
+`sudo docker` if the current user cannot access Docker directly.
+
+The installed app does not require Docker or a CUDA toolkit. It includes the
+CUDA runtime libraries and uses the host NVIDIA driver. Vulkan and CPU remain
+available when CUDA cannot run.
 
 Stack: Electron 39 + React 19 + Tailwind v4 (electron-vite),
 `better-sqlite3-multiple-ciphers` (encrypted local DB), `@lancedb/lancedb` (vectors),

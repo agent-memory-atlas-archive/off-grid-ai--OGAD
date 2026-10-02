@@ -52,7 +52,7 @@ describe('buildSendHistory (D8)', () => {
 })
 
 describe('MemoryChat builds send history from the target conversation (D8 wiring)', () => {
-  const src = readFileSync(join(__dirname, '..', '..', 'components', 'MemoryChat.tsx'), 'utf8')
+  const src = readFileSync(join(__dirname, '..', '..', 'components', 'MemoryChat', 'index.tsx'), 'utf8')
 
   it('no longer builds history from the active-tab `messages` slice', () => {
     // The exact buggy construction that fed the active tab's transcript to a send
@@ -63,5 +63,25 @@ describe('MemoryChat builds send history from the target conversation (D8 wiring
 
   it('builds history via buildSendHistory from the target conversation', () => {
     expect(src).toMatch(/buildSendHistory\(\s*messagesByConv\[convId\]/)
+  })
+
+  it('keeps task guidance visible in Chat but out of the resident model history', () => {
+    expect(
+      buildSendHistory(
+        [
+          { role: 'user', content: 'Start the task' },
+          {
+            role: 'user',
+            content: 'Use a one-way flight',
+            context: { taskGuidance: { taskId: 'task-1' } }
+          }
+        ],
+        false,
+        'What did you find?'
+      )
+    ).toEqual([
+      { role: 'user', content: 'Start the task' },
+      { role: 'user', content: 'What did you find?' }
+    ])
   })
 })

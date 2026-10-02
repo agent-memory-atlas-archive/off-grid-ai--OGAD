@@ -33,6 +33,9 @@ vi.mock('electron', () => ({
 }))
 
 const IMAGE_MODEL = 'navigation-image-fixture.safetensors'
+const CONVERSATION_ID = '11111111-1111-4111-8111-111111111111'
+const MESSAGE_ID = '22222222-2222-4222-8222-222222222222'
+const INIT_IMAGE = path.join(fixture.dataDir, 'comic-hero.png')
 const PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
 
@@ -60,6 +63,10 @@ setTimeout(() => fs.writeFileSync(output, Buffer.from('${PNG_BASE64}', 'base64')
 
   const database = await import('../database')
   database.saveSetting('enhanceImagePrompts', false)
+  database.saveSetting('imageParams', {
+    [IMAGE_MODEL]: { size: 512, steps: 4 }
+  })
+  fs.writeFileSync(INIT_IMAGE, Buffer.from(PNG_BASE64, 'base64'))
   jobs = (await import('../imagegen/job-service')).imageGenerationJobs
 })
 
@@ -80,16 +87,14 @@ describe('image generation across feature navigation', () => {
     const generation = jobs.start({
       prompt: 'A green cabin rendered while navigating',
       model: IMAGE_MODEL,
-      conversationId: 'conversation-navigation',
+      conversationId: CONVERSATION_ID,
       projectId: 'project-navigation',
       seed: 91,
-      width: 512,
-      height: 512,
-      steps: 4
+      initImage: INIT_IMAGE
     })
     expect(jobs.status()).toMatchObject({
       phase: 'running',
-      conversationId: 'conversation-navigation',
+      conversationId: CONVERSATION_ID,
       projectId: 'project-navigation'
     })
 
@@ -99,21 +104,73 @@ describe('image generation across feature navigation', () => {
 
     const image = await generation
     expect(image.dataUrl).toBe(`data:image/png;base64,${PNG_BASE64}`)
+    expect(image).toMatchObject({ width: 512, height: 512, steps: 4 })
     expect(firstScreen).not.toContain('succeeded')
     expect(returnedScreen).toContain('succeeded')
     expect(jobs.status()).toMatchObject({
       phase: 'succeeded',
-      conversationId: 'conversation-navigation',
+      conversationId: CONVERSATION_ID,
       outputPath: image.path
+    })
+    expect(JSON.parse(fs.readFileSync(`${image.path}.json`, 'utf8'))).toMatchObject({
+      syncId: image.syncId,
+      conversationId: CONVERSATION_ID
     })
 
     const refreshed: string[] = []
     const detachRefresh = jobs.onConversationUpdated((conversationId) =>
       refreshed.push(conversationId)
     )
-    expect(jobs.acknowledgeConversation('conversation-navigation')).toBe(true)
-    expect(refreshed).toEqual(['conversation-navigation'])
+    const { getDB } = await import('../database')
+    getDB()
+      .prepare(
+        `INSERT INTO rag_conversations (id, title)
+         VALUES (?, ?)`
+      )
+      .run(CONVERSATION_ID, 'Navigation image')
+    getDB()
+      .prepare(
+        `INSERT INTO rag_messages (uuid, conversation_id, role, content)
+         VALUES (?, ?, 'assistant', ?)`
+      )
+      .run(MESSAGE_ID, CONVERSATION_ID, 'Generated image')
+    expect(jobs.acknowledgeConversation(CONVERSATION_ID, MESSAGE_ID)).toBe(true)
+    expect(refreshed).toEqual([CONVERSATION_ID])
     detachRefresh()
     detachReturned()
+  }, 15_000)
+
+  it('edits with the complete Qwen-Image 2.1 stack on the local image runner', async () => {
+    const { generateImage } = await import('../imagegen')
+    const modelDir = path.join(fixture.dataDir, 'models')
+    const model = 'Qwen-Image-2-1-Q8_0.gguf'
+    const encoder = 'Qwen3VL-8B-Instruct-Q4_K_M.gguf'
+    const projector = 'mmproj-Qwen3VL-8B-Instruct-F16.gguf'
+    const vae = 'qwen_image_2.1_vae.safetensors'
+    const companions = [model, encoder, projector, vae].map((name) => path.join(modelDir, name))
+    const request = {
+      prompt: 'Keep the subject and make the background blue',
+      model,
+      initImage: INIT_IMAGE,
+      enhancePrompt: false,
+      width: 512,
+      height: 512,
+      steps: 4
+    }
+    fs.writeFileSync(companions[0]!, 'GGUF image fixture')
+
+    try {
+      await expect(generateImage(request)).rejects.toThrow('Qwen-Image 2.1 text encoder')
+      fs.writeFileSync(companions[1]!, 'GGUF text fixture')
+      fs.writeFileSync(companions[3]!, 'VAE fixture')
+      await expect(generateImage(request)).rejects.toThrow('Qwen-Image 2.1 vision projector')
+      fs.writeFileSync(companions[2]!, 'GGUF projector fixture')
+
+      const image = await generateImage(request)
+      expect(image.dataUrl).toBe(`data:image/png;base64,${PNG_BASE64}`)
+      expect(image.model).toBe(model)
+    } finally {
+      for (const companion of companions) fs.rmSync(companion, { force: true })
+    }
   }, 15_000)
 })

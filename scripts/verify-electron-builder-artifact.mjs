@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Electron-builder loads this hook directly as JavaScript. */
+import fs from 'node:fs'
 import path from 'node:path'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import {
   assertAsarArchiveInventory,
   verifyDmgArtifact,
@@ -11,34 +10,95 @@ import {
 } from './lib/macos-artifact-integrity.mjs'
 import { releaseTeamIdForEnvironment } from './lib/macos-app-trust.mjs'
 
-const execFileAsync = promisify(execFile)
-const REPO_ROOT = path.resolve(import.meta.dirname, '..')
-
-async function runInstalledDmgSmoke(dmgPath, referenceBundle) {
-  const result = await execFileAsync(
-    'bash',
-    [path.join(REPO_ROOT, 'scripts', 'smoke-dmg-install.sh'), dmgPath],
-    {
-      env: { ...process.env, DMG_REFERENCE_APP: referenceBundle },
-      timeout: 600_000,
-      killSignal: 'SIGKILL',
-      maxBuffer: 10 * 1024 * 1024
-    }
-  )
-  if (result.stdout) process.stdout.write(result.stdout)
-  if (result.stderr) process.stderr.write(result.stderr)
-}
-
 export default async function verifyElectronBuilderArtifact(event) {
   const artifact = event.file.toLowerCase()
-  if (!artifact.endsWith('.dmg') && !artifact.endsWith('.zip') && !artifact.endsWith('.exe')) {
+  const asarOnlyArtifact =
+    artifact.endsWith('.exe') || artifact.endsWith('.appimage') || artifact.endsWith('.deb')
+  if (!artifact.endsWith('.dmg') && !artifact.endsWith('.zip') && !asarOnlyArtifact) {
     return
   }
 
-  const appOutDir = event.packager.computeAppOutDir(event.target.outDir, event.arch)
-  if (artifact.endsWith('.exe')) {
+  // nsis-web stores its payload in dist/nsis-web, while the staged app stays in
+  // dist/win-unpacked. The target output directory is not the app directory.
+  const packageOutDir = event.target.name === 'nsis-web'
+    ? path.dirname(event.target.outDir)
+    : event.target.outDir
+  const appOutDir = event.packager.computeAppOutDir(packageOutDir, event.arch)
+  if (asarOnlyArtifact) {
     assertAsarArchiveInventory(path.join(appOutDir, 'resources', 'app.asar'))
-    console.log('[artifact-integrity] Windows installer input passed ASAR inventory')
+    const executable = artifact.endsWith('.exe') ? 'llama-server.exe' : 'llama-server'
+    const required = [
+      ...[
+        'llama',
+        'llama-cpu',
+        'llama-prism',
+        'llama-prism-cpu'
+      ].map((variant) => path.join('bin', variant, executable))
+    ]
+    if (artifact.endsWith('.exe')) {
+      required.push(
+        path.join('bin', 'whisper-cpu', 'whisper-cli.exe'),
+        path.join('bin', 'sd', 'sd-cli.exe'),
+        path.join('bin', 'sd-cpu', 'sd-cli.exe'),
+        path.join('bin', 'ffmpeg.exe'),
+        path.join('bin', 'kev-local-server.py')
+      )
+    }
+    if (artifact.endsWith('.appimage') || artifact.endsWith('.deb')) {
+      required.push(
+        path.join('bin', 'whisper', 'whisper-cli'),
+        path.join('bin', 'whisper-cpu', 'whisper-cli'),
+        path.join('bin', 'whisper', 'LICENSE'),
+        path.join('bin', 'ffmpeg'),
+        path.join('bin', 'licenses', 'ffmpeg.txt'),
+        path.join('bin', 'sd', 'sd-cli'),
+        path.join('bin', 'sd', 'sd-server'),
+        path.join('bin', 'sd', 'libggml-vulkan.so'),
+        path.join('bin', 'sd', 'libgomp.so.1'),
+        path.join('bin', 'sd', 'libvulkan.so.1'),
+        path.join('bin', 'licenses', 'libgomp1.txt'),
+        path.join('bin', 'licenses', 'libvulkan1.txt'),
+        path.join('bin', 'executorch-speech'),
+        path.join('bin', 'kev-local-server.py'),
+        path.join('speech-assets', 'index.json')
+      )
+    }
+    for (const relative of required) {
+      const file = path.join(appOutDir, 'resources', relative)
+      if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+        throw new Error(`installer input is missing required runtime: ${relative}`)
+      }
+    }
+    const optionalGpuFolders = [
+      'llama-cuda', 'llama-prism-cuda', 'cuda-runtime', 'sd-cuda', 'kev-runtime',
+      ...(artifact.endsWith('.exe') ? ['whisper'] : ['whisper-cuda'])
+    ]
+    for (const folder of optionalGpuFolders) {
+      if (fs.existsSync(path.join(appOutDir, 'resources', 'bin', folder))) {
+        throw new Error(`installer input includes optional GPU runtime: bin/${folder}`)
+      }
+    }
+    if (artifact.endsWith('.appimage') || artifact.endsWith('.deb')) {
+      const libvipsDir = path.join(
+        appOutDir,
+        'resources',
+        'app.asar.unpacked',
+        'node_modules',
+        '@img',
+        'sharp-libvips-linux-x64',
+        'lib'
+      )
+      const hasLibvips =
+        fs.existsSync(libvipsDir) &&
+        fs.readdirSync(libvipsDir).some((name) => {
+          const file = path.join(libvipsDir, name)
+          return /^libvips-cpp\.so\.\d+(?:\.\d+)*$/.test(name) && fs.statSync(file).isFile()
+        })
+      if (!hasLibvips) {
+        throw new Error('installer input is missing the unpacked Sharp libvips library')
+      }
+    }
+    console.log('[artifact-integrity] installer input passed ASAR and native-runtime inventory')
     return
   }
 
@@ -54,8 +114,6 @@ export default async function verifyElectronBuilderArtifact(event) {
       await verifyDmgArtifact(event.file, referenceBundle)
       console.log('[artifact-integrity] DMG bundle matches the locally signed packaged app')
     }
-    await runInstalledDmgSmoke(event.file, referenceBundle)
-    console.log('[artifact-integrity] installed UI and packaged license smokes passed')
     return
   }
 

@@ -1,5 +1,21 @@
+import { useRuntimeBackends } from '../hooks/useRuntimeBackends'
+import {
+  modelRuntimeBackend,
+  runtimeBackendLabel,
+  type RuntimeId
+} from '../../../shared/runtime-backends'
 import { useCallback, useEffect, useState } from 'react'
-import { IconLoader2, IconCheck, IconCpu, IconX, IconPower } from '@tabler/icons-react'
+import { IconLoader2, IconCheck, IconCpu, IconPower } from '@tabler/icons-react'
+import { X } from '@phosphor-icons/react'
+import { SidePanel } from './SidePanel'
+import type { ComputerUseActiveModelProjection } from '../../../shared/computer-use-settings'
+import {
+  COMPUTER_USE_SETTINGS_KEY,
+  normalizeComputerUseSettings
+} from '../../../shared/computer-use-settings'
+import { WEB_USE_SETTINGS_KEY, normalizeWebUseSettings } from '../../../shared/web-use-settings'
+import { openModelSettingsPanel } from '@renderer/lib/model-settings-panel'
+import { SettingsSelect } from './SettingsSelect'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (): any => (window as any).api
@@ -13,6 +29,10 @@ interface ModelEntry {
   name: string
   kind: string
   files?: ModelFile[]
+  remoteServerId?: string
+  grounder?: boolean
+  tags?: string[]
+  availability?: 'ready' | 'coming_soon'
 }
 
 // The text/vision LLM is selected by catalog id (it reloads llama-server); image
@@ -24,7 +44,7 @@ const MODALITIES: {
 }[] = [
   { label: 'Text & Vision', kinds: ['text', 'vision'], mode: 'text' },
   { label: 'Image', kinds: ['image'], mode: 'image' },
-  { label: 'Voice', kinds: ['voice'], mode: 'speech' },
+  { label: 'Voice', kinds: ['voice', 'speech'], mode: 'speech' },
   { label: 'Transcription', kinds: ['transcription'], mode: 'transcription' }
 ]
 type PickerMode = (typeof MODALITIES)[number]['mode']
@@ -46,26 +66,64 @@ function primaryFile(m: ModelEntry): string {
   return m.files?.find((f) => f.role === 'primary')?.name ?? m.files?.[0]?.name ?? m.id
 }
 
+function primaryVariant(m: ModelEntry): string | null {
+  const file = primaryFile(m)
+  if (!file.toLowerCase().endsWith('.gguf')) return null
+  return file.slice(0, -'.gguf'.length).split('-').at(-1) ?? null
+}
+
+function isGroundingSpecialist(model: ModelEntry): boolean {
+  return (
+    model.grounder === true || (model.kind === 'computer_use' && !model.tags?.includes('Decision'))
+  )
+}
+
+function isDecisionModel(model: ModelEntry): boolean {
+  return model.kind === 'computer_use' && Boolean(model.tags?.includes('Decision'))
+}
+
+function openSettings(onClose: () => void): void {
+  onClose()
+  openModelSettingsPanel('model')
+}
+
 export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactElement {
+  const backends = useRuntimeBackends()
+  const backendFor = (id: RuntimeId, modelIds: string[]): string =>
+    runtimeBackendLabel(modelRuntimeBackend(backends, id, modelIds))
   const [models, setModels] = useState<ModelEntry[]>([])
   const [installed, setInstalled] = useState<string[]>([])
   // The active selection per modality: id for text, filename for image/STT.
   const [active, setActive] = useState<Record<string, string | null>>({})
+  const [activeIds, setActiveIds] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState<string | null>(null)
   const [unload, setUnload] = useState<Record<string, UnloadStatus>>({})
+  const [computerUse, setComputerUse] = useState<ComputerUseActiveModelProjection | null>(null)
+  const [webUse, setWebUse] = useState<ComputerUseActiveModelProjection | null>(null)
 
   const load = useCallback(async () => {
     const cat = await api().getModelCatalog?.()
-    setModels(cat?.models ?? [])
+    const catalogModels: ModelEntry[] = cat?.models ?? []
+    setModels(catalogModels)
     setInstalled((await api().getInstalledModels?.()) ?? [])
     const text = await api().getActiveModel?.()
     const modal = (await api().getActiveModalities?.()) ?? {}
+    const nextActiveIds = new Set<string>((await api().getActiveModelIds?.()) ?? [])
+    const computerUseProjection = await api().getComputerUseActiveModels?.()
+    const webUseProjection = await api().getWebUseActiveModels?.()
+    const remoteTextActive = catalogModels.some(
+      (model) => model.remoteServerId && nextActiveIds.has(model.id)
+    )
+    setActiveIds(nextActiveIds)
     setActive({
-      text: text ?? modal.text ?? null,
+      text: remoteTextActive ? null : (text ?? modal.text ?? null),
       image: modal.image ?? null,
       speech: modal.speech ?? null,
-      transcription: modal.transcription ?? null
+      transcription: modal.transcription ?? null,
+      computer_use: modal.computer_use ?? null
     })
+    setComputerUse(computerUseProjection ?? null)
+    setWebUse(webUseProjection ?? null)
   }, [])
   useEffect(() => {
     void load()
@@ -88,13 +146,56 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
     clearUnloadStatus(mode) // re-selecting reloads this modality on next use
     try {
       if (mode === 'text') {
-        await api().setActiveModel?.(m.id)
-        setActive((a) => ({ ...a, text: m.id }))
+        const result = await api().activateModel?.(m.id)
+        if (result?.success !== false) {
+          setActive((current) => ({ ...current, text: m.remoteServerId ? null : m.id }))
+          setActiveIds(new Set((await api().getActiveModelIds?.()) ?? []))
+          await load()
+        }
       } else {
         const fname = primaryFile(m)
-        await api().setActiveModalModel?.(mode, fname)
-        setActive((a) => ({ ...a, [mode]: fname }))
+        if (m.remoteServerId) {
+          const result = await api().activateModel?.(m.id)
+          if (result?.success !== false) await load()
+        } else {
+          await api().setActiveModalModel?.(mode, fname)
+          setActive((a) => ({ ...a, [mode]: fname }))
+        }
       }
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const chooseComputerUse = async (modelId: string): Promise<void> => {
+    if (!modelId) return
+    setBusy(modelId)
+    try {
+      const result = await api().setActiveModalModel?.('computer_use', modelId)
+      if (result?.success !== false) {
+        setActive((current) => ({ ...current, computer_use: modelId }))
+        await load()
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const chooseDecisionModel = async (
+    task: 'computer_use' | 'web_use',
+    modelId: string
+  ): Promise<void> => {
+    if (!modelId) return
+    setBusy(modelId)
+    try {
+      const stored = ((await api().getSettings?.()) ?? {}) as Record<string, unknown>
+      const key = task === 'computer_use' ? COMPUTER_USE_SETTINGS_KEY : WEB_USE_SETTINGS_KEY
+      const current =
+        task === 'computer_use'
+          ? normalizeComputerUseSettings(stored[key])
+          : normalizeWebUseSettings(stored[key])
+      await api().saveSetting?.(key, { ...current, decisionModelId: modelId })
+      await load()
     } finally {
       setBusy(null)
     }
@@ -126,22 +227,221 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
   }
 
   return (
-    <div className="fixed right-0 top-0 bottom-0 z-50 flex w-[30vw] min-w-[420px] flex-col border-l border-neutral-800 bg-neutral-950 font-mono shadow-2xl">
+    <SidePanel ariaLabel="Active models" onClose={onClose} className="w-[30vw] min-w-[420px]">
       <div className="flex items-center justify-between border-b border-neutral-900 px-4 py-3">
         <div className="flex items-center gap-2 text-sm text-white">
           <IconCpu className="h-4 w-4 text-green-500" aria-hidden /> Active models
         </div>
-        <button onClick={onClose} aria-label="Close" className="text-neutral-500 hover:text-white">
-          <IconX className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => openSettings(onClose)}
+            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 transition-colors hover:text-white"
+          >
+            Settings
+          </button>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="text-neutral-500 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
       <div className="flex-1 space-y-5 overflow-y-auto p-4">
+        <section aria-label="Computer Use">
+          <div className="mb-1.5 flex items-center justify-between gap-3">
+            <span className="text-[10px] uppercase tracking-wide text-neutral-600">
+              Computer Use
+            </span>
+            {computerUse ? (
+              <span className="text-[10px] text-neutral-500">{computerUse.strategyLabel}</span>
+            ) : null}
+          </div>
+          {computerUse?.models.length ? (
+            <div className="space-y-1">
+              {computerUse.models.map((model) => (
+                <div
+                  key={model.role}
+                  className="flex items-center justify-between gap-3 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-xs"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[9px] uppercase tracking-wide text-neutral-600">
+                      {model.role === 'reasoner'
+                        ? 'Reasoner'
+                        : model.role === 'decision'
+                          ? 'Decision model'
+                          : 'Grounding specialist'}
+                    </span>
+                    {model.role === 'grounding_specialist' || model.role === 'decision' ? (
+                      <SettingsSelect<string>
+                        id={`active-computer-use-${model.role}-model`}
+                        label={
+                          model.role === 'decision'
+                            ? 'Active Computer Use Decision model'
+                            : 'Active Computer Use model'
+                        }
+                        value={model.modelId}
+                        disabled={busy !== null}
+                        onValueChange={(modelId) =>
+                          void (model.role === 'decision'
+                            ? chooseDecisionModel('computer_use', modelId)
+                            : chooseComputerUse(modelId))
+                        }
+                        options={[
+                          ...models
+                            .filter(
+                              (candidate) =>
+                                installed.includes(candidate.id) &&
+                                candidate.availability !== 'coming_soon' &&
+                                (model.role === 'decision'
+                                  ? isDecisionModel(candidate)
+                                  : isGroundingSpecialist(candidate))
+                            )
+                            .map((candidate) => ({ value: candidate.id, label: candidate.name })),
+                          ...(models.some((candidate) => candidate.id === model.modelId)
+                            ? []
+                            : [{ value: model.modelId, label: model.modelName }])
+                        ]}
+                      />
+                    ) : (
+                      <span className="block truncate text-neutral-200">{model.modelName}</span>
+                    )}
+                  </span>
+                  {model.remote ? (
+                    <span className="shrink-0 rounded-sm border border-green-500/50 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
+                      Remote
+                    </span>
+                  ) : (
+                    <span className="max-w-[45%] text-right text-[9px] text-neutral-500">
+                      On device ·{' '}
+                      {backendFor(
+                        model.role === 'reasoner'
+                          ? 'chat'
+                          : model.role === 'decision'
+                            ? 'decision'
+                            : 'grounding',
+                        [
+                          model.modelId,
+                          ...(models.find((m) => m.id === model.modelId)?.files ?? []).map(
+                            (f) => f.name
+                          )
+                        ]
+                      )}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="px-2 py-1.5 text-xs text-neutral-600">
+              No Computer Use model is selected.
+            </p>
+          )}
+        </section>
+        <section aria-label="Web Use">
+          <div className="mb-1.5 flex items-center justify-between gap-3">
+            <span className="text-[10px] uppercase tracking-wide text-neutral-600">Web Use</span>
+            {webUse ? (
+              <span className="text-[10px] text-neutral-500">{webUse.strategyLabel}</span>
+            ) : null}
+          </div>
+          {webUse?.models.length ? (
+            <div className="space-y-1">
+              {webUse.models.map((model) => (
+                <div
+                  key={model.role}
+                  className="flex items-center justify-between gap-3 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-xs"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[9px] uppercase tracking-wide text-neutral-600">
+                      {model.role === 'reasoner'
+                        ? 'Reasoner'
+                        : model.role === 'decision'
+                          ? 'Decision model'
+                          : 'Grounding specialist'}
+                    </span>
+                    {model.role === 'grounding_specialist' || model.role === 'decision' ? (
+                      <SettingsSelect<string>
+                        id={`active-web-use-${model.role}-model`}
+                        label={
+                          model.role === 'decision'
+                            ? 'Active Web Use Decision model'
+                            : 'Active Web Use grounding model'
+                        }
+                        value={model.modelId}
+                        disabled={busy !== null}
+                        onValueChange={(modelId) =>
+                          void (model.role === 'decision'
+                            ? chooseDecisionModel('web_use', modelId)
+                            : chooseComputerUse(modelId))
+                        }
+                        options={[
+                          ...models
+                            .filter(
+                              (candidate) =>
+                                installed.includes(candidate.id) &&
+                                candidate.availability !== 'coming_soon' &&
+                                (model.role === 'decision'
+                                  ? isDecisionModel(candidate)
+                                  : isGroundingSpecialist(candidate))
+                            )
+                            .map((candidate) => ({ value: candidate.id, label: candidate.name })),
+                          ...(models.some((candidate) => candidate.id === model.modelId)
+                            ? []
+                            : [{ value: model.modelId, label: model.modelName }])
+                        ]}
+                      />
+                    ) : (
+                      <span className="block truncate text-neutral-200">{model.modelName}</span>
+                    )}
+                  </span>
+                  {model.remote ? (
+                    <span className="shrink-0 rounded-sm border border-green-500/50 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
+                      Remote
+                    </span>
+                  ) : (
+                    <span className="max-w-[45%] text-right text-[9px] text-neutral-500">
+                      On device ·{' '}
+                      {backendFor(
+                        model.role === 'reasoner'
+                          ? 'chat'
+                          : model.role === 'decision'
+                            ? 'decision'
+                            : 'grounding',
+                        [
+                          model.modelId,
+                          ...(models.find((m) => m.id === model.modelId)?.files ?? []).map(
+                            (f) => f.name
+                          )
+                        ]
+                      )}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="px-2 py-1.5 text-xs text-neutral-600">No Web Use model is selected.</p>
+          )}
+        </section>
         {MODALITIES.map(({ label, kinds, mode }) => {
           const list = models.filter((m) => kinds.includes(m.kind) && installed.includes(m.id))
+          const duplicateNames = new Set(
+            list
+              .filter((m, index) =>
+                list.some((other, otherIndex) => otherIndex !== index && other.name === m.name)
+              )
+              .map((m) => m.name)
+          )
           const cur = active[mode]
           const status = unload[mode]
           const isActive = (m: ModelEntry): boolean =>
-            mode === 'text' ? cur === m.id : cur === primaryFile(m)
+            mode === 'text'
+              ? m.remoteServerId
+                ? activeIds.has(m.id)
+                : cur === m.id
+              : cur === primaryFile(m)
           return (
             <div key={mode}>
               <div className="mb-1.5 flex items-center justify-between">
@@ -189,7 +489,33 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                           : 'border-neutral-800 text-neutral-300 hover:bg-neutral-900/60'
                       }`}
                     >
-                      <span className="truncate">{m.name}</span>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="min-w-0">
+                          <span className="block truncate">{m.name}</span>
+                          {!m.remoteServerId && (
+                            <span className="block whitespace-normal text-[10px] text-neutral-500">
+                              {backendFor(mode === 'text' ? 'chat' : mode, [
+                                m.id,
+                                primaryFile(m),
+                                ...(mode === 'speech' ? ['Kokoro'] : [])
+                              ])}
+                            </span>
+                          )}
+                        </span>
+                        {duplicateNames.has(m.name) && primaryVariant(m) ? (
+                          <span
+                            className="shrink-0 text-[10px] text-neutral-500"
+                            title={primaryFile(m)}
+                          >
+                            {primaryVariant(m)}
+                          </span>
+                        ) : null}
+                        {m.remoteServerId ? (
+                          <span className="shrink-0 rounded-sm border border-green-500/50 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
+                            Remote
+                          </span>
+                        ) : null}
+                      </span>
                       {busy === m.id ? (
                         <IconLoader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-500" />
                       ) : isActive(m) && status === 'unloaded' ? (
@@ -208,11 +534,20 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
             </div>
           )
         })}
+        <section aria-label="Embeddings">
+          <div className="mb-1.5 text-[10px] uppercase tracking-wide text-neutral-600">Embeddings</div>
+          <div className="rounded-md border border-neutral-800 px-3 py-2 text-xs text-neutral-300">
+            <span className="block">Search and RAG</span>
+            <span className="block text-[10px] text-neutral-500">
+              {runtimeBackendLabel(backends.find((value) => value.id === 'embeddings'))}
+            </span>
+          </div>
+        </section>
         <p className="px-1 pt-1 text-[10px] leading-relaxed text-neutral-600">
-          Text/Vision swaps the chat model (reloads on next message). Image &amp; Transcription
-          apply on the next generation/recording. All on-device.
+          Your selected Text &amp; Vision model handles chat and supported vision work. Image,
+          Voice, and Transcription use their selected models.
         </p>
       </div>
-    </div>
+    </SidePanel>
   )
 }

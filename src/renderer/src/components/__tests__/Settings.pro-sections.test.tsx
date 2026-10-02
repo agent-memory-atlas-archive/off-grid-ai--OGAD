@@ -25,6 +25,29 @@ function stubApi(platform = 'darwin'): void {
         if (prop === 'platform') return platform
         if (prop === 'license') return { status: () => Promise.resolve({}) }
         if (prop === 'getAppVersion') return () => Promise.resolve('')
+        if (prop === 'getPermissionStatus') {
+          return () =>
+            Promise.resolve({
+              accessibility: true,
+              screenRecording: false,
+              localNetwork: true,
+              allGranted: false
+            })
+        }
+        if (prop === 'getLlmSettings') {
+          return () => Promise.resolve({ performanceMode: 'balanced' })
+        }
+        if (prop === 'getRemoteVisionServer') {
+          return () =>
+            Promise.resolve({ provider: 'local', endpoint: '', model: '', hasApiKey: false })
+        }
+        if (prop === 'setupPlan') return () => Promise.resolve(null)
+        if (prop === 'systemHealth') {
+          return () => Promise.resolve({ components: [], ramGb: 0, activeModel: null })
+        }
+        if (prop === 'getStorageInfo') return () => Promise.resolve(null)
+        if (prop === 'listDownloads') return () => Promise.resolve([])
+        if (prop === 'onSetupProgress' || prop === 'onModelProgress') return () => () => {}
         if (prop === 'queueConfigGet') {
           return () => Promise.resolve({ enabled: true, tier1Coexists: true })
         }
@@ -58,8 +81,21 @@ describe('Settings pro-section registry seam (D31)', () => {
       await screen.findByText(/screen capture, backlog recovery, and proactive delivery/i)
     ).toBeTruthy()
     expect(screen.getByText('Processing priority')).toBeTruthy()
-    expect(screen.getByText('Chat and capture model')).toBeTruthy()
+    expect(screen.getByText('Text, vision, and reasoning')).toBeTruthy()
     expect(screen.queryByTestId('fake-capture')).toBeNull()
+  })
+
+  it('shows remote model server settings in the main Settings screen', async () => {
+    vi.resetModules()
+    stubApi()
+    const { Settings } = await import('../Settings')
+    const user = userEvent.setup()
+    render(<Settings />)
+
+    await user.click(screen.getByText('Remote model server'))
+    expect(await screen.findByRole('switch', { name: 'Use remote server' })).toBeTruthy()
+    expect(screen.getByText('Local model is active.')).toBeTruthy()
+    expect(screen.queryByText(/OpenRouter/i)).toBeNull()
   })
 
   it('pro build composes the registered capture owner with shared processing controls', async () => {
@@ -77,13 +113,27 @@ describe('Settings pro-section registry seam (D31)', () => {
     await user.click(screen.getByText('Capture & processing'))
     await waitFor(() => expect(screen.getByTestId('fake-capture')).toBeTruthy())
     expect(screen.getByText('Processing priority')).toBeTruthy()
-    expect(screen.getByText('Chat and capture model')).toBeTruthy()
+    expect(screen.getByText('Text, vision, and reasoning')).toBeTruthy()
     expect(
       screen.queryByText(/screen capture, backlog recovery, and proactive delivery/i)
     ).toBeNull()
   })
 
-  it('Windows Pro build withholds native capture while keeping account sections available', async () => {
+  it('opens permission recovery at the end of Setup & health instead of adding another card', async () => {
+    vi.resetModules()
+    stubApi()
+    const consumed = vi.fn()
+    const { Settings } = await import('../Settings')
+    render(<Settings initialSection="permissions" onInitialSectionConsumed={consumed} />)
+
+    expect(await screen.findByText('System permissions')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Screen Recording' })).toBeTruthy()
+    expect(screen.getByText('Permission needed')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Permissions' })).toBeNull()
+    await waitFor(() => expect(consumed).toHaveBeenCalledOnce())
+  })
+
+  it('Windows Pro build shows capture and account sections', async () => {
     vi.resetModules()
     stubApi('win32')
     const { registerSettingsSection } = await import('../../bootstrap/sectionRegistry')
@@ -102,10 +152,7 @@ describe('Settings pro-section registry seam (D31)', () => {
 
     await waitFor(() => expect(screen.getByTestId('fake-identity')).toBeTruthy())
     await user.click(screen.getByText('Capture & processing'))
-    expect(screen.queryByTestId('fake-capture')).toBeNull()
-    expect(
-      screen.getByText(/screen capture, backlog recovery, and proactive delivery/i)
-    ).toBeTruthy()
+    expect(screen.getByTestId('fake-capture')).toBeTruthy()
     expect(screen.getByText('Processing priority')).toBeTruthy()
   })
 })

@@ -12,11 +12,26 @@ import {
 import { PRO_PAY_URL, PRO_FEATURES, featureSupportsPlatform, type ProFeature } from './proCatalog'
 import { OFF_GRID_MOBILE_URL, OFF_GRID_WEBSITE_URL, openExternal } from '../../constants/links'
 import { deviceNoun, currentPlatform } from '@renderer/lib/device'
+import { projectPersonalMeshActivationFailure } from '@offgrid/sync'
+
+function availableOnLinux(feature?: ProFeature): boolean {
+  return !!feature && featureSupportsPlatform(feature, 'linux')
+}
+
+function linuxNoticeTitle(feature?: ProFeature): string {
+  return feature
+    ? 'This feature is coming soon to Linux.'
+    : 'Some Pro features are coming soon to Linux.'
+}
+
+function showComingSoonBadge(comingSoon: boolean, linux: boolean, feature?: ProFeature): boolean {
+  return comingSoon || (linux && !!feature && !availableOnLinux(feature))
+}
 
 // License-key activation. Only meaningful in a pro-capable build (__OFFGRID_PRO__);
 // a core build has no pro code bundled, so entering a key would unlock nothing.
-// On success the cached entitlement flips, but main-process pro features (tray,
-// capture, CRM loops) only attach at boot — so we offer a relaunch.
+// Main and renderer lifecycle owners react to the saved entitlement, so activation
+// completes in this process without a restart.
 function LicenseActivation(): React.ReactElement {
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
@@ -30,15 +45,12 @@ function LicenseActivation(): React.ReactElement {
     try {
       const r = await license.activate(key.trim())
       if (r.ok) {
-        setMsg({ kind: 'ok', text: 'Activated. Restart to finish unlocking Pro.' })
+        setMsg({ kind: 'ok', text: 'Activated. Pro is starting.' })
       } else {
-        const text =
-          r.reason === 'limit'
-            ? 'This license is already on the maximum number of devices. Deactivate one and try again.'
-            : r.reason === 'network'
-              ? 'Could not reach the licensing server. Check your connection and try again.'
-              : 'That license key is invalid, expired, or revoked.'
-        setMsg({ kind: 'err', text })
+        setMsg({
+          kind: 'err',
+          text: projectPersonalMeshActivationFailure(r.reason).description
+        })
       }
     } catch {
       setMsg({ kind: 'err', text: 'Activation failed. Please try again.' })
@@ -72,17 +84,13 @@ function LicenseActivation(): React.ReactElement {
       </div>
       {msg && (
         <div
-          className={`flex items-center justify-between gap-3 text-left text-xs ${msg.kind === 'ok' ? 'text-green-400' : 'text-red-400'}`}
+          className={`flex items-center justify-between gap-3 text-left text-xs ${
+            msg.kind === 'ok'
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : 'text-red-600 dark:text-red-400'
+          }`}
         >
           <span>{msg.text}</span>
-          {msg.kind === 'ok' && (
-            <button
-              onClick={() => window.api.license?.relaunch()}
-              className="shrink-0 rounded-md border border-green-500/40 px-2.5 py-1 font-medium text-green-300 hover:bg-green-500/10"
-            >
-              Restart now
-            </button>
-          )}
         </div>
       )}
     </div>
@@ -102,6 +110,11 @@ export function UpgradeScreen({
 }): React.ReactElement {
   const f = feature
   const comingSoon = variant === 'coming-soon'
+  const linux = currentPlatform() === 'linux'
+  const linuxFeatureAvailable = availableOnLinux(f)
+  const linuxAvailable = PRO_FEATURES.filter(availableOnLinux)
+    .map((item) => item.label)
+    .join(', ')
   // Whether to warn a prospective buyer that Pro isn't fully live on their device
   // yet. Per-feature: if this writeup is for a specific feature, only warn when THAT
   // feature isn't ported here (so a Windows-ready feature like Vault shows no
@@ -121,27 +134,34 @@ export function UpgradeScreen({
       <div className="mx-auto grid max-w-5xl grid-cols-1 items-start gap-x-12 gap-y-8 lg:grid-cols-[1.4fr_minmax(320px,1fr)]">
         {/* Left — the pitch (left-aligned, desktop reading column) */}
         <div className="flex flex-col gap-5">
-          {comingSoon ? (
+          {showComingSoonBadge(comingSoon, linux, f) ? (
             <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-neutral-700 bg-neutral-800/50 px-3 py-1 text-[11px] uppercase tracking-wide text-neutral-300">
-              <Clock weight="fill" className="h-3.5 w-3.5" /> Off Grid Pro · Coming soon
+              <Clock weight="fill" className="h-3.5 w-3.5" /> Off Grid AI Pro · Coming soon
             </span>
           ) : (
-            <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-green-500/30 bg-green-500/10 px-3 py-1 text-[11px] uppercase tracking-wide text-green-400">
-              <Sparkle weight="fill" className="h-3.5 w-3.5" /> Off Grid Pro · Available now
+            <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-green-500/30 bg-green-500/10 px-3 py-1 text-[11px] uppercase tracking-wide text-emerald-400">
+              <Sparkle weight="fill" className="h-3.5 w-3.5" /> Off Grid AI Pro ·{' '}
+              {linux && !f ? 'Vault available now' : 'Available now'}
             </span>
           )}
 
           <div className="flex items-start gap-4">
             <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-neutral-800 bg-neutral-900/60">
               {f ? (
-                <f.icon weight="duotone" className="h-7 w-7 text-green-400" />
+                <f.icon
+                  weight="duotone"
+                  className="h-7 w-7 text-emerald-600 dark:text-emerald-400"
+                />
               ) : (
-                <Sparkle weight="duotone" className="h-7 w-7 text-green-400" />
+                <Sparkle
+                  weight="duotone"
+                  className="h-7 w-7 text-emerald-600 dark:text-emerald-400"
+                />
               )}
             </div>
             <div className="min-w-0">
               <h1 className="text-3xl font-semibold tracking-tight text-white">
-                {f ? f.label : 'Off Grid Pro is here'}
+                {f ? f.label : linux ? 'Off Grid AI Pro on Linux' : 'Off Grid AI Pro is here'}
               </h1>
               {f && <p className="mt-1 text-base text-neutral-300">{f.tagline}</p>}
             </div>
@@ -157,7 +177,11 @@ export function UpgradeScreen({
             <ul className="grid gap-2 sm:grid-cols-2">
               {f.highlights.map((h) => (
                 <li key={h} className="flex items-start gap-2 text-sm text-neutral-300">
-                  <Check weight="bold" className="mt-0.5 h-4 w-4 shrink-0 text-green-400" /> {h}
+                  <Check
+                    weight="bold"
+                    className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                  />{' '}
+                  {h}
                 </li>
               ))}
             </ul>
@@ -172,7 +196,7 @@ export function UpgradeScreen({
               {PRO_FEATURES.map((x) => (
                 <span
                   key={x.route}
-                  className={`flex items-center gap-1.5 ${x.route === f?.route ? 'text-green-400' : ''}`}
+                  className={`flex items-center gap-1.5 ${x.route === f?.route ? 'text-emerald-600 dark:text-emerald-400' : ''}`}
                 >
                   <span
                     className={`h-1 w-1 rounded-full ${x.route === f?.route ? 'bg-green-400' : 'bg-neutral-600'}`}
@@ -192,12 +216,12 @@ export function UpgradeScreen({
                 You have Pro
               </div>
               <p className="text-sm leading-relaxed text-neutral-300">
-                Your Pro features run on Mac and in the Off Grid phone app today - your license
-                covers both, up to 5 devices. Support for your {deviceNoun()} is on the way; it will
-                be enabled once it is tested.
+                {linux
+                  ? `This feature is coming soon to Linux. ${linuxAvailable} are available now. Your license also works on Windows and macOS.`
+                  : `Your license covers desktop and mobile - up to 5 devices. This feature is not on your ${deviceNoun()} yet.`}
               </p>
               <p className="text-[11px] leading-relaxed text-neutral-600">
-                Everything else in Off Grid works on your {deviceNoun()} today.
+                Core features work on your {deviceNoun()} today.
               </p>
               <div className="border-t border-neutral-800" />
               <button
@@ -207,15 +231,15 @@ export function UpgradeScreen({
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-neutral-700 bg-neutral-800 transition-colors group-hover:border-green-500/30">
                   <Desktop
                     weight="regular"
-                    className="h-4 w-4 text-neutral-300 transition-colors group-hover:text-green-400"
+                    className="h-4 w-4 text-neutral-300 transition-colors group-hover:text-emerald-500"
                   />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-xs font-medium text-neutral-200">
-                    Use Pro on your Mac
+                    Use Pro on Windows or macOS
                   </span>
                   <span className="mt-0.5 block text-[11px] leading-tight text-neutral-500">
-                    Install Off Grid AI Desktop for Mac and use the same license.
+                    Install Off Grid AI Desktop on Windows or Mac and use the same license.
                   </span>
                 </span>
                 <ArrowSquareOut weight="bold" className="h-4 w-4 shrink-0 text-neutral-500" />
@@ -223,38 +247,39 @@ export function UpgradeScreen({
             </>
           ) : (
             <>
-              {/* On a platform where this feature isn't live yet, keep the buy CTA
-                  (the license is valid on Mac + phone today), but set expectations up
-                  front so a user doesn't buy expecting it to run here. A feature that
-                  IS ported to this platform (e.g. Vault on Windows) shows no notice. */}
+              {/* State platform availability before offering a purchase. */}
               {platformNotice && (
                 <div className="flex items-start gap-2 rounded-lg border border-neutral-700 bg-neutral-800/50 px-3 py-2.5 text-[11px] leading-relaxed text-neutral-300">
                   <Clock weight="fill" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-neutral-400" />
                   <span>
                     <span className="font-medium text-neutral-200">
-                      Coming soon to your {deviceNoun()}.
+                      {linux ? linuxNoticeTitle(f) : `Coming soon to your ${deviceNoun()}.`}
                     </span>{' '}
-                    Off Grid Pro is macOS-tested today. Your purchase works now on Mac and the Off
-                    Grid phone app - up to 5 devices. Support for this {deviceNoun()} will be
-                    enabled once it is tested.
+                    {linux
+                      ? `${linuxAvailable} are available on Linux now. Other Pro features are available on Windows and macOS.`
+                      : 'This feature is available on Windows and macOS.'}
                   </span>
                 </div>
               )}
-              <div className="text-[10px] uppercase tracking-widest text-neutral-500">
-                Unlock Pro
-              </div>
-              <button
-                onClick={() => open(PRO_PAY_URL)}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-green-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-green-500"
-              >
-                Get Pro <ArrowSquareOut weight="bold" className="h-4 w-4" />
-              </button>
-              <p className="text-[11px] leading-relaxed text-neutral-600">
-                One-time purchase. Runs entirely on your device - no subscription, no cloud, no
-                account.
-              </p>
+              {(!linux || !f || linuxFeatureAvailable) && (
+                <>
+                  <div className="text-[10px] uppercase tracking-widest text-neutral-500">
+                    Unlock Pro
+                  </div>
+                  <button
+                    onClick={() => open(PRO_PAY_URL)}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-green-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-green-500"
+                  >
+                    Get Pro <ArrowSquareOut weight="bold" className="h-4 w-4" />
+                  </button>
+                  <p className="text-[11px] leading-relaxed text-neutral-600">
+                    One-time purchase. Runs entirely on your device - no subscription, no cloud, no
+                    account.
+                  </p>
+                </>
+              )}
 
-              {__OFFGRID_PRO__ ? (
+              {__OFFGRID_PRO__ && (!linux || !f || linuxFeatureAvailable) ? (
                 <>
                   <div className="border-t border-neutral-800" />
                   <LicenseActivation />
@@ -273,7 +298,7 @@ export function UpgradeScreen({
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-neutral-700 bg-neutral-800 transition-colors group-hover:border-green-500/30">
               <DeviceMobile
                 weight="regular"
-                className="h-4 w-4 text-neutral-300 transition-colors group-hover:text-green-400"
+                className="h-4 w-4 text-neutral-300 transition-colors group-hover:text-emerald-500"
               />
             </span>
             <span className="min-w-0 flex-1">
@@ -281,7 +306,9 @@ export function UpgradeScreen({
                 Get Off Grid AI Mobile
               </span>
               <span className="mt-0.5 block text-[11px] leading-tight text-neutral-500">
-                Your license covers your phone too - up to 5 devices, synced over your own network.
+                {linux
+                  ? 'Off Grid AI Mobile is available on your phone.'
+                  : 'Your license covers your phone too - up to 5 devices, synced over your own network.'}
               </span>
             </span>
             <ArrowSquareOut weight="bold" className="h-4 w-4 shrink-0 text-neutral-500" />

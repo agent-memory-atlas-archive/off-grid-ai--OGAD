@@ -1,8 +1,14 @@
+import { runtimeBackendSnapshot } from './runtime-backends'
 import type { PermissionStatusContract, SystemHealthContract } from '../shared/ipc-contracts'
+import { llm } from './llm'
 import { getPermissionStatus } from './permissions'
 
 interface IpcStatusRegistrar {
   handle: (channel: string, listener: (event: unknown, ...args: unknown[]) => unknown) => unknown
+}
+
+interface ChatHealthPublisher {
+  publish: (health: SystemHealthContract['components'][number]) => void
 }
 
 function permissionComponents(
@@ -24,13 +30,21 @@ function permissionComponents(
       detail: permissions.screenRecording
         ? 'Screen capture is allowed'
         : 'Grant access in System Settings'
+    },
+    {
+      id: 'permission-local-network',
+      label: 'Local Network permission',
+      status: permissions.localNetwork ? 'granted' : 'denied',
+      detail: permissions.localNetwork
+        ? 'Device discovery is allowed'
+        : 'Grant access in System Settings'
     }
   ]
 }
 
-function readPermissionComponents(): SystemHealthContract['components'] {
+async function readPermissionComponents(): Promise<SystemHealthContract['components']> {
   try {
-    return permissionComponents(getPermissionStatus())
+    return permissionComponents(await getPermissionStatus())
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     return [
@@ -45,6 +59,12 @@ function readPermissionComponents(): SystemHealthContract['components'] {
         label: 'Screen Recording permission',
         status: 'down',
         detail: `Permission status unavailable: ${reason}`
+      },
+      {
+        id: 'permission-local-network',
+        label: 'Local Network permission',
+        status: 'down',
+        detail: `Permission status unavailable: ${reason}`
       }
     ]
   }
@@ -56,15 +76,40 @@ function readPermissionComponents(): SystemHealthContract['components'] {
 export async function getRenderedSystemHealth(): Promise<SystemHealthContract> {
   const [health, permissions] = await Promise.all([
     import('./setup').then((module) => module.getSystemHealth()),
-    Promise.resolve().then(readPermissionComponents)
+    readPermissionComponents()
   ])
   return { ...health, components: [...health.components, ...permissions] }
 }
 
 /** Narrow registration seam shared by Electron and the in-process integration
  * harness. The injectable value is ipcMain itself, an uncontrollable native
- * transport boundary; every Off Grid status owner above remains real. */
-export function setupSystemStatusIpc(target: IpcStatusRegistrar): void {
+ * transport boundary; every Off Grid AI status owner above remains real. */
+export function setupSystemStatusIpc(
+  target: IpcStatusRegistrar,
+  chatHealthPublisher?: ChatHealthPublisher
+): void {
+  target.handle('system:chat-health', () =>
+    import('./setup').then((module) => module.getChatHealth())
+  )
+  target.handle('system:runtime-backends', () => [llm.runtimeBackend(), ...runtimeBackendSnapshot()])
   target.handle('system:health', () => getRenderedSystemHealth())
   target.handle('permissions:get-status', () => getPermissionStatus())
+
+  if (chatHealthPublisher) {
+    let revision = 0
+    let lastPublished = ''
+    llm.onHealthInvalidated(() => {
+      const requestedRevision = ++revision
+      void import('./setup')
+        .then((module) => module.getChatHealth())
+        .then((health) => {
+          if (requestedRevision !== revision) return
+          const serialized = JSON.stringify(health)
+          if (serialized === lastPublished) return
+          lastPublished = serialized
+          chatHealthPublisher.publish(health)
+        })
+        .catch((error) => console.error('[system-health] chat refresh failed:', error))
+    })
+  }
 }

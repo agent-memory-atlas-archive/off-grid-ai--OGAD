@@ -1,9 +1,7 @@
 // @vitest-environment node
 //
-// Integration: the LLMService context CEILING is the model's TRAINED window (read from a real GGUF
-// on disk), not our hardcoded default. Real fs, real GGUF bytes, real runtime-env — electron faked
-// only for its path (the one OS boundary). Deleting the capContextToModel call in safeCtxSize makes
-// the first assertion fail (the delete-the-impl guard).
+// Integration: the model's trained window is read from a real GGUF, while the selected context
+// remains unchanged. Real fs, real GGUF bytes, real runtime-env; electron supplies only paths.
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs'
@@ -33,7 +31,8 @@ const u64 = (n: number): Buffer => {
   b.writeBigUInt64LE(BigInt(n))
   return b
 }
-const gstr = (s: string): Buffer => Buffer.concat([u64(Buffer.byteLength(s)), Buffer.from(s, 'utf8')])
+const gstr = (s: string): Buffer =>
+  Buffer.concat([u64(Buffer.byteLength(s)), Buffer.from(s, 'utf8')])
 const kvString = (k: string, v: string): Buffer => Buffer.concat([gstr(k), u32(8), gstr(v)])
 const kvU32 = (k: string, v: number): Buffer => Buffer.concat([gstr(k), u32(4), u32(v)])
 const writeGguf = (p: string, arch: string, ctx: number): void => {
@@ -68,15 +67,13 @@ function activate(fileName: string): void {
 }
 
 describe('LLMService context ceiling from GGUF', () => {
-  it('caps the effective context to the trained window when it is below the default', () => {
-    // Model trained to only 8192; the default ctx (16384) must be pulled DOWN to 8192.
+  it('reports the trained window without silently changing the selected context', () => {
     writeGguf(path.join(TMP, 'models', 'small.gguf'), 'llama', 8192)
     activate('small.gguf')
 
     const svc = new LLMService()
     expect(svc.modelMaxContext()).toBe(8192)
-    // Effective is the trained window (RAM permits 8192 easily), NOT the 16384 default.
-    expect(svc.effectiveContextSize()).toBe(8192)
+    expect(svc.effectiveContextSize()).toBe(16384)
   })
 
   it('does NOT cap below the model max when the model trained wider than the default', () => {
@@ -91,14 +88,12 @@ describe('LLMService context ceiling from GGUF', () => {
     expect(svc.effectiveContextSize()).toBe(16384)
   })
 
-  it('caps BELOW the RAM-clamp floor for a model trained under 2048 tokens', () => {
-    // computeSafeCtx has a 2048-token floor; a model trained to only 1024 must still be capped to
-    // 1024, never run at 2048 (the RAM floor must not exceed the trained ceiling).
+  it('keeps the selected context even when model metadata reports a smaller trained window', () => {
     writeGguf(path.join(TMP, 'models', 'tiny.gguf'), 'llama', 1024)
     activate('tiny.gguf')
     const svc = new LLMService()
     expect(svc.modelMaxContext()).toBe(1024)
-    expect(svc.effectiveContextSize()).toBe(1024)
+    expect(svc.effectiveContextSize()).toBe(16384)
   })
 
   it('reports an unknown max (null) and applies no model cap when the GGUF is unreadable', () => {

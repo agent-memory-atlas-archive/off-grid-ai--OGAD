@@ -12,7 +12,7 @@
   --animate-orbit: offgrid-orbit-circles calc(var(--duration) * 1s) linear infinite;
 
   /*
-   * Remap the Tailwind palette the components already use onto the Off Grid
+   * Remap the Tailwind palette the components already use onto the Off Grid AI
    * tokens (--og-*), which flip between dark and light via data-theme. This
    * recolors every neutral/white/black/accent class to the brutalist/terminal
    * palette and makes the whole app theme-aware, with no component edits.
@@ -34,6 +34,19 @@
   --color-slate-950: var(--og-background);
   --color-slate-900: var(--og-surface);
   /* Emerald is the only accent; fold blue/purple/green into primary. */
+  /*
+   * The light TEXT shades must map, or they stay #34D399 / #6EE7B7 in both themes —
+   * the dark-mode green on a white background, which is why the pairing code and
+   * Discoverable rendered as unreadable pale mint. --og-primary is theme-aware:
+   * #34D399 dark / #059669 light.
+   *
+   * Deliberately NOT mapping 500/600/700: those are the fill shades behind
+   * `bg-emerald-500 text-black` buttons and selected segments, and Tailwind's own
+   * values already read correctly on both themes. Remapping them only darkens
+   * filled controls for no readability gain.
+   */
+  --color-emerald-300: var(--og-primary);
+  --color-emerald-400: var(--og-primary);
   --color-green-400: var(--og-primary);
   --color-green-500: var(--og-primary);
   --color-blue-400: var(--og-primary);
@@ -44,7 +57,7 @@
   --color-red-500: var(--og-error);
 
   /*
-   * shadcn/ui semantic tokens mapped onto Off Grid tokens, so every approved
+   * shadcn/ui semantic tokens mapped onto Off Grid AI tokens, so every approved
    * library component (shadcn, Aceternity, Magic UI) inherits the brutalist /
    * emerald brand with zero per-component styling. Theme-aware via --og-*.
    */
@@ -69,7 +82,7 @@
   --color-ring: var(--og-primary);
 
   /*
-   * Brutalist/terminal radius scale — Off Grid is flat, sharp, dense. Remapping
+   * Brutalist/terminal radius scale — Off Grid AI is flat, sharp, dense. Remapping
    * the radius tokens globally makes EVERY approved-library component (shadcn,
    * Aceternity, Magic UI) sharp and on-brand with no per-component overrides.
    */
@@ -91,18 +104,18 @@
       transform: translate(-50%, -40%) scale(1);
     }
   }
+}
 
-  /* Namespaced because onboarding.css also carries a legacy `orbit` keyframe.
-     Global keyframe names collide even when the rules live in separate files. */
-  @keyframes offgrid-orbit-circles {
-    0% {
-      transform: rotate(var(--angle, 0deg)) translateY(calc(-1 * var(--radius, 160px)))
-        rotate(calc(-1 * var(--angle, 0deg)));
-    }
-    100% {
-      transform: rotate(calc(var(--angle, 0deg) + 360deg))
-        translateY(calc(-1 * var(--radius, 160px))) rotate(calc(-1 * var(--angle, 0deg) - 360deg));
-    }
+/* This component applies its animation inline, so its keyframes must remain global.
+   Keeping them inside @theme lets Tailwind remove them as an unused theme utility. */
+@keyframes offgrid-orbit-circles {
+  0% {
+    transform: rotate(var(--angle, 0deg)) translateY(calc(-1 * var(--radius, 160px)))
+      rotate(calc(-1 * var(--angle, 0deg)));
+  }
+  100% {
+    transform: rotate(calc(var(--angle, 0deg) + 360deg)) translateY(calc(-1 * var(--radius, 160px)))
+      rotate(calc(-1 * var(--angle, 0deg) - 360deg));
   }
 }
 
@@ -173,6 +186,20 @@ button:disabled,
   ):focus-visible {
   outline: 2px solid var(--og-primary);
   outline-offset: 2px;
+}
+
+/* Composite editors own one focus boundary. Do not draw a second, partial
+   outline around the textarea inside the editor. */
+:root[data-user-modality='keyboard'] [data-focus-surface]:focus-within {
+  outline: 2px solid var(--og-primary);
+  outline-offset: 2px;
+}
+
+/* The surface drew the boundary; the field inside it must not draw a second, partial one.
+   Inputs need this as much as textareas: a search field is an icon + input + spinner in one
+   bordered box, so ringing the bare input leaves the icon outside the ring. */
+:root[data-user-modality='keyboard'] [data-focus-surface] :is(input, textarea):focus-visible {
+  outline: none;
 }
 
 code {
@@ -459,6 +486,65 @@ code {
   to {
     opacity: 0;
     transform: scale(0.96);
+  }
+}
+
+.offgrid-loading-dot {
+  animation: offgrid-loading-dot-wave 900ms ease-in-out infinite;
+}
+.offgrid-loading-dot:nth-child(2) {
+  animation-delay: 150ms;
+}
+.offgrid-loading-dot:nth-child(3) {
+  animation-delay: 300ms;
+}
+@keyframes offgrid-loading-dot-wave {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  16.667%,
+  50% {
+    transform: translateY(-5px);
+  }
+  66.667% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes offgrid-collapsible-open {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+}
+
+@keyframes offgrid-collapsible-close {
+  from {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+.offgrid-smooth-collapsible[data-state='open'] {
+  animation: offgrid-collapsible-open 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.offgrid-smooth-collapsible[data-state='closed'] {
+  animation: offgrid-collapsible-close 260ms cubic-bezier(0.4, 0, 1, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .offgrid-smooth-collapsible[data-state] {
+    animation: none;
   }
 }
 [data-slot='dialog-overlay'][data-state='open'] {

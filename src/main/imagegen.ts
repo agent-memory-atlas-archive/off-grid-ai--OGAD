@@ -1,3 +1,4 @@
+import { beginRuntimeBackend } from './runtime-backends'
 // On-device image generation via stable-diffusion.cpp (the bundled `sd-cli`).
 // Mirrors the llm.ts pattern: resolve the binary from resources/bin, pick a
 // Stable Diffusion model from the userData models dir, spawn one-shot txt2img/
@@ -6,11 +7,20 @@
 import { spawn, type ChildProcess } from 'child_process'
 import path from 'path'
 import fs from 'fs'
+import { recordAIRequest } from './ai-request-log'
 import os from 'os'
+import { randomUUID } from 'node:crypto'
 import { modalityQueue, IMAGE_JOB, CHAT_JOB } from './modality-queue/queue'
 import { getResidencyMode } from './runtime-residency'
 import { llm } from './llm'
 import { getSetting } from './database'
+import { resolveImageParameters, type ImageParameterStore } from '@offgrid/models'
+import {
+  generatedImageSidecarPath,
+  readGeneratedImageSidecar,
+  writeGeneratedImageSidecar,
+  type GeneratedImageSidecar
+} from './imagegen/gallery-sidecar'
 import { enhancePrompt } from './imagegen/prompt-enhance'
 import type { ManagedRuntime } from './runtime-manager'
 import {
@@ -22,11 +32,26 @@ import {
   MFLUX_MODELS
 } from './mflux'
 import { getActiveModal } from './active-models'
-import { binRoots, dataDir, modelsDir, exe } from './runtime-env'
+import { getActiveRemoteVisionServerForModality } from './vision/remote-vision-server'
+import { generateRemoteImage } from './remote-media-runtime'
+import { remoteVisionModelId } from '../shared/remote-vision-server'
+import { binRoots, dataDir, modelsDir, resourceDirs } from './runtime-env'
 import { sdServer } from './sd-server'
+import {
+  findSdBinaries,
+  findSdBinary,
+  imageBackendForRuntime,
+  sdRuntimeLibraryEnv
+} from './imagegen/sd-runtime'
+import { getBackendPreference } from './backend-preferences'
 import { standardModelDefaults, taesdFilename } from '../shared/image-defaults'
 import { defaultImageModelFilename } from './image-default'
-import { hasMlmodelc, isZImageModel, isQuantizedModel } from './imagegen/runtime-detect'
+import {
+  hasMlmodelc,
+  isQwenImage21Model,
+  isZImageModel,
+  isQuantizedModel
+} from './imagegen/runtime-detect'
 import {
   isImageModelFile,
   hasCheckpointExt,
@@ -36,11 +61,13 @@ import {
 import { evaluateMemoryGuard } from './imagegen/memory-guard'
 import {
   buildCoreMLArgs,
+  buildQwenImage21Args,
+  qwenImageArgsForBackend,
   buildZImageArgs,
   buildStandardArgs,
   DEFAULT_NEGATIVE
 } from './imagegen/args'
-import { initialProgressState, reduceProgress } from './imagegen/progress'
+import { initialProgressState, reduceProgress, type ProgressEvent } from './imagegen/progress'
 import {
   resolveExistingOwnedEntry,
   resolveExistingOwnedPath,
@@ -49,15 +76,13 @@ import {
 import { IMAGE_CANCELLED_MESSAGE, ImageGenerationLifecycle } from './imagegen/generation-lifecycle'
 import {
   imageMemoryGuardErrorMessage,
+  type ImageGenerationPipelineUpdateContract,
+  type ImageGenerationOutputContract,
   type ImageGenerationRequestContract
 } from '../shared/image-generation-contract'
 
 function findSdCli(): string | null {
-  for (const r of binRoots()) {
-    const p = path.join(r, 'sd', exe('sd-cli'))
-    if (fs.existsSync(p)) return p
-  }
-  return null
+  return findSdBinary('sd-cli')
 }
 
 /** The Core ML (ANE) image-gen Swift helper, if bundled. */
@@ -110,6 +135,7 @@ export function listGeneratedImages(scope?: GeneratedImageScope): {
   path: string
   name: string
   mtime: number
+  syncId?: string
   conversationId?: string
   projectId?: string | null
 }[] {
@@ -117,23 +143,24 @@ export function listGeneratedImages(scope?: GeneratedImageScope): {
   try {
     let all = fs
       .readdirSync(dir)
-      .filter((f) => /\.png$/i.test(f) && !f.startsWith('preview-'))
-      .map((f) => {
-        const p = path.join(dir, f)
-        // Optional sidecar with chat/project scope, written by the ipc handler.
-        let meta: { conversationId?: string; projectId?: string | null } = {}
-        try {
-          meta = JSON.parse(fs.readFileSync(`${p}.json`, 'utf8'))
-        } catch {
-          /* no sidecar */
-        }
-        return {
-          path: p,
-          name: f,
-          mtime: fs.statSync(p).mtimeMs,
-          conversationId: meta.conversationId,
-          projectId: meta.projectId ?? null
-        }
+      .filter((f) => /\.(?:png|jpe?g|webp)$/i.test(f) && !f.startsWith('preview-'))
+      .flatMap((f) => {
+        const ownedImage = resolveExistingOwnedEntry(dir, f)
+        if (!ownedImage) return []
+        // The sidecar is the one owner of what is known about an image besides its bytes, including
+        // the syncId that names it on the mesh. Read through that module so this scan and the sync
+        // receiver cannot disagree about the shape.
+        const meta = readGeneratedImageSidecar(ownedImage)
+        return [
+          {
+            path: ownedImage,
+            name: f,
+            mtime: fs.statSync(ownedImage).mtimeMs,
+            syncId: meta.syncId,
+            conversationId: meta.conversationId,
+            projectId: meta.projectId ?? null
+          }
+        ]
       })
       .sort((a, b) => b.mtime - a.mtime)
     if (scope?.conversationId) all = all.filter((r) => r.conversationId === scope.conversationId)
@@ -149,42 +176,31 @@ export function deleteGeneratedImage(p: string): boolean {
   try {
     const dir = path.join(dataDir(), 'generated-images')
     const ownedImage = resolveExistingOwnedPath(dir, p)
-    if (!ownedImage || !/\.png$/i.test(ownedImage)) return false
+    if (!ownedImage || !/\.(?:png|jpe?g|webp)$/i.test(ownedImage)) return false
     fs.unlinkSync(ownedImage)
-    fs.rmSync(`${ownedImage}.json`, { force: true })
+    fs.rmSync(generatedImageSidecarPath(ownedImage), { force: true })
     return true
   } catch {
     return false
   }
 }
 
-// --- Style-preset thumbnails (generated on-device, cached; never hotlinked) --
-function styleThumbDir(): string {
-  return path.join(dataDir(), 'style-thumbs')
-}
-
-/** Map of style key -> cached thumbnail path (on-device generated). */
+// --- Style-preset thumbnails (bundled release assets; never hotlinked) --------
+/** Map of style key -> bundled thumbnail path. */
 export function listStyleThumbs(): Record<string, string> {
   const out: Record<string, string> = {}
-  try {
-    for (const f of fs.readdirSync(styleThumbDir())) {
-      const m = f.match(/^(.+)\.png$/i)
-      if (m) out[m[1]!] = path.join(styleThumbDir(), f)
+  for (const resources of resourceDirs()) {
+    const directory = path.join(resources, 'style-thumbs')
+    try {
+      for (const file of fs.readdirSync(directory)) {
+        const match = file.match(/^(.+)\.png$/i)
+        if (match && !out[match[1]!]) out[match[1]!] = path.join(directory, file)
+      }
+    } catch {
+      /* this resource root does not contain style previews */
     }
-  } catch {
-    /* none yet */
   }
   return out
-}
-
-/** Generate one style thumbnail on-device (small/fast) and cache it. */
-export async function generateStyleThumb(key: string, prompt: string): Promise<string> {
-  const out = await generateImage({ prompt, width: 512, height: 512, steps: 6 })
-  const dir = styleThumbDir()
-  fs.mkdirSync(dir, { recursive: true })
-  const dest = path.join(dir, `${key.replace(/[^\w-]+/g, '_')}.png`)
-  fs.copyFileSync(out.path, dest)
-  return dest
 }
 
 // --- LoRA adapters -----------------------------------------------------------
@@ -334,6 +350,8 @@ function ggufIsFullCheckpoint(p: string): boolean {
 /** The image model an incoming request would actually load (active pick, else the
  *  resolver's default), as a bare filename — or null if none installed. */
 export function activeImageModel(): string | null {
+  const remote = getActiveRemoteVisionServerForModality('image')
+  if (remote) return remoteVisionModelId(remote.id, remote.selectedModel)
   const m = resolveModel()
   return m ? path.basename(m) : null
 }
@@ -376,6 +394,11 @@ export function imageGenStatus(): {
   active: string | null
   reason?: string
 } {
+  const remote = getActiveRemoteVisionServerForModality('image')
+  if (remote) {
+    const id = remoteVisionModelId(remote.id, remote.selectedModel)
+    return { available: true, models: [id], active: id }
+  }
   const models = listImageModels()
   // The model an incoming request would actually load (the user's active pick,
   // else the resolver default) — so the composer can default its picker to it and
@@ -392,12 +415,10 @@ export function imageGenStatus(): {
 
 export type ImageGenParams = ImageGenerationRequestContract
 
-export interface ImageGenOutput {
-  dataUrl: string
-  path: string
-  seed: number
-  model: string
-}
+export type ImageGenOutput = ImageGenerationOutputContract
+
+/** Native runtimes receive the final prompt as input. The wrapper adds it to their output once. */
+type NativeImageGenOutput = Omit<ImageGenOutput, 'prompt'>
 
 export interface ImageGenProgress {
   step: number
@@ -409,6 +430,7 @@ export interface ImageGenProgress {
   phase?: 'sampling' | 'decoding'
 }
 
+/** Which chat or project to narrow the gallery to. A filter, not the facts about an image. */
 export interface GeneratedImageScope {
   conversationId?: string
   projectId?: string | null
@@ -420,26 +442,51 @@ export interface GeneratedImageScope {
  * export all depend on the same file boundary. Callers should not manufacture
  * sidecars themselves.
  */
-export function saveGeneratedImageScope(imagePath: string, scope: GeneratedImageScope): void {
+export function saveGeneratedImageScope(imagePath: string, facts: GeneratedImageSidecar): void {
   const dir = path.join(dataDir(), 'generated-images')
   const ownedImage = resolveExistingOwnedPath(dir, imagePath)
-  if (!ownedImage || !/\.png$/i.test(ownedImage)) {
+  if (!ownedImage || !/\.(?:png|jpe?g|webp)$/i.test(ownedImage)) {
     throw new Error('Generated image is outside the app image library.')
   }
 
-  const sidecar = `${ownedImage}.json`
-  const temporarySidecar = `${sidecar}.tmp`
+  // Merged by the sidecar owner, not replaced here. The scope is saved AFTER the image has been
+  // given its mesh identity, and the write this replaced dropped that identity on every save.
+  writeGeneratedImageSidecar(ownedImage, facts)
+}
+
+/**
+ * Keep the app's own copy of the image a generation was based on.
+ *
+ * The user picks an init image from their own disk, and nothing kept it: the path was handed to the
+ * generator, used, and forgotten. So the moment that file moved or was deleted there was no record of
+ * what an img2img turn was made from - "convert this into light mode" with nothing to show for the
+ * thing being converted.
+ *
+ * Copies live in a `sources` subdirectory so the gallery scan, which reads PNG files in the directory
+ * itself, does not list an input as though the user had generated it. Returns the copy's path, or null
+ * when the source cannot be read - a generation is not worth failing over its provenance.
+ */
+export function preserveGeneratedImageSource(syncId: string, sourcePath: string): string | null {
   try {
-    fs.writeFileSync(
-      temporarySidecar,
-      JSON.stringify({
-        conversationId: scope.conversationId,
-        projectId: scope.projectId ?? null
-      })
+    const directory = path.join(dataDir(), 'generated-images', 'sources')
+    fs.mkdirSync(directory, { recursive: true })
+    const extension = path.extname(sourcePath).toLowerCase() || '.png'
+    const kept = path.join(directory, `${syncId}${extension}`)
+    const temporary = `${kept}.part`
+    try {
+      fs.copyFileSync(sourcePath, temporary)
+      fs.renameSync(temporary, kept)
+    } finally {
+      fs.rmSync(temporary, { force: true })
+    }
+    return kept
+  } catch (error) {
+    console.error(
+      `[imagegen] could not keep the init image: ${
+        error instanceof Error ? error.message : String(error)
+      }`
     )
-    fs.renameSync(temporarySidecar, sidecar)
-  } finally {
-    fs.rmSync(temporarySidecar, { force: true })
+    return null
   }
 }
 
@@ -451,7 +498,7 @@ export function saveGeneratedImageScope(imagePath: string, scope: GeneratedImage
 export async function exportGeneratedImage(imagePath: string, destination: string): Promise<void> {
   const dir = path.join(dataDir(), 'generated-images')
   const ownedImage = resolveExistingOwnedPath(dir, imagePath)
-  if (!ownedImage || !/\.png$/i.test(ownedImage)) {
+  if (!ownedImage || !/\.(?:png|jpe?g|webp)$/i.test(ownedImage)) {
     throw new Error('Generated image is outside the app image library.')
   }
 
@@ -468,10 +515,15 @@ export async function exportGeneratedImage(imagePath: string, destination: strin
 }
 
 let currentChild: ChildProcess | null = null
+let remoteAbort: AbortController | null = null
 const generationLifecycle = new ImageGenerationLifecycle()
 
 /** Kill an in-progress generation. Returns true if one was running. */
 export function cancelImageGen(): boolean {
+  if (remoteAbort) {
+    remoteAbort.abort()
+    return true
+  }
   cancelMflux() // no-op if mflux isn't the active runtime
   void sdServer.cancelCurrent() // cancels the in-flight job on the resident server (no-op if idle)
   if (!generationLifecycle.cancel()) return false
@@ -494,30 +546,156 @@ export function cancelImageGen(): boolean {
  */
 export async function generateImage(
   params: ImageGenParams,
-  onProgress?: (p: ImageGenProgress & { preview?: string }) => void
+  onUpdate?: (update: ImageGenerationPipelineUpdateContract) => void
 ): Promise<ImageGenOutput> {
-  // Prompt enhancement runs FIRST, while the chat model is still resident — the
-  // image job below evicts the LLM, so the text pass must precede it. Gated by a
-  // setting; failure/timeout silently keeps the original prompt.
-  const enhanced = await maybeEnhancePrompt(params.prompt)
-  const effective = enhanced === params.prompt ? params : { ...params, prompt: enhanced }
-  // The queue evicts 'llm' before this runs AND re-warms it (mode-aware) when the
-  // job finishes — so the image path no longer touches llm.pause/resume itself.
-  return modalityQueue.run(IMAGE_JOB, () => runImageGen(effective, onProgress))
+  return recordAIRequest(
+    {
+      modality: 'image',
+      source: 'Image generation',
+      model: params.model,
+      request: params,
+      isCancelled: (error) => error instanceof Error && error.message === IMAGE_CANCELLED_MESSAGE
+    },
+    async (log) => {
+      // Prompt enhancement runs FIRST, while the chat model is still resident — the
+      // image job below evicts the LLM, so the text pass must precede it. Gated by a
+      // setting; failure/timeout silently keeps the original prompt.
+      const enhanced = await maybeEnhancePrompt(
+        params.prompt,
+        onUpdate,
+        params.enhancePrompt,
+        params.initImage ? [params.initImage] : []
+      )
+      const remote = getActiveRemoteVisionServerForModality('image')
+      const remoteId = remote ? remoteVisionModelId(remote.id, remote.selectedModel) : null
+      if (
+        remote &&
+        (!params.model || params.model === remote.selectedModel || params.model === remoteId)
+      ) {
+        if (params.initImage) {
+          throw new Error(
+            'The selected remote image model does not support image editing. Select a local image model that supports an init image.'
+          )
+        }
+        if (remoteAbort)
+          throw new Error('An image is already generating — please wait for it to finish.')
+        const controller = new AbortController()
+        remoteAbort = controller
+        onUpdate?.({ stage: 'preparing', enhancedPrompt: enhanced })
+        try {
+          const result = await generateRemoteImage(
+            remote,
+            enhanced,
+            params.width,
+            params.height,
+            params.allowUnsafeMemoryOverride === true,
+            controller.signal
+          )
+          const extension =
+            result.mime === 'image/jpeg' ? 'jpg' : result.mime === 'image/webp' ? 'webp' : 'png'
+          const directory = path.join(dataDir(), 'generated-images')
+          await fs.promises.mkdir(directory, { recursive: true })
+          const outputPath = path.join(
+            directory,
+            `remote-${Date.now()}-${randomUUID()}.${extension}`
+          )
+          await fs.promises.writeFile(outputPath, result.bytes)
+          return {
+            dataUrl: `data:${result.mime};base64,${result.bytes.toString('base64')}`,
+            path: outputPath,
+            seed: params.seed ?? -1,
+            model:
+              remote.modelCatalog?.find(
+                (model) => model.id === remote.selectedModel && model.kind === 'image'
+              )?.name ?? remote.selectedModel,
+            prompt: enhanced,
+            computeBackend: 'Remote'
+          }
+        } finally {
+          remoteAbort = null
+        }
+      }
+      const selectedModel = params.model ?? activeImageModel()
+      const modelParameters = selectedModel
+        ? resolveImageParameters(
+            { id: selectedModel },
+            getSetting<ImageParameterStore>('imageParams', {})
+          )
+        : null
+      const effective = {
+        ...params,
+        prompt: enhanced,
+        steps: params.steps ?? modelParameters?.steps,
+        cfgScale: params.cfgScale ?? modelParameters?.cfgScale,
+        // The selected model size is authoritative for both txt2img and img2img.
+        // Only fall back to source dimensions when no model size can be resolved.
+        width: params.width ?? modelParameters?.size,
+        height: params.height ?? modelParameters?.size
+      }
+      log.update({ effectiveRequest: effective, model: selectedModel ?? undefined })
+      onUpdate?.({ stage: 'preparing', enhancedPrompt: enhanced })
+      const progressObserver = onUpdate
+        ? (progress: ImageGenProgress & { preview?: string }) =>
+            onUpdate({
+              stage: progress.phase === 'decoding' ? 'decoding' : 'generating',
+              progress
+            })
+        : undefined
+      // The queue evicts 'llm' before this runs AND re-warms it (mode-aware) when the
+      // job finishes — so the image path no longer touches llm.pause/resume itself.
+      const output = await modalityQueue.run(IMAGE_JOB, () =>
+        runImageGen(effective, progressObserver)
+      )
+      return {
+        ...output,
+        prompt: effective.prompt,
+        width: effective.width,
+        height: effective.height,
+        steps: effective.steps,
+        cfgScale: effective.cfgScale
+      }
+    }
+  )
 }
 
 /** Expand the user's prompt into a richer generation prompt via the local text
  *  model, when `enhanceImagePrompts` is on. Runs through the queue as a foreground
  *  text job (tier 2, evicts a resident image server) so it's serialized with chat.
  *  Any failure returns the original prompt unchanged — enhancement is best-effort. */
-async function maybeEnhancePrompt(prompt: string): Promise<string> {
+async function maybeEnhancePrompt(
+  prompt: string,
+  onUpdate?: (update: ImageGenerationPipelineUpdateContract) => void,
+  requestOverride?: boolean,
+  referenceImages: string[] = []
+): Promise<string> {
+  const enabled = requestOverride ?? getSetting('enhanceImagePrompts', true)
+  if (enabled) onUpdate?.({ stage: 'enhancing', enhancedPrompt: '' })
+  let streamed = ''
   return enhancePrompt(prompt, {
-    enabled: getSetting('enhanceImagePrompts', true),
+    enabled,
+    hasReferenceImage: referenceImages.length > 0,
+    onText: (text) => {
+      streamed += text
+      onUpdate?.({ stage: 'enhancing', enhancedPrompt: streamed })
+    },
     // Foreground text job (tier 2, evicts a resident image server), serialized with
     // chat. Runs while the chat model is still resident — the image job evicts it after.
-    chat: (instruction) =>
+    chat: (instruction, onText) =>
       modalityQueue.run(CHAT_JOB, () =>
-        llm.chat(instruction, [], 60_000, 200, { temperature: 0.7, disableThinking: true })
+        llm
+          .chatStream(
+            instruction,
+            referenceImages,
+            (text, kind) => {
+              if (kind === 'content') onText(text)
+            },
+            { temperature: 0.7, thinking: false },
+            // Leave enough room for a reasoning model to return the enhanced prompt, while
+            // keeping this background step bounded independently of the user's chat setting.
+            2_048,
+            60_000
+          )
+          .then((result) => result.content)
       )
   })
 }
@@ -525,7 +703,7 @@ async function maybeEnhancePrompt(prompt: string): Promise<string> {
 async function runImageGen(
   params: ImageGenParams,
   onProgress?: (p: ImageGenProgress & { preview?: string }) => void
-): Promise<ImageGenOutput> {
+): Promise<NativeImageGenOutput> {
   if (generationLifecycle.isRunning()) {
     throw new Error('An image is already generating — please wait for it to finish.')
   }
@@ -536,6 +714,11 @@ async function runImageGen(
   // queue (evicts: ['llm']) before we get here, then delegates the spawn to the mflux
   // module. Returns before the sd-cli path.
   if (isMfluxModelId(params.model)) {
+    if (params.initImage) {
+      throw new Error(
+        'The selected MLX image model does not support image editing. Select a local image model that supports an init image.'
+      )
+    }
     const def = getMfluxModel(params.model)!
     const outDir = path.join(dataDir(), 'generated-images')
     fs.mkdirSync(outDir, { recursive: true })
@@ -570,7 +753,8 @@ async function runImageGen(
         dataUrl: `data:image/png;base64,${b64}`,
         path: outPath,
         seed: params.seed ?? -1,
-        model: def.label
+        model: def.label,
+        computeBackend: 'Metal'
       }
     } finally {
       generationLifecycle.finish()
@@ -601,6 +785,11 @@ async function runImageGen(
   // Core ML models are directories of .mlmodelc resources → routed to the ANE
   // Swift helper; everything else (GGUF) runs on sd-cli.
   const coreml = isCoreMLModelDir(model)
+  if (params.initImage && (coreml || isZImageModel(path.basename(model)))) {
+    throw new Error(
+      `${coreml ? 'The selected Core ML image model' : 'The selected Z-Image model'} does not support image editing. Select a local image model that supports an init image.`
+    )
+  }
   const cli = coreml ? findCoreMLBin() : findSdCli()
   if (!cli) {
     throw new Error(
@@ -628,13 +817,22 @@ async function runImageGen(
   // its footprint. Count the encoder + VAE too, or the guard waves through a
   // combo that then overflows unified memory and freezes the box.
   const zImageStack = isZImageModel(path.basename(model))
+  const qwenImageStack = isQwenImage21Model(path.basename(model))
   const guard = evaluateMemoryGuard({
     totalGb,
     modelSizeGb: safeSizeGb(model),
     coreml,
     zImageStack,
     zEncoderGb: zImageStack ? safeSizeGb(findInModels(/qwen3-4b-instruct.*\.gguf$/i)) : 0,
-    zVaeGb: zImageStack ? safeSizeGb(findInModels(/^ae\.(safetensors|sft)$|^ae.*\.gguf$/i)) : 0
+    zVaeGb: zImageStack ? safeSizeGb(findInModels(/^ae\.(safetensors|sft)$|^ae.*\.gguf$/i)) : 0,
+    qwenImageStack,
+    qwenEncoderGb: qwenImageStack ? safeSizeGb(findInModels(/^Qwen3VL-8B-Instruct-.*\.gguf$/i)) : 0,
+    qwenVisionGb: qwenImageStack
+      ? safeSizeGb(findInModels(/^mmproj-Qwen3VL-8B-Instruct-.*\.gguf$/i))
+      : 0,
+    qwenVaeGb: qwenImageStack
+      ? safeSizeGb(findInModels(/^qwen_image_2\.1_vae.*\.(safetensors|sft)$/i))
+      : 0
   })
   if (guard.overBudget && !params.allowUnsafeMemoryOverride) {
     throw new Error(
@@ -669,10 +867,11 @@ async function runImageGen(
   const seed = params.seed ?? -1
   const stamp = String(Date.now())
   const outPath = path.join(outDir, `img-${stamp}.png`)
-  const previewPath = path.join(outDir, `preview-${stamp}.png`)
 
   const base = path.basename(model)
   const isZImage = isZImageModel(base)
+  const isQwenImage21 = isQwenImage21Model(base)
+  const previewPath = path.join(outDir, `preview-${stamp}.png`)
 
   // --- RESIDENT fast path (opt-in) --------------------------------------------
   // When the user sets image residency to 'resident', a plain full-checkpoint
@@ -686,8 +885,10 @@ async function runImageGen(
   const residentImage = getResidencyMode('image') === 'resident'
   const eligibleForServer =
     residentImage &&
+    !onProgress &&
     !coreml &&
     !isZImage &&
+    !isQwenImage21 &&
     !loras.length &&
     !params.initImage &&
     ggufIsFullCheckpoint(model)
@@ -702,27 +903,26 @@ async function runImageGen(
         diffusionFa: true,
         taesdPath: taesd ?? undefined
       })
+      const residentBinary = sdServer.getBinaryPath() ?? cli
       generationLifecycle.throwIfCancelled()
-      const { png, seed: usedSeed } = await sdServer.generate(
-        {
-          prompt: params.prompt,
-          negativePrompt: params.negativePrompt?.trim() || DEFAULT_NEGATIVE,
-          width: params.width ?? defaultSize,
-          height: params.height ?? defaultSize,
-          steps: params.steps ?? defaultSteps,
-          cfgScale: params.cfgScale ?? defaultCfg,
-          sampleMethod: sampler,
-          scheduler,
-          seed
-        },
-        (p) => onProgress?.({ step: p.step, total: p.total, secPerStep: 0 })
-      )
+      const { png, seed: usedSeed } = await sdServer.generate({
+        prompt: params.prompt,
+        negativePrompt: params.negativePrompt?.trim() || DEFAULT_NEGATIVE,
+        width: params.width ?? defaultSize,
+        height: params.height ?? defaultSize,
+        steps: params.steps ?? defaultSteps,
+        cfgScale: params.cfgScale ?? defaultCfg,
+        sampleMethod: sampler,
+        scheduler,
+        seed
+      })
       await fs.promises.writeFile(outPath, png)
       return {
         dataUrl: `data:image/png;base64,${png.toString('base64')}`,
         path: outPath,
         seed: usedSeed,
-        model: base
+        model: base,
+        computeBackend: imageBackendForRuntime(process.platform, residentBinary)
       }
     } finally {
       generationLifecycle.finish()
@@ -794,6 +994,36 @@ async function runImageGen(
       seed,
       threads,
       previewArgs
+    })
+  } else if (isQwenImage21) {
+    const llm = findInModels(/^Qwen3VL-8B-Instruct-(?!mmproj).*\.gguf$/i)
+    const llmVision = findInModels(/^mmproj-Qwen3VL-8B-Instruct-.*\.gguf$/i)
+    const vae = findInModels(/^qwen_image_2\.1_vae.*\.(safetensors|sft)$/i)
+    if (!llm)
+      throw new Error(
+        'Qwen-Image 2.1 text encoder (Qwen3-VL-8B-Instruct) not found — download the complete model from Models.'
+      )
+    if (!llmVision && params.initImage)
+      throw new Error(
+        'Qwen-Image 2.1 vision projector not found — download the complete model from Models.'
+      )
+    if (!vae)
+      throw new Error('Qwen-Image 2.1 VAE not found — download the complete model from Models.')
+    args = buildQwenImage21Args({
+      model,
+      llm,
+      llmVision: llmVision ?? '',
+      vae,
+      prompt: params.prompt,
+      outPath,
+      width: params.width,
+      height: params.height,
+      steps: params.steps,
+      cfgScale: params.cfgScale,
+      seed,
+      threads,
+      previewArgs,
+      initImage: params.initImage
     })
   } else {
     // Full checkpoint → load with -m. UNET-only quant → load the diffusion model
@@ -872,45 +1102,127 @@ async function runImageGen(
   // model's load spike — otherwise the brief overlap causes a short stutter.
   try {
     await generationLifecycle.waitForMemoryReclaim()
-    await new Promise<void>((resolve, reject) => {
-      // cwd at the binary dir so @executable_path rpath resolves libstable-diffusion.dylib.
-      const child = spawn(cli, args, { cwd: path.dirname(cli) })
-      currentChild = child
-      let log = ''
-      // Pure progress reducer owns the seed parse + the denoise->decode phase
-      // transition; the shell only handles the preview PNG read + the callback.
-      let progress = initialProgressState(seed)
-      const capture = (d: Buffer): void => {
-        const s = d.toString()
-        log += s
-        const { state, event } = reduceProgress(progress, s)
-        progress = state
-        if (onProgress && event) {
-          let preview: string | undefined
+    const runNativeCli = (runtime: string): Promise<void> =>
+      new Promise<void>((resolve, reject) => {
+        // cwd at the binary dir so @executable_path rpath resolves libstable-diffusion.dylib.
+        const binDir = path.dirname(runtime)
+        // Qwen needs the model on the L40S for CUDA inference. Keep CPU offload
+        // for other runtimes, including a fallback after CUDA startup fails.
+        const runtimeArgs = isQwenImage21
+          ? qwenImageArgsForBackend(args, imageBackendForRuntime(process.platform, runtime))
+          : args
+        const child = spawn(runtime, runtimeArgs, {
+          cwd: binDir,
+          env: { ...process.env, ...sdRuntimeLibraryEnv(process.platform, runtime, process.env) }
+        })
+        const debugNativeLogs = process.env.OFFGRID_NATIVE_LOGS === '1'
+        if (debugNativeLogs) {
+          console.info(
+            `[imagegen:native] backend=${imageBackendForRuntime(process.platform, runtime)} runtime=${runtime}`
+          )
+        }
+        const backendState = beginRuntimeBackend('image', model)
+        currentChild = child
+        let log = ''
+        // Pure progress reducer owns the seed parse + the denoise->decode phase
+        // transition; the shell only handles the preview PNG read + the callback.
+        let progress = initialProgressState(seed)
+        let progressBuffer = ''
+        let latestProgressEvent: ProgressEvent | undefined
+        let previewVersion = ''
+        const readPreview = (): string | undefined => {
           try {
-            if (fs.existsSync(previewPath))
-              preview = `data:image/png;base64,${fs.readFileSync(previewPath).toString('base64')}`
+            if (!fs.existsSync(previewPath)) return undefined
+            const stat = fs.statSync(previewPath)
+            const version = `${stat.mtimeMs}:${stat.size}`
+            if (version === previewVersion) return undefined
+            previewVersion = version
+            return `data:image/png;base64,${fs.readFileSync(previewPath).toString('base64')}`
           } catch {
-            /* preview not ready */
+            return undefined
           }
-          onProgress({ ...event, preview })
         }
-      }
-      child.stdout.on('data', capture)
-      child.stderr.on('data', capture)
-      child.on('error', reject)
-      child.on('close', (code) => {
-        if (generationLifecycle.isCancelled()) {
-          reject(new Error(IMAGE_CANCELLED_MESSAGE))
-        } else if (code === 0) {
-          // stash the resolved seed for the caller via closure
-          ;(params as ImageGenParams & { _seed?: number })._seed = progress.resolvedSeed
-          resolve()
-        } else {
-          reject(new Error(`Image generation failed (exit ${String(code)}): ${log.slice(-400)}`))
+        // sd-cli prints a step before its preview PNG has finished writing. Poll
+        // the file independently so the final step cannot leave the previous
+        // preview on screen while the final VAE decode is still running.
+        const previewPoll = setInterval(() => {
+          if (!onProgress || !latestProgressEvent) return
+          const preview = readPreview()
+          if (preview) onProgress({ ...latestProgressEvent, preview })
+        }, 250)
+        const capture = (stream: 'stdout' | 'stderr', d: Buffer): void => {
+          const s = d.toString()
+          log += s
+          backendState.observe(s, true)
+          if (debugNativeLogs) {
+            const destination = stream === 'stdout' ? process.stdout : process.stderr
+            destination.write(`[sd-cli:${stream}] ${s}`)
+          }
+          // Terminal progress lines can arrive across multiple data chunks. Keep a
+          // short rolling buffer so "12/" and "42" still become step 12 of 42.
+          progressBuffer = `${progressBuffer}${s}`.slice(-2048)
+          const { state, event } = reduceProgress(progress, progressBuffer, params.steps)
+          progress = state
+          if (onProgress && event) {
+            latestProgressEvent = event
+            const preview = readPreview()
+            onProgress({ ...event, preview })
+          }
         }
+        child.stdout.on('data', (data: Buffer) => capture('stdout', data))
+        child.stderr.on('data', (data: Buffer) => capture('stderr', data))
+        child.on('error', (error) => {
+          backendState.fail(error)
+          clearInterval(previewPoll)
+          reject(error)
+        })
+        child.on('close', (code) => {
+          backendState.stop()
+          const preview = readPreview()
+          if (onProgress && latestProgressEvent && preview) {
+            onProgress({ ...latestProgressEvent, preview })
+          }
+          clearInterval(previewPoll)
+          if (generationLifecycle.isCancelled()) {
+            reject(new Error(IMAGE_CANCELLED_MESSAGE))
+          } else if (code === 0) {
+            // stash the resolved seed for the caller via closure
+            ;(params as ImageGenParams & { _seed?: number })._seed = progress.resolvedSeed
+            resolve()
+          } else {
+            reject(new Error(`Image generation failed (exit ${String(code)}): ${log.slice(-400)}`))
+          }
+        })
       })
-    })
+
+    const runtimes = coreml ? [cli] : findSdBinaries('sd-cli', getBackendPreference('image'))
+    let completedRuntime: string | undefined
+    let lastError: unknown
+    for (const [index, runtime] of runtimes.entries()) {
+      try {
+        await recordAIRequest(
+          {
+            modality: 'image',
+            source: 'Image runtime attempt',
+            model: path.basename(model),
+            backend: imageBackendForRuntime(process.platform, runtime),
+            request: params
+          },
+          async () => runNativeCli(runtime)
+        )
+        completedRuntime = runtime
+        break
+      } catch (error) {
+        lastError = error
+        const next = runtimes[index + 1]
+        if (!next || generationLifecycle.isCancelled()) throw error
+        console.warn(
+          `[imagegen] ${imageBackendForRuntime(process.platform, runtime)} runtime failed; retrying with ${imageBackendForRuntime(process.platform, next)}`,
+          error
+        )
+      }
+    }
+    if (!completedRuntime) throw lastError
 
     if (!fs.existsSync(outPath)) throw new Error('Image generation produced no output file.')
     const b64 = fs.readFileSync(outPath).toString('base64')
@@ -919,7 +1231,10 @@ async function runImageGen(
       dataUrl: `data:image/png;base64,${b64}`,
       path: outPath,
       seed: finalSeed,
-      model: path.basename(model)
+      model: path.basename(model),
+      computeBackend: coreml
+        ? 'Core ML (ANE)'
+        : imageBackendForRuntime(process.platform, completedRuntime)
     }
   } finally {
     generationLifecycle.finish()

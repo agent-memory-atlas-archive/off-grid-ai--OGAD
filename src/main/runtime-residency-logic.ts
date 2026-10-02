@@ -1,7 +1,17 @@
-export type Modality = 'llm' | 'image' | 'stt' | 'tts'
+import type { Modality } from '../shared/runtime-residency-types'
+
+export type { Modality } from '../shared/runtime-residency-types'
 export type ResidencyMode = 'resident' | 'on-demand'
 
-export const MODALITIES: readonly Modality[] = ['llm', 'image', 'stt', 'tts']
+export const MODALITIES: readonly Modality[] = [
+  'llm',
+  'image',
+  'stt',
+  'tts',
+  'grounding',
+  'decision',
+  'embeddings'
+]
 
 const LOCKED_RESIDENT: readonly Modality[] = ['llm']
 
@@ -13,7 +23,10 @@ export const DEFAULT_RESIDENCY: Record<Modality, ResidencyMode> = {
   llm: 'resident',
   image: 'on-demand',
   stt: 'on-demand',
-  tts: 'on-demand'
+  tts: 'on-demand',
+  grounding: 'resident',
+  decision: 'on-demand',
+  embeddings: 'resident'
 }
 
 function isMode(value: unknown): value is ResidencyMode {

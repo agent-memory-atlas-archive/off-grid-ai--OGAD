@@ -89,6 +89,34 @@ describe('streamCompletion', () => {
     expect(out.content).toBe('answer') // reasoning excluded from the answer
   })
 
+  it('routes OpenRouter reasoning_details to the reasoning channel', async () => {
+    const port = await serve((res) => {
+      res.writeHead(200)
+      res.write(
+        sse({
+          reasoning_details: [
+            { type: 'reasoning.text', text: 'checking ' },
+            { type: 'reasoning.summary', summary: 'done' }
+          ]
+        })
+      )
+      res.write(sse({ content: 'answer' }))
+      res.end()
+    })
+    const reasoning: string[] = []
+    const out = await streamCompletion(
+      port,
+      '{}',
+      (text, kind) => {
+        if (kind === 'reasoning') reasoning.push(text)
+      },
+      { timeoutMs: 5000 }
+    )
+
+    expect(reasoning).toEqual(['checking done'])
+    expect(out.content).toBe('answer')
+  })
+
   it('reassembles a delta split across TCP chunk boundaries', async () => {
     const port = await serve((res) => {
       res.writeHead(200)
@@ -116,10 +144,15 @@ describe('streamCompletion', () => {
       res.write(sse({ tool_calls: [{ index: 0, function: { arguments: '"fox"}' } }] }))
       res.end()
     })
-    const out = await streamCompletion(port, '{}', () => {}, { timeoutMs: 5000 })
+    const starts: Array<string | undefined> = []
+    const out = await streamCompletion(port, '{}', () => {}, {
+      timeoutMs: 5000,
+      onToolCallStart: (name) => starts.push(name)
+    })
     expect(out.toolCalls).toHaveLength(1)
     expect(out.toolCalls[0]!.name).toBe('search_memory')
     expect(out.toolCalls[0]!.arguments).toBe('{"q":"fox"}') // reassembled across deltas
+    expect(starts).toEqual(['search_memory'])
   })
 
   it('rejects on a non-200 status', async () => {

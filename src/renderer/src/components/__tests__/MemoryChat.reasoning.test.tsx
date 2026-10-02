@@ -9,13 +9,13 @@
 // streamed reasoning into a ref and reads it deterministically.
 //
 // This drives the REAL seam: mount <MemoryChat/>, send a plain chat turn, let the fake
-// ragChat fire a REAL onRagStream 'reasoning' event (via the captured callback, keyed by the
-// streamId ragChat receives), then resolve. The terminal artifact is the `context` handed to
+// toolChat fires a REAL onRagStream 'reasoning' event (via the captured callback, keyed by the
+// streamId toolChat receives), then resolves. The terminal artifact is the `context` handed to
 // window.api.addRagMessage — asserted through the REAL readReasoning reader (the exact path a
 // reload uses to restore the block), not an intermediate field.
 
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
-import { render, screen, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryChat } from '../MemoryChat'
 import { TooltipProvider } from '../ui/tooltip'
@@ -23,43 +23,63 @@ import { readReasoning } from '@renderer/lib/message-persistence'
 
 type StreamEvent = { streamId: string; type: 'content' | 'reasoning' | 'step'; text?: string }
 type AddRagArgs = [convId: string, role: string, content: string, context?: unknown]
-type AddRagMessageBoundary = Mock<(...args: AddRagArgs) => Promise<void>>
+type AddedRagMessage = { id: number; uuid: string }
+type AddRagMessageBoundary = Mock<(...args: AddRagArgs) => Promise<AddedRagMessage>>
 
-/** window.api where ragChat streams a reasoning event through the REAL onRagStream
+/** window.api where toolChat streams a reasoning event through the REAL onRagStream
  *  callback (keyed by the streamId it is handed), then resolves. addRagMessage is the
  *  assertion subject — its context arg is what persists / reloads. */
 function installApi(): { addRagMessage: AddRagMessageBoundary } {
   let streamCb: ((e: StreamEvent) => void) | null = null
-  const addRagMessage = vi.fn(async (..._a: AddRagArgs) => {})
+  let nextMessageId = 0
+  const addRagMessage = vi.fn(async (..._a: AddRagArgs) => {
+    nextMessageId += 1
+    return { id: nextMessageId, uuid: `reasoning-message-${nextMessageId}` }
+  })
   const api = {
     isPro: false,
     imageGenStatus: vi.fn(async () => ({ available: false, models: [], active: '' })),
     cancelImageGen: vi.fn(),
-    onImageGenProgress: vi.fn(() => () => {}),
+    onImageGenProgress: vi.fn(() => () => { }),
+    onImageGenJobState: vi.fn(() => () => { }),
+    onImageGenConversationUpdated: vi.fn(() => () => { }),
+    imageGenJobStatus: vi.fn(async () => ({
+      id: null,
+      phase: 'idle' as const,
+      conversationId: null,
+      projectId: null,
+      stage: null,
+      enhancedPrompt: '',
+      progress: null,
+      outputPath: null,
+      error: null,
+      startedAt: null,
+      finishedAt: null
+    })),
     getRagConversations: vi.fn(async () => []),
     getRagMessages: vi.fn(async () => []),
-    createRagConversation: vi.fn(async () => {}),
+    createRagConversation: vi.fn(async () => { }),
     addRagMessage,
-    saveArtifact: vi.fn(async () => {}),
+    saveArtifact: vi.fn(async () => { }),
     getSettings: vi.fn(async () => ({})),
-    saveSetting: vi.fn(async () => {}),
+    saveSetting: vi.fn(async () => { }),
     listProjects: vi.fn(async () => []),
     styleThumbs: vi.fn(async () => ({})),
     listSkills: vi.fn(async () => []),
     onRagStream: vi.fn((cb: (e: StreamEvent) => void) => {
       streamCb = cb
-      return () => {}
+      return () => { }
     }),
-    // ragChat: 7th arg is the streamId. Stream a reasoning delta on it (the real handler
-    // routes it), then return the final answer + a context object.
-    ragChat: vi.fn(async (..._args: unknown[]) => {
-      const streamId = _args[6] as string
+    // toolChat carries the streamId in its third argument. Stream a reasoning
+    // delta on it, then return the final answer and tool results.
+    toolChat: vi.fn(async (..._args: unknown[]) => {
+      const streamId = (_args[2] as { streamId: string }).streamId
       streamCb?.({ streamId, type: 'reasoning', text: 'weighing the options' })
       streamCb?.({ streamId, type: 'content', text: 'Here is the answer.' })
-      return { answer: 'Here is the answer.', context: { unified: [] } }
+      return { answer: 'Here is the answer.', unified: [], toolCalls: [] }
     })
   }
-  ;(globalThis as unknown as { window: { api: unknown } }).window.api = api
+    ; (globalThis as unknown as { window: { api: unknown } }).window.api = api
   return { addRagMessage }
 }
 
@@ -67,7 +87,7 @@ describe('<MemoryChat/> — streamed reasoning is persisted (survives reload)', 
   beforeEach(() => {
     cleanup()
     vi.clearAllMocks()
-    ;(Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {}
+      ; (Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => { }
   })
 
   it('reasoning streamed via onRagStream lands in the persisted context (readReasoning restores it)', async () => {
@@ -80,7 +100,7 @@ describe('<MemoryChat/> — streamed reasoning is persisted (survives reload)', 
     )
 
     const textarea = await screen.findByPlaceholderText(/ask anything/i, {}, { timeout: 3000 })
-    await user.type(textarea, 'what did I work on')
+    fireEvent.change(textarea, { target: { value: 'what did I work on' } })
     await user.click(screen.getByRole('button', { name: /^send$/i }))
 
     // Terminal artifact: the assistant turn persisted via addRagMessage carries the

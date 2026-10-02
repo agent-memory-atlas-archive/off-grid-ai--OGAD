@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { IconServer2, IconCopy, IconCheck, IconExternalLink } from '@tabler/icons-react'
+import { IconServer2, IconExternalLink } from '@tabler/icons-react'
 import { GATEWAY_HOST, GATEWAY_PORT } from '@offgrid/core/shared/ports'
+import { CopyButton } from './ui/CopyButton'
 
 // Explains the local OpenAI-compatible gateway with copyable quick-start snippets
 // and a link to the interactive playground the gateway serves. Core feature.
@@ -85,28 +86,6 @@ console.log(resp.choices[0].message.content);`
   }
 ]
 
-function CopyButton({ text }: { text: string }): React.ReactElement {
-  const [done, setDone] = useState(false)
-  return (
-    <button
-      onClick={() =>
-        navigator.clipboard.writeText(text).then(() => {
-          setDone(true)
-          setTimeout(() => setDone(false), 1500)
-        })
-      }
-      className="flex items-center gap-1.5 rounded-md border border-neutral-700 px-2 py-1 text-[11px] text-neutral-300 hover:border-neutral-500 hover:text-white"
-    >
-      {done ? (
-        <IconCheck className="h-3.5 w-3.5 text-green-400" />
-      ) : (
-        <IconCopy className="h-3.5 w-3.5" />
-      )}
-      {done ? 'Copied' : 'Copy'}
-    </button>
-  )
-}
-
 export function GatewayScreen(): React.ReactElement {
   const [tab, setTab] = useState(SNIPPETS[0]!.id)
   const open = (p: string): void => {
@@ -120,7 +99,7 @@ export function GatewayScreen(): React.ReactElement {
         {/* Header */}
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-neutral-700 bg-neutral-800">
-            <IconServer2 className="h-5 w-5 text-green-400" />
+            <IconServer2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
           </div>
           <div>
             <h2 className="text-lg font-semibold text-white">Gateway</h2>
@@ -137,7 +116,7 @@ export function GatewayScreen(): React.ReactElement {
             Base URL
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <code className="flex-1 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-green-400">
+            <code className="flex-1 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-emerald-400">
               {BASE}/v1
             </code>
             <CopyButton text={`${BASE}/v1`} />
@@ -161,7 +140,7 @@ export function GatewayScreen(): React.ReactElement {
               <button
                 key={s.id}
                 onClick={() => setTab(s.id)}
-                className={`rounded-md px-2.5 py-1 text-xs transition-colors ${tab === s.id ? 'bg-green-500/15 text-green-400' : 'text-neutral-400 hover:text-white'}`}
+                className={`rounded-md px-2.5 py-1 text-xs transition-colors ${tab === s.id ? 'bg-green-500/15 text-emerald-400' : 'text-neutral-400 hover:text-white'}`}
               >
                 {s.label}
               </button>
@@ -188,7 +167,7 @@ export function GatewayScreen(): React.ReactElement {
                 className="flex flex-col gap-1 rounded-xl border border-neutral-800 bg-neutral-900/40 p-3 text-left transition-colors hover:border-green-500/40"
               >
                 <div className="flex items-center gap-2">
-                  <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium text-green-400">
+                  <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
                     {e.method}
                   </span>
                   <span className="text-sm text-neutral-200">{e.label}</span>

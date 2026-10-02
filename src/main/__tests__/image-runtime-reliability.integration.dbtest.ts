@@ -11,7 +11,6 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
-import { LLAMA_SERVER_PORT } from '../../shared/ports'
 import { createOfflineFetchBoundary, type OfflineFetchBoundary } from './harness/offline-fetch'
 
 const hostFetch = globalThis.fetch.bind(globalThis)
@@ -114,7 +113,7 @@ function installFakeImageBoundary(): void {
 const fs = require('node:fs')
 const args = process.argv.slice(2)
 const value = (flag) => args[args.indexOf(flag) + 1]
-fs.appendFileSync(process.env.OFFGRID_TEST_IMAGE_LOG, 'run\\n')
+fs.appendFileSync(process.env.OFFGRID_TEST_IMAGE_LOG, JSON.stringify(args) + '\\n')
 fs.writeFileSync(value('-o'), Buffer.from('${PNG_BASE64}', 'base64'))
 `
   )
@@ -122,25 +121,29 @@ fs.writeFileSync(value('-o'), Buffer.from('${PNG_BASE64}', 'base64'))
 }
 
 function installFakeTtsBoundary(): void {
-  fs.mkdirSync(fixture.resourceDir, { recursive: true })
+  const executable = path.join(fixture.resourceDir, 'bin', 'executorch-speech')
+  fs.mkdirSync(path.dirname(executable), { recursive: true })
   fs.writeFileSync(
-    path.join(fixture.resourceDir, 'tts-worker.mjs'),
-    `import fs from 'node:fs'
-const [, , command, output] = process.argv
+    executable,
+    `#!/usr/bin/env node
+const fs = require('node:fs')
+const args = process.argv.slice(2)
+const value = flag => args[args.indexOf(flag) + 1]
 let input = ''
 process.stdin.setEncoding('utf8')
 process.stdin.on('data', chunk => { input += chunk })
 process.stdin.on('end', () => {
-  if (command !== 'speak' || !output) return
   if (fs.existsSync(process.env.OFFGRID_TEST_TTS_FAILURE_MARKER || '')) {
     fs.rmSync(process.env.OFFGRID_TEST_TTS_FAILURE_MARKER, { force: true })
     process.stderr.write('synthetic native TTS failure')
+    process.exitCode = 23
     return
   }
   fs.appendFileSync(process.env.OFFGRID_TEST_TTS_INPUT_LOG, input + '\\n')
-  fs.writeFileSync(output, Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(60, 1)]))
+  fs.writeFileSync(value('--output'), Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(60, 1)]))
 })
-`
+`,
+    { mode: 0o755 }
   )
 }
 
@@ -258,10 +261,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   const ownedProcessIds = startedProcessIds()
+  const runtimePort = llm.getPort()
   stopModelServer()
   llm.stop()
   await waitFor(
-    async () => (await portIsAvailable(gatewayPort)) && (await portIsAvailable(LLAMA_SERVER_PORT)),
+    async () => (await portIsAvailable(gatewayPort)) && (await portIsAvailable(runtimePort)),
     'owned model ports to be released'
   )
   await waitFor(
@@ -337,8 +341,52 @@ describe('multimodal runtime reliability', () => {
     expect(await llm.chat('after guarded refusal and explicit override')).toBe('chat recovered')
   }, 20_000)
 
+  it('runs Qwen-Image 2.1 edits only with the complete local image stack', async () => {
+    const modelDir = path.join(fixture.dataDir, 'models')
+    const model = 'Qwen-Image-2-1-Q8_0.gguf'
+    const encoder = 'Qwen3VL-8B-Instruct-Q4_K_M.gguf'
+    const projector = 'mmproj-Qwen3VL-8B-Instruct-F16.gguf'
+    const vae = 'qwen_image_2.1_vae.safetensors'
+    const source = path.join(fixture.root, 'edit-source.png')
+    const companions = [model, encoder, projector, vae].map((name) => path.join(modelDir, name))
+    const request = {
+      prompt: 'Keep the subject and change the background to blue',
+      model,
+      initImage: source,
+      enhancePrompt: false,
+      width: 512,
+      height: 512,
+      steps: 4
+    }
+    fs.writeFileSync(source, Buffer.from(PNG_BASE64, 'base64'))
+    createValidGguf(companions[0]!)
+    const runsBefore = lineCount(fixture.imageLog)
+
+    try {
+      await expect(generateImage(request)).rejects.toThrow('Qwen-Image 2.1 text encoder')
+      createValidGguf(companions[1]!)
+      fs.writeFileSync(companions[3]!, 'vae fixture')
+      await expect(generateImage(request)).rejects.toThrow('Qwen-Image 2.1 vision projector')
+      createValidGguf(companions[2]!)
+
+      const image = await generateImage(request)
+      expect(image.dataUrl).toBe(`data:image/png;base64,${PNG_BASE64}`)
+      expect(lineCount(fixture.imageLog)).toBe(runsBefore + 1)
+      const args = JSON.parse(
+        fs.readFileSync(fixture.imageLog, 'utf8').trim().split(/\r?\n/).at(-1)!
+      ) as string[]
+      expect(args).toContainEqual(expect.stringContaining(encoder))
+      expect(args).toContainEqual(expect.stringContaining(projector))
+      expect(args).toContainEqual(expect.stringContaining(vae))
+      expect(args).toContain(source)
+    } finally {
+      for (const companion of companions) fs.rmSync(companion, { force: true })
+      fs.rmSync(source, { force: true })
+    }
+  }, 20_000)
+
   it('keeps local chat usable when external network reachability is unavailable', async () => {
-    startModelServer(gatewayPort)
+    await startModelServer(gatewayPort)
     await expect(fetch('https://example.invalid/health')).rejects.toThrow(
       'network unavailable in offline integration fixture: https://example.invalid'
     )
@@ -437,7 +485,7 @@ describe('multimodal runtime reliability', () => {
 
     expect(llm.isReady()).toBe(true)
     expect(lineCount(fixture.llamaLog) - startsBefore).toBe(1)
-    startModelServer(gatewayPort)
+    await startModelServer(gatewayPort)
     const health = await fetch(`http://127.0.0.1:${String(gatewayPort)}/v1`)
     expect(health.status).toBe(200)
   })
@@ -447,7 +495,7 @@ describe('multimodal runtime reliability', () => {
     expect(initialAnswer).toBe('chat recovered')
 
     const startsBefore = lineCount(fixture.llamaLog)
-    const crash = await fetch(`http://127.0.0.1:${String(LLAMA_SERVER_PORT)}/test/crash`, {
+    const crash = await fetch(`http://127.0.0.1:${String(llm.getPort())}/test/crash`, {
       method: 'POST'
     })
     expect(crash.status).toBe(200)
@@ -522,7 +570,7 @@ describe('multimodal runtime reliability', () => {
 
     expect(imageLibrary.listGeneratedImages({ conversationId: 'image-release-chat' })).toEqual([
       expect.objectContaining({
-        path: image.path,
+        path: fs.realpathSync(image.path),
         conversationId: 'image-release-chat',
         projectId: 'image-release-project'
       })
@@ -540,7 +588,10 @@ describe('multimodal runtime reliability', () => {
     const reopenedImages = await import('../imagegen')
     const reopenedArtifacts = await import('../artifacts')
     expect(reopenedImages.listGeneratedImages({ projectId: 'image-release-project' })).toEqual([
-      expect.objectContaining({ path: image.path, conversationId: 'image-release-chat' })
+      expect.objectContaining({
+        path: fs.realpathSync(image.path),
+        conversationId: 'image-release-chat'
+      })
     ])
     expect(reopenedArtifacts.listArtifacts({ conversationId: 'image-release-chat' })).toEqual([
       expect.objectContaining({ id: savedArtifact.id, kind: 'image', code: image.path })

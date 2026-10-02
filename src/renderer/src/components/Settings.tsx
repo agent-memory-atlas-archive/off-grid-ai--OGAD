@@ -2,28 +2,75 @@ import { useEffect, useState } from 'react'
 import { motion } from 'motion/react'
 import { ProgressiveBlur } from './ui/progressive-blur'
 import { SetupPanel } from './setup/SetupPanel'
+import { PerformancePackPanel } from './setup/PerformancePackPanel'
 import { StoragePanel } from './setup/StoragePanel'
 import { DataPrivacyPanel } from './setup/DataPrivacyPanel'
 import { getRegisteredSettingsSections } from '../bootstrap/sectionRegistry'
+import { useRendererEntitlement } from '../bootstrap/useRendererEntitlement'
 import { PRO_SETTINGS_SLOTS } from './pro/proSettingsCatalog'
 // Shared card chrome, in its own light module so the pro package can reuse it without
 // importing this whole god-file (which pulls SetupPanel/etc. + their window.api types).
 import { SettingsCard, ProPlaceholder, SettingsCardsGroup } from './SettingsCard'
 import { KeyboardShortcuts } from './KeyboardShortcuts'
 import { currentPlatform } from '@renderer/lib/device'
-import { proComingSoonHere } from './pro/proCatalog'
+import { getProFeature, proComingSoonHere, featureSupportsPlatform } from './pro/proCatalog'
 import { SoftwareUpdateSection } from './SoftwareUpdateSection'
 import { ProcessingControls } from './ProcessingControls'
+import { BackupRestoreSection } from './BackupRestoreSection'
+import { SettingsPermissionsPanel } from './PermissionsPanel'
+import { RemoteVisionSettingsTab } from './RemoteVisionSettingsTab'
+import { AIRequestLogs } from './AIRequestLogs'
 export { ModelPipelineSection } from './ProcessingControls'
 
-export function Settings(): React.ReactElement {
+const SETTINGS_SECTION_TITLES: Record<string, string> = {
+  setup: 'Setup & health',
+  permissions: 'Setup & health',
+  performance: 'GPU performance',
+  capture: 'Capture & processing',
+  'computer-use': 'Computer use',
+  remote: 'Remote model server',
+  'ai-activity': 'AI activity',
+  sync: 'Device sync',
+  identity: 'You',
+  secretary: 'What Off Grid AI has learned',
+  'pro-plan': 'Your Pro plan',
+  privacy: 'Data & privacy',
+  backup: 'Backup & restore',
+  shortcuts: 'Keyboard shortcuts',
+  update: 'Software update'
+}
+
+const SETTINGS_TITLE_IDS = Object.fromEntries(
+  Object.entries(SETTINGS_SECTION_TITLES)
+    .filter(([id]) => id !== 'permissions')
+    .map(([id, title]) => [title, id])
+) as Record<string, string>
+
+export const SETTINGS_DESTINATIONS = Object.entries(SETTINGS_TITLE_IDS).map(
+  ([label, subroute]) => ({ label, view: 'settings', subroute })
+)
+
+export function Settings({
+  initialSection,
+  onInitialSectionConsumed,
+  activeSection,
+  onSectionChange
+}: {
+  initialSection?: string | null
+  onInitialSectionConsumed?: () => void
+  activeSection?: string | null
+  onSectionChange?: (section: string | null) => void
+} = {}): React.ReactElement {
+  const selectedSection = activeSection === undefined ? initialSection : activeSection
   // Pro/core aware: the pro Settings sections (identity / proactive / secretary /
   // plan) render only when the pro package has registered them (section registry);
   // the free build shows the catalogued placeholders. isPro still drives the header
   // subtitle copy.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const isPro = !!(window as any).api?.isPro
+  const { isPro } = useRendererEntitlement()
   const proComingSoon = proComingSoonHere(currentPlatform(), isPro)
+  const replayFeature = getProFeature('replay')
+  const captureAvailable =
+    !!replayFeature && featureSupportsPlatform(replayFeature, currentPlatform())
   // Pro sections registered by the pro renderer at activation (empty in free build).
   const registeredSections = getRegisteredSettingsSections()
   const captureSection = registeredSections.find((section) => section.id === 'capture')
@@ -37,6 +84,20 @@ export function Settings(): React.ReactElement {
       .then((v: string) => setAppVersion(v || ''))
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (!selectedSection) return
+    const timer = window.setTimeout(() => {
+      if (selectedSection === 'permissions') {
+        const target: {
+          scrollIntoView?: (options?: ScrollIntoViewOptions) => void
+        } | null = document.getElementById('settings-permissions')
+        target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+      }
+      onInitialSectionConsumed?.()
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [selectedSection, onInitialSectionConsumed])
 
   return (
     <div className="relative flex h-full flex-col">
@@ -67,7 +128,7 @@ export function Settings(): React.ReactElement {
           <h2 className="text-lg font-semibold text-white">Settings</h2>
           <p className="text-sm text-neutral-500">
             {isPro
-              ? 'Who you are, what Off Grid has learned, and your devices'
+              ? 'Who you are, what Off Grid AI has learned, and your devices'
               : 'Personalization & automation unlock with Pro'}
           </p>
         </div>
@@ -83,7 +144,19 @@ export function Settings(): React.ReactElement {
         >
           {/* Grid of section cards; clicking one opens it as a full-width L2 detail
               (single-open) and hides the rest — one seam via SettingsCardsGroup. */}
-          <SettingsCardsGroup>
+          <SettingsCardsGroup
+            initialOpenId={selectedSection ? SETTINGS_SECTION_TITLES[selectedSection] : null}
+            openId={
+              onSectionChange
+                ? selectedSection
+                  ? (SETTINGS_SECTION_TITLES[selectedSection] ?? null)
+                  : null
+                : undefined
+            }
+            onOpenIdChange={(title) =>
+              onSectionChange?.(title ? (SETTINGS_TITLE_IDS[title] ?? null) : null)
+            }
+          >
             {/* Each section is a collapsed-by-default accordion (SettingsCard). */}
             <SettingsCard
               title="Setup & health"
@@ -94,6 +167,22 @@ export function Settings(): React.ReactElement {
               <div className="mt-4">
                 <StoragePanel />
               </div>
+              {currentPlatform() === 'darwin' ? (
+                <section id="settings-permissions" className="mt-6 scroll-mt-4">
+                  <div className="mb-3 text-[10px] font-medium uppercase tracking-widest text-neutral-600">
+                    System permissions
+                  </div>
+                  <SettingsPermissionsPanel />
+                </section>
+              ) : null}
+            </SettingsCard>
+
+            <SettingsCard
+              title="GPU performance"
+              summary="Manage GPU components for chat, images, transcription, and Computer Use."
+              delay={0.135}
+            >
+              <PerformancePackPanel showUnavailable />
             </SettingsCard>
 
             <SettingsCard
@@ -101,21 +190,30 @@ export function Settings(): React.ReactElement {
               summary="See capture health, recover pending frames, and control model scheduling in one place."
               delay={0.14}
             >
-              {CaptureContribution && !(proComingSoon && currentPlatform() !== 'darwin') ? (
+              {CaptureContribution && captureAvailable ? (
                 <CaptureContribution />
               ) : (
                 <div className="mb-5 border border-neutral-800 bg-neutral-950/40 p-3 text-xs text-neutral-500">
                   <span className="mr-2 text-[10px] uppercase tracking-wide text-emerald-500">
                     Pro
                   </span>
-                  Screen capture, backlog recovery, and proactive delivery are available with Pro on
-                  macOS.
+                  {currentPlatform() === 'linux'
+                    ? 'Capture and Replay controls are available with Pro on Linux.'
+                    : 'Screen capture, backlog recovery, and proactive delivery are available with Pro on Windows and macOS.'}
                 </div>
               )}
               <ProcessingControls />
             </SettingsCard>
 
-            {/* Remaining Pro Settings sections (You / What Off Grid has learned /
+            <SettingsCard
+              title="Remote model server"
+              summary="Connect to a model server on your network or another trusted host."
+              delay={0.16}
+            >
+              <RemoteVisionSettingsTab />
+            </SettingsCard>
+
+            {/* Remaining Pro Settings sections (You / What Off Grid AI has learned /
               Your Pro plan). The pro package registers the real section
               components via the section registry; the free build shows the catalogued
               placeholders. Slot list, order, and placeholder copy live in
@@ -124,13 +222,16 @@ export function Settings(): React.ReactElement {
               (slot) => slot.id !== 'capture' && slot.id !== 'proactive'
             ).map((slot) => {
               const section = registeredSections.find((s) => s.id === slot.id)
-              if (section && proComingSoon && slot.macOnly) {
+              if (section && proComingSoon && slot.id !== 'pro-plan') {
                 return (
                   <ProPlaceholder
                     key={slot.id}
                     delay={slot.delay}
                     title={slot.placeholder?.title ?? slot.id}
-                    description={slot.comingSoonDescription ?? 'Support is coming soon.'}
+                    description={
+                      slot.comingSoonDescription ??
+                      'Pro features are coming soon to Linux. Core features work now.'
+                    }
                     variant="coming-soon"
                   />
                 )
@@ -145,12 +246,24 @@ export function Settings(): React.ReactElement {
                   key={slot.id}
                   delay={slot.delay}
                   title={slot.placeholder.title}
-                  description={slot.placeholder.description}
+                  description={
+                    currentPlatform() === 'linux'
+                      ? (slot.comingSoonDescription ??
+                        'Pro features are coming soon to Linux. Core features work now.')
+                      : slot.placeholder.description
+                  }
+                  variant={currentPlatform() === 'linux' ? 'coming-soon' : 'pro'}
                 />
               )
             })}
 
             {/* Data & privacy — one place to delete on-device data. */}
+            <SettingsCard
+              title="AI activity"
+              summary="Inspect requests, responses, models, and generation details stored on this device."
+            >
+              <AIRequestLogs />
+            </SettingsCard>
             <SettingsCard
               title="Data & privacy"
               summary="See and delete on-device data, per category or all at once."
@@ -159,10 +272,18 @@ export function Settings(): React.ReactElement {
               <DataPrivacyPanel />
             </SettingsCard>
 
+            <SettingsCard
+              title="Backup & restore"
+              summary="Save a portable copy of your chats, projects, and knowledge files."
+              delay={0.44}
+            >
+              <BackupRestoreSection />
+            </SettingsCard>
+
             {/* Keyboard shortcuts — one reference for every hotkey (core + pro rows). */}
             <SettingsCard
               title="Keyboard shortcuts"
-              summary="Every hotkey in one place — command palette, navigation, clipboard, dictation."
+              summary="Every hotkey in one place — command palette, navigation, window zoom, clipboard, dictation."
               delay={0.45}
             >
               <KeyboardShortcuts />

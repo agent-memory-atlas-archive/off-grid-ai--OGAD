@@ -11,12 +11,27 @@ import {
 
 describe('residency rows', () => {
   it('covers every modality the residency store persists, exactly once', () => {
-    expect(RESIDENCY_ROWS.map((r) => r.modality)).toEqual(['llm', 'image', 'stt', 'tts'])
+    expect(RESIDENCY_ROWS.map((r) => r.modality)).toEqual([
+      'llm',
+      'image',
+      'stt',
+      'tts',
+      'grounding',
+      'decision',
+      'embeddings'
+    ])
   })
 
   it('keeps chat/capture the only locked row', () => {
     expect(lockedResidencyRows().map((r) => r.modality)).toEqual(['llm'])
-    expect(unlockedResidencyRows().map((r) => r.modality)).toEqual(['image', 'stt', 'tts'])
+    expect(unlockedResidencyRows().map((r) => r.modality)).toEqual([
+      'image',
+      'stt',
+      'tts',
+      'grounding',
+      'decision',
+      'embeddings'
+    ])
   })
 
   it('gives every row a non-empty label and hint', () => {

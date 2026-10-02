@@ -1,16 +1,43 @@
+import type { RuntimeBackend } from '../shared/runtime-backends'
+import type { PerformancePackStatus } from '../shared/performance-pack'
 import { contextBridge, ipcRenderer } from 'electron'
 import {
   CACHE_CLEANUP_CHANNEL,
   type ArtifactKindContract,
+  type ActiveChatStreamContract,
   type CacheCleanupResultContract,
   type RagChatResultContract,
+  type SystemHealthComponentContract,
   type SystemHealthContract
 } from '../shared/ipc-contracts'
-import type { ImageGenerationRequestContract } from '../shared/image-generation-contract'
+import type {
+  ImageGenerationRequestContract,
+  ImageGenerationResultContract
+} from '../shared/image-generation-contract'
+import {
+  BACKUP_EXPORT_ALL_CHANNEL,
+  BACKUP_IMPORT_CHANNEL,
+  type BackupDeliveryContract,
+  type BackupRestoreSummaryContract
+} from '../shared/backup-contracts'
+import type {
+  BrowserControl,
+  BrowserNavigationState,
+  BrowserSessionsSnapshot,
+  BrowserTaskPointer,
+  ManualBrowserHistoryEntry
+} from '../shared/browser-session'
+import type { TaskGuideInput } from '../shared/task-guidance'
+import type { RemoteVisionServerUpdate } from '../shared/remote-vision-server'
+import type { StartupSnapshot } from '../shared/startup-contract'
+import type { ProjectDeleteOutcome } from '../shared/project-delete-outcome'
+import type { TaskRunSnapshot } from '../main/tasks/task-history-store'
 
 console.log('PRELOAD SCRIPT LOADED')
 
 type IpcListener = Parameters<typeof ipcRenderer.removeListener>[1]
+
+let liveProEntitled = ipcRenderer.sendSync('pro:is-enabled') === true
 
 function unsubscribe(channel: string, listener: IpcListener): () => void {
   return () => {
@@ -24,7 +51,9 @@ const offGridApi = {
   // and we read it synchronously at preload time so the renderer can lock/unlock
   // pro tabs without an async round-trip. See main/license-ipc.ts (`pro:is-enabled`).
   // Falls back to false if the handler isn't registered (should never happen).
-  isPro: ipcRenderer.sendSync('pro:is-enabled') === true,
+  isPro: liveProEntitled,
+  proEntitlementBootstrapEnabled:
+    ipcRenderer.sendSync('pro:entitlement-bootstrap-enabled') === true,
   // Host OS, bridged once so renderer copy and availability rules use the same value.
   platform: process.platform,
   // License (Keygen) activation + status for the upgrade/settings UI.
@@ -33,6 +62,7 @@ const offGridApi = {
     activate: (key: string) => ipcRenderer.invoke('license:activate', key),
     listDevices: () => ipcRenderer.invoke('license:list-devices'),
     deactivate: (machineId: string) => ipcRenderer.invoke('license:deactivate', machineId),
+    resetCurrentDevice: () => ipcRenderer.invoke('license:reset-current-device'),
     clear: () => ipcRenderer.invoke('license:clear'),
     payUrl: () => ipcRenderer.invoke('license:pay-url'),
     openPay: () => ipcRenderer.invoke('license:open-pay'),
@@ -43,9 +73,123 @@ const offGridApi = {
       return unsubscribe('license:changed', sub)
     }
   },
+  // Approval UX v2: the inline gate card + outcome/undo feed (core surface).
+  actions: {
+    resolveGate: (actionId: string, decision: unknown) =>
+      ipcRenderer.invoke('actions:resolve-gate', actionId, decision),
+    undo: (record: unknown) => ipcRenderer.invoke('actions:undo', record),
+    onGatePending: (cb: (request: unknown) => void) => {
+      const sub = (_e: unknown, request: unknown): void => cb(request)
+      ipcRenderer.on('actions:gate-pending', sub)
+      return unsubscribe('actions:gate-pending', sub)
+    },
+    onOutcome: (cb: (outcome: unknown) => void) => {
+      const sub = (_e: unknown, outcome: unknown): void => cb(outcome)
+      ipcRenderer.on('actions:outcome', sub)
+      return unsubscribe('actions:outcome', sub)
+    }
+  },
+  // One durable projection for Web Use and Computer Use tabs/history.
+  tasks: {
+    list: (limit?: number): Promise<TaskRunSnapshot[]> => ipcRenderer.invoke('tasks:list', limit),
+    remove: (taskIds: string[]): Promise<string[]> => ipcRenderer.invoke('tasks:remove', taskIds),
+    retryAvailability: (taskId: string) => ipcRenderer.invoke('tasks:retry-availability', taskId),
+    retry: (taskId: string, phaseIndex?: number) =>
+      ipcRenderer.invoke('tasks:retry', taskId, phaseIndex),
+    guideAvailability: (taskId: string) => ipcRenderer.invoke('tasks:guide-availability', taskId),
+    guideTask: (taskId: string, input: TaskGuideInput) =>
+      ipcRenderer.invoke('tasks:guide', taskId, input),
+    onChanged: (cb: (task: TaskRunSnapshot) => void) => {
+      const sub = (_e: unknown, task: TaskRunSnapshot): void => cb(task)
+      ipcRenderer.on('tasks:changed', sub)
+      return unsubscribe('tasks:changed', sub)
+    },
+    onRemoved: (cb: (taskIds: string[]) => void) => {
+      const sub = (_e: unknown, taskIds: string[]): void => cb(taskIds)
+      ipcRenderer.on('tasks:removed', sub)
+      return unsubscribe('tasks:removed', sub)
+    }
+  },
+  // Browser rail: one watched page and its task feed.
+  browser: {
+    // Report the watched pane's on-screen region so the live view docks to it
+    // (null hides the view). Fire-and-forget on every mount/resize.
+    setRegion: (
+      owner: 'docked' | 'floating',
+      rect: { x: number; y: number; width: number; height: number } | null
+    ) => ipcRenderer.send('browser:set-region', owner, rect),
+    newTab: (journeyId?: string): Promise<{ sessionId: string }> =>
+      ipcRenderer.invoke('browser:new-tab', journeyId),
+    openUrl: (url: string, journeyId?: string): Promise<{ sessionId: string } | null> =>
+      ipcRenderer.invoke('browser:open-url', url, journeyId),
+    getSessions: (): Promise<BrowserSessionsSnapshot> => ipcRenderer.invoke('browser:get-sessions'),
+    activateSession: (sessionId: string): Promise<boolean> =>
+      ipcRenderer.invoke('browser:activate-session', sessionId),
+    closeSession: (sessionId: string): Promise<boolean> =>
+      ipcRenderer.invoke('browser:close-session', sessionId),
+    control: (action: BrowserControl, sessionId?: string): Promise<boolean> =>
+      ipcRenderer.invoke('browser:control', action, sessionId),
+    navigate: (address: string, sessionId?: string): Promise<{ ok: boolean; detail?: string }> =>
+      ipcRenderer.invoke('browser:navigate', address, sessionId),
+    reopen: (taskId?: string) => ipcRenderer.invoke('browser:reopen', taskId),
+    listManualHistory: (): Promise<ManualBrowserHistoryEntry[]> =>
+      ipcRenderer.invoke('browser:list-manual-history'),
+    reopenManual: (historyId: string): Promise<{ sessionId: string } | null> =>
+      ipcRenderer.invoke('browser:reopen-manual', historyId),
+    onSessionsState: (cb: (state: BrowserSessionsSnapshot) => void) => {
+      const sub = (_e: unknown, state: BrowserSessionsSnapshot): void => cb(state)
+      ipcRenderer.on('browser:sessions-state', sub)
+      return unsubscribe('browser:sessions-state', sub)
+    },
+    onNavigationState: (cb: (state: BrowserNavigationState) => void) => {
+      const sub = (_e: unknown, state: BrowserNavigationState): void => cb(state)
+      ipcRenderer.on('browser:navigation-state', sub)
+      return unsubscribe('browser:navigation-state', sub)
+    },
+    onStep: (cb: (step: unknown) => void) => {
+      const sub = (_e: unknown, step: unknown): void => cb(step)
+      ipcRenderer.on('browser:step', sub)
+      return unsubscribe('browser:step', sub)
+    },
+    onTaskState: (cb: (state: BrowserTaskPointer & { sessionId: string }) => void) => {
+      const sub = (_e: unknown, state: BrowserTaskPointer & { sessionId: string }): void =>
+        cb(state)
+      ipcRenderer.on('browser:task-state', sub)
+      return unsubscribe('browser:task-state', sub)
+    }
+  },
+  // Vision rail (R2-D): the supervised overlay's Stop/Pause/Resume + its feed.
+  vision: {
+    control: (command: 'stop' | 'pause' | 'takeover' | 'resume', taskId?: string) =>
+      ipcRenderer.invoke('vision:control', command, taskId),
+    showSupervisor: () => ipcRenderer.invoke('vision:supervisor:show'),
+    dismissSupervisor: () => ipcRenderer.invoke('vision:supervisor:dismiss'),
+    setSupervisorExpanded: (expanded: boolean) =>
+      ipcRenderer.invoke('vision:supervisor:set-expanded', expanded),
+    // The current run's state + step history, for a surface that mounts mid-task.
+    getCurrent: () => ipcRenderer.invoke('vision:current'),
+    onStep: (cb: (step: unknown) => void) => {
+      const sub = (_e: unknown, step: unknown): void => cb(step)
+      ipcRenderer.on('vision:step', sub)
+      return unsubscribe('vision:step', sub)
+    },
+    onTaskState: (cb: (state: unknown) => void) => {
+      const sub = (_e: unknown, state: unknown): void => cb(state)
+      ipcRenderer.on('vision:task-state', sub)
+      return unsubscribe('vision:task-state', sub)
+    },
+    onNotice: (cb: (notice: unknown) => void) => {
+      const sub = (_e: unknown, notice: unknown): void => cb(notice)
+      ipcRenderer.on('vision:notice', sub)
+      return unsubscribe('vision:notice', sub)
+    }
+  },
   // Generic passthrough so pro renderer code can reach pro IPC channels without
   // the core preload bundle enumerating them.
-  proInvoke: (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args),
+  proInvoke: (channel: string, ...args: unknown[]) => {
+    if (!liveProEntitled) return Promise.reject(new Error('Pro license required.'))
+    return ipcRenderer.invoke(channel, ...args)
+  },
   proOn: (channel: string, cb: (...a: unknown[]) => void) => {
     const sub = (_e: unknown, ...a: unknown[]): void => cb(...a)
     ipcRenderer.on(channel, sub)
@@ -109,25 +253,27 @@ const offGridApi = {
   onRagStream: (
     callback: (data: {
       streamId: string
-      type: 'content' | 'reasoning' | 'step' | 'tool_result'
+      type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'done'
       text?: string
       step?: unknown
-      call?: { name: string; result: string }
+      call?: { name: string; result: string; status: 'completed' | 'failed' | 'pending' }
     }) => void
   ) => {
     const sub = (
       _: unknown,
       data: {
         streamId: string
-        type: 'content' | 'reasoning' | 'step' | 'tool_result'
+        type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'done'
         text?: string
         step?: unknown
-        call?: { name: string; result: string }
+        call?: { name: string; result: string; status: 'completed' | 'failed' | 'pending' }
       }
     ): void => callback(data)
     ipcRenderer.on('rag:stream', sub)
     return unsubscribe('rag:stream', sub)
   },
+  getActiveRagStreams: () =>
+    ipcRenderer.invoke('rag:active-streams') as Promise<ActiveChatStreamContract[]>,
   // Stop an in-flight streaming turn; the partial answer is kept.
   cancelRag: (streamId: string) => ipcRenderer.send('rag:cancel', streamId),
 
@@ -136,6 +282,16 @@ const offGridApi = {
     ipcRenderer.invoke('rag:create-conversation', id, title, projectId),
   getRagConversations: (projectId?: string | null) =>
     ipcRenderer.invoke('rag:get-conversations', projectId),
+  onRagConversationsChanged: (
+    callback: (data: { conversationId: string; projectId: string | null }) => void
+  ) => {
+    const subscription = (
+      _event: unknown,
+      data: { conversationId: string; projectId: string | null }
+    ): void => callback(data)
+    ipcRenderer.on('rag:conversations-changed', subscription)
+    return unsubscribe('rag:conversations-changed', subscription)
+  },
   searchRagConversationIds: (query: string) =>
     ipcRenderer.invoke('rag:search-conversation-ids', query),
   setRagConversationProject: (id: string, projectId: string | null) =>
@@ -149,6 +305,12 @@ const offGridApi = {
     content: string,
     context?: unknown
   ) => ipcRenderer.invoke('rag:add-message', conversationId, role, content, context),
+  updateRagMessage: (
+    conversationId: string,
+    messageId: string,
+    content: string,
+    context?: unknown
+  ) => ipcRenderer.invoke('rag:update-message', conversationId, messageId, content, context),
   truncateRagMessages: (conversationId: string, keepCount: number) =>
     ipcRenderer.invoke('rag:truncate-messages', conversationId, keepCount),
   updateRagConversationTitle: (id: string, title: string) =>
@@ -159,9 +321,6 @@ const offGridApi = {
   getEntities: (appName?: string) => ipcRenderer.invoke('db:get-entities', appName),
   getEntityDetails: (entityId: number, appName?: string) =>
     ipcRenderer.invoke('db:get-entity-details', entityId, appName),
-  getEntityGraph: (appName?: string, focusEntityId?: number, edgeLimit?: number) =>
-    ipcRenderer.invoke('db:get-entity-graph', appName, focusEntityId, edgeLimit),
-  rebuildEntityGraph: () => ipcRenderer.invoke('db:rebuild-entity-graph'),
   deleteEntity: (entityId: number) => ipcRenderer.invoke('db:delete-entity', entityId),
   deleteMemory: (memoryId: number) => ipcRenderer.invoke('db:delete-memory', memoryId),
 
@@ -172,6 +331,18 @@ const offGridApi = {
 
   // App Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
+  aiLogsList: (
+    query: import('../shared/ai-request-log').AILogQuery = {}
+  ): Promise<import('../shared/ai-request-log').AILogPage> =>
+    ipcRenderer.invoke('ai-logs:list', query),
+  aiLogsDetail: (id: string): Promise<import('../shared/ai-request-log').AIRequestRecord | null> =>
+    ipcRenderer.invoke('ai-logs:detail', id),
+  aiLogsAttachment: (id: string, asset: string): Promise<string | null> =>
+    ipcRenderer.invoke('ai-logs:attachment', id, asset),
+  aiLogsClear: (): Promise<void> => ipcRenderer.invoke('ai-logs:clear'),
+  aiLogsRelated: (id: string): Promise<import('../shared/ai-request-log').AIRequestSummary[]> =>
+    ipcRenderer.invoke('ai-logs:related', id),
+  aiLogsOpenWindow: (): Promise<void> => ipcRenderer.invoke('ai-logs:open-window'),
   saveSetting: (key: string, value: unknown) => ipcRenderer.invoke('settings:save', key, value),
   consoleEnroll: (url: string, token: string) => ipcRenderer.invoke('console:enroll', url, token),
   consoleStatus: () => ipcRenderer.invoke('console:status'),
@@ -218,6 +389,9 @@ const offGridApi = {
   residencyGet: () => ipcRenderer.invoke('runtime:residency:get'),
   residencySet: (modality: string, mode: string) =>
     ipcRenderer.invoke('runtime:residency:set', modality, mode),
+  backendPreferencesGet: () => ipcRenderer.invoke('runtime:backend:get'),
+  backendPreferenceSet: (modality: string, preference: string) =>
+    ipcRenderer.invoke('runtime:backend:set', modality, preference),
   // Unload a modality's model from memory now (free RAM); reloads on next use.
   unloadRuntime: (modality: string) => ipcRenderer.invoke('runtime:unload', modality),
   // Pipeline queue config (serialize heavy jobs; let speech coexist) + live state.
@@ -227,6 +401,22 @@ const offGridApi = {
   queueState: () => ipcRenderer.invoke('queue:state'),
   // and a manual "check for updates" that resolves with a definite status.
   updateGetPrefs: () => ipcRenderer.invoke('update:get-prefs'),
+  updateDownloadProgress: () => ipcRenderer.invoke('update:download-progress'),
+  onUpdateDownloadProgress: (
+    callback: (data: {
+      bytesPerSecond: number
+      percent: number
+      total: number
+      transferred: number
+      status: 'downloading' | 'completed' | 'failed'
+      version: string | null
+      error?: string
+    }) => void
+  ) => {
+    const listener = (_event: unknown, data: Parameters<typeof callback>[0]): void => callback(data)
+    ipcRenderer.on('update:download-progress', listener)
+    return unsubscribe('update:download-progress', listener)
+  },
   updateSetAuto: (on: boolean) => ipcRenderer.invoke('update:set-auto', on),
   updateSetChannel: (channel: 'stable' | 'beta') =>
     ipcRenderer.invoke('update:set-channel', channel),
@@ -238,28 +428,7 @@ const offGridApi = {
     ipcRenderer.invoke('update:download-version', version),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
 
-  // Notification Events — only the things that need the user's attention:
-  // proactive approvals queued, and new to-dos extracted.
-  onNewApproval: (
-    callback: (data: {
-      approvalId: number
-      title: string
-      detail: string
-      entityName: string | null
-    }) => void
-  ) => {
-    const subscription = (
-      _event: unknown,
-      data: {
-        approvalId: number
-        title: string
-        detail: string
-        entityName: string | null
-      }
-    ): void => callback(data)
-    ipcRenderer.on('notification:new-approval', subscription)
-    return unsubscribe('notification:new-approval', subscription)
-  },
+  // Notification Events — only unrelated informational items such as new to-dos.
   onNewAction: (
     callback: (data: {
       actionId: number
@@ -291,7 +460,9 @@ const offGridApi = {
   openAccessibilitySettings: () => ipcRenderer.invoke('permissions:open-accessibility-settings'),
   openScreenRecordingSettings: () =>
     ipcRenderer.invoke('permissions:open-screen-recording-settings'),
+  relaunchForPermissions: () => ipcRenderer.invoke('permissions:relaunch'),
   openMicrophoneSettings: () => ipcRenderer.invoke('permissions:open-microphone-settings'),
+  openLocalNetworkSettings: () => ipcRenderer.invoke('permissions:open-local-network-settings'),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   openExternal: (url: string) => ipcRenderer.invoke('app:open-external', url),
 
@@ -304,32 +475,49 @@ const offGridApi = {
       percent: number
       downloadedMB: string
       totalMB: string
+      downloadedBytes?: number
+      totalBytes?: number
+      bytesPerSecond?: number
     }) => void
   ) => {
     const subscription = (
       _event: unknown,
-      data: { modelName: string; percent: number; downloadedMB: string; totalMB: string }
+      data: {
+        modelName: string
+        percent: number
+        downloadedMB: string
+        totalMB: string
+        downloadedBytes?: number
+        totalBytes?: number
+        bytesPerSecond?: number
+      }
     ): void => callback(data)
     ipcRenderer.on('model:download-progress', subscription)
     return unsubscribe('model:download-progress', subscription)
   },
 
-  // Off Grid model catalog (text, vision, image, voice, transcription)
+  // Off Grid AI model catalog (text, vision, image, voice, transcription)
   getModelCatalog: () => ipcRenderer.invoke('models:catalog'),
   getInstalledModels: () => ipcRenderer.invoke('models:installed'),
   getModelVisionStatus: () => ipcRenderer.invoke('models:vision-status'),
   searchModels: (query: string, kind?: string) => ipcRenderer.invoke('models:search', query, kind),
-  downloadModel: (modelId: string) => ipcRenderer.invoke('models:download', modelId),
+  getModelFiles: (modelId: string) => ipcRenderer.invoke('models:files', modelId),
+  downloadModel: (modelId: string, fileName?: string) =>
+    ipcRenderer.invoke('models:download', modelId, fileName),
   cancelModelDownload: (modelId: string) => ipcRenderer.invoke('models:cancel-download', modelId),
   deleteModel: (modelId: string) => ipcRenderer.invoke('models:delete', modelId),
   setActiveModel: (modelId: string) => ipcRenderer.invoke('models:set-active', modelId),
-  // Activate any model for its type — UI calls this and never branches on kind.
-  activateModel: (modelId: string) => ipcRenderer.invoke('models:activate', modelId),
+  // Activate any model for its type. A dual-capability model can name the rail
+  // that the user selected; main validates that rail against the catalog.
+  activateModel: (modelId: string, requestedKind?: string) =>
+    ipcRenderer.invoke('models:activate', modelId, requestedKind),
   getActiveModel: () => ipcRenderer.invoke('models:get-active'),
   getActiveModelIds: () => ipcRenderer.invoke('models:active-ids'),
   setActiveModalModel: (kind: string, modelId: string | null) =>
     ipcRenderer.invoke('models:set-active-modal', kind, modelId),
   getActiveModalities: () => ipcRenderer.invoke('models:active-modalities'),
+  getComputerUseActiveModels: () => ipcRenderer.invoke('models:computer-use-active'),
+  getWebUseActiveModels: () => ipcRenderer.invoke('models:web-use-active'),
   onModelProgress: (
     callback: (data: {
       modelId: string
@@ -338,6 +526,9 @@ const offGridApi = {
       currentFile?: string
       downloadedMB?: string
       totalMB?: string
+      downloadedBytes?: number
+      totalBytes?: number
+      bytesPerSecond?: number
       error?: string
     }) => void
   ) => {
@@ -350,6 +541,9 @@ const offGridApi = {
         currentFile?: string
         downloadedMB?: string
         totalMB?: string
+        downloadedBytes?: number
+        totalBytes?: number
+        bytesPerSecond?: number
         error?: string
       }
     ): void => callback(data)
@@ -357,7 +551,34 @@ const offGridApi = {
     return unsubscribe('model:download-progress', subscription)
   },
 
+  startupStatus: (): Promise<StartupSnapshot> => ipcRenderer.invoke('app:startup-status'),
+  onStartupStatusChanged: (callback: (snapshot: StartupSnapshot) => void) => {
+    const subscription = (_event: unknown, snapshot: StartupSnapshot): void => callback(snapshot)
+    ipcRenderer.on('app:startup-status-changed', subscription)
+    return unsubscribe('app:startup-status-changed', subscription)
+  },
+
   // Setup + system health
+  chatHealth: (): Promise<SystemHealthComponentContract> =>
+    ipcRenderer.invoke('system:chat-health'),
+  onChatHealthChanged: (callback: (health: SystemHealthComponentContract) => void) => {
+    const subscription = (_event: unknown, health: SystemHealthComponentContract): void =>
+      callback(health)
+    ipcRenderer.on('system:chat-health-changed', subscription)
+    return unsubscribe('system:chat-health-changed', subscription)
+  },
+  runtimeBackends: (): Promise<RuntimeBackend[]> => ipcRenderer.invoke('system:runtime-backends'),
+  performancePack: {
+    status: (): Promise<PerformancePackStatus> => ipcRenderer.invoke('performance-pack:status'),
+    start: (): Promise<PerformancePackStatus> => ipcRenderer.invoke('performance-pack:start'),
+    pause: (): Promise<PerformancePackStatus> => ipcRenderer.invoke('performance-pack:pause'),
+    restart: (): Promise<void> => ipcRenderer.invoke('performance-pack:restart'),
+    onChanged: (callback: (status: PerformancePackStatus) => void): (() => void) => {
+      const subscription = (_event: unknown, status: PerformancePackStatus): void => callback(status)
+      ipcRenderer.on('performance-pack:changed', subscription)
+      return unsubscribe('performance-pack:changed', subscription)
+    }
+  },
   systemHealth: (): Promise<SystemHealthContract> => ipcRenderer.invoke('system:health'),
   setupRecommendation: (mode?: string) => ipcRenderer.invoke('setup:recommendation', mode),
   setupPlan: (mode?: string) => ipcRenderer.invoke('setup:plan', mode),
@@ -383,6 +604,10 @@ const offGridApi = {
   clearDataCategory: (id: string, olderThanDays?: number) =>
     ipcRenderer.invoke('data:clear', id, olderThanDays),
   deleteAllData: () => ipcRenderer.invoke('data:delete-all'),
+  exportBackup: () =>
+    ipcRenderer.invoke(BACKUP_EXPORT_ALL_CHANNEL) as Promise<BackupDeliveryContract | null>,
+  importBackup: () =>
+    ipcRenderer.invoke(BACKUP_IMPORT_CHANNEL) as Promise<BackupRestoreSummaryContract | null>,
   onSetupProgress: (callback: (data: unknown) => void) => {
     const subscription = (_event: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('setup:progress', subscription)
@@ -397,6 +622,7 @@ const offGridApi = {
     query: string,
     history?: { role: string; content: string }[],
     opts?: {
+      assistantOnly?: boolean
       connectors?: boolean
       conversationId?: string
       projectId?: string
@@ -418,14 +644,24 @@ const offGridApi = {
     minP?: number
     repeatPenalty?: number
     maxTokens?: number
+    maxToolCalls?: number
     systemPrompt?: string
     kvCacheType?: 'f16' | 'q8_0' | 'q4_0'
     flashAttn?: boolean
     gpuLayers?: number
     threads?: number
     batchSize?: number
+    speculativeDecoding?: 'off' | 'ngram' | 'mtp' | 'draft' | 'dflash'
+    draftModel?: string
     performanceMode?: 'conservative' | 'balanced' | 'extreme'
   }) => ipcRenderer.invoke('llm:set-settings', s),
+  getRemoteVisionServer: () => ipcRenderer.invoke('vision:remote-server:get'),
+  setRemoteVisionServer: (update: RemoteVisionServerUpdate) =>
+    ipcRenderer.invoke('vision:remote-server:set', update),
+  testRemoteVisionServer: (update: RemoteVisionServerUpdate) =>
+    ipcRenderer.invoke('vision:remote-server:test', update),
+  removeRemoteVisionServer: (serverId: string) =>
+    ipcRenderer.invoke('vision:remote-server:remove', serverId),
   // Cleanly unload the chat engine so it releases the model port (for LM Studio / another tool)
   // without force-quitting. Resolves once the port is freed (or reports it couldn't be).
   unloadLlmEngine: (): Promise<{ outcome: string; portFree: boolean }> =>
@@ -473,34 +709,65 @@ const offGridApi = {
   }) => ipcRenderer.invoke('skills:save', input),
   deleteSkill: (name: string) => ipcRenderer.invoke('skills:delete', name),
   skillsDir: () => ipcRenderer.invoke('skills:dir'),
+  pickLocalFolder: (input?: { title?: string; defaultPath?: string }) =>
+    ipcRenderer.invoke('filesystem:pick-folder', input),
 
   // --- Voice input (speech-to-text via whisper) ---
-  transcribeAudio: (audio: ArrayBuffer | Uint8Array, ext?: string) =>
-    ipcRenderer.invoke('voice:transcribe', audio, ext),
+  transcribeAudio: (audio: ArrayBuffer | Uint8Array, ext: string, requestId: string) =>
+    ipcRenderer.invoke('voice:transcribe', audio, ext, requestId),
+  cancelTranscription: (requestId: string): Promise<boolean> =>
+    ipcRenderer.invoke('voice:cancel-transcription', requestId),
   // Provenance + picker options: which STT engine + model would run right now, and the installed
   // transcription models a picker can switch to (switch via setActiveModalModel('transcription')).
   getTranscriptionInfo: (): Promise<{
-    engine: 'whisper' | 'parakeet' | 'whisper-resident'
+    engine: 'whisper' | 'parakeet' | 'whisper-resident' | 'remote'
     modelId: string | null
     label: string
+    language: string
+    languages: { code: string; label: string }[]
     options: { id: string | null; name: string; active: boolean }[]
   }> => ipcRenderer.invoke('transcription:active-info'),
 
   // --- Voice output (text-to-speech via Kokoro) ---
   ttsVoices: () => ipcRenderer.invoke('tts:voices'),
+  prepareTtsVoice: (voice: string) => ipcRenderer.invoke('tts:prepare-voice', voice),
+  onTtsVoiceProgress: (
+    callback: (data: {
+      voiceId?: string
+      progress: number | null
+      downloadedBytes?: number
+      totalBytes?: number | null
+      bytesPerSecond?: number
+      currentAsset?: string
+    }) => void
+  ) => {
+    const listener = (
+      _event: unknown,
+      data: {
+        voiceId?: string
+        progress: number | null
+        downloadedBytes?: number
+        totalBytes?: number | null
+        bytesPerSecond?: number
+        currentAsset?: string
+      }
+    ): void => callback(data)
+    ipcRenderer.on('tts:voice-progress', listener)
+    return unsubscribe('tts:voice-progress', listener)
+  },
   speak: (text: string, voice?: string) => ipcRenderer.invoke('tts:speak', text, voice),
+  saveVoiceRecording: (audio: Uint8Array, extension: string): Promise<string> =>
+    ipcRenderer.invoke('voice:save-recording', audio, extension),
 
   // --- On-device image generation (stable-diffusion.cpp) ---
   imageGenStatus: () => ipcRenderer.invoke('imagegen:status'),
   imageGenJobStatus: () => ipcRenderer.invoke('imagegen:job-status'),
   cancelImageGen: () => ipcRenderer.invoke('imagegen:cancel'),
-  imageGenConversationPersisted: (conversationId: string) =>
-    ipcRenderer.invoke('imagegen:conversation-persisted', conversationId),
+  imageGenConversationPersisted: (conversationId: string, messageId?: string) =>
+    ipcRenderer.invoke('imagegen:conversation-persisted', conversationId, messageId),
   listGeneratedImages: (scope?: { conversationId?: string; projectId?: string | null }) =>
     ipcRenderer.invoke('imagegen:list', scope),
   styleThumbs: () => ipcRenderer.invoke('imagegen:style-thumbs'),
-  makeStyleThumb: (key: string, prompt: string) =>
-    ipcRenderer.invoke('imagegen:make-style-thumb', key, prompt),
   listLoras: () => ipcRenderer.invoke('imagegen:list-loras'),
   revealLoras: () => ipcRenderer.invoke('imagegen:reveal-loras'),
   downloadLora: (url: string, filename: string) =>
@@ -513,28 +780,6 @@ const offGridApi = {
   deleteGeneratedImage: (p: string) => ipcRenderer.invoke('imagegen:delete', p),
   exportGeneratedImage: (srcPath: string, suggestedName?: string) =>
     ipcRenderer.invoke('imagegen:export', srcPath, suggestedName),
-  onImageGenProgress: (
-    cb: (p: {
-      step: number
-      total: number
-      secPerStep: number
-      preview?: string
-      phase?: 'sampling' | 'decoding'
-    }) => void
-  ) => {
-    const sub = (
-      _event: unknown,
-      p: {
-        step: number
-        total: number
-        secPerStep: number
-        preview?: string
-        phase?: 'sampling' | 'decoding'
-      }
-    ): void => cb(p)
-    ipcRenderer.on('imagegen:progress', sub)
-    return unsubscribe('imagegen:progress', sub)
-  },
   onImageGenJobState: (
     cb: (state: import('../shared/image-generation-contract').ImageGenerationJobContract) => void
   ) => {
@@ -551,12 +796,17 @@ const offGridApi = {
     return unsubscribe('imagegen:conversation-updated', sub)
   },
   pickImageForGen: () => ipcRenderer.invoke('imagegen:pick-image'),
+  keepInitImage: (sourcePath: string) =>
+    ipcRenderer.invoke('imagegen:keep-init-image', sourcePath) as Promise<{
+      id: string
+      path: string
+    } | null>,
   generateImage: (
     params: ImageGenerationRequestContract & {
       conversationId?: string
       projectId?: string | null
     }
-  ) => ipcRenderer.invoke('imagegen:generate', params),
+  ) => ipcRenderer.invoke('imagegen:generate', params) as Promise<ImageGenerationResultContract>,
 
   // --- Projects + RAG (knowledge bases) + project chat ---
   listProjects: () => ipcRenderer.invoke('projects:list'),
@@ -568,7 +818,8 @@ const offGridApi = {
   }) => ipcRenderer.invoke('projects:create', p),
   updateProject: (id: string, patch: Record<string, unknown>) =>
     ipcRenderer.invoke('projects:update', id, patch),
-  deleteProject: (id: string) => ipcRenderer.invoke('projects:delete', id),
+  deleteProject: (id: string) =>
+    ipcRenderer.invoke('projects:delete', id) as Promise<ProjectDeleteOutcome>,
   listProjectDocuments: (projectId: string) =>
     ipcRenderer.invoke('projects:list-documents', projectId),
   addProjectDocuments: (projectId: string) =>
@@ -580,6 +831,11 @@ const offGridApi = {
     const subscription = (_event: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('projects:index-progress', subscription)
     return unsubscribe('projects:index-progress', subscription)
+  },
+  onProjectDocumentsChanged: (callback: (data: { projectId: string }) => void) => {
+    const subscription = (_event: unknown, data: { projectId: string }): void => callback(data)
+    ipcRenderer.on('projects:documents-changed', subscription)
+    return unsubscribe('projects:documents-changed', subscription)
   },
 
   // --- CRM: entity records (Entity -> App -> frames) + resolution/corrections ---
@@ -645,6 +901,10 @@ const offGridApi = {
   crmDayJournalCached: (startSec: number) => ipcRenderer.invoke('crm:day-journal-cached', startSec),
   crmReplayFrames: (startSec: number, endSec: number) =>
     ipcRenderer.invoke('crm:replay-frames', startSec, endSec),
+  crmReplaySaveFrameEdit: (imagePath: string, caption: string, tags: string[]) =>
+    ipcRenderer.invoke('crm:replay-save-frame-edit', imagePath, caption, tags),
+  crmReplayReprocessFrame: (imagePath: string) =>
+    ipcRenderer.invoke('crm:replay-reprocess-frame', imagePath),
   crmReplayThreads: (startSec: number, endSec: number) =>
     ipcRenderer.invoke('crm:replay-threads', startSec, endSec),
   crmReplayEntityDay: (entityId: number, startSec: number, endSec: number) =>
@@ -675,6 +935,7 @@ const offGridApi = {
   // Approvals (the act-pillar spine)
   approvalsList: (status?: string) => ipcRenderer.invoke('approvals:list', status),
   approvalsProvenance: (id: number) => ipcRenderer.invoke('approvals:provenance', id),
+  approvalsExecutionChat: (id: number) => ipcRenderer.invoke('approvals:execution-chat', id),
   approvalsApprove: (id: number) => ipcRenderer.invoke('approvals:approve', id),
   approvalsReject: (id: number, reason?: string) =>
     ipcRenderer.invoke('approvals:reject', id, reason),
@@ -737,6 +998,14 @@ const offGridApi = {
 }
 
 export type OffGridAPI = typeof offGridApi
+
+// Keep the privileged Pro passthrough closed as soon as main publishes an
+// entitlement loss. The renderer also subscribes for navigation and display.
+ipcRenderer.on('license:changed', (_event, info: unknown) => {
+  if (!info || typeof info !== 'object' || !('isPro' in info)) return
+  liveProEntitled = (info as { isPro: unknown }).isPro === true
+  offGridApi.isPro = liveProEntitled
+})
 
 try {
   contextBridge.exposeInMainWorld('api', offGridApi)

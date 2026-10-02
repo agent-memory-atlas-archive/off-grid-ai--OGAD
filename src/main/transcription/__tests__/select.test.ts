@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   pickTranscription,
   engineForActiveModel,
@@ -8,7 +8,10 @@ import {
   catalogEngine,
   modelsByEngine,
   transcriptionProvenance,
-  transcriptionModelOptions
+  transcriptionModelOptions,
+  transcriptionActiveInfo,
+  resolveConfiguredTranscriptionLanguage,
+  withConfiguredTranscriptionLanguage
 } from '../select'
 import type { TranscriptionService } from '../types'
 
@@ -67,6 +70,115 @@ describe('pickTranscription', () => {
     const r = pickTranscription('whisper', three(false, true, true))
     expect(r.engine).toBe('whisper')
     expect(r.fellBack).toBe(false)
+  })
+})
+
+describe('withConfiguredTranscriptionLanguage', () => {
+  it('applies the selected language to normal transcription', async () => {
+    const transcribe = vi.fn(async () => ({ text: 'bonjour' }))
+    const configured = withConfiguredTranscriptionLanguage(
+      { isAvailable: () => true, transcribe },
+      'fr'
+    )
+
+    await configured.transcribe({ path: '/tmp/voice.wav' })
+
+    expect(transcribe).toHaveBeenCalledWith(
+      { path: '/tmp/voice.wav' },
+      expect.objectContaining({ language: 'fr' })
+    )
+  })
+
+  it('allows a specialized caller to override the selected language', async () => {
+    const transcribe = vi.fn(async () => ({ text: 'hello' }))
+    const configured = withConfiguredTranscriptionLanguage(
+      { isAvailable: () => true, transcribe },
+      'fr'
+    )
+
+    await configured.transcribe({ path: '/tmp/voice.wav' }, { language: 'en' })
+
+    expect(transcribe).toHaveBeenCalledWith(
+      { path: '/tmp/voice.wav' },
+      expect.objectContaining({ language: 'en' })
+    )
+  })
+})
+
+describe('resolveConfiguredTranscriptionLanguage', () => {
+  const languages = [
+    { code: 'auto', label: 'Auto-detect' },
+    { code: 'hi', label: 'Hindi' }
+  ]
+
+  it('keeps a language supported by the selected transcription model', () => {
+    expect(resolveConfiguredTranscriptionLanguage('hi', languages)).toBe('hi')
+  })
+
+  it('falls back to the model default after switching to an incompatible model', () => {
+    expect(resolveConfiguredTranscriptionLanguage('fr', languages)).toBe('auto')
+    expect(resolveConfiguredTranscriptionLanguage('fr', [])).toBe('auto')
+  })
+})
+
+describe('transcriptionActiveInfo', () => {
+  it('returns the selected language and only installed transcription choices', () => {
+    const result = transcriptionActiveInfo(
+      { engine: 'whisper', modelId: 'ggml-base.bin', label: 'Whisper · Base' },
+      [
+        {
+          id: 'ggerganov/whisper.cpp/base',
+          name: 'Whisper Base',
+          files: [{ name: 'ggml-base.bin' }]
+        }
+      ],
+      'hi'
+    )
+
+    expect(result.language).toBe('hi')
+    expect(result.languages.some((language) => language.code === 'hi')).toBe(true)
+    expect(result.options).toEqual([
+      { id: null, name: 'Whisper (built-in)', active: false },
+      { id: 'ggerganov/whisper.cpp/base', name: 'Whisper Base', active: true }
+    ])
+  })
+
+  it('lists a transferred package by its exact id and matches its active family', () => {
+    const result = transcriptionActiveInfo(
+      { engine: 'whisper', modelId: 'whisper-large-v3', label: 'Whisper · Large' },
+      [
+        {
+          id: 'transferred:whisper-large-v3:q5',
+          familyId: 'whisper-large-v3',
+          name: 'Whisper Large v3 (transferred)',
+          files: [{ name: 'ggml-large-v3-q5.bin' }]
+        }
+      ],
+      'hi'
+    )
+
+    expect(result.options[1]).toEqual({
+      id: 'transferred:whisper-large-v3:q5',
+      name: 'Whisper Large v3 (transferred)',
+      active: true
+    })
+  })
+
+  it('falls back to auto-detect and excludes models that are not installed', () => {
+    const result = transcriptionActiveInfo(
+      { engine: 'whisper', modelId: null, label: 'Whisper · built-in' },
+      [],
+      'unsupported'
+    )
+
+    expect(result.language).toBe('auto')
+    expect(result.options).toEqual([{ id: null, name: 'Whisper (built-in)', active: true }])
+  })
+
+  it('marks built-in Whisper active when the saved model is no longer installed', () => {
+    expect(transcriptionModelOptions('removed-whisper-model', [])).toEqual([
+      { id: null, name: 'Whisper (built-in)', active: true }
+    ])
   })
 })
 
@@ -265,7 +377,6 @@ describe('transcriptionProvenance — display label for the active STT choice', 
     )
   })
 })
-
 
 describe('transcriptionModelOptions — switchable models for the picker', () => {
   const installed = [

@@ -1,0 +1,156 @@
+/**
+ * The computer-use supervisor's floating window (the `#cu-supervisor` surface).
+ *
+ * While the rail drives another app, that app is frontmost and Off Grid AI's main
+ * window is behind it - so the in-app overlay is hidden. This is a separate
+ * always-on-top NSPanel that stays visible OVER whatever is being driven, the
+ * same window kind the clipboard/dictation overlays use (a macOS panel is the
+ * one type that floats over another app's full-screen Space without flipping
+ * this app to accessory, which would break TCC).
+ *
+ * It appears WITHOUT stealing focus (showInactive) so the driven app keeps
+ * focus for actuation, and it does NOT dismiss on blur - it must stay up for
+ * the whole task. Opened when a computer_use starts, closed shortly after it
+ * ends (see vision-controller). Native glue, excluded from coverage.
+ */
+import { BrowserWindow, ipcMain, screen } from 'electron'
+import { getComputerUseSettings } from '../computer-use-settings'
+import { preloadPath } from '../preload-path'
+import { rendererHtmlPath } from '../renderer-path'
+
+const MIN_WIN_WIDTH = 360
+const COLLAPSED_WIN_HEIGHT = 130
+const EXPANDED_WIN_HEIGHT = 480
+const MIN_WIN_HEIGHT = COLLAPSED_WIN_HEIGHT
+const WIN_WIDTH = MIN_WIN_WIDTH
+const WIN_HEIGHT = COLLAPSED_WIN_HEIGHT
+const MARGIN = 24
+let supervisor: BrowserWindow | null = null
+let closeTimer: NodeJS.Timeout | null = null
+
+function bottomRight(): { x: number; y: number } {
+  const area = screen.getPrimaryDisplay().workArea
+  return {
+    x: area.x + area.width - WIN_WIDTH - MARGIN,
+    y: area.y + area.height - WIN_HEIGHT - MARGIN
+  }
+}
+
+function create(): BrowserWindow {
+  const pos = bottomRight()
+  const win = new BrowserWindow({
+    width: WIN_WIDTH,
+    height: WIN_HEIGHT,
+    minWidth: MIN_WIN_WIDTH,
+    minHeight: MIN_WIN_HEIGHT,
+    x: pos.x,
+    y: pos.y,
+    show: false,
+    frame: false,
+    resizable: true,
+    movable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    // A macOS NSPanel floats over another app's full-screen Space without
+    // demoting this app to accessory (same reason as the clipboard popup).
+    type: process.platform === 'darwin' ? 'panel' : undefined,
+    alwaysOnTop: true,
+    title: 'Off Grid AI Desktop - Computer Use',
+    webPreferences: {
+      preload: preloadPath(),
+      sandbox: false, // REQUIRED for the IPC bridge (window.api.vision.*)
+      contextIsolation: true,
+      devTools: !!process.env['ELECTRON_RENDERER_URL']
+    }
+  })
+  supervisor = win
+  // Float above full-screen apps, on every Space; plain alwaysOnTop is not enough.
+  win.setVisibleOnAllWorkspaces(true, {
+    visibleOnFullScreen: true,
+    skipTransformProcessType: true
+  })
+  win.setAlwaysOnTop(true, 'screen-saver')
+  win.on('closed', () => {
+    if (supervisor === win) {
+      supervisor = null
+    }
+  })
+
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    void win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#cu-supervisor`)
+  } else {
+    void win.loadFile(rendererHtmlPath(), { hash: 'cu-supervisor' })
+  }
+  return win
+}
+
+/** Show the supervisor window (creating it if needed) WITHOUT stealing focus
+ *  from the app being driven. Idempotent. */
+export function showSupervisorWindow(): void {
+  if (!getComputerUseSettings().showPictureInPicture) {
+    dismissSupervisorWindow()
+    return
+  }
+  if (closeTimer) {
+    clearTimeout(closeTimer)
+    closeTimer = null
+  }
+  const win = supervisor && !supervisor.isDestroyed() ? supervisor : create()
+  if (!win.isVisible()) {
+    // Keep keyboard and pointer focus in the app that Computer Use controls.
+    win.showInactive()
+  }
+}
+
+/** Hide the PiP without changing the task. The task controller remains the only owner of
+ *  pause, stop, takeover, and completion state. */
+export function dismissSupervisorWindow(): void {
+  if (closeTimer) {
+    clearTimeout(closeTimer)
+    closeTimer = null
+  }
+  if (supervisor && !supervisor.isDestroyed()) supervisor.hide()
+}
+
+/** Resize the PiP without moving its bottom edge away from the screen corner. */
+export function setSupervisorExpanded(expanded: boolean): boolean {
+  if (!supervisor || supervisor.isDestroyed()) return false
+  const bounds = supervisor.getBounds()
+  const area = screen.getDisplayMatching(bounds).workArea
+  const height = expanded ? EXPANDED_WIN_HEIGHT : COLLAPSED_WIN_HEIGHT
+  const bottom = bounds.y + bounds.height
+  const y = Math.max(area.y, Math.min(bottom - height, area.y + area.height - height))
+  supervisor.setBounds({ ...bounds, y, height }, true)
+  return true
+}
+
+/** Hide the supervisor window after a short delay, so the final state (done /
+ *  failed + summary) is readable before it disappears. */
+export function hideSupervisorWindow(delayMs = 4000): void {
+  if (closeTimer) {
+    clearTimeout(closeTimer)
+  }
+  closeTimer = setTimeout(() => {
+    closeTimer = null
+    if (supervisor && !supervisor.isDestroyed()) {
+      supervisor.hide()
+    }
+  }, delayMs)
+}
+
+/** Renderer intent for PiP visibility only. Task controls use the separate vision controller. */
+export function registerSupervisorWindowIpc(): void {
+  ipcMain.handle('vision:supervisor:show', () => {
+    showSupervisorWindow()
+    return true
+  })
+  ipcMain.handle('vision:supervisor:dismiss', () => {
+    dismissSupervisorWindow()
+    return true
+  })
+  ipcMain.handle('vision:supervisor:set-expanded', (_event, expanded: boolean) =>
+    setSupervisorExpanded(expanded)
+  )
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatContextWindow, resolveModelName } from '../model-summary'
+import { formatContextWindow, resolveActiveTextModel, resolveModelName } from '../model-summary'
 
 describe('formatContextWindow', () => {
   it('formats power-of-two token windows as compact K labels', () => {
@@ -31,5 +31,39 @@ describe('resolveModelName', () => {
     expect(resolveModelName(models, 'just-imported.gguf')).toBe('just-imported.gguf')
     expect(resolveModelName(models, null)).toBeNull()
     expect(resolveModelName(models, undefined)).toBeNull()
+  })
+
+  it('shows the provider model id instead of an internal remote routing id', () => {
+    expect(
+      resolveModelName([], 'remote-vision:0e535f87-8fff-4fa3-a8bf-6da96e4a6ac4:qwen%2Fqwen-image-3')
+    ).toBe('qwen/qwen-image-3')
+  })
+})
+
+describe('resolveActiveTextModel', () => {
+  const models = [
+    { id: 'gemma', name: 'Gemma 4 E4B' },
+    {
+      id: 'remote:openrouter:stealth/ox-alpha',
+      name: 'stealth/ox-alpha',
+      remoteServerId: 'openrouter'
+    }
+  ]
+
+  it('projects the active remote text model over the loaded local model', () => {
+    expect(
+      resolveActiveTextModel(
+        models,
+        'gemma',
+        new Set(['gemma', 'remote:openrouter:stealth/ox-alpha'])
+      )
+    ).toEqual({ name: 'stealth/ox-alpha', remote: true })
+  })
+
+  it('uses the local model when no remote text model is active', () => {
+    expect(resolveActiveTextModel(models, 'gemma', new Set(['gemma']))).toEqual({
+      name: 'Gemma 4 E4B',
+      remote: false
+    })
   })
 })

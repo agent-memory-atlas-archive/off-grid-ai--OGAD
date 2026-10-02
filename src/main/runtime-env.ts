@@ -31,6 +31,12 @@ interface RuntimeConfig {
 
 let cfg: RuntimeConfig = {}
 
+function developmentBinRoots(root: string): string[] {
+  return process.platform === 'linux'
+    ? [path.join(root, 'build', 'linux-bin'), path.join(root, 'resources', 'bin')]
+    : [path.join(root, 'resources', 'bin')]
+}
+
 /** Host calls this once at startup. Electron host passes app paths; a standalone
  *  host passes its own. Any field left out falls back to env/electron/cwd. */
 export function configureRuntime(c: RuntimeConfig): void {
@@ -48,8 +54,8 @@ function electron(): { dataDir: string; binRoots: string[]; resourceDirs: string
       binRoots: packaged
         ? [path.join(process.resourcesPath, 'bin')]
         : [
-            path.join(app.getAppPath?.() ?? process.cwd(), 'resources', 'bin'),
-            path.join(process.cwd(), 'resources', 'bin')
+            ...developmentBinRoots(app.getAppPath?.() ?? process.cwd()),
+            ...developmentBinRoots(process.cwd())
           ],
       resourceDirs: packaged
         ? [process.resourcesPath]
@@ -82,8 +88,9 @@ export function binRoots(): string[] {
   if (cfg.binRoots?.length) return cfg.binRoots
   if (process.env.OFFGRID_BIN_DIR) return [process.env.OFFGRID_BIN_DIR]
   const e = electron()
-  if (e) return e.binRoots
-  return [path.join(process.cwd(), 'resources', 'bin')]
+  const bundledRoots = e?.binRoots ?? developmentBinRoots(process.cwd())
+  const performancePack = process.env.OFFGRID_PERFORMANCE_PACK_BIN
+  return performancePack ? [performancePack, ...bundledRoots] : bundledRoots
 }
 
 /** Append the platform executable extension to a bundled binary's base name:

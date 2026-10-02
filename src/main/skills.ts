@@ -48,6 +48,20 @@ function ensureSkillsDir(): string {
       /* best effort */
     }
   }
+  // Remove the retired bundled product without touching a user-created skill that happens to use
+  // the same folder name.
+  try {
+    const folder = path.join(dir, 'proposal-deck')
+    const markdown = fs.readFileSync(path.join(folder, 'SKILL.md'), 'utf8')
+    if (
+      markdown.includes('name: proposal-deck') &&
+      markdown.includes('Create a client proposal through the proposal_deck tool.')
+    ) {
+      fs.rmSync(folder, { recursive: true, force: true })
+    }
+  } catch {
+    /* The retired bundled skill is absent or the profile is read-only. */
+  }
   return dir
 }
 

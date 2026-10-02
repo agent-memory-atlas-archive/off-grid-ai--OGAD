@@ -6,6 +6,8 @@
  * lifecycle methods are deliberately inert.
  */
 import { vi } from 'vitest'
+// The DOM globals jsdom lacks. One owner, shared with the db suite - see the file.
+import './dom-globals.setup'
 
 // motion/react (framer-motion) drives animations off requestAnimationFrame, which
 // jsdom stubs — so an AnimatePresence EXIT animation never completes and the
@@ -45,10 +47,13 @@ vi.mock('motion/react', async () => {
     return out
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const host = (tag: string): any =>
-    React.forwardRef((props: Record<string, unknown>, ref) =>
+  const host = (tag: string): any => {
+    const component = React.forwardRef((props: Record<string, unknown>, ref) =>
       React.createElement(tag, { ...strip(props), ref })
     )
+    component.displayName = `MotionTest${tag}`
+    return component
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cache = new Map<string, any>()
   const motion = new Proxy(
@@ -70,23 +75,17 @@ vi.mock('motion/react', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     MotionConfig: ({ children }: { children: any }) =>
       React.createElement(React.Fragment, null, children),
-    useReducedMotion: () => true
+    useReducedMotion: () => true,
+    useAnimate: () => [React.useRef(null), async () => undefined],
+    stagger: () => 0
   }
 })
-if (typeof window !== 'undefined' && typeof globalThis.ResizeObserver === 'undefined') {
-  class ResizeObserverBoundary implements ResizeObserver {
-    constructor(_callback: ResizeObserverCallback) {}
 
-    observe(_target: Element, _options?: ResizeObserverOptions): void {}
-
-    unobserve(_target: Element): void {}
-
-    disconnect(): void {}
-  }
-
-  Object.defineProperty(globalThis, 'ResizeObserver', {
-    configurable: true,
-    writable: true,
-    value: ResizeObserverBoundary
-  })
+/**
+ * jsdom implements no scrolling at all, so Element.scrollIntoView is simply absent - calling it
+ * throws. Real browsers always have it. Stub it here rather than guarding each call site, so
+ * product code is not shaped around a gap in the test environment.
+ */
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function scrollIntoView(): void {}
 }

@@ -14,6 +14,8 @@ import path from 'path'
 // getDB() opens memories.db inside it. safeStorage is reported unavailable so the
 // DB is created as plaintext (no Keychain in CI) - the code path we can exercise.
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-db-it-'))
+const previousDataDir = process.env.OFFGRID_DATA_DIR
+process.env.OFFGRID_DATA_DIR = TMP_DIR
 
 vi.mock('electron', () => ({
   app: { getPath: () => TMP_DIR, isPackaged: false, getAppPath: () => process.cwd() },
@@ -36,6 +38,8 @@ function resolveEntity(name: string, type?: string): number {
 }
 
 afterAll(() => {
+  if (previousDataDir === undefined) delete process.env.OFFGRID_DATA_DIR
+  else process.env.OFFGRID_DATA_DIR = previousDataDir
   try {
     fs.rmSync(TMP_DIR, { recursive: true, force: true })
   } catch {
@@ -166,9 +170,11 @@ describe('database.ts - RAG conversations CRUD', () => {
 describe('database.ts - RAG messages', () => {
   it('addRagMessage returns an incrementing rowid and getRagMessages returns them in order', () => {
     db.createRagConversation('msg-conv', 'msgs')
-    const id1 = db.addRagMessage('msg-conv', 'user', 'hello')
-    const id2 = db.addRagMessage('msg-conv', 'assistant', 'hi there')
-    expect(id2).toBeGreaterThan(id1)
+    const first = db.addRagMessage('msg-conv', 'user', 'hello')
+    const second = db.addRagMessage('msg-conv', 'assistant', 'hi there')
+    expect(second.id).toBeGreaterThan(first.id)
+    // The cross-device name comes back too, so a caller can point at the message it just made.
+    expect(first.uuid).not.toEqual(second.uuid)
     const msgs = db.getRagMessages('msg-conv')
     expect(msgs.map((m) => m.content)).toEqual(['hello', 'hi there'])
     expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant'])

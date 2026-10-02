@@ -1,6 +1,15 @@
+import { restoreCanonicalProductName } from './bootstrap/user-data'
 import { app, shell, BrowserWindow, protocol, session, desktopCapturer, screen } from 'electron'
-import { join } from 'path'
-import fs from 'fs'
+import { tmpdir } from 'os'
+
+// Electron 39 needs the portal to register global shortcuts on Wayland.
+// Clipboard's Ctrl+Shift+C depends on this before app ready.
+if (
+  process.platform === 'linux' &&
+  (process.env['XDG_SESSION_TYPE'] === 'wayland' || process.env['WAYLAND_DISPLAY'])
+) {
+  app.commandLine.appendSwitch('enable-features', 'GlobalShortcutsPortal')
+}
 
 // Custom scheme to serve local capture screenshots to the renderer (file:// is
 // blocked there). Registered before app 'ready'; handled after.
@@ -17,20 +26,39 @@ protocol.registerSchemesAsPrivileged([
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { setupIPC } from './ipc' // IMPORT FROM IPC ONLY
+import { initializeAIRequestLogs } from './ai-request-log-store'
 import { setupRagIPC } from './rag-ipc'
 import { setupMcpIpc } from './mcp-ipc'
+import { registerToolExtension } from './tools'
+import { registerNativeActionTools } from './tools/nativeActionToolExtension'
+import { setupDesktopBackupIPC } from './backup/ipc'
 import { preloadPath } from './preload-path'
 import { rendererHtmlPath } from './renderer-path'
+import { setMainWindow } from './main-window'
 import { startModelServer, stopModelServer } from './model-server'
 import { startMediaServer, stopMediaServer, mediaUrlFor } from './media-server'
-import { serveCaptureFile } from './ogcapture-serve'
+import { capturePathFromUrl, serveCaptureFile } from './ogcapture-serve'
 import { serveArtifactPreview } from './artifact-preview'
 import { ipcMain } from 'electron'
-import { loadProFeaturesMain } from './bootstrap/loadProFeaturesMain'
-import { initLicensing } from './licensing/license-service'
+import { loadProEntitlementProvider, loadProFeaturesMain } from './bootstrap/loadProFeaturesMain'
+import { resolveWindowPresentation } from './bootstrap/window-presentation'
+import { mayUseIsolatedEvidenceInstance } from './bootstrap/isolated-evidence-instance'
+
+/**
+ * Whether this launch may put itself on screen or take the keyboard. Resolved ONCE: the main window, the Dock
+ * tile, the second-instance focus and every window pro opens must all give the same answer, or a headless run
+ * is only partly headless - which is exactly the bug this fixes.
+ */
+const windowPresentation = resolveWindowPresentation(process.env)
+import {
+  initLicensing,
+  refreshCachedProEntitlement,
+  revalidateProEntitlement
+} from './licensing/license-service'
+import { PERSONAL_MESH_ENTITLEMENT_REVALIDATION_INTERVAL_MS } from '@offgrid/sync'
 import { setupLicenseIpc } from './license-ipc'
 import { nativeImage } from 'electron'
-import { purgeLegacyChatImports, getSetting } from './database'
+import { purgeLegacyChatImports, getSetting, saveSetting } from './database'
 import { modalityQueue } from './modality-queue/queue'
 import { applyQueueConfig, readQueueConfig } from './modality-queue/config'
 import { registerRuntime } from './runtime-manager'
@@ -38,64 +66,28 @@ import { guardConsoleStreams } from './stream-guards'
 import { PRODUCT_NAME } from '../shared/product-identity'
 import { installMediaPermissionHandler } from './media-permission'
 import { localMediaRoots } from './media-roots'
-import { beginProductIdentityBootstrap } from './product-identity-lifecycle'
+import { resourceDirs } from './runtime-env'
 import {
   installDiagnosticConsoleCapture,
   installIpcDiagnostics,
   writeDiagnosticLog
 } from './diagnostics-log'
+import { registerStartupStatusIpc } from './startup-ipc'
+import { runIndependentStartupStages, runStartupStage } from './startup-stages'
 import {
   applicationShutdown,
+  commitApplicationRelaunch,
   installApplicationShutdown,
+  requestApplicationRelaunch,
   registerCoreShutdownOwners
 } from './shutdown'
 import { shutdownRuntimes } from './runtime-manager'
 import { shutdownModelDownloads } from './models/download-queue'
+import { prepareInstalledOnnxCudaLibraries } from './performance-pack'
 
 // Before anything logs: a broken stdout/stderr pipe (parent/e2e-harness exited, closed pipe)
 // must never crash main via an uncaught EPIPE. See stream-guards.ts.
 guardConsoleStreams([process.stdout, process.stderr])
-
-// Pin one canonical userData dir ("Off Grid AI Desktop") regardless of package
-// name, and migrate data from the legacy split dirs ("My Memories" had the
-// models, "my-memories" had the DB) so nothing is lost / re-downloaded. Must run
-// before app 'ready' and before any getPath('userData') usage.
-// Preserve the Keychain namespace used by every existing install during Electron's
-// early safeStorage bootstrap. The returned callback restores the canonical visible
-// product name at the beginning of the ready phase.
-const restoreCanonicalProductName = beginProductIdentityBootstrap(app, process.platform)
-;(function unifyUserDataPath(): void {
-  try {
-    // Test/CI seam: let a harness isolate userData (e.g. screenshot capture of
-    // a fresh, pre-onboarding profile). Harmless in production (unset).
-    if (process.env.OFFGRID_USER_DATA) {
-      fs.mkdirSync(process.env.OFFGRID_USER_DATA, { recursive: true })
-      app.setPath('userData', process.env.OFFGRID_USER_DATA)
-      console.log('[userData] override path:', process.env.OFFGRID_USER_DATA)
-      return
-    }
-    const appData = app.getPath('appData')
-    const canonical = join(appData, 'Off Grid AI Desktop')
-    fs.mkdirSync(canonical, { recursive: true })
-    const move = (fromDir: string, name: string): void => {
-      try {
-        const src = join(fromDir, name)
-        const dst = join(canonical, name)
-        if (fs.existsSync(src) && !fs.existsSync(dst)) fs.renameSync(src, dst)
-      } catch (e) {
-        console.warn('[userData] migrate skip', name, e)
-      }
-    }
-    move(join(appData, 'My Memories'), 'models')
-    move(join(appData, 'my-memories'), 'models')
-    move(join(appData, 'my-memories'), 'memories.db')
-    move(join(appData, 'My Memories'), 'memories.db')
-    app.setPath('userData', canonical)
-    console.log('[userData] canonical path:', canonical)
-  } catch (e) {
-    console.error('[userData] unify failed', e)
-  }
-})()
 
 installDiagnosticConsoleCapture()
 writeDiagnosticLog('app', 'bootstrap.started', {
@@ -118,11 +110,25 @@ registerCoreShutdownOwners(applicationShutdown, {
 // FORCE UPDATE VERIFICATION: 3 - SHELL OVERWRITE
 console.log('MAIN PROCESS: LOADING CUSTOM ENTRY POINT (SHELL OVERWRITE)')
 
-function createWindow(): void {
-  // Create the browser window.
+async function createWindow(): Promise<void> {
+  // Open filling the screen, because this is a desktop-first, dense app: multi-column grids, master
+  // detail lists and side panels. At 900x670 the Models grid collapsed to one card per row, the chat
+  // history rail ate a third of the width, and every screen looked like a phone layout stretched.
+  //
+  // The work area, not the display bounds - that excludes the menu bar and Dock, so the window fills
+  // what the user can actually use. maximize() on top of it because the work area is only the
+  // starting size; maximizing is what makes the OS treat the window as filled and keeps it that way
+  // through a display change.
+  //
+  // Not fullscreen: on macOS that moves the app to its own Space and hides the menu bar, so a user who
+  // just wanted a big window loses Mission Control and every other window alongside it.
+  const { workAreaSize } = screen.getPrimaryDisplay()
   const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
+    width: workAreaSize.width,
+    height: workAreaSize.height,
+    // The old default is now the floor: below this the dense layouts stop working.
+    minWidth: 900,
+    minHeight: 670,
     show: false,
     title: PRODUCT_NAME,
     autoHideMenuBar: true,
@@ -136,15 +142,104 @@ function createWindow(): void {
     }
   })
 
+  // Record THE main window so callers that lay a view over it (the browser
+  // rail) attach to the right window, not a stray overlay from getAllWindows().
+  setMainWindow(mainWindow)
+
+  // Maximized before the first paint, not on ready-to-show: the window is still hidden here, so it
+  // opens at full size instead of appearing at the constructed size and jumping. It also means anything
+  // that reads the window as soon as it exists sees the real geometry - on ready-to-show the renderer
+  // can already have loaded, so the size depended on which happened first.
+  mainWindow.maximize()
+
+  // Nothing is shown in a headless (e2e) run - see window-presentation for why the suite needs that on
+  // macOS, where Playwright cannot make an Electron app headless and there is no xvfb to hide it behind.
+  // The renderer has already loaded and painted by now either way, which is all Playwright drives.
   mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
+    if (windowPresentation.showWindow) mainWindow.show()
   })
 
-  // Pin zoom to 100% (clear any persisted accidental Cmd+= zoom) and disable
-  // pinch-zoom so the UI always renders at the intended density.
+  const rendererTarget =
+    is.dev && process.env['ELECTRON_RENDERER_URL']
+      ? process.env['ELECTRON_RENDERER_URL']
+      : rendererHtmlPath()
+  let rendererLoadAttempt = 0
+  let rendererLoadRetry: NodeJS.Timeout | undefined
+
+  const loadRenderer = async (): Promise<void> => {
+    rendererLoadAttempt += 1
+    try {
+      if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+        await mainWindow.loadURL(rendererTarget)
+      } else {
+        await mainWindow.loadFile(rendererTarget)
+      }
+      writeDiagnosticLog('renderer', 'load.completed', {
+        attempt: rendererLoadAttempt,
+        target: rendererTarget
+      })
+    } catch (error) {
+      writeDiagnosticLog(
+        'renderer',
+        'load.rejected',
+        {
+          attempt: rendererLoadAttempt,
+          target: rendererTarget,
+          error: error instanceof Error ? error.message : String(error)
+        },
+        'error'
+      )
+      if (rendererLoadAttempt >= 3 || mainWindow.isDestroyed()) return
+      rendererLoadRetry = setTimeout(() => void loadRenderer(), 1_000)
+    }
+  }
+
+  mainWindow.webContents.on(
+    'did-fail-load',
+    (_event, code, description, validatedURL, isMainFrame) => {
+      if (!isMainFrame) return
+      writeDiagnosticLog(
+        'renderer',
+        'load.failed',
+        { code, description, url: validatedURL },
+        'error'
+      )
+    }
+  )
+  mainWindow.on('closed', () => {
+    if (rendererLoadRetry) clearTimeout(rendererLoadRetry)
+  })
+
+  // Restore the user's page zoom after each load and keep pinch zoom disabled.
   mainWindow.webContents.on('did-finish-load', () => {
-    mainWindow.webContents.setZoomFactor(1)
+    const savedZoomLevel = getSetting('windowZoomLevel', 0)
+    mainWindow.webContents.setZoomLevel(
+      typeof savedZoomLevel === 'number' && Number.isFinite(savedZoomLevel) ? savedZoomLevel : 0
+    )
     mainWindow.webContents.setVisualZoomLevelLimits(1, 1)
+  })
+
+  // Own the complete page-zoom shortcut set. Chromium handled Cmd+= here, but
+  // not its matching Cmd+-, and its zoom level was lost when the page reloaded.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    const commandModifier =
+      process.platform === 'darwin' ? input.meta && !input.control : input.control && !input.meta
+    if (input.type !== 'keyDown' || !commandModifier || input.alt) return
+
+    const currentZoomLevel = mainWindow.webContents.getZoomLevel()
+    const nextZoomLevel =
+      input.code === 'Equal'
+        ? currentZoomLevel + 0.5
+        : input.code === 'Minus'
+          ? currentZoomLevel - 0.5
+          : input.code === 'Digit0'
+            ? 0
+            : null
+    if (nextZoomLevel === null) return
+
+    event.preventDefault()
+    mainWindow.webContents.setZoomLevel(nextZoomLevel)
+    saveSetting('windowZoomLevel', nextZoomLevel)
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -152,11 +247,7 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    mainWindow.loadFile(rendererHtmlPath())
-  }
+  await loadRenderer()
 }
 
 // The menu-bar (Tray) control surface for always-on capture (pause/resume +
@@ -167,20 +258,43 @@ function createWindow(): void {
 // meetings DB, so its orphan-recovery could adopt/kill the first instance's LIVE
 // recorder. Bail before whenReady if we can't get the lock; focus the existing
 // window instead.
-if (!app.requestSingleInstanceLock()) {
+const isolatedEvidenceInstance = mayUseIsolatedEvidenceInstance(process.env, tmpdir())
+if (!isolatedEvidenceInstance && !app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => {
     const win = BrowserWindow.getAllWindows()[0]
     if (win) {
       if (win.isMinimized()) win.restore()
-      win.focus()
+      if (windowPresentation.showWindow) win.focus()
     }
   })
 }
 
-app.whenReady().then(() => {
+// Windows this file does not own must obey the same answer. pro opens several that call show()+focus()
+// themselves - the clipboard quick-open popup, the tray and CRM notification surfaces, the meeting notice -
+// so hiding only the main window left a headless run still stealing the keyboard, once per spec that touches
+// them. Making every window non-focusable is the technique pro's dictation overlay already uses deliberately
+// (pro/main/dictation/overlay.ts: non-focusable + showInactive, so the user's target app keeps the keys);
+// here it is applied to all of them, from the one place that knows the launch is headless.
+//
+// Visibility is deliberately left alone. Popups stay visible and their isVisible()-gated logic keeps working,
+// which is what lets the clipboard quick-open journey pass headless - it just cannot take focus any more.
+if (!windowPresentation.showWindow) {
+  app.on('browser-window-created', (_event, win) => {
+    win.setFocusable(false)
+  })
+}
+
+app.whenReady().then(async () => {
+  // glibc reads LD_LIBRARY_PATH when Electron starts, before an ONNX worker runs.
+  // Restart once with the verified optional libraries if this launch lacks them.
+  if (app.isPackaged && prepareInstalledOnnxCudaLibraries()) {
+    requestApplicationRelaunch(app)
+    return
+  }
   restoreCanonicalProductName()
+  initializeAIRequestLogs()
 
   // Server-only (headless) mode: boot just the multimodal gateway + LLM runtime,
   // no window / tray / capture / CRM loops. Lets the gateway be deployed on its
@@ -216,12 +330,18 @@ app.whenReady().then(() => {
     console.warn('[startup] legacy purge failed', e)
   }
 
-  // Dock icon = the Off Grid green chip logo (in dev macOS otherwise shows the
+  // Dock icon = the Off Grid AI green chip logo (in dev macOS otherwise shows the
   // default Electron icon; the packaged build uses build/icon from electron-builder).
   if (process.platform === 'darwin' && app.dock) {
     try {
-      const dockImg = nativeImage.createFromPath(icon)
-      if (!dockImg.isEmpty()) app.dock.setIcon(dockImg)
+      // Out of the Dock entirely in a headless run: an app with a Dock tile still becomes the frontmost
+      // application, which is the half of the interruption that is not the window itself.
+      if (!windowPresentation.showInDock) {
+        app.dock.hide()
+      } else {
+        const dockImg = nativeImage.createFromPath(icon)
+        if (!dockImg.isEmpty()) app.dock.setIcon(dockImg)
+      }
     } catch (e) {
       console.warn('[dock] setIcon failed', e)
     }
@@ -242,10 +362,12 @@ app.whenReady().then(() => {
   // NOTE: keep this in sync with the dirs the renderer requests over ogcapture://.
   // 'generated-images' + 'style-thumbs' were missing, so every image-gen output and
   // every style-picker thumbnail 403'd and rendered as a broken image.
-  const ogCaptureRoots = localMediaRoots(app.getPath('userData'))
+  const ogCaptureRoots = localMediaRoots(app.getPath('userData'), resourceDirs())
   protocol.handle('ogcapture', async (request) => {
     try {
-      const requestedPath = decodeURIComponent(request.url.slice('ogcapture://'.length))
+      // Parsed, not sliced: a Windows drive letter lands in the URL's host and loses its colon, so
+      // slicing produced `C/Users/…` and every preview 404'd on that platform alone.
+      const requestedPath = capturePathFromUrl(request.url)
       return serveCaptureFile(requestedPath, ogCaptureRoots, request.headers.get('Range'))
     } catch {
       return new Response(null, { status: 400 })
@@ -316,77 +438,204 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // 2. Setup IPC Handlers (core) + the local model gateway
-  try {
-    installIpcDiagnostics(ipcMain)
-    // Licensing first: load the cached Keygen entitlement into memory and register
-    // the SYNC `pro:is-enabled` handler BEFORE createWindow() (line below) so the
-    // preload's sendSync resolves and window.api.isPro reflects the real license.
-    initLicensing()
-    setupLicenseIpc()
-    setupIPC()
-    setupRagIPC()
-    setupMcpIpc() // basic MCP connectors (management + chat tool extension)
-    // one OpenAI-compatible local gateway (LLM + STT); auto-picks a free port. Async, so handle a
-    // rejection on the promise (a try/catch around a fire-and-forget async call can't catch it).
-    startModelServer().catch((e) => console.error('[model-server] start failed', e))
-    startMediaServer() // loopback HTTP for seekable local media (meeting videos)
-    // Heal a stale active-model.json whose model gained a vision projector after it was
-    // activated (e.g. Gemma 4 E2B) — turns vision on at launch if the projector is now
-    // on disk, without waiting for a re-activate.
-    void import('./models-manager').then((m) => m.reconcileActiveModelProjector()).catch(() => {})
-    ipcMain.handle('media:url', (_e, absPath: string) => mediaUrlFor(absPath))
-    // (clipboard is now a pro feature — setupClipboard runs in pro's activateMain)
-    // Pro features (capture, CRM, meetings, connectors, secretary, proactive,
-    // skills engine, console, tray) register their own IPC + intervals/capture loop
-    // here. No-op in the free build (the pro submodule is absent → stub).
-    void loadProFeaturesMain().catch((e) => console.error('[pro] load failed', e))
-    // Demo seeder for testing: OFFGRID_SEED=1 seeds once; OFFGRID_SEED=force re-seeds.
-    if (process.env.OFFGRID_SEED) {
-      void import('./dev-seed')
-        .then((m) => m.seedDemo(process.env.OFFGRID_SEED === 'force'))
-        .catch((e) => console.error('[seed]', e))
+  installIpcDiagnostics(ipcMain)
+  applicationShutdown.register({
+    name: 'startup:status-ipc',
+    shutdown: registerStartupStatusIpc()
+  })
+
+  // The cached entitlement is the only asynchronous decision that must precede the shell. It is
+  // local and fail-closed: if it misses the bound, Pro stays unavailable until the provider lands.
+  await runStartupStage({
+    name: 'pro.entitlement.load-cached',
+    deadlineMs: 5_000,
+    required: true,
+    lateEffect: 'keep',
+    run: () => loadProEntitlementProvider()
+  })
+  initLicensing()
+  setupLicenseIpc()
+  const entitlementRefresh = setInterval(() => {
+    refreshCachedProEntitlement()
+    void revalidateProEntitlement('foreground')
+  }, PERSONAL_MESH_ENTITLEMENT_REVALIDATION_INTERVAL_MS)
+  entitlementRefresh.unref()
+  applicationShutdown.register({
+    name: 'pro:entitlement-refresh',
+    shutdown: () => clearInterval(entitlementRefresh)
+  })
+
+  await runStartupStage({
+    name: 'core.ipc',
+    deadlineMs: 10_000,
+    required: true,
+    lateEffect: 'guard',
+    run: ({ commit }) =>
+      commit('core.ipc.handlers', () => {
+        setupIPC()
+        setupRagIPC()
+        setupMcpIpc()
+        registerNativeActionTools(registerToolExtension)
+        setupDesktopBackupIPC()
+        ipcMain.handle('media:url', (_event, absPath: string) => mediaUrlFor(absPath))
+      })
+  })
+
+  // These registrations are independent. They load together, and each failure remains isolated.
+  await runIndependentStartupStages([
+    {
+      name: 'actions.ipc',
+      deadlineMs: 10_000,
+      lateEffect: 'guard',
+      run: ({ commit }) =>
+        import('./actions/actions-ipc').then((module) =>
+          commit('actions.ipc.handlers', module.registerActionsIpc)
+        )
+    },
+    {
+      name: 'browser.view.ipc',
+      deadlineMs: 10_000,
+      lateEffect: 'guard',
+      run: ({ commit }) =>
+        import('./browser/browser-host').then((module) =>
+          commit('browser.view.ipc.handlers', module.registerBrowserViewIpc)
+        )
+    },
+    {
+      name: 'vision.ipc',
+      deadlineMs: 10_000,
+      lateEffect: 'guard',
+      run: ({ commit }) =>
+        import('./vision/vision-controller').then((module) =>
+          commit('vision.ipc.handlers', module.registerVisionIpc)
+        )
+    },
+    {
+      name: 'vision.supervisor-window',
+      deadlineMs: 10_000,
+      lateEffect: 'guard',
+      run: ({ commit }) =>
+        import('./vision/supervisor-window').then((module) =>
+          commit('vision.supervisor-window.handlers', module.registerSupervisorWindowIpc)
+        )
+    },
+    {
+      name: 'tasks.history.ipc',
+      deadlineMs: 10_000,
+      lateEffect: 'guard',
+      run: ({ commit }) =>
+        import('./tasks/task-history-ipc').then((module) =>
+          commit('tasks.history.ipc.handlers', module.registerTaskHistoryIpc)
+        )
     }
-    console.log('IPC Handlers Registered.')
-  } catch (e) {
-    console.error('FATAL: IPC Setup failed', e)
+  ])
+
+  // Start optional Pro registration before the renderer loads. The activation
+  // code yields between feature groups, so the shell can load at the same time,
+  // while Pro IPC handlers still get a head start before the renderer mounts.
+  const proFeaturesStartup = runStartupStage({
+    name: 'pro.features.load',
+    deadlineMs: 30_000,
+    lateEffect: 'keep',
+    run: () => loadProFeaturesMain()
+  })
+
+  await createWindow()
+
+  // loadURL/loadFile resolves after the renderer finishes loading. Give Electron
+  // one more event-loop turn to present that frame before optional main-process
+  // imports and local-model startup begin competing for CPU and memory.
+  await new Promise<void>((resolve) => setImmediate(resolve))
+
+  // Network checks, model work, and optional services now run beside the visible shell.
+  void runIndependentStartupStages([
+    {
+      name: 'pro.entitlement.revalidate',
+      deadlineMs: 30_000,
+      lateEffect: 'keep',
+      run: () => revalidateProEntitlement('launch')
+    },
+    {
+      name: 'models.gateway.start',
+      deadlineMs: 30_000,
+      lateEffect: 'keep',
+      run: () => startModelServer()
+    },
+    {
+      name: 'media.server.start',
+      deadlineMs: 10_000,
+      lateEffect: 'keep',
+      run: () => startMediaServer()
+    },
+    {
+      name: 'modalities.runtime.register',
+      deadlineMs: 30_000,
+      lateEffect: 'guard',
+      run: async ({ commit }) => {
+        const [{ ttsRuntime }, { imageRuntime }, { sttRuntime }] = await Promise.all([
+          import('./tts'),
+          import('./imagegen'),
+          import('./transcription/select')
+        ])
+        commit('modalities.runtime.registrations', () => {
+          registerRuntime(ttsRuntime)
+          registerRuntime(imageRuntime)
+          registerRuntime(sttRuntime)
+        })
+      }
+    },
+    {
+      name: 'models.projector.reconcile',
+      deadlineMs: 15_000,
+      lateEffect: 'keep',
+      run: () => import('./models-manager').then((module) => module.reconcileActiveModelProjector())
+    },
+    {
+      name: 'updater.ipc',
+      deadlineMs: 15_000,
+      lateEffect: 'guard',
+      run: ({ commit }) =>
+        import('./updater').then((module) =>
+          commit('updater.ipc.handlers', () => {
+            module.registerUpdateIpc()
+            if (!is.dev) module.startAutoUpdates()
+          })
+        )
+    }
+  ])
+
+  // Text-model preparation starts a memory-heavy native runtime. Do not start it
+  // until Pro activation has finished and the first renderer frame can present.
+  void (async () => {
+    await proFeaturesStartup
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    await runStartupStage({
+      name: 'models.text.prepare',
+      deadlineMs: 180_000,
+      lateEffect: 'keep',
+      run: async () => {
+        const { llm } = await import('./llm')
+        registerRuntime(llm.runtime)
+        applyQueueConfig(modalityQueue, readQueueConfig(getSetting))
+        if (llm.modelsExist()) await llm.init()
+      }
+    })
+  })()
+
+  // Demo seeding already runs beside the shell. Keep its existing persistence semantics instead of
+  // pretending an in-progress database write can be cancelled by a timer.
+  if (process.env.OFFGRID_SEED) {
+    void import('./dev-seed')
+      .then((module) => module.seedDemo(process.env.OFFGRID_SEED === 'force'))
+      .catch((error) => console.error('[seed]', error))
   }
 
-  // 3. Initialize LLM (Async)
-  // We don't await this to avoid blocking window creation
-  import('./llm').then(({ llm }) => {
-    // Register the chat engine through the shared residency seam (runtime-manager),
-    // exactly like every other engine — the queue evicts it before a competing
-    // heavy job and re-warms it mode-aware (resident = reload; on-demand = release
-    // the pause block so it lazily respawns on next use, freeing RAM meanwhile).
-    registerRuntime(llm.runtime)
-    // Apply persisted queue settings (defaults: enabled, tier-1 coexists) — the
-    // keys + apply live in modality-queue/config so the settings UI shares them.
-    applyQueueConfig(modalityQueue, readQueueConfig(getSetting))
-    llm.init().catch((err) => console.error('Failed to init LLM:', err))
-  })
-  // Every other engine joins the SAME residency seam (runtime-manager), lazily so
-  // module load never blocks window creation. Registration only stores hooks — it
-  // doesn't spawn anything until the engine is actually used.
-  import('./tts').then(({ ttsRuntime }) => registerRuntime(ttsRuntime)).catch(() => {})
-  import('./imagegen').then(({ imageRuntime }) => registerRuntime(imageRuntime)).catch(() => {})
-  import('./transcription/select')
-    .then(({ sttRuntime }) => registerRuntime(sttRuntime))
-    .catch(() => {})
-
-  createWindow()
-
-  // Update IPC is always registered (the renderer queries staged-version on startup
-  // in every build); the auto-download engine runs production-only (dev has no feed).
-  import('./updater')
-    .then((m) => {
-      m.registerUpdateIpc()
-      if (!is.dev) m.startAutoUpdates()
-    })
-    .catch((e) => console.error('[update] init', e))
-
   app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) void createWindow()
+  })
+  app.on('browser-window-focus', () => {
+    refreshCachedProEntitlement()
+    void revalidateProEntitlement('foreground')
   })
 })
 
@@ -406,13 +655,28 @@ app.on('before-quit', (event) => {
   }
   event.preventDefault()
   void (async () => {
+    // Stop the agent browser first so a playing video's audio dies immediately,
+    // not whenever the process finally exits.
+    try {
+      const { disposeBrowserHost } = await import('./browser/browser-host')
+      disposeBrowserHost()
+    } catch {
+      /* best-effort — never block quit */
+    }
     try {
       const { llm } = await import('./llm')
       await llm.unload()
     } catch {
       /* best-effort — quit regardless so the app never hangs on exit */
     }
+    try {
+      const { grounderRuntime } = await import('./vision/grounder-runtime')
+      await grounderRuntime.shutdown()
+    } catch {
+      /* best-effort — quit regardless so the app never hangs on exit */
+    }
     engineUnloaded = true
+    commitApplicationRelaunch(app)
     app.quit()
   })()
 })

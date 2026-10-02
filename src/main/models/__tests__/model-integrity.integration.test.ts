@@ -15,6 +15,16 @@ process.env.OFFGRID_DATA_DIR = dataDir
 const manager = await import('../../models-manager')
 const { CATALOG } = await import('@offgrid/models')
 
+const unavailableSource = CATALOG.find((entry) => entry.kind === 'computer_use')
+if (!unavailableSource) throw new Error('Model catalog needs a Computer Use fixture')
+const unavailableModel = {
+  ...unavailableSource,
+  id: 'offgrid-test/unavailable-computer-use',
+  name: 'Unavailable Computer Use fixture',
+  availability: 'coming_soon' as const,
+  availabilityNote: 'This Computer Use model has no runtime adapter.'
+}
+
 // Single-file GGUF models — download-mechanics fixtures (disk-full / interrupted /
 // offline). Kind-agnostic: the catalog no longer has a pure 'text' kind (every
 // former text model ships an mmproj → derived 'vision'), and these scenarios test
@@ -28,9 +38,14 @@ const fixtures = CATALOG.flatMap((entry) => {
 
 // 'text' dropped: the chat model is a vision model now (mmproj), so there's no
 // standalone text kind to select.
-const activeSelectionFixtures = ['vision', 'image', 'voice', 'transcription'].map(
+const activeSelectionFixtures = ['vision', 'image', 'computer_use', 'voice', 'transcription'].map(
   (kind) => {
-    const entry = CATALOG.find((candidate) => candidate.kind === kind && candidate.files.length > 0)
+    const entry = CATALOG.find(
+      (candidate) =>
+        candidate.kind === kind &&
+        candidate.files.length > 0 &&
+        candidate.availability !== 'coming_soon'
+    )
     if (!entry) throw new Error(`Model catalog needs an installable ${kind} fixture`)
     return { kind, entry }
   }
@@ -71,6 +86,7 @@ function capacityLimitedFileStream(
 }
 
 beforeAll(() => {
+  CATALOG.push(unavailableModel)
   fs.mkdirSync(path.dirname(primary.filePath), { recursive: true })
 })
 
@@ -91,12 +107,32 @@ afterEach(() => {
 })
 
 afterAll(() => {
+  const fixtureIndex = CATALOG.findIndex((entry) => entry.id === unavailableModel.id)
+  if (fixtureIndex >= 0) CATALOG.splice(fixtureIndex, 1)
   if (originalDataDir === undefined) delete process.env.OFFGRID_DATA_DIR
   else process.env.OFFGRID_DATA_DIR = originalDataDir
   fs.rmSync(dataDir, { recursive: true, force: true })
 })
 
 describe('model-manager GGUF integrity', () => {
+  it('refuses an unavailable Computer Use model before any network or disk work', async () => {
+    const fetchBoundary = vi.fn()
+    vi.stubGlobal('fetch', fetchBoundary)
+    const modelsDir = path.join(dataDir, 'models')
+    const filesBefore = fs.readdirSync(modelsDir).sort()
+
+    const result = await manager.downloadModel(unavailableModel.id)
+
+    expect(result).toEqual({ success: false, error: unavailableModel.availabilityNote })
+    expect(fetchBoundary).not.toHaveBeenCalled()
+    expect(fs.readdirSync(modelsDir).sort()).toEqual(filesBefore)
+    expect(await manager.listInstalled()).not.toContain(unavailableModel.id)
+    await expect(manager.loadComputerUseModel(unavailableModel.id)).resolves.toEqual({
+      success: false,
+      error: unavailableModel.availabilityNote
+    })
+  })
+
   it('rejects a truncated GGUF download before promotion or installation', async () => {
     const truncated = Buffer.from('GGUF', 'ascii')
     vi.stubGlobal(
@@ -124,6 +160,35 @@ describe('model-manager GGUF integrity', () => {
       status: 'failed',
       error: result.error
     })
+  })
+
+  it('rejects same-shape Muse bytes when their SHA-256 does not match the shared catalog', async () => {
+    const muse = CATALOG.find((entry) => entry.id === 'unsloth/Muse-Glimmer-30B-GGUF')
+    if (!muse) throw new Error('Shared model catalog must include Muse Glimmer')
+    const wrongBytes = Buffer.concat([Buffer.from('GGUF', 'ascii'), Buffer.alloc(2_000, 17)])
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Promise.resolve(
+          new Response(wrongBytes, {
+            status: 200,
+            headers: { 'content-length': String(wrongBytes.length) }
+          })
+        )
+      )
+    )
+
+    const result = await manager.downloadModel(muse.id)
+
+    expect(result).toEqual({
+      success: false,
+      error: expect.stringMatching(/checksum mismatch/i)
+    })
+    for (const file of muse.files) {
+      expect(fs.existsSync(path.join(dataDir, 'models', file.name))).toBe(false)
+      expect(fs.existsSync(path.join(dataDir, 'models', `${file.name}.part`))).toBe(false)
+    }
+    expect(await manager.listInstalled()).not.toContain(muse.id)
   })
 
   it('rejects a truncated local GGUF before copying or registration', async () => {
@@ -320,6 +385,7 @@ describe('active model deletion', () => {
       expect(await manager.getActiveModelIds()).not.toContain(entry.id)
       expect(manager.getActiveModalities()).toEqual({
         text: null,
+        computer_use: null,
         image: null,
         speech: null,
         transcription: null
@@ -332,6 +398,7 @@ describe('active model deletion', () => {
       const restartedManager = await import('../../models-manager')
       expect(restartedManager.getActiveModalities()).toEqual({
         text: null,
+        computer_use: null,
         image: null,
         speech: null,
         transcription: null
@@ -364,10 +431,12 @@ describe('active model persistence', () => {
 
   it('keeps every selected modal model active after a module-style relaunch', async () => {
     const modalModels = activeSelectionFixtures.filter(({ kind }) =>
-      ['image', 'voice', 'transcription'].includes(kind)
+      ['computer_use', 'image', 'voice', 'transcription'].includes(kind)
     )
-    if (modalModels.length !== 3) {
-      throw new Error('Model catalog needs installable image, voice, and transcription fixtures')
+    if (modalModels.length !== 4) {
+      throw new Error(
+        'Model catalog needs installable computer use, image, voice, and transcription fixtures'
+      )
     }
 
     for (const { entry } of modalModels) {
@@ -381,6 +450,7 @@ describe('active model persistence', () => {
     expect(await manager.getActiveModelIds()).toEqual(expect.arrayContaining(selectedIds))
     const activeBeforeRestart = manager.getActiveModalities()
     expect(activeBeforeRestart).toMatchObject({
+      computer_use: expect.any(String),
       image: expect.any(String),
       speech: expect.any(String),
       transcription: expect.any(String)

@@ -1,3 +1,4 @@
+import { runtimeBackendSnapshot } from './runtime-backends'
 // Unified setup + system-health surface. Two jobs:
 //   1. getSystemHealth() — one aggregated snapshot of every local component
 //      (chat LLM / gateway / vision / embeddings / STT / TTS / image gen) so the
@@ -15,7 +16,9 @@ import {
   downloadModel,
   listInstalled,
   setActiveModel,
-  setActiveModalChoice
+  setActiveModalChoice,
+  BONSAI_2,
+  desktopCatalog
 } from './models-manager'
 import { getGatewayPort } from './model-server'
 import { deviceNoun } from '../shared/device'
@@ -47,9 +50,11 @@ export interface SetupProgress {
   percent?: number
   downloadedMB?: string
   totalMB?: string
+  downloadedBytes?: number
+  totalBytes?: number
+  bytesPerSecond?: number
 }
 export type SetupProgressCb = (p: SetupProgress) => void
-
 
 /** GET a localhost endpoint, parse JSON, with a short timeout. null on any failure. */
 function pingJson(port: number, path = '/health', timeoutMs = 1500): Promise<unknown | null> {
@@ -84,14 +89,40 @@ function ramGb(): number {
   return Math.round(os.totalmem() / 1e9)
 }
 
+/** The authoritative live health record for the chat engine. Sidebar status and
+ * the full System Health snapshot both use this owner, so they cannot disagree.
+ * This deliberately probes only llama-server; callers that need the complete
+ * machine record must use getSystemHealth(). */
+export async function getChatHealth(): Promise<HealthComponent> {
+  const activeModel = getActiveModel()
+  const modelsExist = llm.modelsExist()
+  const llamaHealth = await pingJson(llm.getPort())
+  const { status, detail } = decideChatStatus({
+    // A healthy socket is not sufficient: another app/profile can own this port.
+    healthy: !!llamaHealth && llm.isReady(),
+    loading: llm.isStarting(),
+    modelsExist,
+    activeModel,
+    lastError: llm.lastError()
+  })
+
+  return {
+    id: 'chat',
+    label: 'Chat model (llama-server)',
+    status,
+    detail,
+    port: llm.getPort(),
+    canRestart: modelsExist
+  }
+}
+
 /** One aggregated snapshot of every local component. */
 export async function getSystemHealth(): Promise<SystemHealth> {
   const activeModel = getActiveModel()
-  const modelsExist = llm.modelsExist()
 
-  // Live probes (run in parallel): the chat server and the gateway.
-  const [llamaHealth, gatewayHealth] = await Promise.all([
-    pingJson(llm.getPort()),
+  // Live probes (run in parallel): the authoritative chat record and the gateway.
+  const [chatHealth, gatewayHealth] = await Promise.all([
+    getChatHealth(),
     pingJson(getGatewayPort())
   ])
 
@@ -113,29 +144,8 @@ export async function getSystemHealth(): Promise<SystemHealth> {
     return v === 'ready' ? 'ready' : v === 'not_installed' ? 'not_installed' : 'down'
   }
 
-  // Chat LLM (llama-server). ready = /health answers 200. starting = the process
-  // is alive but the model is still loading (cold-start warm-up — /health 503).
-  // not_installed = no model on disk. down = model present but the process isn't
-  // running. (Decision extracted to chat-health.ts so it's unit-tested.)
-  const { status: chat, detail: chatDetail } = decideChatStatus({
-    // A healthy socket is not sufficient: another app/profile can own 8439. Only report Ready
-    // when THIS LLMService completed startup and the owned engine answers its health probe.
-    healthy: !!llamaHealth && llm.isReady(),
-    loading: llm.isStarting(),
-    modelsExist,
-    activeModel,
-    lastError: llm.lastError()
-  })
-
   const components: HealthComponent[] = [
-    {
-      id: 'chat',
-      label: 'Chat model (llama-server)',
-      status: chat,
-      detail: chatDetail,
-      port: llm.getPort(),
-      canRestart: modelsExist
-    },
+    chatHealth,
     {
       id: 'gateway',
       label: 'Local gateway',
@@ -158,6 +168,18 @@ export async function getSystemHealth(): Promise<SystemHealth> {
       status: image.available ? 'ready' : 'not_installed',
       detail: image.available ? undefined : (image.reason ?? 'No image model installed')
     },
+    ...(['grounding', 'decision'] as const).map((id): HealthComponent => {
+      const runtime = runtimeBackendSnapshot().find((entry) => entry.id === id)
+      return {
+        id,
+        label: id === 'grounding' ? 'Computer Use grounding' : 'Computer / Web Use decision',
+        status:
+          runtime?.state === 'loaded' ? 'ready'
+            : runtime?.state === 'loading' ? 'starting'
+              : runtime?.state === 'error' ? 'down' : 'idle',
+        detail: runtime?.state === 'error' ? runtime.detail : undefined
+      }
+    }),
     ...getNativeHelperHealth()
   ]
 
@@ -181,15 +203,27 @@ function settingsMode(): RecMode {
 export async function recommendChatModel(
   modeOverride?: RecMode
 ): Promise<{ id: string; name: string } | null> {
-  const { CATALOG, recommendForRam } = await import('@offgrid/models')
-  const { chooseChatModel, recommendedParamCeiling, preferredModelIds, totalBytes } =
+  const { recommendForRam } = await import('@offgrid/models')
+  const CATALOG = await desktopCatalog()
+  const { chooseChatModel, recommendedParamCeiling, preferredModelIds, totalBytes, modeBudget } =
     await import('./model-sizing')
   const gb = ramGb()
   const tier = recommendForRam(gb)
   const mode: RecMode = modeOverride ?? settingsMode()
   const frac = recommendBudgetFraction(mode)
   const budget = gb * frac * 1e9
-  // 1) Curated default for the tier (16GB → Gemma 4 E2B), if it fits the budget.
+  // Bonsai's packed PQ2 weights fit the Balanced loader's memory envelope at
+  // 16 GB, even though they exceed the general 38% recommendation budget. Leave
+  // room for context and the loader's normal reserve before recommending it.
+  const { frac: balancedFrac, reserveGb } = modeBudget('balanced')
+  if (
+    mode === 'balanced' &&
+    gb >= (BONSAI_2.minRamGb ?? 0) &&
+    totalBytes(BONSAI_2) / 1e9 + reserveGb + 0.5 <= gb * balancedFrac
+  ) {
+    return { id: BONSAI_2.id, name: BONSAI_2.name }
+  }
+  // 1) Curated default for the tier, if it fits the normal recommendation budget.
   for (const id of preferredModelIds(gb, mode)) {
     const e = CATALOG.find((m) => m.id === id)
     if (e && totalBytes(e as never) <= budget) return { id: e.id, name: e.name }
@@ -216,7 +250,8 @@ export interface FitEstimate {
 export async function estimateModelFit(modelId: string): Promise<FitEstimate> {
   const gb = ramGb()
   try {
-    const { CATALOG, resolveHuggingFaceModel } = await import('@offgrid/models')
+    const { resolveHuggingFaceModel } = await import('@offgrid/models')
+    const CATALOG = await desktopCatalog()
     const entry = CATALOG.find((m) => m.id === modelId) ?? (await resolveHuggingFaceModel(modelId))
     const { fitLevel } = await import('./model-sizing')
     const weightsGb =
@@ -244,7 +279,7 @@ export interface Recommendation {
 export async function getRecommendation(mode?: RecMode): Promise<Recommendation | null> {
   const pick = await recommendChatModel(mode)
   if (!pick) return null
-  const { CATALOG } = await import('@offgrid/models')
+  const CATALOG = await desktopCatalog()
   const entry = CATALOG.find((m) => m.id === pick.id)
   const sizeGb =
     (entry?.files.reduce((s: number, f: { sizeBytes?: number }) => s + (f.sizeBytes ?? 0), 0) ??
@@ -282,7 +317,7 @@ export interface SetupPlan {
  *  autoConfigure() consumes the same plan, so the preview and the action never drift. */
 export async function getSetupPlan(mode?: RecMode): Promise<SetupPlan> {
   const effMode: RecMode = mode ?? settingsMode()
-  const { CATALOG } = await import('@offgrid/models')
+  const CATALOG = await desktopCatalog()
   let installed: string[] = []
   try {
     installed = await listInstalled()
@@ -367,7 +402,10 @@ export async function autoConfigure(
         modelName: model.name,
         percent: p.percent,
         downloadedMB: p.downloadedMB,
-        totalMB: p.totalMB
+        totalMB: p.totalMB,
+        downloadedBytes: p.downloadedBytes,
+        totalBytes: p.totalBytes,
+        bytesPerSecond: p.bytesPerSecond
       })
     )
     if (!res.success) {
@@ -436,7 +474,10 @@ export async function autoConfigure(
             modelName: ex.name,
             percent: p.percent,
             downloadedMB: p.downloadedMB,
-            totalMB: p.totalMB
+            totalMB: p.totalMB,
+            downloadedBytes: p.downloadedBytes,
+            totalBytes: p.totalBytes,
+            bytesPerSecond: p.bytesPerSecond
           })
         )
         if (r.success) await setActiveModalChoice(ex.kind, ex.id)
@@ -451,7 +492,7 @@ export async function autoConfigure(
   emit({
     phase: 'done',
     message: ok
-      ? `Ready — ${model.name} + voice & image are set up.`
+      ? `Ready - ${model.name} is active. Optional model downloads are complete.`
       : `${model.name} installed; the server is still warming up.`,
     modelId: model.id,
     modelName: model.name

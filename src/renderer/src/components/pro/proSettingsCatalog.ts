@@ -18,9 +18,7 @@ export interface ProSettingsSlot {
   delay: number
   /** Free-build teaser. null = render nothing when the slot isn't registered. */
   placeholder: { title: string; description: string } | null
-  /** Runtime-backed section is withheld outside macOS until that implementation is tested. */
-  macOnly?: boolean
-  /** Copy shown to an entitled user when a Mac-only section is unavailable. */
+  /** Copy shown to an entitled user when a section is unavailable on Linux. */
   comingSoonDescription?: string
 }
 
@@ -30,13 +28,28 @@ export const PRO_SETTINGS_SLOTS: ProSettingsSlot[] = [
   {
     id: 'capture',
     delay: 0.14,
-    macOnly: true,
-    comingSoonDescription:
-      'Screen capture controls are available on Mac today. Support for this device is coming soon.',
     placeholder: {
       title: 'Capture',
       description:
         'See whether screen capture is running, and pause, resume, or restart it - a control that works even if the menu-bar icon is unavailable.'
+    }
+  },
+  {
+    id: 'computer-use',
+    delay: 0.15,
+    placeholder: {
+      title: 'Computer use',
+      description:
+        'Let Off Grid AI complete supervised work in a browser or on your screen while you stay in control.'
+    }
+  },
+  {
+    id: 'sync',
+    delay: 0.16,
+    placeholder: {
+      title: 'Device sync',
+      description:
+        'Pair your computer and your phone and they stay in step - the same chats, projects and model settings on both. A direct encrypted link over your own network; nothing is uploaded.'
     }
   },
   {
@@ -45,15 +58,14 @@ export const PRO_SETTINGS_SLOTS: ProSettingsSlot[] = [
     placeholder: {
       title: 'You',
       description:
-        'Tell Off Grid who you are so it can attribute your messages, commitments, and calendar - part of the Pro intelligence layer.'
+        'Tell Off Grid AI who you are so it can attribute your messages, commitments, and calendar - part of the Pro intelligence layer.'
     }
   },
   {
     id: 'proactive',
     delay: 0.18,
-    macOnly: true,
     comingSoonDescription:
-      'Morning briefings and meeting alerts are available on Mac and phone today. Support for this device is coming soon.',
+      'Morning briefings and meeting alerts are coming soon to Linux. They are available on Windows and macOS.',
     placeholder: {
       title: 'Proactive delivery',
       description:
@@ -63,11 +75,10 @@ export const PRO_SETTINGS_SLOTS: ProSettingsSlot[] = [
   {
     id: 'secretary',
     delay: 0.22,
-    macOnly: true,
     comingSoonDescription:
-      'Learned preferences are available on Mac and phone today. Support for this device is coming soon.',
+      'Learned preferences are coming soon to Linux. They are available on Windows and macOS.',
     placeholder: {
-      title: 'What Off Grid has learned',
+      title: 'What Off Grid AI has learned',
       description:
         'Preferences distilled from the suggestions you dismiss, fed back to your assistant so it gets sharper over time.'
     }

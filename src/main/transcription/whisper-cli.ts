@@ -4,9 +4,8 @@
 // ffmpeg 16 kHz-mono re-encode are defined once and reused by dictation interim
 // ticks, final passes, file ingest, and meeting transcription alike.
 
-import { execFile } from 'child_process'
-import { promisify } from 'util'
 import fs from 'fs'
+import { recordAIRequest } from '../ai-request-log'
 import os from 'os'
 import path from 'path'
 import { getActiveModal } from '../active-models'
@@ -16,14 +15,18 @@ import { existing } from './bin-resolution'
 import { catalogEngine } from './classify'
 import { decodeToWavArgs, DECODE_TIMEOUT_MS } from './ffmpeg-decode'
 import type { TranscriptionService, Transcript, TranscribeOptions, Seg } from './types'
+import { runNativeTranscriptionProcess } from './native-process'
+import { HINDI_SCRIPT_RECOVERY_MESSAGE } from '../../shared/transcription-recovery'
+import { findWhisperBinary, findWhisperBinaries, whisperRuntimeLibraryEnv } from './whisper-runtime'
+import { getBackendPreference } from '../backend-preferences'
 
-const execFileAsync = promisify(execFile)
+const HINDI_DEVANAGARI_PROMPT = 'यह ऑडियो हिंदी में है। हिंदी को केवल देवनागरी लिपि में लिखें।'
 
 /** Resolve the bundled whisper-cli across dev / packaged layouts. System Health
  * reuses this exact runtime resolver so its Installed claim cannot drift from
  * the executable the transcription service will actually launch. */
 export function whisperBin(): string | null {
-  return existing(binRoots().map((r) => path.join(r, 'whisper', exe('whisper-cli'))))
+  return findWhisperBinary('whisper-cli', getBackendPreference('stt'))
 }
 
 /** Resolve ffmpeg: bundled first, then common system locations. */
@@ -71,6 +74,56 @@ function sizeRank(f: string): number {
         : /base/i.test(f)
           ? 1
           : 0
+}
+
+/** A Hindi transcription should contain Devanagari when it contains Hindi text. A small
+ * multilingual Whisper model can occasionally return Latin or Perso-Arabic text even with
+ * `-l hi`; that is a model-quality miss, not a request to translate the recording. */
+export function hindiTranscriptNeedsQualityRetry(text: string, language: string): boolean {
+  if (language !== 'hi' || !text.trim()) return false
+  return !/\p{Script=Devanagari}/u.test(text)
+}
+
+/** Pick a stronger downloaded multilingual Whisper model for one quality retry. English-only
+ * `.en` models cannot correct a Hindi script miss. The active model still runs first; this only
+ * returns a model whose catalog-size rank is higher than the one that produced the bad result. */
+export function strongerMultilingualWhisperModel(
+  currentModel: string,
+  files: readonly string[],
+  dir: string
+): string | null {
+  const currentRank = sizeRank(path.basename(currentModel))
+  const candidate = files
+    .filter((file) => !/\.en\.bin$/i.test(file) && sizeRank(file) > currentRank)
+    .sort((a, b) => sizeRank(b) - sizeRank(a))[0]
+  return candidate ? path.join(dir, candidate) : null
+}
+
+/** Run the selected model first, then make one quality retry when Hindi text has the wrong
+ * script and a stronger multilingual model is already on the device. `run` is the native-process
+ * boundary, which keeps the decision deterministic and testable without replacing Off Grid code. */
+export async function transcribeWithHindiQualityRetry({
+  language,
+  model,
+  modelFiles,
+  modelDir,
+  run
+}: {
+  language: string
+  model: string
+  modelFiles: readonly string[]
+  modelDir: string
+  run: (modelPath: string) => Promise<string>
+}): Promise<string> {
+  let stdout = await run(model)
+  if (!hindiTranscriptNeedsQualityRetry(stdout, language)) return stdout
+
+  const retryModel = strongerMultilingualWhisperModel(model, modelFiles, modelDir)
+  if (retryModel) {
+    stdout = await run(retryModel)
+    if (!hindiTranscriptNeedsQualityRetry(stdout, language)) return stdout
+  }
+  throw new Error(HINDI_SCRIPT_RECOVERY_MESSAGE)
 }
 
 /** Find the model to use for accurate (final) transcription. Prefers a
@@ -134,60 +187,116 @@ class WhisperCliTranscription implements TranscriptionService {
   }
 
   async transcribe(input: { path: string }, opts: TranscribeOptions = {}): Promise<Transcript> {
-    const bin = whisperBin()
-    if (!bin) throw new Error('Transcription runtime (whisper) is not installed.')
-    const model = resolveModel(opts.model)
-    if (!model)
-      throw new Error('No transcription model found — download Whisper from Models first.')
+    return recordAIRequest(
+      {
+        modality: 'stt',
+        source: 'Whisper transcription',
+        request: { ...input, ...opts },
+        signal: opts.signal
+      },
+      async (log) => {
+        await log.inputFile(input.path)
+        const binaries = findWhisperBinaries('whisper-cli', getBackendPreference('stt'))
+        if (binaries.length === 0) throw new Error('Transcription runtime (whisper) is not installed.')
+        const model = resolveModel(opts.model)
+        log.update({ model: model ?? undefined, backend: 'Unknown' })
+        if (!model)
+          throw new Error('No transcription model found — download Whisper from Models first.')
 
-    const language = opts.language ?? 'auto'
-    const suppress = opts.suppressNonSpeech !== false
+        const language = opts.language ?? 'auto'
+        const suppress = opts.suppressNonSpeech !== false
 
-    let wav = input.path
-    let tmp: string | null = null
-    if (!opts.alreadyWav16k) {
-      const ff = ffmpegBin()
-      if (!ff) throw new Error('ffmpeg is required to decode audio and was not found.')
-      tmp = path.join(os.tmpdir(), `offgrid-stt-${Date.now()}-${process.pid}.wav`)
-      // 16 kHz mono PCM WAV; -vn drops any video track so A/V files work too.
-      // Cap the decode so a malformed/streaming input can't hang the process forever.
-      try {
-        await execFileAsync(ff, decodeToWavArgs(input.path, tmp), { timeout: DECODE_TIMEOUT_MS })
-      } catch (e) {
-        fs.promises.unlink(tmp).catch(() => {})
-        throw e
+        let wav = input.path
+        let tmp: string | null = null
+        if (!opts.alreadyWav16k) {
+          const ff = ffmpegBin()
+          if (!ff) throw new Error('ffmpeg is required to decode audio and was not found.')
+          tmp = path.join(os.tmpdir(), `offgrid-stt-${Date.now()}-${process.pid}.wav`)
+          // 16 kHz mono PCM WAV; -vn drops any video track so A/V files work too.
+          // Cap the decode so a malformed/streaming input can't hang the process forever.
+          try {
+            await runNativeTranscriptionProcess(ff, decodeToWavArgs(input.path, tmp), {
+              timeout: DECODE_TIMEOUT_MS,
+              signal: opts.signal
+            })
+          } catch (e) {
+            fs.promises.unlink(tmp).catch(() => {})
+            throw e
+          }
+          wav = tmp
+        }
+
+        try {
+          // -nt strips timestamps (plain text). Keep them when the caller wants
+          // per-utterance segments (meetings interleave two speakers by time).
+          const args = ['-m', model, '-f', wav, '-l', language]
+          if (!opts.timestamps) args.push('-nt')
+          // -mc 0 + -sns: kill the repetition/hallucination loop + non-speech tokens.
+          if (suppress) args.push('-mc', '0', '-sns')
+          // Bias toward custom vocabulary (names/jargon) via the initial prompt.
+          const customPrompt = (opts.prompt ?? '').trim()
+          const prompt =
+            language === 'hi'
+              ? [HINDI_DEVANAGARI_PROMPT, customPrompt].filter(Boolean).join(' ')
+              : customPrompt
+          if (prompt) args.push('--prompt', prompt.slice(0, 800))
+          const stdout = await transcribeWithHindiQualityRetry({
+            language,
+            model,
+            modelFiles: whisperModelFiles(),
+            modelDir: modelsDir(),
+            run: async (modelPath) => {
+              const runArgs = [...args]
+              runArgs[1] = modelPath
+              let lastError: unknown
+              for (const [index, binary] of binaries.entries()) {
+                try {
+                  const result = await recordAIRequest(
+                    {
+                      modality: 'stt',
+                      source: 'Whisper attempt',
+                      model: modelPath,
+                      request: { args: runArgs, binary },
+                      signal: opts.signal
+                    },
+                    async () =>
+                      runNativeTranscriptionProcess(binary, runArgs, {
+                        runtimeModel: modelPath,
+                        maxBuffer: 64 * 1024 * 1024,
+                        timeout: 30 * 60_000,
+                        signal: opts.signal,
+                        env: {
+                          ...process.env,
+                          ...whisperRuntimeLibraryEnv(process.platform, binary, process.env)
+                        }
+                      })
+                  )
+                  return result.stdout
+                } catch (error) {
+                  lastError = error
+                  if (opts.signal?.aborted || index === binaries.length - 1) throw error
+                  console.warn(`[transcription] Whisper runtime failed; retrying ${binaries[index + 1]}`, error)
+                }
+              }
+              throw lastError
+            }
+          })
+          const lang = language === 'auto' ? undefined : language
+          if (!opts.timestamps) return { text: stdout.trim(), language: lang }
+          const segments = parseSegments(stdout)
+          return {
+            text: segments
+              .map((s) => s.text)
+              .join(' ')
+              .trim(),
+            segments,
+            language: lang
+          }
+        } finally {
+          if (tmp) fs.promises.unlink(tmp).catch(() => {})
+        }
       }
-      wav = tmp
-    }
-
-    try {
-      // -nt strips timestamps (plain text). Keep them when the caller wants
-      // per-utterance segments (meetings interleave two speakers by time).
-      const args = ['-m', model, '-f', wav, '-l', language, '-np']
-      if (!opts.timestamps) args.push('-nt')
-      // -mc 0 + -sns: kill the repetition/hallucination loop + non-speech tokens.
-      if (suppress) args.push('-mc', '0', '-sns')
-      // Bias toward custom vocabulary (names/jargon) via the initial prompt.
-      const prompt = (opts.prompt ?? '').trim()
-      if (prompt) args.push('--prompt', prompt.slice(0, 800))
-      const { stdout } = await execFileAsync(bin, args, {
-        maxBuffer: 64 * 1024 * 1024,
-        timeout: 30 * 60_000
-      })
-      const lang = language === 'auto' ? undefined : language
-      if (!opts.timestamps) return { text: stdout.trim(), language: lang }
-      const segments = parseSegments(stdout)
-      return {
-        text: segments
-          .map((s) => s.text)
-          .join(' ')
-          .trim(),
-        segments,
-        language: lang
-      }
-    } finally {
-      if (tmp) fs.promises.unlink(tmp).catch(() => {})
-    }
+    )
   }
 }
 

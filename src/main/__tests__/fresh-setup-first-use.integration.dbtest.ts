@@ -2,13 +2,14 @@
  * Fresh-install release journey through the production setup planner, catalog,
  * model manager, persisted selections, and every supported modality runtime.
  *
- * Only boundaries outside Off Grid are controlled: HTTP serves deterministic
+ * Only boundaries outside Off Grid AI are controlled: HTTP serves deterministic
  * model bytes and tiny executables stand in for llama.cpp, stable-diffusion.cpp,
  * whisper.cpp, and Kokoro. The interrupted-download registry, Range resume,
  * filesystem promotion, generic activation, runtime selection, first use, and
  * relaunch behavior stay real.
  */
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -50,9 +51,14 @@ interface JourneyModel {
   files: CatalogFile[]
 }
 
+function isFirstUseModelKind(kind: string): kind is JourneyModel['kind'] {
+  return ['text', 'vision', 'image', 'transcription', 'voice'].includes(kind)
+}
+
 const PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
 const delivery = new Map<string, Buffer>()
+const originalCatalogHashes: Array<{ file: { sha256?: string }; sha256?: string }> = []
 const interrupted = new Set<string>()
 const resumedRanges = new Map<string, string>()
 let interruptDownloads = true
@@ -70,6 +76,7 @@ function installRuntimeBoundaries(): void {
       '#!/usr/bin/env node',
       "const http = require('node:http')",
       'const args = process.argv.slice(2)',
+      "if (args.includes('--list-devices')) { console.log('Available devices:\\n  Vulkan0: test GPU'); process.exit(0) }",
       "const portIndex = args.indexOf('--port')",
       'const port = portIndex >= 0 ? Number(args[portIndex + 1]) : 8439',
       'const server = http.createServer((req, res) => {',
@@ -118,22 +125,19 @@ function installRuntimeBoundaries(): void {
       `fs.writeFileSync(args[outputIndex + 1], Buffer.from('${PNG_BASE64}', 'base64'))`
     ].join('\n')
   )
-  fs.mkdirSync(resourceDir, { recursive: true })
-  fs.writeFileSync(
-    path.join(resourceDir, 'tts-worker.mjs'),
+  executable(
+    path.join(resourceDir, 'bin', 'executorch-speech'),
     [
-      "import fs from 'node:fs'",
-      'const [, , command, output] = process.argv',
-      "if (command === 'speak' && output) {",
-      "  let input = ''",
-      "  process.stdin.setEncoding('utf8')",
-      "  process.stdin.on('data', chunk => { input += chunk })",
-      "  process.stdin.on('end', () => {",
-      "    fs.writeFileSync(output, Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(60, 1)]))",
-      '  })',
-      '}'
-    ].join('\n'),
-    { mode: 0o755 }
+      '#!/usr/bin/env node',
+      "const fs = require('node:fs')",
+      'const args = process.argv.slice(2)',
+      "const output = args[args.indexOf('--output') + 1]",
+      "process.stdin.setEncoding('utf8')",
+      "process.stdin.on('data', () => {})",
+      "process.stdin.on('end', () => {",
+      "  fs.writeFileSync(output, Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(60, 1)]))",
+      '})'
+    ].join('\n')
   )
 }
 
@@ -142,6 +146,24 @@ function fixtureBytes(fileName: string, seed: number): Buffer {
     return Buffer.concat([Buffer.from('GGUF', 'ascii'), Buffer.alloc(2_044, seed)])
   }
   return Buffer.concat([Buffer.from(`off-grid-${fileName}-`), Buffer.alloc(2_048, seed)])
+}
+
+function installCatalogFixtureHashes(
+  models: JourneyModel[],
+  catalog: Array<{ id: string; files: Array<{ name: string; sha256?: string }> }>
+): void {
+  models.forEach((model, modelIndex) => {
+    model.files.forEach((file, fileIndex) => {
+      const bytes = fixtureBytes(file.name, modelIndex * 10 + fileIndex + 1)
+      const catalogFile = catalog
+        .find((entry) => entry.id === model.id)
+        ?.files.find((entry) => entry.name === file.name)
+      if (catalogFile) {
+        originalCatalogHashes.push({ file: catalogFile, sha256: catalogFile.sha256 })
+        catalogFile.sha256 = createHash('sha256').update(bytes).digest('hex')
+      }
+    })
+  })
 }
 
 function installDownloadBoundary(models: JourneyModel[]): void {
@@ -196,19 +218,6 @@ function installDownloadBoundary(models: JourneyModel[]): void {
   )
 }
 
-async function waitForPortRelease(port: number): Promise<void> {
-  const deadline = Date.now() + 2_000
-  while (Date.now() < deadline) {
-    try {
-      await fetch(`http://127.0.0.1:${port}/health`)
-    } catch {
-      return
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
-  throw new Error(`runtime boundary still owns port ${port}`)
-}
-
 function expectWav(dataUrl: string): void {
   expect(dataUrl).toMatch(/^data:audio\/wav;base64,/)
   expect(Buffer.from(dataUrl.split(',')[1]!, 'base64').subarray(0, 4).toString('ascii')).toBe(
@@ -217,6 +226,7 @@ function expectWav(dataUrl: string): void {
 }
 
 afterAll(async () => {
+  for (const { file, sha256 } of originalCatalogHashes) file.sha256 = sha256
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
   try {
@@ -245,7 +255,7 @@ describe('fresh setup to first use', () => {
     expect(fs.existsSync(dataDir)).toBe(false)
     installRuntimeBoundaries()
 
-    const [{ llm }, setup, manager, { CATALOG }] = await Promise.all([
+    const [{ llm }, setup, manager, { CATALOG, MODEL_KINDS }] = await Promise.all([
       import('../llm'),
       import('../setup'),
       import('../models-manager'),
@@ -259,25 +269,45 @@ describe('fresh setup to first use', () => {
     )
     const plan = await setup.getSetupPlan()
     expect(plan.mode).toBe('conservative')
+    // Exercise the desktop-only packed-weight recommendation through the same
+    // persisted setup owner, without changing the conservative first-use path.
+    const totalmem = vi.spyOn(os, 'totalmem').mockReturnValue(16e9)
+    try {
+      expect((await setup.recommendChatModel('balanced'))?.id).toBe(
+        'prism-ml/Ternary-Bonsai-2-27B-gguf'
+      )
+    } finally {
+      totalmem.mockRestore()
+    }
     expect(plan.items.map((item) => item.kind)).toEqual(['chat', 'transcription', 'voice'])
     expect(plan.items.every((item) => item.installed === false)).toBe(true)
 
     const baselineModels: JourneyModel[] = plan.items.map((item) => {
       const catalogEntry = CATALOG.find((entry) => entry.id === item.id)
       if (!catalogEntry) throw new Error(`Setup selected a model outside the catalog: ${item.id}`)
+      if (!isFirstUseModelKind(catalogEntry.kind)) {
+        throw new Error(`Setup selected an optional ${catalogEntry.kind} model: ${item.id}`)
+      }
       return {
         id: item.id,
         kind: catalogEntry.kind,
         files: catalogEntry.files.map((file) => ({ name: file.name, url: file.url }))
       }
     })
-    const requiredKinds: JourneyModel['kind'][] = [
-      'text',
-      'vision',
-      'image',
-      'transcription',
-      'voice'
-    ]
+    // Derived from the catalog rather than hardcoded, because a kind the app SUPPORTS is not the same as
+    // a kind it SHIPS. 'text' is still a ModelKind - a user can add a text-only GGUF - but no catalog
+    // entry is one any more: every shipped chat model is multimodal, so it is kind 'vision' and carries an
+    // mmproj beside its weights. Naming 'text' here asked first-use to download a model that does not
+    // exist, which is a stale fixture rather than a gap in setup.
+    // Computer Use stays an explicit Models-catalog choice. Fresh setup must not add its multi-GB
+    // policy package to the baseline that prepares chat, image, transcription, and voice.
+    const requiredKinds = MODEL_KINDS.filter(
+      (kind): kind is JourneyModel['kind'] =>
+        isFirstUseModelKind(kind) && CATALOG.some((entry) => entry.kind === kind)
+    )
+    expect(requiredKinds).toEqual(
+      expect.arrayContaining(['vision', 'image', 'transcription', 'voice'])
+    )
     const baselineKinds = new Set(baselineModels.map((model) => model.kind))
     const additionalModels: JourneyModel[] = requiredKinds
       .filter((kind) => !baselineKinds.has(kind))
@@ -292,6 +322,9 @@ describe('fresh setup to first use', () => {
       })
     const models = [...baselineModels, ...additionalModels]
     expect(new Set(models.map((model) => model.kind))).toEqual(new Set(requiredKinds))
+    // The HTTP boundary serves tiny valid fixture bytes; give those bytes a matching
+    // test-only catalog digest so the real download integrity gate remains exercised.
+    installCatalogFixtureHashes(models, CATALOG)
     installDownloadBoundary(models)
 
     // Each representative modality download loses its connection after writing a
@@ -311,11 +344,15 @@ describe('fresh setup to first use', () => {
     // then the same download owner resumes the remaining catalog modalities.
     vi.resetModules()
     interruptDownloads = false
-    const [{ llm: resumedLlm }, resumedSetup, resumedManager] = await Promise.all([
+    const [{ llm: resumedLlm }, resumedSetup, resumedManager, resumedCatalog] = await Promise.all([
       import('../llm'),
       import('../setup'),
-      import('../models-manager')
+      import('../models-manager'),
+      import('@offgrid/models')
     ])
+    // A relaunch creates fresh catalog objects too, while the served fixture bytes
+    // stay the same. Preserve checksum verification on both sides of that boundary.
+    installCatalogFixtureHashes(models, resumedCatalog.CATALOG)
     expect(resumedManager.listDownloads()).toEqual(
       expect.arrayContaining(
         models.map((model) =>
@@ -349,7 +386,32 @@ describe('fresh setup to first use', () => {
       expect(fs.existsSync(path.join(dataDir, 'models', `${firstFile.name}.part`))).toBe(false)
     }
 
-    const textModel = models.find((model) => model.kind === 'text')!
+    // A SECOND chat model, not the one being activated. What the assertion below protects is that
+    // activating one chat model as the text modality does not leave another marked active too - so this
+    // has to be a different entry from visionModel. It used to be kind 'text'; since every shipped chat
+    // model is multimodal now, the second one is simply another 'vision' entry.
+    // A text-ONLY model, imported the way a user adds one.
+    //
+    // The journey needs one to prove that a multimodal model claims the text modality and DISPLACES a
+    // text-only model: this one is activated, and by the end 'text' is served by the vision model while
+    // this id is no longer active. Nothing in the catalog can play that part any more - every model it
+    // ships for chat is multimodal, so it is kind 'vision' with an mmproj beside its weights - and a
+    // made-up catalog id cannot either, because downloadModel only knows catalog entries ('unknown
+    // model'). importLocalModel is the real path for a text-only GGUF, and it registers exactly kind
+    // 'text', so the property is exercised through the API a user actually reaches.
+    //
+    // A valid GGUF here is its four-byte magic and at least GGUF_MIN_BYTES - see models/gguf.ts, which is
+    // all the import checks before copying. Nothing loads these weights; the llama socket is faked.
+    const localGgufPath = path.join(dataDir, 'text-only-chat-Q4_K_M.gguf')
+    fs.writeFileSync(localGgufPath, Buffer.concat([Buffer.from('GGUF'), Buffer.alloc(4096)]))
+    const imported = await manager.importLocalModel(localGgufPath)
+    expect(imported).toMatchObject({ success: true })
+    const textModel = { id: imported.id!, kind: 'text' as const }
+    expect(manager.getLocalModels().map(({ id, kind }) => ({ id, kind }))).toContainEqual({
+      id: textModel.id,
+      kind: 'text'
+    })
+
     const visionModel = models.find((model) => model.kind === 'vision')!
     const imageModel = models.find((model) => model.kind === 'image')!
     const transcriptionModel = models.find((model) => model.kind === 'transcription')!
@@ -400,6 +462,7 @@ describe('fresh setup to first use', () => {
     expect(active).toEqual({
       text: visionModel.id,
       image: expect.any(String),
+      computer_use: null,
       transcription: transcriptionModel.id,
       speech: voiceModel.id
     })
@@ -409,10 +472,11 @@ describe('fresh setup to first use', () => {
     expect(await resumedManager.getActiveModelIds()).not.toContain(textModel.id)
 
     const requestsAfterFirstUse = remoteRequests
-    resumedLlm.stop()
+    // The awaitable owner verifies its own child exited. A /health probe on a
+    // shared default port can hit another suite's newly started runtime.
+    expect((await resumedLlm.unload()).outcome).not.toBe('stuck')
     const database = await import('../database')
     database.getDB().close()
-    await waitForPortRelease(8439)
 
     // A second relaunch must consume the exact persisted install and selections.
     // It must not repair or redownload anything to make first use work again.
@@ -475,8 +539,7 @@ describe('fresh setup to first use', () => {
     expect(regenerated.dataUrl).toBe(`data:image/png;base64,${PNG_BASE64}`)
     expect(remoteRequests).toBe(requestsAfterFirstUse)
 
-    relaunchedLlm.stop()
-    await waitForPortRelease(8439)
+    expect((await relaunchedLlm.unload()).outcome).not.toBe('stuck')
     const relaunchedDatabase = await import('../database')
     relaunchedDatabase.getDB().close()
   }, 30_000)

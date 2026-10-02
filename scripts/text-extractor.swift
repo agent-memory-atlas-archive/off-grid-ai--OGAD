@@ -82,8 +82,58 @@ func selectPrimaryScrollArea(from areas: [AXUIElement]) -> AXUIElement? {
 }
 func runTextExtractor() {
     let args = CommandLine.arguments
+    // R5 T1c: `--elements <app>` emits the structured interactive-element list
+    // for the accessibility driving rail instead of the text blob.
+    if args.count >= 3 && args[1] == "--elements" {
+        runElementsExtractor(args[2])
+        return
+    }
+    // Deterministic native slider actuation. The screen point binds the write
+    // to the slider from the latest structured observation.
+    if args.count >= 6 && args[1] == "--set-slider-value",
+       let x = Double(args[3]),
+       let y = Double(args[4]),
+       let value = Double(args[5]) {
+        runSetSliderValue(args[2], x: x, y: y, value: value)
+        return
+    }
+    // R5 T1d: the foreground running-app list for target resolution.
+    if args.count >= 2 && args[1] == "--apps" {
+        runAppsList()
+        return
+    }
+    // Execution-time ownership check for Computer Use. It emits only the
+    // foreground process name, so callers can fail closed before actuation.
+    if args.count >= 2 && args[1] == "--frontmost-app" {
+        runFrontmostAppName()
+        return
+    }
+    // LaunchServices is the authority for the user's HTTPS browser; Dock icons
+    // and running-app order cannot identify the configured default reliably.
+    if args.count >= 2 && args[1] == "--default-browser" {
+        guard let url = URL(string: "https://example.com/"),
+              let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) else {
+            exit(1)
+        }
+        let bundle = Bundle(url: appURL)
+        let name = (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String)
+            ?? appURL.deletingPathExtension().lastPathComponent
+        guard let data = try? JSONSerialization.data(withJSONObject: ["name": name, "path": appURL.path]),
+              let output = String(data: data, encoding: .utf8) else {
+            exit(1)
+        }
+        print(output)
+        return
+    }
+    // Screenshot-only vision asks only whether the focused native field is safe.
+    // The helper never reads or emits the field value.
+    if args.count >= 2 && args[1] == "--focused-element" {
+        runFocusedElementInspector()
+        return
+    }
     if args.count < 2 {
-        print("Usage: text-extractor <app-name>")
+        print("Usage: text-extractor <app-name> | --elements <app-name> | --set-slider-value <app-name> <x> <y> <value> | --frontmost-app | --focused-element")
         exit(1)
     }
 

@@ -55,7 +55,7 @@ const forceCloseApp = async (): Promise<void> => {
 
 const enterChat = async (): Promise<void> => {
   for (let i = 0; i < 8; i++) {
-    const btn = page.getByRole('button', { name: /Continue|Start using Off Grid/i })
+    const btn = page.getByRole('button', { name: /Continue|Start using Off Grid AI/i })
     if (!(await btn.isVisible().catch(() => false))) break
     await btn.click()
     await page.waitForTimeout(300)
@@ -205,7 +205,7 @@ test('streaming placeholder appears immediately after send', async () => {
   const assistantBubble = page
     .locator('div')
     .filter({
-      hasText: /searching|working|sorry|error|off grid/i
+      hasText: /searching|working|sorry|error|Off Grid AI/i
     })
     .first()
   await expect(assistantBubble)
@@ -319,7 +319,7 @@ test('cancelling a tool-owned image keeps its text answer after a full relaunch'
   // Re-launch against faithful native-process boundaries. The production LLMService
   // spawns the fake llama executable and speaks real HTTP/SSE; imagegen spawns the
   // fake sd-cli and must kill it through the rendered Stop control. SQLite, IPC,
-  // toolChat, MemoryChat, and the process relaunch are all real Off Grid code.
+  // toolChat, MemoryChat, and the process relaunch are all real Off Grid AI code.
   await closeApp()
 
   const modelsDir = path.join(userDataDir, 'models')
@@ -362,7 +362,12 @@ test('cancelling a tool-owned image keeps its text answer after a full relaunch'
   await composer.fill('Summarize my week and draw a chart')
   await page.keyboard.press('Enter')
 
-  const answer = page.getByText('Here is your weekly summary.', { exact: true })
+  // .last(), because the reply is legitimately on screen twice: the chat list shows each conversation's
+  // last message as a preview, so the text appears once in the history rail and once in its bubble, and
+  // an unscoped locator is strict-mode ambiguous for a UI that is behaving correctly. The rail is the
+  // <aside> and comes first in the DOM, so the last match is the transcript bubble - the thing this test
+  // is about.
+  const answer = page.getByText('Here is your weekly summary.', { exact: true }).last()
   await expect(answer).toBeVisible()
   const stopImage = page.getByRole('button', { name: 'Stop', exact: true })
   await expect(stopImage).toBeVisible()
@@ -391,7 +396,8 @@ test('cancelling a tool-owned image keeps its text answer after a full relaunch'
 
   // Terminal artifact: a newly created renderer, backed by the re-opened SQLite
   // database in a new Electron main process, paints the exact completed text turn.
-  await expect(page.getByText('Here is your weekly summary.', { exact: true })).toBeVisible()
+  // The transcript copy again (see above): the rail's preview is the earlier match.
+  await expect(page.getByText('Here is your weekly summary.', { exact: true }).last()).toBeVisible()
   await expect(
     page
       .locator('p')

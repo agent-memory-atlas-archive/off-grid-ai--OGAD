@@ -18,9 +18,10 @@ import { randomUUID } from 'crypto'
 import { app } from 'electron'
 import { parseRange, isPathAllowed } from './media-range'
 import { MEDIA_PORT } from '../shared/ports'
-import { pickFreePort } from './free-port'
+import { isPortFree, pickFreePort } from './free-port'
 import { mimeForExt } from './mime'
 import { localMediaRoots } from './media-roots'
+import { resourceDirs } from './runtime-env'
 
 // Fixed loopback port so the renderer CSP (media-src) can allowlist it. Bound to
 // 127.0.0.1 only — not reachable off-device. Canonical value in shared/ports.
@@ -71,8 +72,13 @@ export class LoopbackMediaServer {
     // The preferred media port (MEDIA_PORT) may be taken by another Off Grid AI Desktop instance; scan upward
     // for a free one. requestedPort 0 = let the OS assign (tests) — inherently free. urlFor() serves
     // the LIVE boundPort, so downstream links follow wherever it bound.
-    const target =
-      this.requestedPort > 0 ? ((await pickFreePort(this.requestedPort)) ?? this.requestedPort) : 0
+    const target = this.requestedPort > 0
+      ? await pickFreePort(this.requestedPort, (port) => isPortFree(port, '127.0.0.1'))
+      : 0
+    if (target === null) {
+      this.startPromise = null
+      throw new Error('No free loopback media port.')
+    }
     const candidate = http.createServer((req, res) => this.handle(req, res))
     this.server = candidate
     await new Promise<void>((resolve, reject) => {
@@ -194,13 +200,13 @@ function serveFile(req: http.IncomingMessage, res: http.ServerResponse, filePath
   rs.pipe(res)
 }
 
-/** Start the loopback media server (idempotent). Call after app is ready. */
-export function startMediaServer(): void {
+/** Start the loopback media server (idempotent). Resolves only after the socket is ready. */
+export function startMediaServer(): Promise<void> {
   productionServer ??= new LoopbackMediaServer({
-    roots: localMediaRoots(app.getPath('userData')),
+    roots: localMediaRoots(app.getPath('userData'), resourceDirs()),
     port: MEDIA_PORT
   })
-  void productionServer.start().catch((error) => console.error('[media-server]', error))
+  return productionServer.start()
 }
 
 /** Build a loopback URL only after the production socket is ready. */

@@ -34,11 +34,8 @@ const winPorted = (route: string): ProFeature => ({
   platforms: ['darwin', 'win32']
 })
 
-// Ported-to-Windows features, by route. Grows one entry per shipped Windows port;
-// asserted against the catalog so a flipped `platforms` and this list can't drift.
-// Module-scoped because both the featureSupportsPlatform and proFeatureComingSoon
-// describes read it — the gate and the capability check must agree on one list.
-const WIN_PORTED = new Set(['vault', 'clipboard', 'replay', 'reflect'])
+const WIN_PORTED = new Set(PRO_FEATURES.map((feature) => feature.route))
+const LINUX_PORTED = new Set(['vault', 'clipboard', 'replay'])
 
 describe('getProFeature', () => {
   it('returns the matching feature for a known route', () => {
@@ -86,18 +83,14 @@ describe('featureSupportsPlatform (per-feature seam)', () => {
     expect(featureSupportsPlatform(getProFeature(route)!, 'win32')).toBe(true)
   })
 
-  it('exactly the ported features are win32-supported; the rest stay macOS-only', () => {
+  it('all catalog features are live on Windows', () => {
     for (const f of PRO_FEATURES) {
-      expect(featureSupportsPlatform(f, 'win32'), `win32 support for ${f.route}`).toBe(
-        WIN_PORTED.has(f.route)
-      )
+      expect(featureSupportsPlatform(f, 'win32'), `win32 support for ${f.route}`).toBe(true)
     }
   })
 
-  // Guards against a lazy `['darwin', ...allNonMac]` — a ported feature is win32
-  // only, never linux by implication.
-  it.each([...WIN_PORTED])('%s is win32-only, not linux by implication', (route) => {
-    expect(featureSupportsPlatform(getProFeature(route)!, 'linux')).toBe(false)
+  it.each([...WIN_PORTED])('%s has its own Linux support declaration', (route) => {
+    expect(featureSupportsPlatform(getProFeature(route)!, 'linux')).toBe(LINUX_PORTED.has(route))
   })
 })
 
@@ -113,13 +106,13 @@ describe('proFeatureComingSoon flips PER FEATURE (the seam works one at a time)'
 })
 
 describe('proComingSoonHere', () => {
-  it('gates Pro subscribers on non-Mac platforms', () => {
-    expect(proComingSoonHere('win32', true)).toBe(true)
+  it('gates Pro subscribers on Linux and unknown platforms', () => {
+    expect(proComingSoonHere('win32', true)).toBe(false)
     expect(proComingSoonHere('linux', true)).toBe(true)
     expect(proComingSoonHere('unknown', true)).toBe(true)
   })
 
-  it('does not gate Mac subscribers or free users', () => {
+  it('does not gate Mac or Windows subscribers or free users', () => {
     expect(proComingSoonHere('darwin', true)).toBe(false)
     expect(proComingSoonHere('win32', false)).toBe(false)
     expect(proComingSoonHere('darwin', false)).toBe(false)
@@ -134,7 +127,7 @@ describe('proFeatureComingSoon', () => {
     expect(proFeatureComingSoon(route, 'win32', false)).toBe(false)
   })
 
-  it('gates every NOT-yet-ported catalog route for a Windows Pro subscriber', () => {
+  it('does not gate any catalog route for a Windows Pro subscriber', () => {
     for (const feature of PRO_FEATURES) {
       const ported = featureSupportsPlatform(feature, 'win32')
       expect(
@@ -160,6 +153,12 @@ describe('proFeatureComingSoon', () => {
     if (!route) throw new Error('Pro catalog must not be empty')
     expect(proFeatureComingSoon(route, 'linux', true)).toBe(true)
     expect(proFeatureComingSoon(route, 'linux', false)).toBe(false)
+  })
+
+  it('opens Vault for a Linux Pro subscriber', () => {
+    expect(proFeatureComingSoon('vault', 'linux', true)).toBe(false)
+    expect(proFeatureComingSoon('vault', 'linux', false)).toBe(false)
+    expect(proFeatureComingSoon('replay', 'linux', true)).toBe(false)
   })
 
   it('does not gate core or unknown routes', () => {

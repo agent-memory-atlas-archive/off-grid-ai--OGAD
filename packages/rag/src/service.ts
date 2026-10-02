@@ -1,6 +1,6 @@
 // RagService: ties the bridges together. indexDocument extracts -> chunks ->
 // embeds -> stores; searchProject embeds the query and ranks stored chunks.
-// Mirrors Off Grid Mobile's RagService surface so the apps wire it the same way.
+// Mirrors Off Grid AI Mobile's RagService surface so the apps wire it the same way.
 
 import { chunkText, type ChunkOptions } from './chunking'
 import { extractContent, type ExtractOptions } from './extract'
@@ -28,18 +28,23 @@ export interface IndexResult {
   kind: RagDocument['kind']
 }
 
+export interface IndexDocumentParams {
+  projectId: string
+  path: string
+  fileName: string
+  size: number
+  extract?: ExtractOptions
+  syncId?: string
+  createdAt?: string
+  enabled?: boolean
+}
+
 export class RagService {
   constructor(private readonly deps: RagServiceDeps) {}
 
   /** Ingest a file into a project's knowledge base. */
   async indexDocument(
-    params: {
-      projectId: string
-      path: string
-      fileName: string
-      size: number
-      extract?: ExtractOptions
-    },
+    params: IndexDocumentParams,
     onProgress?: (stage: IndexStage) => void
   ): Promise<IndexResult> {
     onProgress?.('extracting')
@@ -54,11 +59,14 @@ export class RagService {
     const chunks = chunkText(text, this.deps.chunkOptions)
 
     const docId = await this.deps.store.addDocument({
+      syncId: params.syncId,
       projectId: params.projectId,
       name: params.fileName,
       path: params.path,
       size: params.size,
-      kind
+      kind,
+      createdAt: params.createdAt,
+      enabled: params.enabled
     })
 
     if (chunks.length === 0) {
