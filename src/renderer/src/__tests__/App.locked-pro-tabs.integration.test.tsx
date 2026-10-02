@@ -151,7 +151,7 @@ describe('<App/> locked Pro navigation integration', () => {
     await waitFor(() => expect(window.location.pathname).toBe('/day'))
   }, 30_000)
 
-  it('shows Linux Pro routes as coming soon without a purchase action', async () => {
+  it('keeps an unavailable Linux Pro route gated without a purchase action', async () => {
     window.history.replaceState(null, '', '/day')
     const openExternal = vi.fn()
     installAppBoundary({ platform: 'linux', isPro: false, openExternal })
@@ -160,9 +160,21 @@ describe('<App/> locked Pro navigation integration', () => {
 
     expect(await screen.findByRole('heading', { name: 'Day' })).toBeTruthy()
     expect(screen.getByText(/Off Grid AI Pro · Coming soon/)).toBeTruthy()
-    expect(screen.getByText(/Pro features are coming soon to Linux/)).toBeTruthy()
+    expect(screen.getByText(/This feature is coming soon to Linux/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Get Pro/ })).toBeNull()
     expect(openExternal).not.toHaveBeenCalled()
+  }, 30_000)
+
+  it('offers Vault from its Linux route', async () => {
+    window.history.replaceState(null, '', '/vault')
+    installAppBoundary({ platform: 'linux', isPro: false })
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Vault' })).toBeTruthy()
+    expect(screen.getByText(/Off Grid AI Pro · Available now/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Get Pro/ })).toBeTruthy()
+    expect(screen.queryByText(/coming soon to Linux/i)).toBeNull()
   }, 30_000)
 
   it('marks Pro Settings cards as coming soon on Linux', async () => {

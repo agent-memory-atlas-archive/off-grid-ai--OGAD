@@ -502,6 +502,7 @@ function AppContent() {
       '/search': 'search',
       '/settings': 'settings',
       '/voice': 'voice',
+      '/vault': 'vault',
       '/devices': 'devices'
     }
 
