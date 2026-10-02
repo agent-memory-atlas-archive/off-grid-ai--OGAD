@@ -574,7 +574,8 @@ const offGridApi = {
     pause: (): Promise<PerformancePackStatus> => ipcRenderer.invoke('performance-pack:pause'),
     restart: (): Promise<void> => ipcRenderer.invoke('performance-pack:restart'),
     onChanged: (callback: (status: PerformancePackStatus) => void): (() => void) => {
-      const subscription = (_event: unknown, status: PerformancePackStatus): void => callback(status)
+      const subscription = (_event: unknown, status: PerformancePackStatus): void =>
+        callback(status)
       ipcRenderer.on('performance-pack:changed', subscription)
       return unsubscribe('performance-pack:changed', subscription)
     }
@@ -901,6 +902,10 @@ const offGridApi = {
   crmDayJournalCached: (startSec: number) => ipcRenderer.invoke('crm:day-journal-cached', startSec),
   crmReplayFrames: (startSec: number, endSec: number) =>
     ipcRenderer.invoke('crm:replay-frames', startSec, endSec),
+  crmReplaySaveFrameEdit: (imagePath: string, caption: string, tags: string[]) =>
+    ipcRenderer.invoke('crm:replay-save-frame-edit', imagePath, caption, tags),
+  crmReplayReprocessFrame: (imagePath: string) =>
+    ipcRenderer.invoke('crm:replay-reprocess-frame', imagePath),
   crmReplayThreads: (startSec: number, endSec: number) =>
     ipcRenderer.invoke('crm:replay-threads', startSec, endSec),
   crmReplayEntityDay: (entityId: number, startSec: number, endSec: number) =>
