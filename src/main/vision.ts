@@ -38,9 +38,15 @@ class VisionService {
           types: ['window'],
           thumbnailSize: { width: 1920, height: 1080 }
         })
-        const exact = windowId
+        const byId = windowId
           ? windows.find((source) => source.id.split(':')[1] === String(windowId))
-          : windows.find((source) => source.name === windowTitle)
+          : undefined
+        // On X11, the focus library may report the client leader instead of the
+        // individual window ID. A unique title still identifies that window.
+        const matchingTitles = windowTitle
+          ? windows.filter((source) => source.name === windowTitle)
+          : []
+        const exact = byId ?? (matchingTitles.length === 1 ? matchingTitles[0] : undefined)
         if (exact && !exact.thumbnail.isEmpty()) {
           return await this.writeThumb(exact.thumbnail.toPNG())
         }
