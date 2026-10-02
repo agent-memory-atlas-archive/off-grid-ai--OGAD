@@ -23,24 +23,24 @@ class VisionService {
   async captureAppWindow(
     appName: string,
     windowTitle?: string,
-    bounds?: { x: number; y: number; width: number; height: number }
+    bounds?: { x: number; y: number; width: number; height: number },
+    windowId?: number
   ): Promise<string | null> {
     try {
       console.log(
         `Vision: Attempting to capture window for ${appName} (Title: ${windowTitle || 'Any'})...`
       )
 
-      // 1) Best case: an EXACT window-title match for the focused window. Only
-      // trust an exact match — fuzzy/app-name matching against window titles is
-      // unreliable and used to fall through to grabbing the wrong window (the
-      // old "any window containing 'claude'" hack captured the Claude desktop
-      // app no matter what app was actually focused).
-      if (windowTitle && windowTitle.trim()) {
+      // Native IDs identify the focused window even when its title is empty or
+      // another window has the same title. Electron's source id is window:ID:0.
+      if (windowId || (windowTitle && windowTitle.trim())) {
         const windows = await desktopCapturer.getSources({
           types: ['window'],
           thumbnailSize: { width: 1920, height: 1080 }
         })
-        const exact = windows.find((s) => s.name === windowTitle)
+        const exact = windowId
+          ? windows.find((source) => source.id.split(':')[1] === String(windowId))
+          : windows.find((source) => source.name === windowTitle)
         if (exact && !exact.thumbnail.isEmpty()) {
           return await this.writeThumb(exact.thumbnail.toPNG())
         }
