@@ -38,11 +38,11 @@ describe('Pro platform availability', () => {
       PRO_FEATURES.filter((feature) => feature.platforms.includes('linux')).map(
         (feature) => feature.route
       )
-    ).toEqual(['vault'])
+    ).toEqual(['replay', 'vault', 'clipboard'])
     renderOn('linux')
     expect(screen.getByText(/Off Grid AI Pro · Coming soon/)).toBeTruthy()
     expect(screen.getByText(/This feature is coming soon to Linux/)).toBeTruthy()
-    expect(screen.getByText(/Vault is available on Linux now/)).toBeTruthy()
+    expect(screen.getByText(/Replay, Vault, Clipboard are available on Linux now/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Get Pro/ })).toBeNull()
   })
 
