@@ -101,9 +101,9 @@ export const PRO_FEATURES: ProFeature[] = [
     ],
     // Ported to Windows: Reflect adds no capture of its own — it is pure aggregation
     // over observations the capture pipeline already writes, which Replay's port put
-    // on Windows. The whole path (crm/reflect.ts, its IPC, ReflectScreen) carries no
-    // platform-native code and reaches SQLite through the same getDB core uses.
-    platforms: ['darwin', 'win32']
+    // on Windows and Linux. The whole path (crm/reflect.ts, its IPC, ReflectScreen)
+    // carries no platform-native code and reaches SQLite through core getDB.
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'replay',

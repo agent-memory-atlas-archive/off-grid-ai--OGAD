@@ -46,23 +46,37 @@ class VisionService {
         }
       }
 
-      // 2) Robust fallback: capture the ACTIVE SCREEN (the display under the
-      // cursor / where the focused app lives). This is the ground truth of what
-      // the user is actually looking at — no window guessing, and it's the
-      // direction we want anyway (record what's on screen).
-      return (await this.captureDisplayFrame(bounds))?.path ?? null
+      // If Electron has no window source, use the focused window's bounds on its
+      // display. A missing rectangle must not turn a Replay frame into a full
+      // display image.
+      if (
+        !bounds ||
+        !Number.isFinite(bounds.x) ||
+        !Number.isFinite(bounds.y) ||
+        !Number.isFinite(bounds.width) ||
+        !Number.isFinite(bounds.height) ||
+        bounds.width <= 0 ||
+        bounds.height <= 0
+      )
+        return null
+      return (
+        (await this.captureDisplayFrame(bounds, undefined, { windowBounds: bounds }))?.path ?? null
+      )
     } catch (e) {
       console.error('Vision Capture Failed:', e)
       return null
     }
   }
 
-  /** Capture the full display that owns the target app. Computer Use reuses this frame for its
-   * live supervisor, so the model/action loop and the user never observe different screens. */
+  /** Capture the display that owns the target app. Replay can crop to the focused window;
+   * Computer Use still receives the full display for its live supervisor. */
   async captureDisplayFrame(
     bounds?: { x: number; y: number; width: number; height: number },
     outputPath?: string,
-    options: { forComputerUse?: boolean } = {}
+    options: {
+      forComputerUse?: boolean
+      windowBounds?: { x: number; y: number; width: number; height: number }
+    } = {}
   ): Promise<CapturedDisplayFrame | null> {
     try {
       const point =
@@ -103,6 +117,43 @@ class VisionService {
         return null
       }
       const size = target.thumbnail.getSize()
+      if (options.windowBounds) {
+        const win = options.windowBounds
+        const x0 = Math.max(win.x, display.bounds.x)
+        const y0 = Math.max(win.y, display.bounds.y)
+        const x1 = Math.min(win.x + win.width, display.bounds.x + display.bounds.width)
+        const y1 = Math.min(win.y + win.height, display.bounds.y + display.bounds.height)
+        if (x1 <= x0 || y1 <= y0) return null
+        const left = Math.max(
+          0,
+          Math.floor(((x0 - display.bounds.x) * size.width) / display.bounds.width)
+        )
+        const top = Math.max(
+          0,
+          Math.floor(((y0 - display.bounds.y) * size.height) / display.bounds.height)
+        )
+        const right = Math.min(
+          size.width,
+          Math.ceil(((x1 - display.bounds.x) * size.width) / display.bounds.width)
+        )
+        const bottom = Math.min(
+          size.height,
+          Math.ceil(((y1 - display.bounds.y) * size.height) / display.bounds.height)
+        )
+        if (right <= left || bottom <= top) return null
+        const { default: sharp } = await import('sharp')
+        const png = await sharp(target.thumbnail.toPNG())
+          .extract({ left, top, width: right - left, height: bottom - top })
+          .png()
+          .toBuffer()
+        const framePath = await this.writeThumb(png, outputPath)
+        return {
+          path: framePath,
+          width: right - left,
+          height: bottom - top,
+          displayBounds: display.bounds
+        }
+      }
       const framePath = await this.writeThumb(target.thumbnail.toPNG(), outputPath)
       return { path: framePath, ...size, displayBounds: display.bounds }
     } catch (error) {
