@@ -271,14 +271,11 @@ export function featureSupportsPlatform(feature: ProFeature, platform: DevicePla
 
 /**
  * The baseline rule for Pro surfaces that don't (yet) have their own per-feature
- * `platforms` declaration — today just the pro Settings sections (proactive
- * delivery, learned prefs), which aren't catalog routes. Linux subscribers see
- * a "coming soon" placeholder; free users see the upgrade screen. Catalog routes use
- * the per-feature `featureSupportsPlatform` seam via `proFeatureComingSoon`
- * instead — prefer that for anything backed by a ProFeature.
+ * `platforms` declaration. Registered Settings sections run on each supported
+ * desktop platform; an unknown platform keeps the placeholder.
  */
 export function proComingSoonHere(platform: DevicePlatform, isPro: boolean): boolean {
-  return isPro && platform !== 'darwin' && platform !== 'win32'
+  return isPro && platform === 'unknown'
 }
 
 /**

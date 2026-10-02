@@ -229,8 +229,7 @@ export function Settings({
                     delay={slot.delay}
                     title={slot.placeholder?.title ?? slot.id}
                     description={
-                      slot.comingSoonDescription ??
-                      'Pro features are coming soon to Linux. Core features work now.'
+                      slot.comingSoonDescription ?? 'This section is unavailable on this device.'
                     }
                     variant="coming-soon"
                   />
@@ -246,13 +245,8 @@ export function Settings({
                   key={slot.id}
                   delay={slot.delay}
                   title={slot.placeholder.title}
-                  description={
-                    currentPlatform() === 'linux'
-                      ? (slot.comingSoonDescription ??
-                        'Pro features are coming soon to Linux. Core features work now.')
-                      : slot.placeholder.description
-                  }
-                  variant={currentPlatform() === 'linux' ? 'coming-soon' : 'pro'}
+                  description={slot.placeholder.description}
+                  variant="pro"
                 />
               )
             })}
