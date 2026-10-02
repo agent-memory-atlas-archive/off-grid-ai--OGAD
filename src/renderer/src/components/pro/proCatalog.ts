@@ -150,7 +150,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'Secretary-proposed actions',
       'Approval-gated — you’re always in control'
     ],
-    platforms: ['darwin', 'win32']
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'entities',
@@ -164,7 +164,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'Cross-source narrative summaries',
       'Relationship graph'
     ],
-    platforms: ['darwin', 'win32']
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'search',
@@ -174,7 +174,7 @@ export const PRO_FEATURES: ProFeature[] = [
     description:
       'One search bar across your captured activity, meetings, entities, and connectors — semantic + keyword, all on-device.',
     highlights: ['Unified semantic search', 'Across capture, meetings & connectors', 'Fully local'],
-    platforms: ['darwin', 'win32']
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'notifications',
@@ -249,12 +249,9 @@ export const PRO_FEATURES: ProFeature[] = [
       'Known devices reconnect when they return to the network',
       'Direct encrypted transfer on your local network'
     ],
-    // Both platforms: sync is cross-platform by construction. The transport is node:net and
-    // discovery is bonjour-service (pure JS mDNS), so a Windows install gets the LAN route with
-    // no native code. The single `process.platform === 'darwin'` branch in the activation path
-    // only ADDS the Apple proximity route on top - macOS ends up with LAN plus proximity,
-    // Windows with LAN. Gating this to darwin would dark-out a feature that works.
-    platforms: ['darwin', 'win32']
+    // LAN sync uses node:net and bonjour-service on all three desktop platforms.
+    // Apple proximity is an extra macOS route; Linux and Windows use LAN.
+    platforms: ['darwin', 'win32', 'linux']
   }
 ]
 
