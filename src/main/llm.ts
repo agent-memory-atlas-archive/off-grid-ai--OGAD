@@ -1032,7 +1032,10 @@ export class LLMService {
     if (generation !== this.launchGeneration) return
     if (await this.launchWithFallback(serverPaths, generation)) return
     if (generation !== this.launchGeneration) return
-    this.lastErrorMsg = 'All model engines failed to load the model.'
+    this.lastErrorMsg =
+      classifyLlamaError(this.stderrTail.join('\n'))?.reason ??
+      this.lastErrorMsg ??
+      'All model engines failed to load the model.'
     this.invalidateHealth()
     throw new Error(this.lastErrorMsg)
   }
@@ -1350,7 +1353,7 @@ export class LLMService {
       await this.init()
     } catch (error) {
       console.error('[LLMService] recovery startup failed:', error)
-      if (generation === this.launchGeneration && !this.server) await this.handleCrash(code)
+      if (generation === this.launchGeneration && !(this.server as ChildProcess | null)) await this.handleCrash(code)
     }
   }
 
