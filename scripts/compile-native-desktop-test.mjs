@@ -4,7 +4,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import ts from 'typescript'
+import { transformSync } from 'esbuild'
 
 const output = path.resolve(process.argv[2])
 const compiled = path.join(output, 'compiled')
@@ -46,28 +46,24 @@ for (const file of sources) {
     '../resources/linux-desktop/meeting-recorder.py?raw',
     '../resources/linux-desktop/meeting-recorder-source.js'
   )
-  const result = ts.transpileModule(source, {
-    fileName: path.resolve(file),
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-      jsx: ts.JsxEmit.ReactJSX,
-      esModuleInterop: true,
-      sourceMap: true,
-      inlineSources: true
-    }
+  const result = transformSync(source, {
+    sourcefile: path.resolve(file),
+    loader: file.endsWith('.tsx') ? 'tsx' : 'ts',
+    format: 'cjs',
+    target: 'es2022',
+    jsx: 'automatic',
+    sourcemap: 'external',
+    sourcesContent: true
   })
-  const map = JSON.parse(result.sourceMapText)
+  const map = JSON.parse(result.map)
   map.sources = [path.resolve(file)]
   map.sourceRoot = ''
   fs.mkdirSync(path.dirname(target), { recursive: true })
   fs.writeFileSync(
     target,
-    result.outputText.replace(
-      /\/\/# sourceMappingURL=.*$/m,
-      '//# sourceMappingURL=data:application/json;base64,' +
-        Buffer.from(JSON.stringify(map)).toString('base64')
-    )
+    result.code +
+      '\n//# sourceMappingURL=data:application/json;base64,' +
+      Buffer.from(JSON.stringify(map)).toString('base64')
   )
 }
 const recorder = path.join(compiled, 'pro/resources/linux-desktop/meeting-recorder-source.js')

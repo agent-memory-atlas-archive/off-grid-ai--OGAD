@@ -24,13 +24,18 @@ for (const script of mergeProcessCovs(snapshots).result) {
   if (!encoded) continue
   const sourceMap = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'))
   if (sourceMap.sources.some((source) => source.includes('__tests__'))) continue
+  const exportAssignment = code.indexOf('module.exports = __toCommonJS(')
+  const generatedEnd = exportAssignment < 0 ? 0 : code.indexOf(';', exportAssignment) + 1
   report.merge(
     await convert({
       code,
       ast: await parseAstAsync(code),
       sourceMap,
       coverage: script,
-      wrapperLength: 0
+      wrapperLength: 0,
+      // esbuild's CommonJS export getters have no source functions. Match
+      // Vitest's exclusion of generated export plumbing before source mapping.
+      ignoreNode: (node) => (node.start < generatedEnd ? 'ignore-this-and-nested-nodes' : undefined)
     })
   )
 }
