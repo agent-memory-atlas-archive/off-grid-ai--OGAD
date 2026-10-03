@@ -222,12 +222,11 @@ jobs:
       # Build/native/port integration tests (packaging, whisper build-staging, the
       # model-port + System Health seams that own :8439). These need a packaged
       # build / native toolchain / a live engine port the pure `verify` runner
-      # doesn't have, so they're advisory here (bounded, non-blocking) and run for
-      # real in the build/release job + locally via `npm run test:heavy`.
+      # doesn't have. They run here against synthetic profiles and external
+      # native boundaries, and failures block this job.
       - name: Heavy integration (build/native/port)
         if: ${{ !cancelled() }}
         timeout-minutes: 10
-        continue-on-error: true
         run: |
           # The preceding DB journey restores Electron's SQLite ABI. These
           # tests run in Node; restore Electron again before the worker test.
@@ -244,12 +243,10 @@ jobs:
         run: npm run depcruise
       # NOTE: SonarCloud runs via Automatic Analysis (SonarCloud clones this repo and
       # analyzes core on each push/PR — no CI step, token, or coverage upload here).
-      # Advisory: lint is enforced locally; bounded + non-blocking here so an
-      # eslint slowdown over the full tree (incl. checked-out pro/) can't wedge CI.
+      # Lint errors block CI. Keep the timeout bounded for the full source tree.
       - name: Lint
         if: ${{ !cancelled() }}
         timeout-minutes: 8
-        continue-on-error: true
         run: npm run lint
       # The full Playwright tour on the BUILT app - the one check unit/integration cannot give: does the app
       # actually render and drive. Specs needing real models/engine binaries (functional-real-engine, voice/tts)
