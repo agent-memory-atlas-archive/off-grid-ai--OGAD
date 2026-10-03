@@ -1349,7 +1349,6 @@ export function setupIPC() {
     if (key === COMPUTER_USE_SETTINGS_KEY) setComputerUseSettings(value)
     else if (key === WEB_USE_SETTINGS_KEY) setWebUseSettings(value)
     else saveSetting(key, value)
-    console.log(`[IPC] Setting saved: ${key} =`, value)
     return true
   })
 
