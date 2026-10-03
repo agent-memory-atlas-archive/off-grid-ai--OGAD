@@ -22,6 +22,7 @@ jobs:
   # job. An earlier attempt at this was reverted because appending e2e "blew the 25-min job cap" (PR #68); that
   # cap was this workflow's own timeout-minutes, so it is raised here deliberately rather than worked around.
   ci:
+    needs: native-desktop
     runs-on: ubuntu-latest
     timeout-minutes: 50 # backstop: a hung step fails fast instead of running for hours (unit gates + e2e tour)
     # Each gate below uses !cancelled() so later checks still report after an earlier failure.
@@ -316,10 +317,22 @@ jobs:
       # then gate only executable lines added on this branch. The floors are the same
       # ratchets as scripts/hooks/pre-push; neither whole-tree debt nor a partial suite
       # can decide the result.
+      - name: Download native desktop source coverage
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-desktop-coverage-*
+          path: coverage-native-desktop
+      - name: Normalize native source paths
+        if: ${{ !cancelled() }}
+        run: |
+          for report in coverage-native-desktop/*/coverage-final.json; do
+            node scripts/normalize-native-coverage.mjs "$report" absolute
+          done
       - name: Coverage gate (new code across all suites)
         if: ${{ !cancelled() }}
         run: |
-          reports="coverage/coverage-final.json coverage-db/coverage-final.json"
+          reports="coverage/coverage-final.json coverage-db/coverage-final.json coverage-native-desktop/native-desktop-coverage-ubuntu-latest/coverage-final.json coverage-native-desktop/native-desktop-coverage-windows-2022/coverage-final.json"
           for report in $reports; do
             if [ ! -f "$report" ]; then
               echo "::error::required coverage report is missing: $report"
@@ -348,3 +361,97 @@ jobs:
           name: e2e-screenshots
           path: e2e/screenshots/
           if-no-files-found: ignore
+
+  native-desktop:
+    name: Native recording (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2022]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        id: native_pro_branch
+        continue-on-error: true
+        with:
+          repository: off-grid-ai/desktop-pro
+          token: ${{ secrets.CI_CROSS_REPO_TOKEN }}
+          path: pro
+          ref: ${{ github.head_ref || github.ref_name }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        if: steps.native_pro_branch.outcome != 'success'
+        with:
+          repository: off-grid-ai/desktop-pro
+          token: ${{ secrets.CI_CROSS_REPO_TOKEN }}
+          path: pro
+          ref: ${{ github.base_ref || 'main' }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: off-grid-ai/shared
+          token: ${{ secrets.CI_CROSS_REPO_TOKEN }}
+          path: _shared
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: off-grid-ai/executorch-speech
+          token: ${{ secrets.CI_CROSS_REPO_TOKEN }}
+          path: _executorch_speech
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Windows'
+        with:
+          python-version: '3.12'
+      - name: Install workspace dependencies
+        run: |
+          mv _shared ../shared
+          mv _executorch_speech ../executorch-speech
+          npm --prefix ../shared ci
+          for package in models sync use automation speech ui; do
+            npm --prefix "../shared/packages/$package" run build
+          done
+          npm ci
+      - name: Install the virtual Linux desktop and media runtime
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gstreamer-1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-pulseaudio pulseaudio dbus-x11 openbox xdotool ffmpeg xvfb
+      - name: Record on the synthetic Linux desktop
+        if: runner.os == 'Linux'
+        env:
+          OFFGRID_NATIVE_DESKTOP_TEST: '1'
+          XDG_SESSION_TYPE: x11
+        run: |
+          dbus-run-session -- xvfb-run -a bash -c '
+            pulseaudio --start --exit-idle-time=-1
+            pactl load-module module-null-sink sink_name=offgrid_test
+            pactl set-default-sink offgrid_test
+            pactl set-default-source offgrid_test.monitor
+            openbox >/tmp/offgrid-openbox.log 2>&1 &
+            npx vitest run integration-tests/native-desktop-recording.test.ts --project product-integration
+          '
+      - name: Record on the synthetic Windows desktop
+        if: runner.os == 'Windows'
+        env:
+          OFFGRID_NATIVE_DESKTOP_TEST: '1'
+        run: npx vitest run integration-tests/native-desktop-recording.test.ts --project product-integration
+      - name: Convert native source coverage
+        run: |
+          node ../shared/node_modules/c8/bin/c8.js report --temp-directory=coverage-native-desktop-raw --reporter=json --report-dir=coverage-native-desktop --all=false
+          node scripts/normalize-native-coverage.mjs coverage-native-desktop/coverage-final.json relative
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-desktop-coverage-${{ matrix.os }}
+          path: coverage-native-desktop/coverage-final.json
+          if-no-files-found: error
