@@ -125,8 +125,8 @@ export function ArtifactCanvas({
 
   useEffect(() => {
     let alive = true
-    window.api
-      .artifactRuntime(artifact.kind)
+    ;(window.api as Partial<typeof window.api>)
+      .artifactRuntime?.(artifact.kind)
       .then((r: Record<string, string>) => {
         if (alive) setRuntime(r)
       })
