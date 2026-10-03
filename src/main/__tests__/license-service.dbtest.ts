@@ -1,3 +1,5 @@
+// In the DB suite because license-service.ts is a Keychain/IPC shell excluded from unit coverage
+// (vitest.config.ts); the provider is the only boundary and is faked at its contract.
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   listProDevices,
@@ -5,7 +7,7 @@ import {
   revalidateProEntitlement,
   type ProEntitlementProvider,
   type ProLicenseInfo
-} from '../license-service'
+} from '../licensing/license-service'
 
 const INFO: ProLicenseInfo = { isPro: true, tier: 'annual', expiry: null, verifiedAt: 0 }
 
