@@ -90,3 +90,5 @@ resources/linux-desktop/bin/
 resources/linux-desktop/__pycache__/
 coverage-native-raw/
 coverage-native/
+coverage-native-desktop-raw/
+coverage-native-desktop/
