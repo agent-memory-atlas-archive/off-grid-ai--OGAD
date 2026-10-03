@@ -441,6 +441,8 @@ export async function universalSearch(
     collapseScreenMoments?: boolean
     sort?: SearchSort
     excludeChatId?: string
+    /** Aborted when a newer search supersedes this one; the remaining stages are skipped. */
+    signal?: AbortSignal
   } = {}
 ): Promise<SearchResult[]> {
   ensureRagStoreSchema()
@@ -451,12 +453,14 @@ export async function universalSearch(
   const perSource = opts.sources?.length ? 80 : Math.min(40, limit + 10)
 
   const lists = keywordHits(q, perSource)
+  opts.signal?.throwIfAborted()
   if (opts.semantic !== false) {
     try {
       lists.push(await semanticHits(q, perSource))
     } catch {
       /* embedding model not ready — keyword results still fine */
     }
+    opts.signal?.throwIfAborted()
   }
 
   // Reciprocal-rank fusion across all lists, keyed by the unique chunk key.
@@ -475,6 +479,7 @@ export async function universalSearch(
     excludeChatId: opts.excludeChatId,
     sort: opts.sort
   })
+  opts.signal?.throwIfAborted()
   for (const r of ordered)
     r.imagePath = thumbFor({ key: r.key, kind: r.kind, refId: r.refId } as RawHit)
 
