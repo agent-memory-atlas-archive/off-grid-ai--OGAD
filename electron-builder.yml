@@ -164,6 +164,7 @@ deb:
     - libasound2t64
     - libgbm1
     - xdotool
+    - x11-utils
     - wtype
     - python3-gi
     - gir1.2-gstreamer-1.0

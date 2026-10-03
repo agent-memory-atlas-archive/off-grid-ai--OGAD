@@ -23,7 +23,7 @@ The Debian package declares Python GI, GStreamer, PipeWire, the desktop portal, 
 - GStreamer PipeWire, PulseAudio, x264, Opus, WAV, and Matroska elements;
 - `xdg-desktop-portal` and a backend for the current desktop;
 - `gnome-extensions` on GNOME, Spectacle on KDE, or grim on Sway/Hyprland;
-- xdotool for X11 paste, or wtype on Sway/Hyprland.
+- x11-utils (xprop and xwininfo) for X11 window details; xdotool for X11 paste, or wtype on Sway/Hyprland.
 
 The release staging script downloads kdotool 0.3.0 from its upstream release and checks its pinned SHA-256. No new application settings store is used.
 

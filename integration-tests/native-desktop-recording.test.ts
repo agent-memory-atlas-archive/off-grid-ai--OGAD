@@ -6,7 +6,6 @@ import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createRequire } from 'node:module'
-import { pathToFileURL } from 'node:url'
 
 const require = createRequire(import.meta.url)
 
@@ -20,34 +19,10 @@ it.runIf(process.env.OFFGRID_NATIVE_DESKTOP_TEST === '1')(
     try {
       await fs.mkdir(path.join(root, 'temp'))
       await fs.mkdir(output, { recursive: true })
-      const dependencies = JSON.parse(await fs.readFile('package.json', 'utf8'))
-      const external = ['electron', ...Object.keys(dependencies.dependencies)]
-      const main = path.join(output, 'main.cjs')
-      await build({
-        entryPoints: ['pro/main/__tests__/native-desktop.fixture.ts'],
-        outfile: main,
-        bundle: true,
-        platform: 'node',
-        format: 'cjs',
-        sourcemap: 'inline',
-        tsconfig: 'pro/tsconfig.json',
-        external,
-        loader: { '.py': 'text' },
-        define: {
-          'import.meta.url': JSON.stringify(pathToFileURL(main).href),
-          __OFFGRID_PRO__: 'true'
-        },
-        plugins: [
-          {
-            name: 'private-recorder-source',
-            setup(builder) {
-              builder.onResolve({ filter: /\.py\?raw$/ }, (args) => ({
-                path: path.resolve(args.resolveDir, args.path.slice(0, -4))
-              }))
-            }
-          }
-        ]
-      })
+      await promisify(execFile)(process.execPath, [
+        'scripts/compile-native-desktop-test.mjs',
+        output
+      ])
       await fs.mkdir(path.join(output, 'out/preload'), { recursive: true })
       await build({
         entryPoints: ['pro/main/meeting-recorder-preload.ts'],
@@ -69,6 +44,7 @@ it.runIf(process.env.OFFGRID_NATIVE_DESKTOP_TEST === '1')(
         ...process.env,
         NODE_V8_COVERAGE: output,
         OFFGRID_DATA_DIR: path.join(root, 'data'),
+        OFFGRID_NATIVE_PROFILE: root,
         OFFGRID_BIN_DIR: path.join(root, 'no-model-binaries'),
         TEMP: path.join(root, 'temp'),
         TMP: path.join(root, 'temp'),
