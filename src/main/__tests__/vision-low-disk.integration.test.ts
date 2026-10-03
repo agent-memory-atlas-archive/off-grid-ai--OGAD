@@ -18,11 +18,28 @@ vi.mock('electron', () => ({
   desktopCapturer: {
     getSources: async () => [
       {
+        id: 'window:51:0',
         name: 'Release notes',
         display_id: '1',
         thumbnail: {
           isEmpty: () => false,
           toPNG: () => Buffer.from('synthetic screenshot bytes')
+        }
+      },
+      {
+        id: 'window:52:0',
+        name: 'Shared title',
+        thumbnail: {
+          isEmpty: () => false,
+          toPNG: () => Buffer.from('focused window 52')
+        }
+      },
+      {
+        id: 'window:53:0',
+        name: 'Shared title',
+        thumbnail: {
+          isEmpty: () => false,
+          toPNG: () => Buffer.from('other window 53')
         }
       }
     ]
@@ -51,6 +68,18 @@ afterAll(() => {
 })
 
 describe('vision capture on an exhausted filesystem', () => {
+  it('selects the focused window by native ID when titles are duplicated', async () => {
+    const result = await vision.captureAppWindow('Notes', 'Shared title', undefined, 52)
+    expect(result).not.toBeNull()
+    expect(fs.readFileSync(result!)).toEqual(Buffer.from('focused window 52'))
+  })
+
+  it('does not save a display image when no unique active window can be identified', async () => {
+    const result = await vision.captureAppWindow('Notes', 'Shared title')
+    expect(result).toBeNull()
+    expect(fs.readdirSync(CAPTURES_DIR)).toEqual([])
+  })
+
   it('stops safely without creating a corrupt capture or disturbing existing bytes', async () => {
     const existing = path.join(CAPTURES_DIR, 'existing.png')
     const existingBytes = Buffer.from('existing readable capture')

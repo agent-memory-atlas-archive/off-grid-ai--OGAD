@@ -153,7 +153,7 @@ describe('<App/> locked Pro navigation integration', () => {
     await waitFor(() => expect(window.location.pathname).toBe('/day'))
   }, 30_000)
 
-  it('keeps an unavailable Linux Pro route gated without a purchase action', async () => {
+  it('offers Day on Linux to a free user', async () => {
     window.history.replaceState(null, '', '/day')
     const openExternal = vi.fn()
     installAppBoundary({ platform: 'linux', isPro: false, openExternal })
@@ -161,9 +161,9 @@ describe('<App/> locked Pro navigation integration', () => {
     render(<App />)
 
     expect(await screen.findByRole('heading', { name: 'Day' })).toBeTruthy()
-    expect(screen.getByText(/Off Grid AI Pro · Coming soon/)).toBeTruthy()
-    expect(screen.getByText(/This feature is coming soon to Linux/)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /Get Pro/ })).toBeNull()
+    expect(screen.getByText(/Off Grid AI Pro · Available now/)).toBeTruthy()
+    expect(screen.queryByText(/This feature is coming soon to Linux/)).toBeNull()
+    expect(screen.getByRole('button', { name: /Get Pro/ })).toBeTruthy()
     expect(openExternal).not.toHaveBeenCalled()
   }, 30_000)
 
@@ -192,7 +192,10 @@ describe('<App/> locked Pro navigation integration', () => {
     await user.hover(navigation)
     await waitFor(() => expect(navigation.getAttribute('aria-expanded')).toBe('true'))
 
-    const linuxRoutes = new Set(['vault', 'clipboard', 'replay'])
+    const linuxRoutes = new Set([
+      'day', 'reflect', 'replay', 'actions', 'entities', 'search',
+      'notifications', 'vault', 'clipboard', 'devices'
+    ])
     for (const feature of PRO_FEATURES) {
       const navButton = within(navigation).getByRole('button', { name: feature.label })
       if (linuxRoutes.has(feature.route)) {
@@ -215,15 +218,13 @@ describe('<App/> locked Pro navigation integration', () => {
     }
   }, 30_000)
 
-  it('marks Pro Settings cards as coming soon on Linux', async () => {
+  it('does not mark all Pro Settings cards as coming soon on Linux', async () => {
     window.history.replaceState(null, '', '/settings')
     installAppBoundary({ platform: 'linux', isPro: false })
 
     render(<App />)
 
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeTruthy()
-    expect(
-      screen.getAllByText('Pro features are coming soon to Linux. Core features work now.').length
-    ).toBeGreaterThan(0)
+    expect(screen.queryByText('Pro features are coming soon to Linux. Core features work now.')).toBeNull()
   }, 30_000)
 })

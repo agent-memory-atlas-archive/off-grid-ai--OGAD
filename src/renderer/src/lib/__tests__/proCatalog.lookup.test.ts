@@ -35,7 +35,18 @@ const winPorted = (route: string): ProFeature => ({
 })
 
 const WIN_PORTED = new Set(PRO_FEATURES.map((feature) => feature.route))
-const LINUX_PORTED = new Set(['vault', 'clipboard', 'replay'])
+const LINUX_PORTED = new Set([
+  'day',
+  'reflect',
+  'replay',
+  'actions',
+  'entities',
+  'search',
+  'notifications',
+  'vault',
+  'clipboard',
+  'devices'
+])
 
 describe('getProFeature', () => {
   it('returns the matching feature for a known route', () => {
@@ -106,9 +117,9 @@ describe('proFeatureComingSoon flips PER FEATURE (the seam works one at a time)'
 })
 
 describe('proComingSoonHere', () => {
-  it('gates Pro subscribers on Linux and unknown platforms', () => {
+  it('gates Pro subscribers only on unknown platforms', () => {
     expect(proComingSoonHere('win32', true)).toBe(false)
-    expect(proComingSoonHere('linux', true)).toBe(true)
+    expect(proComingSoonHere('linux', true)).toBe(false)
     expect(proComingSoonHere('unknown', true)).toBe(true)
   })
 
