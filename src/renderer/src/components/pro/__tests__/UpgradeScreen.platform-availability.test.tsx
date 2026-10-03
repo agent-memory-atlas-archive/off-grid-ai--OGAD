@@ -33,21 +33,32 @@ describe('Pro platform availability', () => {
     expect(screen.queryByText(/coming soon to Linux/i)).toBeNull()
   })
 
-  it('keeps other Pro features gated on Linux', () => {
+  it('keeps features without a Linux implementation gated', () => {
     expect(
       PRO_FEATURES.filter((feature) => feature.platforms.includes('linux')).map(
         (feature) => feature.route
       )
-    ).toEqual(['replay', 'vault', 'clipboard'])
-    renderOn('linux')
+    ).toEqual([
+      'day',
+      'reflect',
+      'replay',
+      'actions',
+      'entities',
+      'search',
+      'notifications',
+      'vault',
+      'clipboard',
+      'devices'
+    ])
+    renderOn('linux', 'upgrade', getProFeature('meetings')!)
     expect(screen.getByText(/Off Grid AI Pro · Coming soon/)).toBeTruthy()
     expect(screen.getByText(/This feature is coming soon to Linux/)).toBeTruthy()
-    expect(screen.getByText(/Replay, Vault, Clipboard are available on Linux now/)).toBeTruthy()
+    expect(screen.getByText(/Day, Reflect, Replay.*are available on Linux now/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Get Pro/ })).toBeNull()
   })
 
   it('gives an existing Linux subscriber the same status', () => {
-    renderOn('linux', 'coming-soon')
+    renderOn('linux', 'coming-soon', getProFeature('meetings')!)
     expect(screen.getByText(/This feature is coming soon to Linux/)).toBeTruthy()
     expect(screen.getByText(/Core features work on your device today/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Get Pro/ })).toBeNull()
@@ -70,7 +81,7 @@ describe('Pro platform availability', () => {
     render(<UpgradeScreen />)
 
     expect(screen.getByText(/Some Pro features are coming soon to Linux/)).toBeTruthy()
-    expect(screen.getByText(/Replay, Vault, Clipboard are available on Linux now/)).toBeTruthy()
+    expect(screen.getByText(/Day, Reflect, Replay.*are available on Linux now/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /Get Pro/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: /Activate/ })).toBeTruthy()
   })
