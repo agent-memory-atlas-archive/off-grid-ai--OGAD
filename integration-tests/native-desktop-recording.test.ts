@@ -49,6 +49,7 @@ it.runIf(process.env.OFFGRID_NATIVE_DESKTOP_TEST === '1')(
         NODE_V8_COVERAGE: output,
         OFFGRID_DATA_DIR: path.join(root, 'data'),
         OFFGRID_NATIVE_PROFILE: root,
+        OFFGRID_RESOURCE_DIR: path.join(output, 'resources'),
         OFFGRID_BIN_DIR: path.join(root, 'no-model-binaries'),
         TEMP: path.join(root, 'temp'),
         TMP: path.join(root, 'temp'),
