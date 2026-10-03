@@ -22,7 +22,6 @@ jobs:
   # job. An earlier attempt at this was reverted because appending e2e "blew the 25-min job cap" (PR #68); that
   # cap was this workflow's own timeout-minutes, so it is raised here deliberately rather than worked around.
   ci:
-    needs: native-desktop
     runs-on: ubuntu-latest
     timeout-minutes: 50 # backstop: a hung step fails fast instead of running for hours (unit gates + e2e tour)
     # Each gate below uses !cancelled() so later checks still report after an earlier failure.
@@ -322,6 +321,24 @@ jobs:
       # then gate only executable lines added on this branch. The floors are the same
       # ratchets as scripts/hooks/pre-push; neither whole-tree debt nor a partial suite
       # can decide the result.
+      - name: Wait for native desktop coverage
+        if: ${{ !cancelled() }}
+        timeout-minutes: 12
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 1 48); do
+            completed=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name | startswith("Native recording (")) | select(.status == "completed")] | length')
+            if [ "$completed" -eq 2 ]; then
+              failed=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
+                --jq '[.jobs[] | select(.name | startswith("Native recording (")) | select(.conclusion != "success")] | length')
+              test "$failed" -eq 0
+              break
+            fi
+            sleep 15
+          done
+          test "$completed" -eq 2
       - name: Download native desktop source coverage
         if: ${{ !cancelled() }}
         uses: actions/download-artifact@v4
@@ -453,7 +470,7 @@ jobs:
         run: npx vitest run integration-tests/native-desktop-recording.test.ts --project product-integration
       - name: Convert native source coverage
         run: |
-          node ../shared/node_modules/c8/bin/c8.js report --temp-directory=coverage-native-desktop-raw --reporter=json --report-dir=coverage-native-desktop --all=false
+          node scripts/convert-native-coverage.mjs coverage-native-desktop-raw coverage-native-desktop
           node scripts/normalize-native-coverage.mjs coverage-native-desktop/coverage-final.json relative
       - uses: actions/upload-artifact@v4
         with:

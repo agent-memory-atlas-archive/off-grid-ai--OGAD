@@ -34,7 +34,7 @@ it.runIf(process.env.OFFGRID_NATIVE_DESKTOP_TEST === '1')(
         sourcemap: 'inline'
       })
       await fs.mkdir(path.join(output, 'resources/linux-desktop'), { recursive: true })
-      for (const file of ['portal.py', 'recorder.html', 'hotkey.py']) {
+      for (const file of ['portal.py', 'recorder.html', 'hotkey.py', 'desktop.py']) {
         await fs.copyFile(
           'resources/linux-desktop/' + file,
           path.join(output, 'resources/linux-desktop', file)
@@ -49,6 +49,7 @@ it.runIf(process.env.OFFGRID_NATIVE_DESKTOP_TEST === '1')(
         NODE_V8_COVERAGE: output,
         OFFGRID_DATA_DIR: path.join(root, 'data'),
         OFFGRID_NATIVE_PROFILE: root,
+        OFFGRID_RESOURCE_DIR: path.join(output, 'resources'),
         OFFGRID_BIN_DIR: path.join(root, 'no-model-binaries'),
         TEMP: path.join(root, 'temp'),
         TMP: path.join(root, 'temp'),
