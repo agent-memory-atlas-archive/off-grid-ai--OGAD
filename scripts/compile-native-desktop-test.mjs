@@ -64,6 +64,7 @@ for (const file of sources) {
     sourcefile: path.resolve(file),
     loader: file.endsWith('.tsx') ? 'tsx' : 'ts',
     format: 'cjs',
+    platform: 'node',
     target: 'es2022',
     jsx: 'automatic',
     sourcemap: 'external',
@@ -90,5 +91,5 @@ fs.writeFileSync(
 )
 fs.writeFileSync(
   path.join(output, 'main.cjs'),
-  'global.__OFFGRID_PRO__ = true; require("./compiled/pro/main/__tests__/native-desktop.fixture.js");'
+  'const {app}=require("electron"); app.setPath("userData", require("path").join(process.env.OFFGRID_NATIVE_PROFILE, "profile")); global.__OFFGRID_PRO__ = true; require("./compiled/pro/main/__tests__/native-desktop.fixture.js");'
 )
