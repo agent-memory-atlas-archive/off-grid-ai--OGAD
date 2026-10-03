@@ -453,7 +453,7 @@ jobs:
         run: npx vitest run integration-tests/native-desktop-recording.test.ts --project product-integration
       - name: Convert native source coverage
         run: |
-          node ../shared/node_modules/c8/bin/c8.js report --temp-directory=coverage-native-desktop-raw --reporter=json --report-dir=coverage-native-desktop --all=false
+          node scripts/convert-native-coverage.mjs coverage-native-desktop-raw coverage-native-desktop
           node scripts/normalize-native-coverage.mjs coverage-native-desktop/coverage-final.json relative
       - uses: actions/upload-artifact@v4
         with:

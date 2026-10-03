@@ -34,7 +34,7 @@ it.runIf(process.env.OFFGRID_NATIVE_DESKTOP_TEST === '1')(
         sourcemap: 'inline'
       })
       await fs.mkdir(path.join(output, 'resources/linux-desktop'), { recursive: true })
-      for (const file of ['portal.py', 'recorder.html', 'hotkey.py']) {
+      for (const file of ['portal.py', 'recorder.html', 'hotkey.py', 'desktop.py']) {
         await fs.copyFile(
           'resources/linux-desktop/' + file,
           path.join(output, 'resources/linux-desktop', file)
