@@ -229,7 +229,12 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         continue-on-error: true
-        run: npm run test:heavy
+        run: |
+          # The preceding DB journey restores Electron's SQLite ABI. These
+          # tests run in Node; restore Electron again before the worker test.
+          trap 'npx electron-rebuild -f -w better-sqlite3-multiple-ciphers' EXIT
+          npm explore better-sqlite3-multiple-ciphers -- npm run build-release
+          npm run test:heavy
       # Architecture-boundary gate (hygiene §A/§H): walks the import graph and fails
       # on a forbidden edge — core->pro (open-core), a pure-logic module gaining an
       # IO import, renderer->main, circular deps. Fast (graph-only, ~2s), so unlike

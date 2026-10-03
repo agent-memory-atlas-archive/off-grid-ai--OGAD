@@ -50,6 +50,8 @@ else:
     def code(name):
         return library.XKeysymToKeycode(display, library.XStringToKeysym(name.encode()))
     codes = [code(name) for name in [key, left, right]]
+    extra_modifiers = [code(name) for other, names in MODIFIERS.items()
+                       if other != sys.argv[2] for name in names[1:]]
     if not codes[0]:
         raise RuntimeError('The shortcut key is not available in this keyboard layout.')
     library.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
@@ -71,7 +73,8 @@ else:
         while library.XPending(display):
             library.XNextEvent(display, event)
         library.XQueryKeymap(display, keys)
-        pressed = down(codes[0]) and (down(codes[1]) or down(codes[2]))
+        pressed = (down(codes[0]) and (down(codes[1]) or down(codes[2]))
+                   and not any(down(other) for other in extra_modifiers))
         if pressed != held:
             print('down' if pressed else 'up', flush=True)
             held = pressed

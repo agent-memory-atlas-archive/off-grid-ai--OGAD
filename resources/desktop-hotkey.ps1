@@ -31,7 +31,15 @@ try {
         while ([OffGridHotkey]::PeekMessage([ref]$Message, [IntPtr]::Zero, 0, 0, 1)) {}
         $ModifierDown = (([OffGridHotkey]::GetAsyncKeyState($ModifierKey) -band 0x8000) -ne 0)
         if ($Modifier -eq 'command') { $ModifierDown = $ModifierDown -or (([OffGridHotkey]::GetAsyncKeyState(92) -band 0x8000) -ne 0) }
-        $Down = (([OffGridHotkey]::GetAsyncKeyState($VirtualKey) -band 0x8000) -ne 0) -and $ModifierDown
+        $ExtraModifierDown = $false
+        foreach ($OtherModifier in @('option', 'control', 'shift', 'command')) {
+            if ($OtherModifier -eq $Modifier) { continue }
+            $OtherKey = switch ($OtherModifier) { 'option' {18} 'control' {17} 'shift' {16} 'command' {91} }
+            $OtherDown = (([OffGridHotkey]::GetAsyncKeyState($OtherKey) -band 0x8000) -ne 0)
+            if ($OtherModifier -eq 'command') { $OtherDown = $OtherDown -or (([OffGridHotkey]::GetAsyncKeyState(92) -band 0x8000) -ne 0) }
+            $ExtraModifierDown = $ExtraModifierDown -or $OtherDown
+        }
+        $Down = (([OffGridHotkey]::GetAsyncKeyState($VirtualKey) -band 0x8000) -ne 0) -and $ModifierDown -and (-not $ExtraModifierDown)
         if ($Down -ne $Held) {
             [Console]::WriteLine($(if ($Down) {'down'} else {'up'}))
             $Held = $Down
