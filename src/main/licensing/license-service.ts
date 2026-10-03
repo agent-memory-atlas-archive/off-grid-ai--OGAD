@@ -108,8 +108,9 @@ export function activateProByKey(rawCredential: string): Promise<ActivateResult>
   )
 }
 
+/** Rejects when no provider can answer, so the device screen shows a failure instead of "no devices". */
 export function listProDevices(): Promise<ProLicensedDevice[]> {
-  return provider?.listDevices() ?? Promise.resolve([])
+  return provider?.listDevices() ?? Promise.reject(new Error('License service unavailable'))
 }
 
 export function deactivateProDevice(deviceId: string): Promise<boolean> {
