@@ -34,9 +34,14 @@ for (const file of sources) {
     /(['"])(@offgrid\/core\/|@offgrid\/pro\/|@renderer\/|@\/)([^'"]+)\1/g,
     (_match, _quote, prefix, suffix) => {
       const directory = aliases.find(([name]) => name === prefix)[1]
-      let relative = path
-        .relative(path.dirname(target), path.join(compiled, directory, suffix))
-        .replaceAll('\\', '/')
+      const original = path.join(directory, suffix)
+      const emitted =
+        fs.existsSync(original + '.ts') || fs.existsSync(original + '.tsx')
+          ? path.join(compiled, original + '.js')
+          : fs.existsSync(path.join(original, 'index.ts'))
+            ? path.join(compiled, original, 'index.js')
+            : path.join(compiled, original)
+      let relative = path.relative(path.dirname(target), emitted).replaceAll('\\', '/')
       if (!relative.startsWith('.')) relative = './' + relative
       return JSON.stringify(relative)
     }
