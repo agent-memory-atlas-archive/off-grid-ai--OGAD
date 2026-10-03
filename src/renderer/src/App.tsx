@@ -34,7 +34,7 @@ import {
   proFeatureComingSoon,
   landingView
 } from './components/pro/proCatalog'
-import { currentPlatform } from './lib/device'
+import { currentPlatform, primaryModifier } from './lib/device'
 import { NotificationProvider } from './hooks/NotificationProvider'
 import { useNotifications } from './hooks/useNotifications'
 import { ToastProvider } from './hooks/ToastProvider'
@@ -1209,7 +1209,7 @@ function AppContent() {
                   onClick={navigateBack}
                   disabled={!canGoBack}
                   aria-label="Back"
-                  title="Back (⌘[)"
+                  title={`Back (${primaryModifier()}+[)`}
                   className={cn(
                     'flex items-center justify-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-800/40 text-neutral-300 transition-colors hover:border-neutral-700 hover:bg-neutral-800 hover:text-white disabled:opacity-30 disabled:hover:bg-neutral-800/40',
                     sidebarOpen ? 'flex-1 px-2 py-1.5' : 'h-9 w-9'
@@ -1223,7 +1223,7 @@ function AppContent() {
                     onClick={navigateForward}
                     disabled={!canGoForward}
                     aria-label="Forward"
-                    title="Forward (⌘])"
+                    title={`Forward (${primaryModifier()}+])`}
                     className="flex items-center justify-center rounded-lg border border-neutral-800 bg-neutral-800/40 px-2 py-1.5 text-neutral-300 transition-colors hover:border-neutral-700 hover:bg-neutral-800 hover:text-white disabled:opacity-30 disabled:hover:bg-neutral-800/40"
                   >
                     <IconArrowRight className="h-4 w-4 shrink-0" />

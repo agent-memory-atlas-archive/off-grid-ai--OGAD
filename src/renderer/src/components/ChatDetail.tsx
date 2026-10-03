@@ -9,6 +9,7 @@ import { parseSessionId } from '@renderer/lib/session-id'
 import { BorderBeam } from './ui/border-beam'
 import { ProgressiveBlur } from './ui/progressive-blur'
 import { openChatLink } from '@renderer/lib/chat-link'
+import { primaryModifier } from '@renderer/lib/device'
 
 interface Memory {
   id: number
@@ -327,7 +328,7 @@ export function ChatDetail({ sessionId, onBack, onSelectEntity, onSelectMemory }
         <button
           onClick={() => (expandedSection ? setExpandedSection(null) : onBack())}
           className="p-2 rounded-lg bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors"
-          title={expandedSection ? 'Close (⌘[ or Esc)' : 'Back (⌘[)'}
+          title={expandedSection ? `Close (${primaryModifier()}+[ or Esc)` : `Back (${primaryModifier()}+[)`}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path

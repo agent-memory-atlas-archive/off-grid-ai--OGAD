@@ -61,7 +61,7 @@ export const PRO_FEATURES: ProFeature[] = [
     description:
       'Choose a workflow, add its details, and start it in Chat. The work stays on your device.',
     highlights: ['Prepared workflows', 'One intake before the run', 'Starts in your local Chat'],
-    platforms: ['darwin', 'win32']
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'tasks',
@@ -71,7 +71,7 @@ export const PRO_FEATURES: ProFeature[] = [
     description:
       'Track running and completed work, open its live view, and respond when a task needs attention.',
     highlights: ['Live task status', 'Saved task history', 'Attention requests in one place'],
-    platforms: ['darwin', 'win32']
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'day',
@@ -136,7 +136,7 @@ export const PRO_FEATURES: ProFeature[] = [
       'On-device transcription',
       'Searchable transcripts & summaries'
     ],
-    platforms: ['darwin', 'win32']
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'actions',
@@ -195,13 +195,13 @@ export const PRO_FEATURES: ProFeature[] = [
     label: 'Voice',
     icon: Waveform,
     tagline: 'Talk instead of type, fully local.',
-    description: `Hold Option+Space and speak — Off Grid AI Desktop transcribes on-device with whisper.cpp and pastes the text into whatever app you are in. Tap to toggle, hold to push-to-talk. Every recording and transcript is kept in a searchable library, and you can drop in any audio or video file to transcribe it. Runs in your ${deviceNoun()}'s RAM; nothing leaves the device.`,
+    description: `Hold ${primaryModifier() === 'Cmd' ? 'Option' : 'Alt'}+Space and speak — Off Grid AI Desktop transcribes on-device with whisper.cpp and pastes the text into whatever app you are in. Tap to toggle, hold to push-to-talk. Every recording and transcript is kept in a searchable library, and you can drop in any audio or video file to transcribe it. Runs in your ${deviceNoun()}'s RAM; nothing leaves the device.`,
     highlights: [
-      'Option+Space push-to-talk or toggle, anywhere',
+      `${primaryModifier() === 'Cmd' ? 'Option' : 'Alt'}+Space push-to-talk or toggle, anywhere`,
       'Paste-at-cursor + a searchable recordings library',
       'Transcribe any audio/video file, all on-device'
     ],
-    platforms: ['darwin', 'win32']
+    platforms: ['darwin', 'win32', 'linux']
   },
   {
     route: 'vault',

@@ -1,6 +1,7 @@
 import { desktopCapturer, app, screen } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs'
+import { isWaylandSession, captureWaylandWindow } from './linux-desktop'
 import { captureComputerUseDisplay } from './vision/computer-use-display-capture'
 
 export interface CapturedDisplayFrame {
@@ -27,6 +28,11 @@ class VisionService {
     windowId?: number
   ): Promise<string | null> {
     try {
+      if (isWaylandSession()) {
+        if (!windowId) return null
+        const png = await captureWaylandWindow(windowId)
+        return png ? await this.writeThumb(png) : null
+      }
       console.log(
         `Vision: Attempting to capture window for ${appName} (Title: ${windowTitle || 'Any'})...`
       )

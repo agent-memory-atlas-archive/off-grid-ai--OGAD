@@ -199,7 +199,7 @@ export function Settings({
                   </span>
                   {currentPlatform() === 'linux'
                     ? 'Capture and Replay controls are available with Pro on Linux.'
-                    : 'Screen capture, backlog recovery, and proactive delivery are available with Pro on Windows and macOS.'}
+                    : 'Screen capture, backlog recovery, and proactive delivery are available with Pro on Windows, Linux, and macOS.'}
                 </div>
               )}
               <ProcessingControls />
