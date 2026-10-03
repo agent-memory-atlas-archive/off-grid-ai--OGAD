@@ -173,7 +173,6 @@ export default defineConfig({
         'src/main/tools/mcpConnectorToolExtension.ts',
         'src/main/updater.ts',
         'src/main/dev-seed.ts',
-        'src/main/vision.ts',
         'src/main/ocr.ts',
         'src/main/embeddings.ts',
         // permissions.ts is no longer excluded: it is unit-tested now, including the multicast probe's four
@@ -197,7 +196,6 @@ export default defineConfig({
         'src/main/data-privacy.ts',
         'src/main/artifacts.ts',
         'src/main/secrets.ts',
-        'src/main/vision.ts',
         // Renderer .ts that are pure IPC passthrough (no logic) or React hooks (e2e-covered).
         'src/renderer/src/lib/voiceApi.ts',
         'src/renderer/src/useMeetingRecorder.ts',
