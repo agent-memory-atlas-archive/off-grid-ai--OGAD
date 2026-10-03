@@ -211,7 +211,7 @@ const offGridApi = {
   extractMemory: (text: string) => ipcRenderer.invoke('llm:extract', text),
 
   // Chat Summaries
-  getChatSessions: (appName?: string) => ipcRenderer.invoke('db:get-chat-sessions', appName),
+  getChatSessions: () => ipcRenderer.invoke('db:get-chat-sessions'),
   getMemoriesForSession: (sessionId: string) =>
     ipcRenderer.invoke('db:get-memories-for-session', sessionId),
   getEntitiesForSession: (sessionId: string) =>

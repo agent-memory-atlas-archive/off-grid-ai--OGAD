@@ -1156,8 +1156,8 @@ export function setupIPC() {
     }
   )
 
-  ipcMain.handle('db:get-chat-sessions', (_, appName?: string) => {
-    return getChatSessions(appName)
+  ipcMain.handle('db:get-chat-sessions', () => {
+    return getChatSessions()
   })
   ipcMain.handle('db:get-memories-for-session', (_, sessionId: string) => {
     // Need to export this from database.ts first or import it

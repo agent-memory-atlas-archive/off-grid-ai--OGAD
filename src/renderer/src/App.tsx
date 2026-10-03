@@ -1,4 +1,3 @@
-import { ChatList } from './components/ChatList'
 import { ChatDetail } from './components/ChatDetail'
 import { CommandPalette } from './components/CommandPalette'
 import logo from './assets/logo.png'
@@ -496,7 +495,6 @@ function AppContent() {
       '/connectors': 'connectors',
       '/meetings': 'meetings',
       '/chat': CHAT_VIEW,
-      '/chats': 'chats',
       '/memories': 'memories',
       '/entities': 'entities',
       '/models': 'models',
@@ -1362,8 +1360,6 @@ function AppContent() {
                       ) : (
                         <UpgradeScreen feature={getProFeature(viewMode)} />
                       )
-                    ) : viewMode === 'chats' ? (
-                      <ChatList onSelectSession={setSelectedSessionId} />
                     ) : viewMode === 'models' ? (
                       <ModelsScreen
                         navigationSubroute={navigationSubroute}

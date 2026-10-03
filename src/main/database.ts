@@ -466,10 +466,10 @@ export interface MemoryRecord {
   name: string | null
 }
 
-export function getChatSessions(appName?: string): ChatSessionRecord[] {
+export function getChatSessions(): ChatSessionRecord[] {
   const db = getDB()
   // Query conversations with memory and entity counts instead of message count
-  let query = `
+  const query = `
         SELECT 
             c.id as session_id,
             c.title,
@@ -479,20 +479,9 @@ export function getChatSessions(appName?: string): ChatSessionRecord[] {
             (SELECT COUNT(DISTINCT es.entity_id) FROM entity_sessions es WHERE es.session_id = c.id) as entity_count,
             (SELECT summary FROM chat_summaries cs WHERE cs.session_id = c.id) as summary
         FROM conversations c
+        ORDER BY c.updated_at DESC
     `
-
-  if (appName && appName !== 'All') {
-    query += ` WHERE c.app_name LIKE ? `
-  }
-
-  query += ` ORDER BY c.updated_at DESC`
-
-  const stmt = db.prepare(query)
-  if (appName && appName !== 'All') {
-    return stmt.all(`%${appName}%`) as ChatSessionRecord[]
-  } else {
-    return stmt.all() as ChatSessionRecord[]
-  }
+  return db.prepare(query).all() as ChatSessionRecord[]
 }
 
 export function upsertChatSummary(sessionId: string, summary: string): void {
