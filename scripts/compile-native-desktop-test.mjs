@@ -46,6 +46,15 @@ for (const file of sources) {
       return JSON.stringify(relative)
     }
   )
+  // Native dynamic imports use Node's ESM resolver, which requires extensions.
+  source = source.replace(/import\((['"])(\.[^'"]+)\1\)/g, (match, _quote, specifier) => {
+    const original = path.resolve(path.dirname(file), specifier)
+    if (fs.existsSync(original + '.ts') || fs.existsSync(original + '.tsx'))
+      return `import(${JSON.stringify(specifier + '.js')})`
+    if (fs.existsSync(path.join(original, 'index.ts')))
+      return `import(${JSON.stringify(specifier + '/index.js')})`
+    return match
+  })
   source = source.replaceAll('import.meta.url', JSON.stringify(pathToFileURL(target).href))
   source = source.replace(
     '../resources/linux-desktop/meeting-recorder.py?raw',
