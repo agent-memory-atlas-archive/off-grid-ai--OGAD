@@ -306,6 +306,12 @@ jobs:
           else
             echo "no e2e coverage captured (the suite may not have launched)"
           fi
+      - name: Convert native recording worker coverage
+        if: ${{ !cancelled() }}
+        run: |
+          node ../shared/node_modules/c8/bin/c8.js report --temp-directory=coverage-native-raw \
+            --reporter=json --reporter=text-summary --report-dir=coverage-native --all=false
+          test -f coverage-native/coverage-final.json
       # Match the pre-push authority: merge every report that can cover this change,
       # then gate only executable lines added on this branch. The floors are the same
       # ratchets as scripts/hooks/pre-push; neither whole-tree debt nor a partial suite
@@ -320,9 +326,9 @@ jobs:
               exit 1
             fi
           done
-          coarse=""
+          coarse="--coarse=coverage-native/coverage-final.json"
           if [ -f coverage-e2e/coverage-final.json ]; then
-            coarse="--coarse=coverage-e2e/coverage-final.json"
+            coarse="$coarse --coarse=coverage-e2e/coverage-final.json"
           fi
           node ../shared/scripts/new-code-coverage.mjs . $reports $coarse \
             --min-statements=78 --min-branches=57 --min-functions=52 --min-lines=78

@@ -182,8 +182,8 @@ describe('<App/> locked Pro navigation integration', () => {
   it('unlocks the ported routes for an entitled Linux user', async () => {
     const user = userEvent.setup()
     installAppBoundary({ platform: 'linux', isPro: true })
-    const paidView = vi.fn((view: string) => <h1>Paid {view}</h1>)
-    const taskWorkspace = vi.fn(() => <h1>Paid Tasks workspace</h1>)
+    const paidView = (view: string): React.JSX.Element => <h1>Paid {view}</h1>
+    const taskWorkspace = (): React.JSX.Element => <h1>Paid Tasks workspace</h1>
     registerProView(paidView)
     registerSlot(SLOTS.taskWorkspace, taskWorkspace)
 
@@ -192,28 +192,21 @@ describe('<App/> locked Pro navigation integration', () => {
     await user.hover(navigation)
     await waitFor(() => expect(navigation.getAttribute('aria-expanded')).toBe('true'))
 
-    const linuxRoutes = new Set([
-      'day', 'reflect', 'replay', 'actions', 'entities', 'search',
-      'notifications', 'vault', 'clipboard', 'devices'
-    ])
     for (const feature of PRO_FEATURES) {
       const navButton = within(navigation).getByRole('button', { name: feature.label })
-      if (linuxRoutes.has(feature.route)) {
-        expect(within(navButton).queryByTitle('Coming soon')).toBeNull()
-        expect(within(navButton).queryByTitle('Pro')).toBeNull()
-        await user.click(navButton)
-        expect(await screen.findByRole('heading', { name: `Paid ${feature.route}` })).toBeTruthy()
-      } else {
-        expect(within(navButton).getByTitle('Coming soon')).toBeTruthy()
-        paidView.mockClear()
-        await user.click(navButton)
-        expect(await screen.findByRole('heading', { name: feature.label, level: 1 })).toBeTruthy()
-        expect(screen.getByText(/This feature is coming soon to Linux/)).toBeTruthy()
-        expect(screen.queryByRole('button', { name: /Get Pro/ })).toBeNull()
-        // A previous ported screen can render during its exit animation.
-        expect(paidView.mock.calls.every(([route]) => linuxRoutes.has(String(route)))).toBe(true)
-        expect(taskWorkspace).not.toHaveBeenCalled()
-      }
+      expect(within(navButton).queryByTitle('Coming soon')).toBeNull()
+      expect(within(navButton).queryByTitle('Pro')).toBeNull()
+      await user.click(navButton)
+      expect(
+        await screen.findByRole('heading', {
+          name:
+            feature.route === 'tasks'
+              ? 'Paid Tasks workspace'
+              : feature.route === 'explore'
+                ? 'Assistant'
+                : `Paid ${feature.route}`
+        })
+      ).toBeTruthy()
       await user.hover(navigation)
     }
   }, 30_000)
@@ -225,6 +218,8 @@ describe('<App/> locked Pro navigation integration', () => {
     render(<App />)
 
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeTruthy()
-    expect(screen.queryByText('Pro features are coming soon to Linux. Core features work now.')).toBeNull()
+    expect(
+      screen.queryByText('Pro features are coming soon to Linux. Core features work now.')
+    ).toBeNull()
   }, 30_000)
 })

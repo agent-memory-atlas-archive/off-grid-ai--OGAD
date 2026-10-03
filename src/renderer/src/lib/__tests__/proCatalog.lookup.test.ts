@@ -35,18 +35,7 @@ const winPorted = (route: string): ProFeature => ({
 })
 
 const WIN_PORTED = new Set(PRO_FEATURES.map((feature) => feature.route))
-const LINUX_PORTED = new Set([
-  'day',
-  'reflect',
-  'replay',
-  'actions',
-  'entities',
-  'search',
-  'notifications',
-  'vault',
-  'clipboard',
-  'devices'
-])
+const LINUX_PORTED = new Set(PRO_FEATURES.map((feature) => feature.route))
 
 describe('getProFeature', () => {
   it('returns the matching feature for a known route', () => {
@@ -159,10 +148,10 @@ describe('proFeatureComingSoon', () => {
   // list, so ANY platform absent from it is coming-soon. Without a third platform
   // asserted here, a regression that special-cased win32 (rather than reading the
   // list) would still pass. Entitlement is orthogonal — free users are never gated.
-  it('gates a Pro route on linux too, and still never gates free users there', () => {
+  it('opens all Pro routes on Linux', () => {
     const route = PRO_FEATURES.at(0)?.route
     if (!route) throw new Error('Pro catalog must not be empty')
-    expect(proFeatureComingSoon(route, 'linux', true)).toBe(true)
+    expect(proFeatureComingSoon(route, 'linux', true)).toBe(false)
     expect(proFeatureComingSoon(route, 'linux', false)).toBe(false)
   })
 
