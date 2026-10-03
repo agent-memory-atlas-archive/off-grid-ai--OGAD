@@ -671,6 +671,16 @@ export function MemoryChat({
     const timer = setTimeout(() => persistChangedPreference('imgNegative', imgNegative), 400)
     return () => clearTimeout(timer)
   }, [imgNegative, persistChangedPreference])
+  // Leaving the composer within the pause must not drop the last edit: write what is pending.
+  const typedImageParams = useRef({ imgSeed, imgNegative })
+  typedImageParams.current = { imgSeed, imgNegative }
+  useEffect(
+    () => () => {
+      persistChangedPreference('imgSeed', typedImageParams.current.imgSeed)
+      persistChangedPreference('imgNegative', typedImageParams.current.imgNegative)
+    },
+    [persistChangedPreference]
+  )
   useEffect(() => {
     console.log('MemoryChat effect: persist image enhancement preference')
     persistChangedPreference('enhanceImagePrompts', enhanceImg)
