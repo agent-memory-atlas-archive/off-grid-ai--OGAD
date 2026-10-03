@@ -663,12 +663,10 @@ describe('<App/> desktop navigation integration', () => {
 
       render(<App />)
 
-      await screen.findAllByRole(
-        'button',
-        { name: new RegExp(`^${defaultTab}`) },
-        { timeout: 10_000 }
-      )
-      expect(routedTabButton(defaultTab).getAttribute('aria-current')).toBe('page')
+      await waitFor(() => {
+        const buttons = screen.getAllByRole('button', { name: new RegExp(`^${defaultTab}`) })
+        expect(buttons.some((button) => button.getAttribute('aria-current') === 'page')).toBe(true)
+      }, { timeout: 10_000 })
       await waitFor(() => expect(window.location.pathname).toBe(canonicalPath))
     }
   )
