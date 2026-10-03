@@ -12,7 +12,7 @@ export type DevicePlatform = NodeJS.Platform | string
 /**
  * Noun to show the user for their computer.
  * - macOS (`'darwin'`) -> `'Mac'` (proper noun, always capitalized)
- * - Windows / Linux / anything else -> `'device'`
+ * - Windows -> `'Windows PC'`; Linux -> `'Linux computer'`; other -> `'device'`
  *
  * Pass `{ capitalize: true }` for sentence- or heading-initial use so `'device'`
  * becomes `'Device'` (no effect on `'Mac'`, which is already capitalized).
@@ -33,10 +33,8 @@ export function deviceNoun(platform: DevicePlatform, opts?: { capitalize?: boole
 }
 
 /**
- * The device flag: true on macOS. Use this to gate features that are only
- * confirmed working on Mac — the Pro layer is macOS-tested only for now, so on
- * Windows/Linux we show Pro subscribers a "coming soon" screen instead of the
- * untested feature (see proCatalog.proFeatureComingSoon).
+ * The device flag: true on macOS. Use this for macOS-specific system behavior.
+ * Feature availability comes from the platform declarations in the Pro catalog.
  */
 export function isMac(platform: DevicePlatform): boolean {
   return platform === 'darwin'
