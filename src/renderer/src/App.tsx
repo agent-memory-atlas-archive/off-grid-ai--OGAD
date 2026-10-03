@@ -390,7 +390,7 @@ function AppContent() {
       return !pinned
     })
   }
-  const rec = useMeetingRecorder()
+  const rec = useMeetingRecorder(isPro && proReady)
 
   const setTaskDetailSidebarMode = useCallback((detailOpen: boolean): void => {
     if (detailOpen) setSidebarHovered(false)

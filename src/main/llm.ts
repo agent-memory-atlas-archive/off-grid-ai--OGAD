@@ -699,9 +699,7 @@ export class LLMService {
       this.draftModel = path.basename(compatibleSettings.draftModel)
     // Quantized KV cache requires FlashAttention — auto-enable it so the pair is valid.
     if (this.kvCacheType !== 'f16' && !this.flashAttn) this.flashAttn = true
-    try {
-      this.persist()
-    } catch (error) {
+    const restorePrior = (): void => {
       this.performanceMode = priorSettings.performanceMode ?? this.performanceMode
       this.temperature = priorSettings.temperature ?? this.temperature
       this.ctxSize = priorSettings.ctxSize ?? this.ctxSize
@@ -722,6 +720,11 @@ export class LLMService {
       this.draftModel = priorSettings.draftModel ?? this.draftModel
       this.userExplicit.clear()
       priorExplicit.forEach((field) => this.userExplicit.add(field))
+    }
+    try {
+      this.persist()
+    } catch (error) {
+      restorePrior()
       throw error
     }
     if (before) {
@@ -731,8 +734,33 @@ export class LLMService {
       )
     }
     if (launchChanged && !this.paused) {
+      // A running model is only replaced once the new launch succeeds. If it fails, the
+      // previous settings are restored and the previous model is relaunched.
+      const wasRunning = this.initialized
       this.stop()
-      await this.init()
+      try {
+        await this.init()
+      } catch (error) {
+        if (!wasRunning) throw error
+        const attempted = this.getSettings()
+        restorePrior()
+        try {
+          this.persist()
+        } catch (persistError) {
+          console.error('[llm] could not restore settings after a failed relaunch:', persistError)
+        }
+        if (before) {
+          emitChangedLlmSettings(
+            attempted as Record<string, unknown>,
+            this.getSettings() as Record<string, unknown>
+          )
+        }
+        this.stop()
+        await this.init().catch((restartError: unknown) => {
+          console.error('[llm] could not relaunch the previous model:', restartError)
+        })
+        throw error
+      }
     }
   }
 

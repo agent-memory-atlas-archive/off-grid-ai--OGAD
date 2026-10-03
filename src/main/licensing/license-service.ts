@@ -68,8 +68,22 @@ export function refreshCachedProEntitlement(): void {
   provider?.refreshCachedState()
 }
 
+// Launch, interval and window-focus triggers can fire together. One check runs at a time, and a
+// trigger that arrives mid-check shares its result instead of racing it with an older answer.
+let inflightRevalidation: { provider: ProEntitlementProvider; promise: Promise<void> } | undefined
+
 export function revalidateProEntitlement(reason: PersonalMeshReconciliationReason): Promise<void> {
-  return provider?.revalidate(reason) ?? Promise.resolve()
+  const current = provider
+  if (!current) return Promise.resolve()
+  if (inflightRevalidation?.provider === current) return inflightRevalidation.promise
+  const entry = {
+    provider: current,
+    promise: current.revalidate(reason).finally(() => {
+      if (inflightRevalidation === entry) inflightRevalidation = undefined
+    })
+  }
+  inflightRevalidation = entry
+  return entry.promise
 }
 
 export function isProEntitled(): boolean {
