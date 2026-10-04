@@ -28,8 +28,24 @@ export interface PlaywrightToolResult {
   isError: boolean
 }
 
+/**
+ * What the semantic loop needs from a page session: Playwright MCP's tools. The in-app browser
+ * and Chromium extension tabs answer them through Playwright itself (PlaywrightMcpSession); a
+ * browser without a debugger protocol (Firefox) answers them in the page
+ * (extension-snapshot-session.ts).
+ */
+export interface SemanticPageSession {
+  snapshot(signal?: AbortSignal): Promise<PlaywrightToolResult>
+  recoverPage(url: string | undefined, signal?: AbortSignal): Promise<PlaywrightToolResult>
+  call(
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<PlaywrightToolResult>
+}
+
 /** One in-process Playwright MCP client for one target-scoped Web Use relay. */
-export class PlaywrightMcpSession {
+export class PlaywrightMcpSession implements SemanticPageSession {
   private readonly client = new Client({ name: 'Off Grid AI Web Use', version: '1' })
   private server: Awaited<ReturnType<typeof createConnection>> | null = null
   private connected = false

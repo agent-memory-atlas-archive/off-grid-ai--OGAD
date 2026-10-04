@@ -7,6 +7,10 @@
 //
 // The visual fallback (canvas, maps, remote desktops) needs OGAD's own view, so here a page
 // that needs it ends the task with that reason instead of guessing.
+//
+// Chromium tabs are driven by Playwright over the debugger protocol. Firefox has none for
+// extensions, so there the loop's Playwright tools are answered by the extension in the page
+// (extension-snapshot-session.ts); openTaskSession picks from what the browser reports.
 
 import { automationTaskReadStatus } from '@offgrid/automation'
 import { encodeTaskPhase } from '../../shared/task-execution-plan'
@@ -25,13 +29,55 @@ import { BrowserDriver } from './browser-driver'
 import { runBrowserPlaywrightTask } from './browser-playwright-task'
 import type { BrowserRailHost, BrowserTaskRequest, WebTaskResult } from './browser-rail'
 import { ElectronPlaywrightRelay } from './electron-playwright-relay'
-import { createExtensionPageProvider } from './extension-tab-pages'
-import { PlaywrightMcpSession } from './playwright-mcp-session'
+import { createExtensionPageProvider, type ExtensionTabContents } from './extension-tab-pages'
+import { ExtensionSnapshotSession } from './extension-snapshot-session'
+import { PlaywrightMcpSession, type SemanticPageSession } from './playwright-mcp-session'
 
 const START_URL = 'https://www.google.com'
 
 export const NEEDS_IN_APP_BROWSER =
   'This page needs visual control, which runs in the Off Grid AI browser. Switch Tasks > Web Use to the Off Grid AI browser to finish it.'
+
+type PageProvider = ReturnType<typeof createExtensionPageProvider>
+
+export interface TaskSession {
+  session: SemanticPageSession
+  /** The pointer overlay; null where the page is driven from inside (no debugger). */
+  driver: () => BrowserDriver | null
+  close: () => Promise<void>
+}
+
+/**
+ * Drive the task tab the way this browser allows: Playwright over the debugger protocol where
+ * it has one (Chromium), the extension's in-page answers otherwise (Firefox).
+ */
+export async function openTaskSession(
+  link: BrowserLink,
+  pages: PageProvider,
+  tab: ExtensionTabContents
+): Promise<TaskSession> {
+  const caps = (await link.request('browser.caps')) as { cdp?: unknown } | null
+  const current = (): ExtensionTabContents => pages.active() ?? tab
+  if (caps?.cdp !== true) {
+    return {
+      session: new ExtensionSnapshotSession(link, () => current().tabId),
+      driver: () => null,
+      close: async () => undefined
+    }
+  }
+  const relay = new ElectronPlaywrightRelay(pages)
+  const playwright = new PlaywrightMcpSession(relay)
+  tab.debugger.attach()
+  await playwright.connect()
+  return {
+    session: playwright,
+    driver: () => new BrowserDriver(current().transport()),
+    close: async () => {
+      await playwright.close().catch(() => undefined)
+      await relay.stop().catch(() => undefined)
+    }
+  }
+}
 
 export function createExtensionBrowserHost(link: () => BrowserLink | null): BrowserRailHost {
   return {
@@ -104,40 +150,31 @@ async function runInBrowser(
       ))
     const tab = await pages.open(start)
     recordStep(`opened ${start} in ${link.browser.name}`)
-    const relay = new ElectronPlaywrightRelay(pages)
-    const playwright = new PlaywrightMcpSession(relay)
-    tab.debugger.attach()
-    const driver = (): BrowserDriver => new BrowserDriver((pages.active() ?? tab).transport())
-    const semantic = await (async () => {
-      await playwright.connect()
-      return runBrowserPlaywrightTask({
-        goal,
-        plan,
-        session: playwright,
-        guard,
-        activeDriver: driver,
-        activeUrl: () => (pages.active() ?? tab).getURL(),
-        waitForUser: (why, signal) => waitForVisionUser(taskId, why, signal),
-        takeGuidance: () => guidance.splice(0),
-        onStep: recordStep,
-        onPhase: (phaseId) => recordStep(encodeTaskPhase(phaseId)),
-        onProgress: (currentStep, phase, action) =>
-          reportTaskProgress({
-            taskId,
-            journeyId,
-            kind: 'web_use',
-            title: goal,
-            status: 'running',
-            phase,
-            currentStep,
-            currentAction: action
-          }),
-        signal: controller.signal
-      })
-    })().finally(async () => {
-      await playwright.close().catch(() => undefined)
-      await relay.stop().catch(() => undefined)
-    })
+    const task = await openTaskSession(link, pages, tab)
+    const semantic = await runBrowserPlaywrightTask({
+      goal,
+      plan,
+      session: task.session,
+      guard,
+      activeDriver: task.driver,
+      activeUrl: () => (pages.active() ?? tab).getURL(),
+      waitForUser: (why, signal) => waitForVisionUser(taskId, why, signal),
+      takeGuidance: () => guidance.splice(0),
+      onStep: recordStep,
+      onPhase: (phaseId) => recordStep(encodeTaskPhase(phaseId)),
+      onProgress: (currentStep, phase, action) =>
+        reportTaskProgress({
+          taskId,
+          journeyId,
+          kind: 'web_use',
+          title: goal,
+          status: 'running',
+          phase,
+          currentStep,
+          currentAction: action
+        }),
+      signal: controller.signal
+    }).finally(task.close)
 
     const finalUrl = (pages.active() ?? tab).getURL()
     if (semantic.fallback) guard.fail(NEEDS_IN_APP_BROWSER)
