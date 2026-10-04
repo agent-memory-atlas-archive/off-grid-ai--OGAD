@@ -5,15 +5,19 @@
 //   POST /v1/extension/rpc    every other call, sealed end to end
 //
 // Defence in layers, none of them the only one:
-//   loopback only       the gateway listens on every interface for phones; this does not
+//   loopback only       the gateway binds to loopback; these routes check the peer again
 //   no web pages        a request carrying an http(s) Origin is refused outright, and pairing
 //                       requires an extension origin, so a site you visit cannot start one
 //   sealed traffic      rpc bodies are AES-GCM under a key only a paired browser holds
 
 import type http from 'http'
+import type { Duplex } from 'stream'
+import { WebSocketServer } from 'ws'
 import { isExtensionOrigin } from './bridge-protocol'
-import { getBridgeService } from './bridge-electron'
+import { addBrowserLink, getBridgeService } from './bridge-electron'
 import type { BridgeReply } from './bridge-service'
+import { acceptBrowserSocket } from './bridge-socket'
+import { SOCKET_PATH } from './bridge-socket-protocol'
 
 const MAX_BODY = 4 * 1024 * 1024
 
@@ -84,4 +88,46 @@ export async function handleExtensionBridge(
     // Never echo internals; the bridge's own errors are already generic.
     return send(res, origin, { status: 500, body: { error: 'bridge_error' } })
   }
+}
+
+const sockets = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 })
+const DEVICE_ID = /^[A-Za-z0-9_-]{8,64}$/
+
+/**
+ * The live socket at /v1/extension/socket?d=<deviceId>. Same gates as pairing: loopback peer
+ * and a browser-extension Origin. The sealed hello then proves the browser holds its key.
+ * Returns false for any other upgrade so the gateway can decide what to do with it.
+ */
+export function handleExtensionUpgrade(
+  req: http.IncomingMessage,
+  socket: Duplex,
+  head: Buffer
+): boolean {
+  const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+  if (url.pathname !== SOCKET_PATH) return false
+  const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined
+  const deviceId = url.searchParams.get('d') ?? ''
+  if (!isLoopback(req) || !isExtensionOrigin(origin) || !DEVICE_ID.test(deviceId)) {
+    socket.destroy()
+    return true
+  }
+  sockets.handleUpgrade(req, socket, head, (ws) => {
+    void getBridgeService()
+      .then((bridge) =>
+        acceptBrowserSocket(
+          {
+            linkKey: (id) => bridge.linkKey(id),
+            acceptNonce: (id, nonce) => bridge.acceptNonce(id, nonce),
+            now: Date.now
+          },
+          ws,
+          deviceId
+        )
+      )
+      .then((link) => {
+        if (link) addBrowserLink(link)
+      })
+      .catch(() => ws.close(1011, 'bridge_error'))
+  })
+  return true
 }

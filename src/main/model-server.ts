@@ -55,7 +55,7 @@ import {
   toDataUrl
 } from './model-server/data-url'
 import { errBody, errMeta } from './model-server/errors'
-import { handleExtensionBridge } from './extension-bridge/bridge-http'
+import { handleExtensionBridge, handleExtensionUpgrade } from './extension-bridge/bridge-http'
 import { isAsync, matchPollRoute } from './model-server/async-request'
 import { sanitizeChatMessages } from './model-server/chat-messages'
 import { applyThinkingPayload, requestedThinking } from './llm/chat-payload'
@@ -1503,6 +1503,10 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
   server.requestTimeout = 0 // no cap on how long a request may take
   server.headersTimeout = 0 // no cap on time-to-headers
   server.keepAliveTimeout = 60_000
+  // The paired browser extension's live socket (extension-bridge/). Every other upgrade is refused.
+  server.on('upgrade', (req, socket, head) => {
+    if (!handleExtensionUpgrade(req, socket, head)) socket.destroy()
+  })
 
   // The gateway has no authentication. Bind the socket itself to loopback so no
   // route can become LAN-accessible through a missing per-handler authorization check.

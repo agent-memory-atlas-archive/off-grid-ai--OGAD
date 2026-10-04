@@ -37,6 +37,7 @@ import {
   turnsToAppend
 } from './bridge-conversations'
 import { generateKeyPair } from './bridge-protocol'
+import { createLinkRegistry, type BrowserLink } from './bridge-socket'
 
 const storePath = (): string => path.join(app.getPath('userData'), 'extension-bridge.json')
 
@@ -214,6 +215,17 @@ const data: BridgeData = {
 }
 
 let service: Promise<BridgeService> | null = null
+const links = createLinkRegistry()
+
+/** Browsers connected over the live socket right now, newest first. */
+export function getBrowserLinks(): BrowserLink[] {
+  return links.list()
+}
+
+/** Keep a browser's live link once its socket has passed the handshake. */
+export function addBrowserLink(link: BrowserLink): void {
+  links.add(link)
+}
 
 /** The bridge, created on first use (after the app is ready, so safeStorage works). */
 export function getBridgeService(): Promise<BridgeService> {
