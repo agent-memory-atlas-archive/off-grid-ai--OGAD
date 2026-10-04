@@ -110,14 +110,23 @@ export function createChannel(opts: {
   }
 }
 
-/** Commands the desktop sends down. Each gets exactly one reply with the same id. */
+/**
+ * Commands the desktop sends down. Each gets exactly one reply with the same id.
+ *
+ * Two ways to drive a tab. `cdp.*` is the browser's debugger protocol, where it has one
+ * (Chromium). `page.call` runs one Playwright MCP tool (browser_snapshot, browser_click, ...)
+ * against the tab from the extension itself, for browsers without one (Firefox).
+ * `browser.caps` says which this browser offers.
+ */
 export const SOCKET_OPS = [
+  'browser.caps',
   'tabs.list',
   'tab.create',
   'tab.close',
   'cdp.attach',
   'cdp.detach',
-  'cdp.send'
+  'cdp.send',
+  'page.call'
 ] as const
 export type SocketOp = (typeof SOCKET_OPS)[number]
 
@@ -125,6 +134,31 @@ export interface SocketCommand {
   readonly id: number
   readonly op: SocketOp
   readonly args: Record<string, unknown>
+}
+
+/** The reply to `browser.caps`. */
+export interface BrowserCaps {
+  /** The tab can be driven over `cdp.*`. False means `page.call` only. */
+  readonly cdp: boolean
+}
+
+/** The Playwright MCP tools `page.call` runs, and its reply. */
+export const PAGE_TOOLS = [
+  'browser_snapshot',
+  'browser_navigate',
+  'browser_click',
+  'browser_type',
+  'browser_select_option',
+  'browser_press_key',
+  'browser_hover',
+  'browser_drag',
+  'browser_tabs'
+] as const
+export type PageTool = (typeof PAGE_TOOLS)[number]
+
+export interface PageToolResult {
+  readonly text: string
+  readonly isError: boolean
 }
 
 export type SocketReply =
