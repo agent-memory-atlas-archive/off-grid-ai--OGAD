@@ -101,10 +101,14 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
     return derived
   }
 
+  // Pro features say "pro_required" only when the desktop is not Pro. A Pro desktop that
+  // still cannot offer one (an older Pro bundle, no vault set up) says "<feature>_unavailable",
+  // so the browser never tells a paying user to upgrade.
   const requireFeature = (feature: keyof BridgeFeatures): void => {
-    if (!deps.data.features()[feature]) {
-      throw new Error(feature === 'vault' ? 'pro_required' : `${feature}_unavailable`)
-    }
+    const features = deps.data.features()
+    if (features[feature]) return
+    const proOnly = feature === 'vault' || feature === 'tools'
+    throw new Error(proOnly && !features.pro ? 'pro_required' : `${feature}_unavailable`)
   }
 
   const handlers: Record<RpcMethod, Handler> = {

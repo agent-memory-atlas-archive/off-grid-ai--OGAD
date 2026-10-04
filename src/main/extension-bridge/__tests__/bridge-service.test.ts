@@ -222,6 +222,17 @@ describe('sealed rpc', () => {
     })
     expect(
       (await free.call('device000001', 'tools.run', { name: 'mail_send', args: {} })).body
+    ).toMatchObject({ ok: false, error: 'pro_required' })
+
+    // Pro, but this desktop cannot answer for the vault or tools yet: never "upgrade".
+    const stale = await setup({ features: { ...PRO, vault: false, tools: false } })
+    await stale.pair()
+    expect((await stale.call('device000001', 'vault', { request: {} })).body).toMatchObject({
+      ok: false,
+      error: 'vault_unavailable'
+    })
+    expect(
+      (await stale.call('device000001', 'tools.run', { name: 'mail_send', args: {} })).body
     ).toMatchObject({ ok: false, error: 'tools_unavailable' })
 
     const pro = await setup({ features: PRO })

@@ -20,7 +20,7 @@ import {
 } from '../database'
 import { getToolExtensions, runTool } from '../tools'
 import { callHookAsync, hasHook, HOOKS } from '../bootstrap/hookRegistry'
-import { isProEntitled } from '../licensing/license-service'
+import { proEnabled } from '../bootstrap/loadProFeaturesMain'
 import {
   createBridgeService,
   type BridgeData,
@@ -137,7 +137,8 @@ async function confirmPairing(code: string, deviceName: string): Promise<boolean
 }
 
 function features(): BridgeFeatures {
-  const pro = isProEntitled()
+  // The same Pro decision the rest of the app uses (license, or the dev OFFGRID_PRO switch).
+  const pro = proEnabled()
   const exts = getToolExtensions()
   return {
     pro,
