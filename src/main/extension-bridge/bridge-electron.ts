@@ -19,6 +19,7 @@ import {
   getRagMessages
 } from '../database'
 import { getToolExtensions, runTool } from '../tools'
+import { notifyRagConversationChanged } from '../rag-conversation-events'
 import { callHookAsync, hasHook, HOOKS } from '../bootstrap/hookRegistry'
 import { proEnabled } from '../bootstrap/loadProFeaturesMain'
 import { getWebUseSettings } from '../web-use-settings'
@@ -202,9 +203,12 @@ const data: BridgeData = {
     for (const turn of turnsToAppend(getRagMessages(conversation.id), conversation.turns)) {
       addRagMessage(conversation.id, turn.role, turn.content)
     }
+    // The chat list reloads now, as it does for a phone's chats, not on the next restart.
+    notifyRagConversationChanged({ conversationId: conversation.id })
   },
   deleteConversation: async (id) => {
     deleteRagConversation(id)
+    notifyRagConversationChanged({ conversationId: id })
   },
   listTools,
   runTool: async (name, args, browser) => {
