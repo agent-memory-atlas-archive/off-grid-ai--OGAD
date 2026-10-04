@@ -224,7 +224,7 @@ describe('sealed rpc', () => {
     expect(set.body).toMatchObject({ ok: true, result: { voice: 'bm_george' } })
     expect(JSON.stringify(set.body)).not.toContain('apiKey')
     for (const [method, params] of [
-      ['settings.get', { section: 'remote' }],
+      ['settings.get', { section: 'secrets' }],
       ['settings.set', { section: 'voice', patch: { voice: 'not a voice' } }]
     ] as const) {
       expect((await s.call('device000001', method, params)).body).toMatchObject({

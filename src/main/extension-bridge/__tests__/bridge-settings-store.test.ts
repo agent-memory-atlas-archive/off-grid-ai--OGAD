@@ -12,7 +12,8 @@ function fakeDesktop() {
     screenshotSize: 'large',
     visualHistoryFrames: 1,
     checkpointInterval: 8,
-    groundingModelId: 'kept-on-desktop'
+    groundingModelId: 'kept-on-desktop' as string | null,
+    decisionModelId: null as string | null
   }
   const state = {
     web: { ...task, browserTarget: 'in_app' as 'in_app' | 'default_browser' },
@@ -26,6 +27,18 @@ function fakeDesktop() {
       { id: 1, name: 'Notes', url: 'https://mcp.test/notes', enabled: 1 },
       { id: 2, name: 'Local script', url: null, enabled: 1 }
     ],
+    remote: { activeServerId: null as string | null, textOnRemote: false },
+    servers: [
+      {
+        id: 'lab',
+        name: 'Lab',
+        endpoint: 'https://lab.example.test:8443/v1?key=secret',
+        model: 'qwen-32b',
+        roleModels: { grounding: 'ui-tars', decision: 'decider' },
+        modelCatalog: [{ id: 'qwen-32b', name: 'Qwen 32B' }]
+      },
+      { id: 'off', name: 'Off', endpoint: 'https://off.test', model: 'x', enabled: false }
+    ],
     calls: [] as string[]
   }
   const deps: SettingsStoreDeps = {
@@ -33,6 +46,23 @@ function fakeDesktop() {
     setWeb: (next) => void (state.web = next as typeof state.web),
     computer: () => state.computer,
     setComputer: (next) => void (state.computer = next as typeof state.computer),
+    remote: () => ({ ...state.remote, servers: state.servers }),
+    useRemote: (id) => {
+      state.remote = { activeServerId: id, textOnRemote: true }
+      return true
+    },
+    remoteOff: () => void (state.remote = { activeServerId: null, textOnRemote: false }),
+    taskModels: async () => ({
+      catalog: [
+        { id: 'grounder-7b', name: 'Grounder 7B', kind: 'computer_use' },
+        { id: 'decider-2b', name: 'Decider 2B', kind: 'computer_use', tags: ['Decision'] },
+        { id: 'not-installed', name: 'Missing', kind: 'computer_use' },
+        { id: 'chat', name: 'Chat', kind: 'text' }
+      ],
+      installed: ['grounder-7b', 'decider-2b', 'chat'],
+      activeGrounder: 'grounder-7b'
+    }),
+    setLocalGrounder: async (id) => void state.calls.push(`grounder ${id}`),
     appSettings: () => state.app,
     saveSetting: (key, value) => void (state.app = { ...state.app, [key]: value }),
     listTools: () => state.tools,
@@ -69,8 +99,9 @@ function fakeDesktop() {
 describe('a paired browser’s view of the desktop settings', () => {
   it('reads Tasks without anything the browser may not set', async () => {
     const { store } = fakeDesktop()
-    const tasks = (await store.read('tasks')) as Record<string, Record<string, unknown>>
+    const tasks = (await store.read('tasks')) as unknown as Record<string, Record<string, unknown>>
     expect(tasks.web).toEqual({
+      decisionModelId: '',
       modelStrategy: 'same_as_chat',
       context: 'auto',
       screenshotSize: 'large',
@@ -80,6 +111,56 @@ describe('a paired browser’s view of the desktop settings', () => {
     })
     expect(tasks.computer).toMatchObject({ showPictureInPicture: false, enabledRails: ['vision'] })
     expect(JSON.stringify(tasks)).not.toContain('groundingModelId')
+  })
+
+  it('offers installed and remote role models for grounding and decisions', async () => {
+    const { store } = fakeDesktop()
+    const tasks = await store.read('tasks')
+    expect(tasks).toMatchObject({
+      grounding: 'kept-on-desktop',
+      groundingChoices: [
+        { id: 'grounder-7b', label: 'Grounder 7B' },
+        { id: expect.stringContaining('ui-tars'), label: 'ui-tars - Lab' }
+      ],
+      decisionChoices: [
+        { id: 'decider-2b', label: 'Decider 2B' },
+        { id: expect.stringContaining('decider'), label: 'decider - Lab' }
+      ]
+    })
+  })
+
+  it('sets only offered models; a local grounder also becomes the active one', async () => {
+    const { store, state } = fakeDesktop()
+    await store.write('tasks', { grounding: 'not-installed', web: { decisionModelId: 'nope' } })
+    expect(state.computer.groundingModelId).toBe('kept-on-desktop')
+    expect(state.web.decisionModelId).toBeNull()
+    await store.write('tasks', { grounding: 'grounder-7b', web: { decisionModelId: 'decider-2b' } })
+    expect(state.calls).toEqual(['grounder grounder-7b'])
+    expect(state.computer.groundingModelId).toBe('grounder-7b')
+    expect(state.web.decisionModelId).toBe('decider-2b')
+    await store.write('tasks', { web: { decisionModelId: '' } })
+    expect(state.web.decisionModelId).toBeNull()
+    const remote = (await store.read('tasks')) as unknown as { groundingChoices: { id: string }[] }
+    const remoteId = remote.groundingChoices[1]!.id
+    await store.write('tasks', { grounding: remoteId })
+    expect(state.calls).toEqual(['grounder grounder-7b'])
+    expect(state.computer.groundingModelId).toBe(remoteId)
+  })
+
+  it('shows remote servers by name and host only, and switches between them', async () => {
+    const { store, state } = fakeDesktop()
+    expect(await store.read('remote')).toEqual({
+      active: false,
+      activeServerId: null,
+      servers: [{ id: 'lab', name: 'Lab', host: 'lab.example.test:8443', model: 'Qwen 32B' }]
+    })
+    await store.write('remote', { use: 'made-up' })
+    expect(state.remote.textOnRemote).toBe(false)
+    await store.write('remote', { use: 'lab' })
+    expect(await store.read('remote')).toMatchObject({ active: true, activeServerId: 'lab' })
+    await store.write('remote', { off: true })
+    expect(await store.read('remote')).toMatchObject({ active: false, activeServerId: null })
+    expect(JSON.stringify(await store.read('remote'))).not.toContain('secret')
   })
 
   it('writes Tasks through the setters, keeping what the browser did not send', async () => {

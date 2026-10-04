@@ -12,6 +12,7 @@
 // reachable from here.
 
 export const SETTINGS_SECTIONS = [
+  'remote',
   'tasks',
   'tools',
   'connectors',
@@ -26,6 +27,25 @@ export const isSettingsSection = (v: unknown): v is SettingsSection =>
 
 // ---- What the desktop answers ---------------------------------------------------------------
 
+export interface ModelChoice {
+  readonly id: string
+  readonly label: string
+}
+
+/** Saved remote servers, by name and host only: endpoints' paths and API keys stay put. */
+export interface RemoteSettings {
+  /** Chat runs on the active remote server rather than this machine. */
+  readonly active: boolean
+  readonly activeServerId: string | null
+  readonly servers: readonly {
+    readonly id: string
+    readonly name: string
+    readonly host: string
+    /** The server's text model, by name. Empty when none is chosen on the desktop. */
+    readonly model: string
+  }[]
+}
+
 /** Web Use and Computer Use options with fixed choices (the desktop's Tasks tab). */
 export interface TaskOptions {
   readonly modelStrategy: string
@@ -36,10 +56,19 @@ export interface TaskOptions {
 }
 
 export interface TasksSettings {
-  readonly web: TaskOptions & { readonly browserTarget: 'in_app' | 'default_browser' }
+  /** Shared by Web Use and Computer Use. Empty when none is chosen. */
+  readonly grounding: string
+  readonly groundingChoices: readonly ModelChoice[]
+  /** Decider models for the decision strategies; '' means the default. */
+  readonly decisionChoices: readonly ModelChoice[]
+  readonly web: TaskOptions & {
+    readonly browserTarget: 'in_app' | 'default_browser'
+    readonly decisionModelId: string
+  }
   readonly computer: TaskOptions & {
     readonly showPictureInPicture: boolean
     readonly enabledRails: readonly string[]
+    readonly decisionModelId: string
   }
 }
 
@@ -75,6 +104,7 @@ export interface VoiceSettings {
 }
 
 export interface SettingsBySection {
+  remote: RemoteSettings
   tasks: TasksSettings
   tools: ToolsSettings
   connectors: ConnectorsSettings
@@ -160,10 +190,25 @@ const nested =
 
 const HTTP_URL = /^https?:\/\/[^\s]+$/
 
+const MODEL_ID = text(400, /^\S*$/)
+const yes: Rule = (v) => (v === true ? v : undefined)
+
 const SECTION_RULES: Record<SettingsSection, Record<string, Rule>> = {
+  // Only switching between saved servers: adding one, its models and keys stay on the desktop.
+  remote: { use: text(200, /^\S+$/), off: yes },
   tasks: {
-    web: nested({ ...TASK_RULES, browserTarget: oneOf(BROWSER_TARGETS) }),
-    computer: nested({ ...TASK_RULES, showPictureInPicture: bool, enabledRails: rails })
+    grounding: text(400, /^\S+$/),
+    web: nested({
+      ...TASK_RULES,
+      browserTarget: oneOf(BROWSER_TARGETS),
+      decisionModelId: MODEL_ID
+    }),
+    computer: nested({
+      ...TASK_RULES,
+      showPictureInPicture: bool,
+      enabledRails: rails,
+      decisionModelId: MODEL_ID
+    })
   },
   tools: {
     enabled: bool,

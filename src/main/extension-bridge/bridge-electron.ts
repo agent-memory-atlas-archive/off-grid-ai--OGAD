@@ -33,6 +33,18 @@ import { readTranscriptionInfo } from '../transcription/select'
 import { resolveImageParameters, setImageParameterOverride } from '@offgrid/models'
 import { createSettingsStore } from './bridge-settings-store'
 import {
+  activateRemoteVisionModel,
+  deactivateRemoteVisionModel,
+  getRemoteVisionServerSettings
+} from '../vision/remote-vision-server'
+import { remoteModelSelected } from '../active-models'
+import {
+  getActiveModalities,
+  getCatalog,
+  listInstalled,
+  setActiveModalChoice
+} from '../models-manager'
+import {
   createBridgeService,
   type BridgeData,
   type BridgeFeatures,
@@ -197,6 +209,31 @@ const settingsStore = createSettingsStore({
   setWeb: (next) => void setWebUseSettings(next),
   computer: getComputerUseSettings,
   setComputer: (next) => void setComputerUseSettings(next),
+  remote: () => {
+    const r = getRemoteVisionServerSettings()
+    return {
+      activeServerId: r.activeServerId,
+      textOnRemote: remoteModelSelected('text'),
+      servers: r.servers
+    }
+  },
+  useRemote: (serverId) => {
+    const server = getRemoteVisionServerSettings().servers.find((s) => s.id === serverId)
+    return Boolean(server?.model) && activateRemoteVisionModel(serverId, server!.model)
+  },
+  remoteOff: deactivateRemoteVisionModel,
+  taskModels: async () => {
+    const [catalog, installed] = await Promise.all([getCatalog(), listInstalled()])
+    const active = (getActiveModalities() as Record<string, string | null>).computer_use
+    return {
+      catalog: catalog.models as Record<string, unknown>[],
+      installed,
+      activeGrounder: active ?? null
+    }
+  },
+  setLocalGrounder: async (modelId) => {
+    await setActiveModalChoice('computer_use', modelId)
+  },
   appSettings: () => getSettings() as Record<string, unknown>,
   saveSetting,
   listTools: listDesktopTools,

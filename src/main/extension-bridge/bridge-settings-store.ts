@@ -1,6 +1,6 @@
 // A paired browser's view of the desktop's settings (sealed settings.get / settings.set). The
 // browser sees and changes the same values as Settings here, through the same functions:
-// Tasks, Tools, Connectors, Image, Transcription and Voice. The patch arriving here has
+// Remote, Tasks, Tools, Connectors, Image, Transcription and Voice. The patch arriving here has
 // already been checked by bridge-settings.ts (listed keys, types, bounds); the setters below
 // normalise it as they do for the desktop's own screen.
 //
@@ -8,14 +8,34 @@
 // so it is tested without Electron or a database.
 
 import type { SettingsBySection, SettingsSection, TaskOptions } from './bridge-settings'
+import { parseRemoteVisionModelId } from '../../shared/remote-vision-server'
+import { remoteView, taskModelChoices, type SavedServer } from './bridge-task-models'
 
 type Patch = Record<string, unknown>
 
+type Decides = { decisionModelId: string | null }
+
 export interface SettingsStoreDeps {
-  web(): TaskOptions & { browserTarget: 'in_app' | 'default_browser' }
+  web(): TaskOptions & Decides & { browserTarget: 'in_app' | 'default_browser' }
   setWeb(next: unknown): void
-  computer(): TaskOptions & { showPictureInPicture: boolean; enabledRails: string[] }
+  computer(): TaskOptions &
+    Decides & {
+      showPictureInPicture: boolean
+      enabledRails: string[]
+      groundingModelId: string | null
+    }
   setComputer(next: unknown): void
+  remote(): { activeServerId: string | null; textOnRemote: boolean; servers: SavedServer[] }
+  /** Runs chat on a saved server's text model; false when it has none or is switched off. */
+  useRemote(serverId: string): boolean
+  remoteOff(): void
+  /** The model catalog, what is installed, and the active local grounding model. */
+  taskModels(): Promise<{
+    catalog: Record<string, unknown>[]
+    installed: string[]
+    activeGrounder: string | null
+  }>
+  setLocalGrounder(modelId: string): Promise<void>
   appSettings(): Record<string, unknown>
   saveSetting(key: string, value: unknown): void
   listTools(): { name: string; description: string; enabled: boolean }[]
@@ -65,15 +85,29 @@ export function createSettingsStore(deps: SettingsStoreDeps): {
   const readers: {
     [S in SettingsSection]: () => Promise<SettingsBySection[S]> | SettingsBySection[S]
   } = {
-    tasks: () => {
+    remote: () => {
+      const r = deps.remote()
+      return remoteView(r.servers, r.activeServerId, r.textOnRemote)
+    },
+    tasks: async () => {
       const web = deps.web()
       const computer = deps.computer()
+      const models = await deps.taskModels()
+      const choices = taskModelChoices({ ...models, servers: deps.remote().servers })
       return {
-        web: { ...taskOptions(web), browserTarget: web.browserTarget },
+        grounding: computer.groundingModelId ?? models.activeGrounder ?? '',
+        groundingChoices: choices.grounding,
+        decisionChoices: choices.decision,
+        web: {
+          ...taskOptions(web),
+          browserTarget: web.browserTarget,
+          decisionModelId: web.decisionModelId ?? ''
+        },
         computer: {
           ...taskOptions(computer),
           showPictureInPicture: computer.showPictureInPicture,
-          enabledRails: [...computer.enabledRails]
+          enabledRails: [...computer.enabledRails],
+          decisionModelId: computer.decisionModelId ?? ''
         }
       }
     },
@@ -125,14 +159,33 @@ export function createSettingsStore(deps: SettingsStoreDeps): {
     }
   }
 
-  const writers: Record<SettingsSection, (patch: Patch) => void> = {
-    tasks: (p) => {
-      if (p.web) deps.setWeb({ ...deps.web(), ...pickTask(p.web, ['browserTarget']) })
+  const writers: Record<SettingsSection, (patch: Patch) => Promise<void> | void> = {
+    remote: (p) => {
+      if (p.off === true) {
+        deps.remoteOff()
+      } else if (typeof p.use === 'string' && deps.remote().servers.some((s) => s.id === p.use)) {
+        deps.useRemote(p.use)
+      }
+    },
+    tasks: async (p) => {
+      const models = await deps.taskModels()
+      const choices = taskModelChoices({ ...models, servers: deps.remote().servers })
+      const decider = (raw: unknown): Patch => decisionPatch(raw, choices.decision)
+      if (p.web) {
+        deps.setWeb({ ...deps.web(), ...pickTask(p.web, ['browserTarget']), ...decider(p.web) })
+      }
       if (p.computer) {
         deps.setComputer({
           ...deps.computer(),
-          ...pickTask(p.computer, ['showPictureInPicture', 'enabledRails'])
+          ...pickTask(p.computer, ['showPictureInPicture', 'enabledRails']),
+          ...decider(p.computer)
         })
+      }
+      const grounding = choices.grounding.find((c) => c.id === p.grounding)
+      if (grounding) {
+        // A local grounder is also the active Computer Use model, as Settings > Tasks does it.
+        if (!parseRemoteVisionModelId(grounding.id)) await deps.setLocalGrounder(grounding.id)
+        deps.setComputer({ ...deps.computer(), groundingModelId: grounding.id })
       }
     },
     tools: (p) => {
@@ -177,9 +230,16 @@ export function createSettingsStore(deps: SettingsStoreDeps): {
   return {
     read: async (section) => readers[section](),
     async write(section, patch) {
-      writers[section](patch)
+      await writers[section](patch)
     }
   }
+}
+
+/** A decision model the desktop offers, or '' for the default; anything else is dropped. */
+function decisionPatch(raw: unknown, choices: readonly { id: string }[]): Patch {
+  const id = ((raw ?? {}) as Patch).decisionModelId
+  if (id === '') return { decisionModelId: null }
+  return choices.some((c) => c.id === id) ? { decisionModelId: id } : {}
 }
 
 function pickTask(raw: unknown, extra: readonly string[]): Patch {
