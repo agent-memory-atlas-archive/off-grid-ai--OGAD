@@ -2265,37 +2265,9 @@ export function setupIPC(): void {
 
   // Which STT engine + model would run right now (provenance) + the installed transcription
   // models a picker can switch to (via the existing models:set-active-modal — this only lists).
-  ipcMain.handle('transcription:active-info', async () => {
-    const { getActiveTranscriptionInfo, transcriptionActiveInfo } =
-      await import('./transcription/select')
-    const { getCatalog } = await import('./models-manager')
-    const { getSetting } = await import('./database')
-    const catalog = await getCatalog()
-    const installed = (
-      catalog.models as Array<{
-        id: string
-        familyId?: string
-        name?: string
-        kind?: string
-        downloaded?: boolean
-        files?: Array<{ name: string; downloaded?: boolean }>
-      }>
-    ).filter(
-      (model) =>
-        model.kind === 'transcription' &&
-        (model.downloaded === true || model.files?.every((file) => file.downloaded === true))
-    )
-    return transcriptionActiveInfo(
-      getActiveTranscriptionInfo(),
-      installed.map((model) => ({
-        id: model.id,
-        familyId: model.familyId,
-        name: model.name,
-        files: model.files ?? []
-      })),
-      getSetting('sttLanguage', 'auto')
-    )
-  })
+  ipcMain.handle('transcription:active-info', async () =>
+    (await import('./transcription/select')).readTranscriptionInfo()
+  )
 
   /**
    * Keep the image a generation will be based on, and give it a name the mesh can use.
