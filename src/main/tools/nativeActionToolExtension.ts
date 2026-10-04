@@ -24,9 +24,12 @@ import {
   specsForPlatform,
   systemHintForPlatform,
   taskSessionLimitMinutes,
+  withWebUseTarget,
   type NativeToolSpec
 } from './nativeActionToolExtension-logic'
 import { createHash } from 'node:crypto'
+import { getWebUseSettings } from '../web-use-settings'
+import { getBrowserLinks } from '../extension-bridge/bridge-electron'
 import { actionArgsWithTaskLaunch } from '../tasks/task-launch-identity'
 
 /** The engine port the extension needs - implemented by the actions runtime,
@@ -42,6 +45,8 @@ export interface NativeActionToolBoundary {
   run: (cmd: NativeActionCommand) => Promise<NativeActionResponse>
   /** Allows a host or test boundary to disable long-running task tools. */
   taskUseEnabled: () => boolean
+  /** Web Use runs in the user's connected default browser (Tasks > Web Use > Browser). */
+  webUseInDefaultBrowser?: () => boolean
   actions?: ActionsPort
 }
 
@@ -132,6 +137,8 @@ function needsCurrentLocation(args: Record<string, unknown>, context?: ToolConte
 const productionBoundary: NativeActionToolBoundary = {
   run: inlineRun,
   taskUseEnabled: () => true,
+  webUseInDefaultBrowser: () =>
+    getWebUseSettings().browserTarget === 'default_browser' && getBrowserLinks().length > 0,
   get actions(): ActionsPort {
     // The import is static (the main bundle is one CJS chunk); the runtime
     // itself builds lazily on first access, once the DB exists.
@@ -146,8 +153,9 @@ export class NativeActionToolExtension implements ToolExtension {
   category = 'tool' as const
 
   private get linuxTaskUse(): boolean {
-    return this.platform === 'linux' &&
-      (app.isPackaged || process.env.OFFGRID_LINUX_TASK_USE === '1')
+    return (
+      this.platform === 'linux' && (app.isPackaged || process.env.OFFGRID_LINUX_TASK_USE === '1')
+    )
   }
 
   constructor(
@@ -156,7 +164,9 @@ export class NativeActionToolExtension implements ToolExtension {
   ) {}
 
   schemas(): unknown[] {
-    return buildNativeToolSchemas(specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse))
+    return buildNativeToolSchemas(
+      specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse)
+    )
   }
 
   /** What the Tools settings tab lists and toggles. A getter, not a field: the set depends on the
@@ -165,10 +175,12 @@ export class NativeActionToolExtension implements ToolExtension {
    *  which is why every native action - web_use and computer_use included - was invisible and
    *  untoggleable in Settings even while the model could call it. */
   get settings(): readonly { name: string; description: string }[] {
-    return specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse).map((spec) => ({
-      name: spec.name,
-      description: spec.description
-    }))
+    return specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse).map(
+      (spec) => ({
+        name: spec.name,
+        description: spec.description
+      })
+    )
   }
 
   canHandle(name: string): boolean {
@@ -178,7 +190,10 @@ export class NativeActionToolExtension implements ToolExtension {
   }
 
   systemHint(): string {
-    return systemHintForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse)
+    return withWebUseTarget(
+      systemHintForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse),
+      this.boundary.webUseInDefaultBrowser?.() ?? false
+    )
   }
 
   async execute(
