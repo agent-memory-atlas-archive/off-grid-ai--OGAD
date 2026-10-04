@@ -1,4 +1,5 @@
 import { ipcMain, BrowserWindow, app, clipboard } from 'electron'
+import { listBridgeBrowsers } from './extension-bridge/bridge-electron'
 import { setupAIRequestLogIPC } from './ai-request-log-ipc'
 import { setupArtifactPreviewIpc } from './artifact-preview-ipc'
 import {
@@ -1336,6 +1337,9 @@ export function setupIPC(): void {
   ipcMain.handle('settings:get', () => {
     return getSettings()
   })
+
+  // Browsers paired through the extension bridge, and which are connected (Tasks > Web Use).
+  ipcMain.handle('extension-bridge:browsers', () => listBridgeBrowsers())
 
   // App version (for the Settings footer — so users know what build they're on).
   ipcMain.handle('app:version', () => app.getVersion())

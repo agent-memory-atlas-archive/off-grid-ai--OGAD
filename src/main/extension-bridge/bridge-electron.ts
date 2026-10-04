@@ -21,6 +21,7 @@ import {
 import { getToolExtensions, runTool } from '../tools'
 import { callHookAsync, hasHook, HOOKS } from '../bootstrap/hookRegistry'
 import { proEnabled } from '../bootstrap/loadProFeaturesMain'
+import { getWebUseSettings } from '../web-use-settings'
 import {
   createBridgeService,
   type BridgeData,
@@ -137,6 +138,12 @@ async function confirmPairing(code: string, deviceName: string): Promise<boolean
   return (await Promise.race([shown, timeout])).response === 0
 }
 
+/** Paired browsers and whether each is connected over the live socket now (Tasks > Web Use). */
+export function listBridgeBrowsers(): Array<{ name: string; connected: boolean }> {
+  const live = new Set(links.list().map((l) => l.browser.id))
+  return (readFile()?.browsers ?? []).map((b) => ({ name: b.name, connected: live.has(b.id) }))
+}
+
 function features(): BridgeFeatures {
   // The same Pro decision the rest of the app uses (license, or the dev OFFGRID_PRO switch).
   const pro = proEnabled()
@@ -146,7 +153,9 @@ function features(): BridgeFeatures {
     chats: true,
     tools: exts.some((e) => e.category === 'tool'),
     connectors: exts.some((e) => e.category !== 'tool'),
-    vault: pro && hasHook(HOOKS.extensionVaultRequest)
+    vault: pro && hasHook(HOOKS.extensionVaultRequest),
+    // Keep the live socket open only while tasks are set to use the default browser.
+    browserTasks: getWebUseSettings().browserTarget === 'default_browser'
   }
 }
 
