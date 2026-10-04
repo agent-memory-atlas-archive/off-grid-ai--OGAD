@@ -55,6 +55,7 @@ import {
   toDataUrl
 } from './model-server/data-url'
 import { errBody, errMeta } from './model-server/errors'
+import { handleExtensionBridge } from './extension-bridge/bridge-http'
 import { isAsync, matchPollRoute } from './model-server/async-request'
 import { sanitizeChatMessages } from './model-server/chat-messages'
 import { applyThinkingPayload, requestedThinking } from './llm/chat-payload'
@@ -1256,6 +1257,9 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
       })
       return
     }
+
+    // The browser extension's private, paired, end-to-end sealed link (extension-bridge/).
+    if (url.startsWith('/v1/extension/')) return void handleExtensionBridge(req, res, url, method)
 
     if (url === '/openapi.json') {
       const img = imageGenStatus()
