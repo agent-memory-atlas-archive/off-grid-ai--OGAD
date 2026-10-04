@@ -126,6 +126,7 @@ describe('message shapes', () => {
     expect(
       parseUpstream({ event: 'cdp.event', tabId: 4, data: { method: 'Page.loadEventFired' } })
     ).toMatchObject({ event: 'cdp.event', tabId: 4 })
+    expect(parseUpstream({ event: 'ping', tabId: 0, data: {} })).toMatchObject({ event: 'ping' })
     expect(parseUpstream({ event: 'shell', tabId: 4, data: {} })).toBeNull()
     expect(parseUpstream('x')).toBeNull()
   })

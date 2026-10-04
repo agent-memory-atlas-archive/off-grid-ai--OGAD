@@ -131,9 +131,10 @@ export type SocketReply =
   | { readonly id: number; readonly ok: true; readonly result: unknown }
   | { readonly id: number; readonly ok: false; readonly error: string }
 
-/** Events the browser sends up unprompted. */
+/** Events the browser sends up unprompted. `ping` keeps an idle link (and the extension's
+ *  worker) alive; it carries nothing. */
 export interface SocketEvent {
-  readonly event: 'cdp.event' | 'cdp.detached' | 'tab.removed' | 'tab.updated'
+  readonly event: 'cdp.event' | 'cdp.detached' | 'tab.removed' | 'tab.updated' | 'ping'
   readonly tabId: number
   readonly data: Record<string, unknown>
 }
@@ -163,7 +164,7 @@ export function parseUpstream(raw: unknown): SocketReply | SocketEvent | null {
       ? { id: raw.id as number, ok: false, error: raw.error }
       : null
   }
-  const events = ['cdp.event', 'cdp.detached', 'tab.removed', 'tab.updated']
+  const events = ['cdp.event', 'cdp.detached', 'tab.removed', 'tab.updated', 'ping']
   return events.includes(raw.event as string) && Number.isSafeInteger(raw.tabId) && isObj(raw.data)
     ? { event: raw.event as SocketEvent['event'], tabId: raw.tabId as number, data: raw.data }
     : null
