@@ -45,6 +45,8 @@ export interface BridgeFeatures {
   readonly tools: boolean
   readonly connectors: boolean
   readonly vault: boolean
+  /** Tasks may drive this browser (web_use in the default browser), so keep the live socket open. */
+  readonly browserTasks?: boolean
 }
 
 export interface BridgeData {
@@ -78,6 +80,10 @@ export interface BridgeService {
   info(): Promise<BridgeReply>
   pair(raw: unknown): Promise<BridgeReply>
   rpc(raw: unknown): Promise<BridgeReply>
+  /** A paired browser and its session key, for the live socket. Null for an unknown device. */
+  linkKey(deviceId: string): Promise<{ browser: PairedBrowser; key: CryptoKey } | null>
+  /** True the first time a socket hello nonce is seen inside the freshness window. */
+  acceptNonce(deviceId: string, nonce: string): boolean
 }
 
 export function createBridgeService(deps: BridgeDeps): BridgeService {
@@ -221,6 +227,15 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
         }
       }
       return { status: 200, body: await seal(key, responseAad(browser.id, request.id), reply) }
+    },
+
+    async linkKey(deviceId: string) {
+      const browser = (await deps.store.list()).find((b) => b.id === deviceId)
+      return browser ? { browser, key: await sessionKey(browser) } : null
+    },
+
+    acceptNonce(deviceId: string, nonce: string): boolean {
+      return replay.accept(`${deviceId}:hello:${nonce}`, deps.now())
     }
   }
 }

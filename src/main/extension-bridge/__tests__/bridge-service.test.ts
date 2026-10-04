@@ -258,3 +258,21 @@ describe('sealed rpc', () => {
     expect((await s.call('device000001', 'state')).status).toBe(401)
   })
 })
+
+describe('live socket support', () => {
+  it('hands the socket the paired browser and its key, and nothing for strangers', async () => {
+    const s = await setup()
+    expect(await s.bridge.linkKey('device000001')).toBeNull()
+    await s.pair()
+    const link = await s.bridge.linkKey('device000001')
+    expect(link?.browser.name).toBe('Chrome on this Mac')
+    expect(link?.key.algorithm).toMatchObject({ name: 'AES-GCM' })
+  })
+
+  it('accepts a socket hello nonce once', async () => {
+    const s = await setup()
+    expect(s.bridge.acceptNonce('device000001', 'n1')).toBe(true)
+    expect(s.bridge.acceptNonce('device000001', 'n1')).toBe(false)
+    expect(s.bridge.acceptNonce('device000002', 'n1')).toBe(true)
+  })
+})
