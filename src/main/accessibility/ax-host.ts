@@ -196,7 +196,8 @@ function nativeAppTargeter(): NativeAppTargeter | null {
   return null
 }
 
-async function defaultBrowserTarget(): Promise<InstalledNativeApp | null> {
+/** The default browser on this computer (macOS and Windows), or null when unknown. */
+export async function defaultBrowserTarget(): Promise<InstalledNativeApp | null> {
   if (process.platform === 'win32') return resolveWindowsDefaultBrowser()
   if (process.platform === 'darwin') {
     const helper = accessibilityHelperPath()
