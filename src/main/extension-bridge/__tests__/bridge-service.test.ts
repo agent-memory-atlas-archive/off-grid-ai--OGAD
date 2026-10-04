@@ -29,6 +29,17 @@ const FREE: BridgeFeatures = {
 }
 const PRO: BridgeFeatures = { pro: true, chats: true, tools: true, connectors: true, vault: true }
 
+// The desktop's settings, in memory: the store bridge-electron wires is tested on its own.
+const saved: Record<string, Record<string, unknown>> = {
+  voice: { ttsEnabled: true, voice: 'af_heart' }
+}
+const settings = {
+  read: (section: string) => ({ ...(saved[section] ?? {}) }),
+  write: (section: string, patch: Record<string, unknown>) => {
+    saved[section] = { ...(saved[section] ?? {}), ...patch }
+  }
+}
+
 interface CallResult {
   status: number
   body: unknown
@@ -72,6 +83,8 @@ async function setup(opts: { approve?: boolean; features?: BridgeFeatures } = {}
     },
     listTools: async () => [{ name: 'notion_search' }],
     runTool: async (name) => ({ ok: true, output: `ran ${name}` }),
+    readSettings: async (section) => settings.read(section),
+    writeSettings: async (section, patch) => settings.write(section, patch),
     vault: async () => ({ type: 'status', state: 'unlocked' })
   }
   const bridge = createBridgeService({
@@ -193,6 +206,32 @@ describe('sealed rpc', () => {
     await s.pair()
     expect((await s.call('device000001', 'state', {}, 'fixedid0001')).status).toBe(200)
     expect((await s.call('device000001', 'state', {}, 'fixedid0001')).status).toBe(401)
+  })
+
+  it('reads and changes settings, only through the validated keys', async () => {
+    const s = await setup()
+    await s.pair()
+    expect((await s.call('device000001', 'settings.get', { section: 'voice' })).body).toMatchObject(
+      {
+        ok: true,
+        result: { voice: 'af_heart' }
+      }
+    )
+    const set = await s.call('device000001', 'settings.set', {
+      section: 'voice',
+      patch: { voice: 'bm_george', apiKey: 'x' }
+    })
+    expect(set.body).toMatchObject({ ok: true, result: { voice: 'bm_george' } })
+    expect(JSON.stringify(set.body)).not.toContain('apiKey')
+    for (const [method, params] of [
+      ['settings.get', { section: 'remote' }],
+      ['settings.set', { section: 'voice', patch: { voice: 'not a voice' } }]
+    ] as const) {
+      expect((await s.call('device000001', method, params)).body).toMatchObject({
+        ok: false,
+        error: 'invalid'
+      })
+    }
   })
 
   it('lists chats and tools, puts and deletes', async () => {

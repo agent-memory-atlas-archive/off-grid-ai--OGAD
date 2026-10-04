@@ -1,4 +1,5 @@
 // SHARED VERBATIM with off-grid-ai/browser-extension src/shared/bridge/service.ts. Change both.
+// SHARED VERBATIM with off-grid-ai/desktop src/main/extension-bridge/bridge-service.ts. Change both.
 // The extension bridge, as pure logic: pairing and the sealed RPC loop. Everything it touches
 // (key storage, the native confirm dialog, the chat database, tools, the vault) is injected,
 // so this file is unit-tested without Electron. bridge-electron.ts supplies the real ones.
@@ -22,6 +23,7 @@ import {
   BRIDGE_VERSION,
   type RpcMethod
 } from './bridge-protocol'
+import { isSettingsSection, parseSettingsPatch, type SettingsSection } from './bridge-settings'
 
 export interface PairedBrowser {
   readonly id: string
@@ -58,6 +60,10 @@ export interface BridgeData {
   listTools(): Promise<unknown[]>
   runTool(name: string, args: Record<string, unknown>, browser: PairedBrowser): Promise<unknown>
   vault(request: unknown, browser: PairedBrowser): Promise<unknown>
+  /** One section of the desktop's settings (settings.ts), as its Settings screen shows it. */
+  readSettings(section: SettingsSection): Promise<unknown>
+  /** Apply an already-validated patch through the desktop's own setters. */
+  writeSettings(section: SettingsSection, patch: Record<string, unknown>): Promise<void>
 }
 
 export interface BridgeDeps {
@@ -146,6 +152,20 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
     vault: async (p, browser) => {
       requireFeature('vault')
       return deps.data.vault(p.request, browser)
+    },
+    'settings.get': async (p) => {
+      if (!isSettingsSection(p.section)) {
+        throw new Error('invalid')
+      }
+      return deps.data.readSettings(p.section)
+    },
+    'settings.set': async (p) => {
+      const patch = isSettingsSection(p.section) ? parseSettingsPatch(p.section, p.patch) : null
+      if (!patch || !isSettingsSection(p.section)) {
+        throw new Error('invalid')
+      }
+      await deps.data.writeSettings(p.section, patch)
+      return deps.data.readSettings(p.section)
     },
     unpair: async (_p, browser) => {
       const all = await deps.store.list()

@@ -16,13 +16,22 @@ import {
   getDB,
   getRagConversation,
   getRagConversations,
-  getRagMessages
+  getRagMessages,
+  getSettings,
+  saveSetting
 } from '../database'
 import { getToolExtensions, runTool } from '../tools'
 import { notifyRagConversationChanged } from '../rag-conversation-events'
 import { callHookAsync, hasHook, HOOKS } from '../bootstrap/hookRegistry'
 import { proEnabled } from '../bootstrap/loadProFeaturesMain'
-import { getWebUseSettings } from '../web-use-settings'
+import { getWebUseSettings, setWebUseSettings } from '../web-use-settings'
+import { getComputerUseSettings, setComputerUseSettings } from '../computer-use-settings'
+import { listTools as listDesktopTools, setToolEnabled } from '../tools'
+import { addConnector, listConnectors, removeConnector, setConnectorEnabled } from '../mcp'
+import { imageGenStatus } from '../imagegen'
+import { readTranscriptionInfo } from '../transcription/select'
+import { resolveImageParameters, setImageParameterOverride } from '@offgrid/models'
+import { createSettingsStore } from './bridge-settings-store'
 import {
   createBridgeService,
   type BridgeData,
@@ -182,6 +191,36 @@ async function listTools(): Promise<unknown[]> {
   return out
 }
 
+// The same functions Settings here uses, so a browser and this window always agree.
+const settingsStore = createSettingsStore({
+  web: getWebUseSettings,
+  setWeb: (next) => void setWebUseSettings(next),
+  computer: getComputerUseSettings,
+  setComputer: (next) => void setComputerUseSettings(next),
+  appSettings: () => getSettings() as Record<string, unknown>,
+  saveSetting,
+  listTools: listDesktopTools,
+  setToolEnabled,
+  listConnectors,
+  addConnector: (c) => void addConnector(c),
+  setConnectorEnabled,
+  removeConnector,
+  activeImageModel: () => {
+    const status = imageGenStatus()
+    return status.active ?? status.models[0] ?? null
+  },
+  imageParams: (model, store) =>
+    resolveImageParameters({ id: model }, store as Parameters<typeof resolveImageParameters>[1]),
+  setImageParam: (store, model, key, value) =>
+    setImageParameterOverride(
+      store as Parameters<typeof setImageParameterOverride>[0],
+      model,
+      key,
+      value
+    ),
+  transcription: readTranscriptionInfo
+})
+
 const data: BridgeData = {
   features,
   desktopName: () => 'Off Grid AI Desktop',
@@ -224,7 +263,9 @@ const data: BridgeData = {
     callHookAsync(HOOKS.extensionVaultRequest, request, {
       deviceName: browser.name,
       deviceId: browser.id
-    })
+    }),
+  readSettings: (section) => settingsStore.read(section),
+  writeSettings: (section, patch) => settingsStore.write(section, patch)
 }
 
 let service: Promise<BridgeService> | null = null

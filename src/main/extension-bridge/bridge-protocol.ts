@@ -182,6 +182,8 @@ export const RPC_METHODS = [
   'tools.list',
   'tools.run',
   'vault',
+  'settings.get',
+  'settings.set',
   'unpair'
 ] as const
 export type RpcMethod = (typeof RPC_METHODS)[number]
