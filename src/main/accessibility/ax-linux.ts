@@ -70,8 +70,13 @@ export async function setLinuxAccessibleValue(
   y: number,
   value: number
 ): Promise<void> {
-  const changed = JSON.parse(
-    await linuxAccessibility('set-value', app, String(x), String(y), String(value))
-  ) as boolean
+  let changed: boolean
+  try {
+    changed = JSON.parse(
+      await linuxAccessibility('set-value', app, String(x), String(y), String(value))
+    ) as boolean
+  } catch {
+    throw new Error('Native value control is unavailable.')
+  }
   if (!changed) throw new Error('The Linux value control could not be set.')
 }
