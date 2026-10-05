@@ -604,6 +604,8 @@ export function ModelsScreen({
     const q = deferredQuery.trim()
     if (!searchEnabled || q.length < 2) {
       setHfResults([])
+      // A cleared query asks for no search, so a superseded or cancelled one must not keep spinning.
+      setSearching(false)
       return
     }
     setSearching(true)
