@@ -239,18 +239,24 @@ async function createWindow(): Promise<void> {
     if (nextZoomLevel === null) return
 
     event.preventDefault()
-    setWindowZoom(nextZoomLevel)
+    setWindowZoom(mainWindow, nextZoomLevel)
   })
 
   // The default macOS menu owns Cmd+- ("Zoom Out") and handles it before the window sees the key,
   // and its zoom items do not save the level. Own the View menu's zoom items so every zoom key and
   // menu click runs the same persisted zoom. The rest of the menu keeps the standard roles.
-  const setWindowZoom = (level: number): void => {
-    mainWindow.webContents.setZoomLevel(level)
+  // The menu outlives a closed window (macOS keeps the app running), so zoom the window the click
+  // came from, and only while it is still alive.
+  const setWindowZoom = (window: BrowserWindow, level: number): void => {
+    window.webContents.setZoomLevel(level)
     saveSetting('windowZoomLevel', level)
   }
-  const stepWindowZoom = (delta: number) => () =>
-    setWindowZoom(delta === 0 ? 0 : mainWindow.webContents.getZoomLevel() + delta)
+  const stepWindowZoom =
+    (delta: number) =>
+    (_item: unknown, window: unknown): void => {
+      if (!(window instanceof BrowserWindow) || window.isDestroyed()) return
+      setWindowZoom(window, delta === 0 ? 0 : window.webContents.getZoomLevel() + delta)
+    }
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
