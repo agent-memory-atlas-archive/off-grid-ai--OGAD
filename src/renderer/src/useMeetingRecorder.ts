@@ -49,10 +49,7 @@ export function useMeetingRecorder(enabled = true): MeetingRecorder {
   // access opens (a newly activated Pro profile) and clears when it closes, so a Free profile
   // never keeps a stale recording indicator.
   useEffect(() => {
-    if (!enabled) {
-      setSt(EMPTY)
-      return undefined
-    }
+    if (!enabled) return undefined
     let alive = true
     api
       .meetingGetState?.()
@@ -64,6 +61,8 @@ export function useMeetingRecorder(enabled = true): MeetingRecorder {
     return () => {
       alive = false
       off?.()
+      // Access closed (or the view unmounted): drop the last recording state with it.
+      setSt(EMPTY)
     }
   }, [enabled])
 
