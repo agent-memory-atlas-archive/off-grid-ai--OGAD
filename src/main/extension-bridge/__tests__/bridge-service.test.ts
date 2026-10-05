@@ -83,6 +83,8 @@ async function setup(opts: { approve?: boolean; features?: BridgeFeatures } = {}
     },
     listTools: async () => [{ name: 'notion_search' }],
     runTool: async (name) => ({ ok: true, output: `ran ${name}` }),
+    latestTask: async (browser, since) =>
+      since > 2_000_000 ? null : { status: 'done', summary: `for ${browser.name}` },
     readSettings: async (section) => settings.read(section),
     writeSettings: async (section, patch) => settings.write(section, patch),
     vault: async () => ({ type: 'status', state: 'unlocked' })
@@ -286,6 +288,29 @@ describe('sealed rpc', () => {
     expect((await pro.call('device000001', 'tools.run', { name: 'x' })).body).toMatchObject({
       ok: false,
       error: 'invalid'
+    })
+  })
+
+  it('tasks.latest reports this browser\'s latest task, for a run that started one', async () => {
+    // web_use answers "started" at once; the browser asks here for the result it was waiting on.
+    const pro = await setup({ features: PRO })
+    await pro.pair()
+    expect((await pro.call('device000001', 'tasks.latest', { since: 1 })).body).toMatchObject({
+      ok: true,
+      result: { status: 'done', summary: 'for Chrome on this Mac' }
+    })
+    expect((await pro.call('device000001', 'tasks.latest', { since: 3_000_000 })).body).toMatchObject(
+      { ok: true, result: null }
+    )
+    expect((await pro.call('device000001', 'tasks.latest', { since: 'x' })).body).toMatchObject({
+      ok: false,
+      error: 'invalid'
+    })
+    const free = await setup()
+    await free.pair()
+    expect((await free.call('device000001', 'tasks.latest', { since: 1 })).body).toMatchObject({
+      ok: false,
+      error: 'pro_required'
     })
   })
 

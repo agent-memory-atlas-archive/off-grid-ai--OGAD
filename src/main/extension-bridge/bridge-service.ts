@@ -60,6 +60,12 @@ export interface BridgeData {
   listTools(): Promise<unknown[]>
   runTool(name: string, args: Record<string, unknown>, browser: PairedBrowser): Promise<unknown>
   vault(request: unknown, browser: PairedBrowser): Promise<unknown>
+  /** This browser's latest task started at or after `since` (ms): web_use answers "started" at
+   *  once, so a browser waiting on the result asks here. Null when none has started yet. */
+  latestTask(
+    browser: PairedBrowser,
+    since: number
+  ): Promise<{ status: string; summary: string } | null>
   /** One section of the desktop's settings (settings.ts), as its Settings screen shows it. */
   readSettings(section: SettingsSection): Promise<unknown>
   /** Apply an already-validated patch through the desktop's own setters. */
@@ -148,6 +154,13 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
         throw new Error('invalid')
       }
       return deps.data.runTool(p.name, p.args as Record<string, unknown>, browser)
+    },
+    'tasks.latest': async (p, browser) => {
+      requireFeature('tools')
+      if (typeof p.since !== 'number' || !Number.isFinite(p.since)) {
+        throw new Error('invalid')
+      }
+      return deps.data.latestTask(browser, p.since)
     },
     vault: async (p, browser) => {
       requireFeature('vault')

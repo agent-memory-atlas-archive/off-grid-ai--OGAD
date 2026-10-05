@@ -181,6 +181,7 @@ export const RPC_METHODS = [
   'conversations.delete',
   'tools.list',
   'tools.run',
+  'tasks.latest',
   'vault',
   'settings.get',
   'settings.set',

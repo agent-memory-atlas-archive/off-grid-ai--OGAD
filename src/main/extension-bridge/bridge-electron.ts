@@ -5,6 +5,7 @@
 // core; the native action tools and the vault exist only when Pro is active, because only then
 // are they registered. Nothing here grants a browser more than the desktop app itself has.
 
+import { listTaskRuns } from '../tasks/task-history'
 import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
@@ -295,6 +296,13 @@ const data: BridgeData = {
       getToolExtensions()
     )
     return { ok: result.status !== 'failed', output: result.text }
+  },
+  latestTask: async (browser, since) => {
+    const run = listTaskRuns(20).find(
+      (task) =>
+        task.journeyId === `${BROWSER_ORIGIN_PREFIX}${browser.id}` && task.startedAt >= since
+    )
+    return run ? { status: run.status, summary: run.summary ?? '' } : null
   },
   vault: async (request, browser) =>
     callHookAsync(HOOKS.extensionVaultRequest, request, {
