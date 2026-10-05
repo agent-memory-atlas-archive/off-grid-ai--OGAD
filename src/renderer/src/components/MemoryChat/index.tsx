@@ -553,9 +553,16 @@ export function MemoryChat({
     imageParams: imgParamStore
   })
   const persistChangedPreference = useCallback((key: string, value: unknown): void => {
-    if (Object.is(persistedPreferenceValues.current[key], value)) return
+    const previous = persistedPreferenceValues.current[key]
+    if (Object.is(previous, value)) return
     persistedPreferenceValues.current[key] = value
-    void window.api.saveSetting(key, value)
+    // A failed save must not count as saved, or the close-time flush would skip the retry.
+    window.api.saveSetting(key, value).catch((error: unknown) => {
+      if (Object.is(persistedPreferenceValues.current[key], value)) {
+        persistedPreferenceValues.current[key] = previous
+      }
+      console.error(`[chat] could not save ${key}:`, error)
+    })
   }, [])
   useEffect(() => {
     console.log('MemoryChat effect: hydrate composer preferences')
