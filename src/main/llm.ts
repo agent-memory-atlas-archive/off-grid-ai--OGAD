@@ -807,12 +807,10 @@ export class LLMService {
       // A newer launch change is already queued and will spawn with the newest arguments,
       // so this one has nothing left to do.
       if (request !== this.launchRestartRequest) return
-      // Captured before the launch: a newer save can change the live settings while this one
-      // loads, and only what THIS launch started with becomes the working launch on success.
-      const launching = { settings: this.getSettings(), explicit: new Set(this.userExplicit) }
+      // A successful spawn records the settings its arguments were built from as the working
+      // launch (launchWithFallback), so a save made while this loads is never mistaken for it.
       this.stop()
       await this.init()
-      this.lastWorkingLaunch = launching
     })
     // The queue itself must never carry a rejection: a failed respawn is reported to the
     // caller that asked for it, and the next request still gets its turn.
@@ -1180,7 +1178,11 @@ export class LLMService {
           console.warn(`[LLMService] out of memory — retrying load at ${at.reason}`)
         }
         const args = this.launchArgsFor(at.ctxSize, at.gpuLayers)
+        // Captured in the same step as the arguments: a save can land during init's earlier awaits,
+        // so only this matches what actually ran. A successful spawn makes it the working launch.
+        const launchedWith = { settings: this.getSettings(), explicit: new Set(this.userExplicit) }
         if (await this.launchServer(serverPath, args)) {
+          this.lastWorkingLaunch = launchedWith
           if (a > 0) {
             console.warn(`[LLMService] model loaded via fallback: ${at.reason}`)
           }
