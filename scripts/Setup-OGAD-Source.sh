@@ -28,7 +28,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   libx11-dev libxext-dev libxfixes-dev libxi-dev libxtst-dev libxrandr-dev \
   libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libsecret-1-0 \
   pipewire-audio pipewire-module-xrdp ubuntu-drivers-common \
-  python3-gi gir1.2-atspi-2.0 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+  python3-gi geoclue-2.0 gir1.2-atspi-2.0 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-pulseaudio
 sudo systemctl start docker

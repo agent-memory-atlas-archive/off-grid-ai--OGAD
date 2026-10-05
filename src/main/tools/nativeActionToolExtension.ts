@@ -15,6 +15,7 @@ import { getActionsRuntime } from '../actions/use-runtime'
 import { makeWinInlineRunner } from '../actions/semantic-rail-win'
 import { runPowerShell } from '../actions/win-powershell'
 import { runNativeAction } from '../actions/native-helper'
+import { currentLinuxLocation } from '../actions/native-location'
 import type { NativeActionCommand, NativeActionResponse } from '../actions/native-helper-logic'
 import {
   actionTypeForTool,
@@ -95,6 +96,7 @@ export function inlineRunnerForPlatform(
   }
   if (platform === 'linux') {
     return async (cmd) => {
+      if (cmd.command === 'location.current') return currentLinuxLocation()
       if (cmd.command !== 'system.openURL') {
         return { ok: false, error: 'native actions are not available on this platform' }
       }

@@ -354,8 +354,8 @@ export const WINDOWS_TOOL_NAMES: ReadonlySet<string> = new Set([
 ])
 
 // Linux exposes task tools when the host has enabled its watched workspace.
-// The core-only path exposes only the link opener.
-export const LINUX_TOOL_NAMES: ReadonlySet<string> = new Set(['open_url'])
+// Location and the link opener are also available without task tools.
+export const LINUX_TOOL_NAMES: ReadonlySet<string> = new Set(['open_url', 'get_current_location'])
 
 export const TASK_USE_TOOL_NAMES: ReadonlySet<string> = new Set([WEB_USE_TOOL_NAME, 'computer_use'])
 
@@ -409,9 +409,9 @@ export function systemHintForPlatform(
   }
   if (platform === 'linux') {
     if (includeTaskUse && linuxTaskUse) {
-      return "Use web_use for website tasks in the built-in browser. Use computer_use for visible desktop apps or the user's existing browser session. Use open_url only to open a link. Linux has no location, calendar, mail, or contact tools. Report only results observed through the tools."
+      return "Use get_current_location to get the user's current device coordinates before a nearby task. If location is unavailable, ask for a starting address or neighborhood. Use web_use for website tasks in the built-in browser. Use computer_use for visible desktop apps or the user's existing browser session. Use open_url only to open a link. Linux has no calendar, mail, or contact tools. Report only results observed through the tools."
     }
-    return "You can use open_url to open a link in the user's default browser. You cannot control that browser or desktop apps, or use calendar, mail, contact, or location tools on Linux."
+    return "Use get_current_location to get the user's current device coordinates. If location is unavailable, ask for a starting address or neighborhood. Use open_url to open a link in the user's default browser. You cannot control that browser or desktop apps, or use calendar, mail, or contact tools on Linux."
   }
   return ''
 }

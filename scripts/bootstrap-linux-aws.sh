@@ -17,7 +17,7 @@ apt-get install -y build-essential cmake ninja-build pkg-config git git-lfs gh \
   libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libsecret-1-0 \
   xfce4 xfce4-terminal xrdp xorgxrdp dbus-x11 \
   pipewire-audio pipewire-module-xrdp ubuntu-drivers-common \
-  python3-gi gir1.2-atspi-2.0 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+  python3-gi geoclue-2.0 gir1.2-atspi-2.0 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-pulseaudio
 
