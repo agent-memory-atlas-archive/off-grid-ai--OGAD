@@ -724,10 +724,10 @@ export class LLMService {
       this.performanceMode = priorSettings.performanceMode ?? this.performanceMode
       this.temperature = priorSettings.temperature ?? this.temperature
       this.ctxSize = priorSettings.ctxSize ?? this.ctxSize
-      this.topP = priorSettings.topP ?? this.topP
-      this.topK = priorSettings.topK ?? this.topK
-      this.minP = priorSettings.minP ?? this.minP
-      this.repeatPenalty = priorSettings.repeatPenalty ?? this.repeatPenalty
+      this.topP = priorSettings.topP
+      this.topK = priorSettings.topK
+      this.minP = priorSettings.minP
+      this.repeatPenalty = priorSettings.repeatPenalty
       this.maxTokens = priorSettings.maxTokens ?? this.maxTokens
       this.maxToolCalls = priorSettings.maxToolCalls ?? this.maxToolCalls
       this.reasoningBudget = priorSettings.reasoningBudget ?? this.reasoningBudget
@@ -735,8 +735,8 @@ export class LLMService {
       this.kvCacheType = priorSettings.kvCacheType ?? this.kvCacheType
       this.flashAttn = priorSettings.flashAttn ?? this.flashAttn
       this.gpuLayers = priorSettings.gpuLayers ?? this.gpuLayers
-      this.threads = priorSettings.threads ?? this.threads
-      this.batchSize = priorSettings.batchSize ?? this.batchSize
+      this.threads = priorSettings.threads
+      this.batchSize = priorSettings.batchSize
       this.speculativeDecoding = priorSettings.speculativeDecoding ?? this.speculativeDecoding
       this.draftModel = priorSettings.draftModel ?? this.draftModel
       this.userExplicit.clear()
