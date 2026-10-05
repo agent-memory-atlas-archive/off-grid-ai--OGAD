@@ -158,7 +158,15 @@ export function createDiagnosticWriter(options: DiagnosticWriterOptions): Diagno
     while ((active || pending.length > 0) && Date.now() < deadline) {
       schedule()
       if (!active) break
-      await active
+      // The write itself is bounded too: a stalled disk must not hold quit past the deadline.
+      let expire: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        active,
+        new Promise<void>((resolve) => {
+          expire = setTimeout(resolve, Math.max(0, deadline - Date.now()))
+        })
+      ])
+      clearTimeout(expire)
     }
     if (active || pending.length > 0) {
       options.reportFailure(
