@@ -86,9 +86,10 @@ export function setupVoiceTranscriptionIpc(
     active.set(key, controller)
     event.sender.once('destroyed', abortOnDestroyed)
     // A stalled engine must not hold the request, its temp file or the engine lock forever.
-    let timedOut = false
+    // Held on an object: the flag is set only by the timer, which narrowing cannot see.
+    const timeout = { hit: false }
     const deadline = setTimeout(() => {
-      timedOut = true
+      timeout.hit = true
       controller.abort()
     }, TRANSCRIBE_TIMEOUT_MS)
     try {
@@ -97,7 +98,7 @@ export function setupVoiceTranscriptionIpc(
       controller.signal.throwIfAborted()
       return (await service.transcribe({ path: tmp }, { signal: controller.signal })).text
     } catch (error) {
-      if (timedOut) throw new Error('Transcription timed out. Try again with a shorter recording.')
+      if (timeout.hit) throw new Error('Transcription timed out. Try again with a shorter recording.')
       throw error
     } finally {
       clearTimeout(deadline)
