@@ -44,6 +44,11 @@ function ConversationSidebarComponent({
     },
     []
   )
+  // An outside change to the search wins: a draft still waiting to settle must not overwrite it.
+  useEffect(() => {
+    if (settleTimer.current) clearTimeout(settleTimer.current)
+    settleTimer.current = null
+  }, [search])
   const changeDraft = (next: string, immediate = false): void => {
     setDraft(next)
     if (settleTimer.current) clearTimeout(settleTimer.current)

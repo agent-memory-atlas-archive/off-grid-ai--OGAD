@@ -680,7 +680,10 @@ export function MemoryChat({
   }, [imgNegative, persistChangedPreference])
   // Leaving the composer within the pause must not drop the last edit: write what is pending.
   const typedImageParams = useRef({ imgSeed, imgNegative })
-  typedImageParams.current = { imgSeed, imgNegative }
+  // Committed values only: a render React discards must not reach the close-time save.
+  useEffect(() => {
+    typedImageParams.current = { imgSeed, imgNegative }
+  }, [imgSeed, imgNegative])
   useEffect(
     () => () => {
       persistChangedPreference('imgSeed', typedImageParams.current.imgSeed)
