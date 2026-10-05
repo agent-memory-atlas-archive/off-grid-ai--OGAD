@@ -1,5 +1,5 @@
 import { extractJsonObject } from '../json-extract'
-import { keepValidCandidates } from './semantic-candidates'
+import { keepValidCandidates, NoSupportedActionError } from './semantic-candidates'
 import type { TaskExecutionPlan } from '../../shared/task-execution-plan'
 import { currentRemoteScreenTaskSession } from '../actions/remote-screen-session'
 import { getWebUseSettings } from '../web-use-settings'
@@ -220,7 +220,7 @@ ${boundedSnapshot(request.snapshot)}
     selection.choice < 0 ||
     selection.choice >= candidates.length
   ) {
-    throw new Error('The Web Use Decision model did not select a supported action.')
+    throw new NoSupportedActionError()
   }
   return candidates[selection.choice]!
 }

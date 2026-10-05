@@ -22,3 +22,11 @@ export function keepValidCandidates<T>(raw: readonly unknown[], parse: (value: u
   }
   return valid
 }
+
+/** The Decision model chose "none of these": a reason to ask again, not to end the task. */
+export class NoSupportedActionError extends Error {
+  constructor() {
+    super('The Web Use Decision model did not select a supported action.')
+    this.name = 'NoSupportedActionError'
+  }
+}
