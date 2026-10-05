@@ -801,9 +801,12 @@ export class LLMService {
         // A newer launch change is already queued and will spawn with the newest arguments,
         // so this one has nothing left to do.
         if (request !== this.launchRestartRequest) return
+        // Captured before the launch: a newer save can change the live settings while this one
+        // loads, and only what THIS launch started with becomes the working launch on success.
+        const launching = { settings: this.getSettings(), explicit: new Set(this.userExplicit) }
         this.stop()
         await this.init()
-        this.lastWorkingLaunch = { settings: this.getSettings(), explicit: new Set(this.userExplicit) }
+        this.lastWorkingLaunch = launching
       })
       .finally(() => {
         this.launchRestartsPending -= 1
