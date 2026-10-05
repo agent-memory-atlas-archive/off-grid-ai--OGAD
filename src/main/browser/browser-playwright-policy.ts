@@ -1,4 +1,5 @@
 import { extractJsonObject } from '../json-extract'
+import { keepValidCandidates, NoSupportedActionError } from './semantic-candidates'
 import type { TaskExecutionPlan } from '../../shared/task-execution-plan'
 import { currentRemoteScreenTaskSession } from '../actions/remote-screen-session'
 import { getWebUseSettings } from '../web-use-settings'
@@ -197,7 +198,7 @@ ${boundedSnapshot(request.snapshot)}
   ) {
     throw invalidDecision('requires 1 to 3 candidate actions')
   }
-  const candidates = parsed.candidates.map((candidate) =>
+  const candidates = keepValidCandidates(parsed.candidates, (candidate) =>
     parseSemanticDecision(candidate, request.snapshot)
   )
   // Finish reasoning before acquiring the Decision model's memory lease. Kev
@@ -219,7 +220,7 @@ ${boundedSnapshot(request.snapshot)}
     selection.choice < 0 ||
     selection.choice >= candidates.length
   ) {
-    throw new Error('The Web Use Decision model did not select a supported action.')
+    throw new NoSupportedActionError()
   }
   return candidates[selection.choice]!
 }

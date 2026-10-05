@@ -347,3 +347,35 @@ export const sttRuntime: ManagedRuntime = {
     whisperServer.stop()
   }
 }
+
+/** The Transcription settings tab's view: active model, language, and choices. Shared by the
+ *  desktop's own Settings (IPC transcription:active-info) and a paired browser's. */
+export async function readTranscriptionInfo(): Promise<ReturnType<typeof transcriptionActiveInfo>> {
+  const { getCatalog } = await import('../models-manager')
+  const { getSetting } = await import('../database')
+  const catalog = await getCatalog()
+  const installed = (
+    catalog.models as Array<{
+      id: string
+      familyId?: string
+      name?: string
+      kind?: string
+      downloaded?: boolean
+      files?: Array<{ name: string; downloaded?: boolean }>
+    }>
+  ).filter(
+    (model) =>
+      model.kind === 'transcription' &&
+      (model.downloaded === true || model.files?.every((file) => file.downloaded === true))
+  )
+  return transcriptionActiveInfo(
+    getActiveTranscriptionInfo(),
+    installed.map((model) => ({
+      id: model.id,
+      familyId: model.familyId,
+      name: model.name,
+      files: model.files ?? []
+    })),
+    getSetting('sttLanguage', 'auto')
+  )
+}

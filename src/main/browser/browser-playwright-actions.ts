@@ -1,10 +1,10 @@
 import type { BrowserDriver } from './browser-driver'
-import type { PlaywrightMcpSession, PlaywrightToolResult } from './playwright-mcp-session'
+import type { PlaywrightToolResult, SemanticPageSession } from './playwright-mcp-session'
 import type { SemanticDecision } from './browser-playwright-policy'
 
 /** Translate one policy decision into the public Playwright MCP tool contract. */
 export async function executePlaywrightAction(
-  session: PlaywrightMcpSession,
+  session: SemanticPageSession,
   decision: SemanticDecision,
   signal?: AbortSignal
 ): Promise<PlaywrightToolResult> {
@@ -56,10 +56,11 @@ export async function executePlaywrightAction(
 
 /** Keep the existing Off Grid pointer visible while Playwright performs the action. */
 export async function projectPlaywrightPointer(
-  driver: BrowserDriver,
+  driver: BrowserDriver | null,
   decision: SemanticDecision,
   snapshot: string
 ): Promise<void> {
+  if (!driver) return
   const refs = decision.action === 'drag' ? [decision.start_ref, decision.end_ref] : [decision.ref]
   for (const ref of refs) {
     if (ref) await driver.projectSemanticTarget(ref, snapshot)

@@ -42,6 +42,7 @@ export default defineConfig({
     alias: {
       '@renderer': resolve(__dirname, 'src/renderer/src'),
       '@offgrid/core': resolve(__dirname, 'src'),
+      '@offgrid/pro/main': resolve(__dirname, 'src/bootstrap/proStub.ts'),
       '@offgrid/pro/renderer': resolve(__dirname, 'src/bootstrap/proStub.ts'),
       '@offgrid/pro': resolve(__dirname, 'src/bootstrap/proStub.ts'),
       '@': resolve(__dirname, 'src/renderer/src')
@@ -173,7 +174,6 @@ export default defineConfig({
         'src/main/tools/mcpConnectorToolExtension.ts',
         'src/main/updater.ts',
         'src/main/dev-seed.ts',
-        'src/main/vision.ts',
         'src/main/ocr.ts',
         'src/main/embeddings.ts',
         // permissions.ts is no longer excluded: it is unit-tested now, including the multicast probe's four
@@ -197,7 +197,6 @@ export default defineConfig({
         'src/main/data-privacy.ts',
         'src/main/artifacts.ts',
         'src/main/secrets.ts',
-        'src/main/vision.ts',
         // Renderer .ts that are pure IPC passthrough (no logic) or React hooks (e2e-covered).
         'src/renderer/src/lib/voiceApi.ts',
         'src/renderer/src/useMeetingRecorder.ts',
@@ -219,10 +218,8 @@ export default defineConfig({
         'pro/main/**/ipc.ts',
         'pro/main/meeting-native.ts',
         'pro/main/meeting-detect.ts',
-        'pro/main/meeting-controller.ts',
         'pro/main/meeting-service.ts',
         'pro/main/meetings.ts',
-        'pro/main/text-injection.ts',
         'pro/main/console.ts',
         'pro/main/google-rest.ts',
         // Core settings composition; IdentityService rules are measured in identity.ts.
