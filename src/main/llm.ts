@@ -1367,6 +1367,10 @@ export class LLMService {
    *  template llama-server publishes at /props; 'enable-thinking' until then, which is the
    *  behaviour every model got before this was resolved at all. */
   private thinkingDialect: ThinkingDialect = 'enable-thinking'
+  /** The loaded model's thinking dialect, for requests the gateway forwards. */
+  get currentThinkingDialect(): ThinkingDialect {
+    return this.thinkingDialect
+  }
   private mediaMarker: string | null = null
 
   /** Read the loaded model's properties and remember its request dialects.

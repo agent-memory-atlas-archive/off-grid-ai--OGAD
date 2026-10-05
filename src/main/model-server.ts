@@ -598,7 +598,7 @@ async function handleChat(
     // A client says WHETHER it wants thinking; this server decides HOW, because the second half
     // of the answer (reasoning_format) is a property of the model server running here, not of the
     // request. Without this a phone could ask for thinking and get a reply with nothing in it.
-    if (applyThinkingPayload(body)) changed = true
+    if (applyThinkingPayload(body, llm.currentThinkingDialect)) changed = true
     if (changed) forward = Buffer.from(JSON.stringify(body))
   } catch {
     // Image fetch failed — forward the original valid request unchanged so the
