@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 it('preserves Core and Pro source counts when a native report moves between runners', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'offgrid-coverage-paths-'))
   const file = path.join(directory, 'coverage-final.json')
-  const entry = (name: string) => ({
+  const entry = (name: string): Record<string, unknown> => ({
     path: name,
     statementMap: { 0: { start: { line: 1, column: 0 }, end: { line: 1, column: 10 } } },
     fnMap: {},
