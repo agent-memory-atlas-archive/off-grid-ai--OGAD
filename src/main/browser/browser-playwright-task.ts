@@ -327,6 +327,14 @@ async function recoverActionError(
   }
   if (isStaleReference(result)) {
     state.observation = await observeWithCurrentLease(input)
+    // A stale reference on a page that did not change is no progress: a model citing a ref
+    // the page never had would otherwise re-observe until the step limit.
+    const after = fingerprint(state.observation.text)
+    state.noChangeCount = after === state.lastFingerprint ? state.noChangeCount + 1 : 0
+    state.lastFingerprint = after
+    if (state.noChangeCount >= MAX_NO_CHANGE) {
+      return fallback('Semantic control made no visible progress.', state.handoffs)
+    }
     state.recoveryNote =
       'The element reference became stale. Use only a reference from this fresh snapshot.'
     input.onStep('re-observed the page after a stale element reference')
