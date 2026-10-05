@@ -763,31 +763,39 @@ export class LLMService {
           ? { settings: priorSettings, explicit: priorExplicit }
           : null
       }
-      const restart = this.restartForLaunchChange()
-      const request = this.launchRestartRequest
+      // Held until this save's restart AND any recovery it triggers have settled, so a save that
+      // arrives meanwhile joins the chain and keeps the working checkpoint instead of clearing it.
+      this.launchRestartsPending += 1
       try {
-        await restart
-      } catch (error) {
-        const working = this.lastWorkingLaunch
-        if (!working || request !== this.launchRestartRequest) throw error
-        const attempted = this.getSettings()
-        restorePrior(working)
+        const restart = this.restartForLaunchChange()
+        const request = this.launchRestartRequest
         try {
-          this.persist()
-        } catch (persistError) {
-          console.error('[llm] could not restore settings after a failed relaunch:', persistError)
+          await restart
+        } catch (error) {
+          const working = this.lastWorkingLaunch
+          if (!working || request !== this.launchRestartRequest) throw error
+          const attempted = this.getSettings()
+          restorePrior(working)
+          try {
+            this.persist()
+          } catch (persistError) {
+            console.error('[llm] could not restore settings after a failed relaunch:', persistError)
+          }
+          if (before) {
+            emitChangedLlmSettings(
+              attempted as Record<string, unknown>,
+              this.getSettings() as Record<string, unknown>
+            )
+          }
+          // The relaunch is a queued restart too: one spawn at a time, and a newer save that
+          // arrives during recovery runs after it rather than racing it.
+          await this.restartForLaunchChange().catch((restartError: unknown) => {
+            console.error('[llm] could not relaunch the previous model:', restartError)
+          })
+          throw error
         }
-        if (before) {
-          emitChangedLlmSettings(
-            attempted as Record<string, unknown>,
-            this.getSettings() as Record<string, unknown>
-          )
-        }
-        this.stop()
-        await this.init().catch((restartError: unknown) => {
-          console.error('[llm] could not relaunch the previous model:', restartError)
-        })
-        throw error
+      } finally {
+        this.launchRestartsPending -= 1
       }
     }
   }
@@ -795,22 +803,17 @@ export class LLMService {
   /** The engine owns restart policy: one spawn at a time, and the newest settings win. */
   private async restartForLaunchChange(): Promise<void> {
     const request = ++this.launchRestartRequest
-    this.launchRestartsPending += 1
-    const run = this.launchRestartQueue
-      .then(async () => {
-        // A newer launch change is already queued and will spawn with the newest arguments,
-        // so this one has nothing left to do.
-        if (request !== this.launchRestartRequest) return
-        // Captured before the launch: a newer save can change the live settings while this one
-        // loads, and only what THIS launch started with becomes the working launch on success.
-        const launching = { settings: this.getSettings(), explicit: new Set(this.userExplicit) }
-        this.stop()
-        await this.init()
-        this.lastWorkingLaunch = launching
-      })
-      .finally(() => {
-        this.launchRestartsPending -= 1
-      })
+    const run = this.launchRestartQueue.then(async () => {
+      // A newer launch change is already queued and will spawn with the newest arguments,
+      // so this one has nothing left to do.
+      if (request !== this.launchRestartRequest) return
+      // Captured before the launch: a newer save can change the live settings while this one
+      // loads, and only what THIS launch started with becomes the working launch on success.
+      const launching = { settings: this.getSettings(), explicit: new Set(this.userExplicit) }
+      this.stop()
+      await this.init()
+      this.lastWorkingLaunch = launching
+    })
     // The queue itself must never carry a rejection: a failed respawn is reported to the
     // caller that asked for it, and the next request still gets its turn.
     this.launchRestartQueue = run.catch(() => {})
