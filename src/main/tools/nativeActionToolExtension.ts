@@ -7,7 +7,7 @@
 // owner. Outside-Chat proposals enter the engine through the Actions surface, whose gate
 // remains responsible for approval. Reads and navigation stay inline.
 
-import { app, shell } from 'electron'
+import { shell } from 'electron'
 import type { ToolCallStatus, ToolContext, ToolExtension, ToolResult } from '../tools'
 import type { ProposeOutcome, TickOutcome } from '@offgrid/use'
 import { shouldGate } from '../actions/approval'
@@ -153,9 +153,7 @@ export class NativeActionToolExtension implements ToolExtension {
   category = 'tool' as const
 
   private get linuxTaskUse(): boolean {
-    return (
-      this.platform === 'linux' && (app.isPackaged || process.env.OFFGRID_LINUX_TASK_USE === '1')
-    )
+    return this.platform === 'linux'
   }
 
   constructor(
