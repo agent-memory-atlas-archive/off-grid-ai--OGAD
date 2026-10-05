@@ -1148,10 +1148,6 @@ export class LLMService {
             .map((serverPath) => ({ serverPath, cpuOnly: true }))
         ]
     for (const { serverPath, cpuOnly } of candidates) {
-      const attempts = loadAttempts(
-        this.ctxSize,
-        cpuOnly || enginePriority(serverPath) === 2 ? 0 : this.gpuLayers
-      ).slice(0, 1)
       if (generation !== this.launchGeneration) return false
       if (!serverPath) continue
       const engineDir = path.basename(path.dirname(serverPath))
@@ -1170,6 +1166,12 @@ export class LLMService {
           continue
         }
       }
+      // Read after the device probe's wait, with no await before the launch arguments, so a save made
+      // during the probe cannot leave the checkpoint and the arguments describing different launches.
+      const attempts = loadAttempts(
+        this.ctxSize,
+        cpuOnly || enginePriority(serverPath) === 2 ? 0 : this.gpuLayers
+      ).slice(0, 1)
       for (let a = 0; a < attempts.length; a++) {
         if (generation !== this.launchGeneration) return false
         const at = attempts[a]
@@ -1203,9 +1205,13 @@ export class LLMService {
           }
           await this.prepareModelPort()
           if (generation !== this.launchGeneration) return false
-          if (
-            await this.launchServer(serverPath, this.launchArgsFor(at.ctxSize, at.gpuLayers))
-          ) {
+          const retryArgs = this.launchArgsFor(
+            this.ctxSize,
+            cpuOnly || enginePriority(serverPath) === 2 ? 0 : this.gpuLayers
+          )
+          const retriedWith = { settings: this.getSettings(), explicit: new Set(this.userExplicit) }
+          if (await this.launchServer(serverPath, retryArgs)) {
+            this.lastWorkingLaunch = retriedWith
             return true
           }
         }
