@@ -29,7 +29,7 @@ export function ConnectorPullQueryField({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && pullable) onPull(query)
+          if (e.key === 'Enter' && pullable && !disabled) onPull(query)
         }}
         placeholder={`Ask ${connectorName} for… (e.g. ABSLI)`}
         className="flex-1 rounded-md border border-neutral-800 bg-neutral-950 px-2.5 py-1.5 text-xs text-neutral-200 outline-none focus:border-neutral-600"

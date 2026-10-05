@@ -256,6 +256,7 @@ export function ConnectorsScreen(): ReactElement {
   >([])
   const [connecting, setConnecting] = useState<string | null>(null)
   const pendingConnectorIds = useRef(new Map<string, number>())
+  const connectsInFlight = useRef(new Set<string>())
   const cancelledConnections = useRef(new Set<string>())
   const [errorFor, setErrorFor] = useState<Record<string, string>>({})
   const [tokenFor, setTokenFor] = useState<CatalogEntry | null>(null)
@@ -293,6 +294,9 @@ export function ConnectorsScreen(): ReactElement {
     entry: CatalogEntry,
     secretVals: Record<string, string>
   ): Promise<void> => {
+    // One attempt per connector: a second would overwrite the first's pending id and cleanup.
+    if (connectsInFlight.current.has(entry.id)) return
+    connectsInFlight.current.add(entry.id)
     setConnecting(entry.id)
     cancelledConnections.current.delete(entry.id)
     setErrorFor((p) => ({ ...p, [entry.id]: '' }))
@@ -334,6 +338,7 @@ export function ConnectorsScreen(): ReactElement {
         }))
       }
     } finally {
+      connectsInFlight.current.delete(entry.id)
       pendingConnectorIds.current.delete(entry.id)
       cancelledConnections.current.delete(entry.id)
       setConnecting(null)
@@ -758,6 +763,7 @@ export function ConnectorsScreen(): ReactElement {
                                   secrets={e.secrets ?? []}
                                   onConnect={(secrets) => void doConnect(e, secrets)}
                                   onCancel={() => setTokenFor(null)}
+                                  connecting={connecting === e.id}
                                 />
                               </div>
                             ) : (

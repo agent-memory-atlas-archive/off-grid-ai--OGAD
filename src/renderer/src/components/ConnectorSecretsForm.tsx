@@ -11,6 +11,8 @@ interface ConnectorSecretsFormProps {
   /** Connect with the secrets as typed. Nothing is stored until this is called. */
   readonly onConnect: (secrets: Record<string, string>) => void
   readonly onCancel: () => void
+  /** True while this connector's connection attempt is running. */
+  readonly connecting?: boolean
 }
 
 /**
@@ -24,7 +26,8 @@ interface ConnectorSecretsFormProps {
 export function ConnectorSecretsForm({
   secrets,
   onConnect,
-  onCancel
+  onCancel,
+  connecting = false
 }: ConnectorSecretsFormProps): React.JSX.Element {
   const [values, setValues] = useState<Record<string, string>>({})
 
@@ -43,9 +46,10 @@ export function ConnectorSecretsForm({
       <div className="flex gap-2">
         <button
           onClick={() => onConnect(values)}
-          className="rounded-md bg-green-500 px-2.5 py-1 text-xs text-neutral-950 hover:bg-green-400"
+          disabled={connecting}
+          className="rounded-md bg-green-500 px-2.5 py-1 text-xs text-neutral-950 hover:bg-green-400 disabled:opacity-40"
         >
-          Connect
+          {connecting ? 'Connecting…' : 'Connect'}
         </button>
         <button
           onClick={onCancel}
