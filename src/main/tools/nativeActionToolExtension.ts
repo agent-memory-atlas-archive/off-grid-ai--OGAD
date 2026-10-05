@@ -218,18 +218,11 @@ export class NativeActionToolExtension implements ToolExtension {
     }
     if (isTaskAction(name) && needsCurrentLocation(args, context)) {
       const location = context?.currentLocation
-      if (!location) {
-        return {
-          text: context?.currentLocationFailed
-            ? 'I could not get your current location. Provide a starting address or neighborhood before I start this nearby task.'
-            : 'I need your current coordinates before I start this nearby task. I did not start Web Use.',
-          status: 'failed',
-          authoritative: true
+      if (location) {
+        args = {
+          ...args,
+          goal: `${typeof args.goal === 'string' ? args.goal : ''}\n\nStart from latitude ${location.latitude}, longitude ${location.longitude}.`
         }
-      }
-      args = {
-        ...args,
-        goal: `${typeof args.goal === 'string' ? args.goal : ''}\n\nStart from latitude ${location.latitude}, longitude ${location.longitude}.`
       }
     }
     if (shouldGate(spec.risk)) {
