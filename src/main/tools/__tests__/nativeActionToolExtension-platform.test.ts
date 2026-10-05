@@ -10,6 +10,8 @@ import {
   NATIVE_TOOL_SPECS,
   specsForPlatform,
   systemHintForPlatform,
+  withWebUseTarget,
+  WEB_USE_IN_DEFAULT_BROWSER_HINT,
   WINDOWS_TOOL_NAMES,
   LINUX_TOOL_NAMES
 } from '../nativeActionToolExtension-logic'
@@ -116,7 +118,10 @@ describe('the extension on Linux', () => {
   it('does not offer task tools when the action runtime is absent', () => {
     Object.defineProperty(app, 'isPackaged', { value: true, configurable: true })
     try {
-      const unavailable = new NativeActionToolExtension({ ...boundary, taskUseEnabled: () => false }, 'linux')
+      const unavailable = new NativeActionToolExtension(
+        { ...boundary, taskUseEnabled: () => false },
+        'linux'
+      )
       expect(unavailable.canHandle('computer_use')).toBe(false)
       expect(unavailable.canHandle('web_use')).toBe(false)
       expect(JSON.stringify(unavailable.schemas())).not.toContain('computer_use')
@@ -138,5 +143,18 @@ describe('registerNativeActionTools', () => {
       registerNativeActionTools(register, platform)
       expect(register).toHaveBeenCalledTimes(expected)
     }
+  })
+})
+
+describe('withWebUseTarget', () => {
+  it('tells the model web_use runs signed in when it runs in the default browser', () => {
+    const hint = systemHintForPlatform('darwin')
+    expect(withWebUseTarget(hint, false)).toBe(hint)
+    expect(withWebUseTarget(hint, true)).toBe(`${hint} ${WEB_USE_IN_DEFAULT_BROWSER_HINT}`)
+  })
+
+  it('adds nothing where web_use is not offered', () => {
+    const hint = systemHintForPlatform('darwin', false)
+    expect(withWebUseTarget(hint, true)).toBe(hint)
   })
 })

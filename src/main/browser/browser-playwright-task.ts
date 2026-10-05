@@ -1,4 +1,5 @@
 import type { PlaywrightToolResult } from './playwright-mcp-session'
+import { NoSupportedActionError } from './semantic-candidates'
 import {
   completionEvidenceMatches,
   decideBrowserSemanticAction,
@@ -143,6 +144,12 @@ async function runSemanticStep(
       signal: combinedSignal(input.signal, modelLease.signal)
     })
   } catch (error) {
+    if (error instanceof NoSupportedActionError) {
+      return reobserveForRetry(input, state, {
+        note: 'The Decision model rejected every proposed action as unsafe or unsupported. Propose different actions from this fresh snapshot.',
+        step: 're-observed the page after the Decision model rejected every proposal'
+      })
+    }
     if (!modelLease.signal.aborted) throw error
     input.onStep('discarded a model reply after input control changed')
     state.observation = await observeWithCurrentLease(input)
@@ -316,6 +323,29 @@ async function publishObservation(
   }
 }
 
+/**
+ * Re-observe and let the model try again with a recovery note. On a page that did not change
+ * this counts as no progress, so a model that keeps citing a ref the page never had, or a
+ * Decision model that keeps rejecting every proposal, stops at the no-progress limit instead
+ * of using every step.
+ */
+async function reobserveForRetry(
+  input: BrowserPlaywrightTaskInput,
+  state: SemanticLoopState,
+  why: { readonly note: string; readonly step: string }
+): Promise<BrowserPlaywrightTaskResult | undefined> {
+  state.observation = await observeWithCurrentLease(input)
+  const after = fingerprint(state.observation.text)
+  state.noChangeCount = after === state.lastFingerprint ? state.noChangeCount + 1 : 0
+  state.lastFingerprint = after
+  if (state.noChangeCount >= MAX_NO_CHANGE) {
+    return fallback('Semantic control made no visible progress.', state.handoffs)
+  }
+  state.recoveryNote = why.note
+  input.onStep(why.step)
+  return undefined
+}
+
 async function recoverActionError(
   input: BrowserPlaywrightTaskInput,
   state: SemanticLoopState,
@@ -326,11 +356,10 @@ async function recoverActionError(
     return undefined
   }
   if (isStaleReference(result)) {
-    state.observation = await observeWithCurrentLease(input)
-    state.recoveryNote =
-      'The element reference became stale. Use only a reference from this fresh snapshot.'
-    input.onStep('re-observed the page after a stale element reference')
-    return undefined
+    return reobserveForRetry(input, state, {
+      note: 'The element reference became stale. Use only a reference from this fresh snapshot.',
+      step: 're-observed the page after a stale element reference'
+    })
   }
   return fallback(`Semantic action failed: ${compact(result.text)}`, state.handoffs)
 }

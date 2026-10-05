@@ -74,7 +74,7 @@ export function ArtifactCanvas({
   onClose: () => void
   width?: number | null
   onResize?: (w: number) => void
-}) {
+}): React.JSX.Element {
   // Runtime libraries are tagged with the kind they were loaded for, so a kind change never
   // builds a preview with the previous kind's libraries.
   const [loadedRuntime, setLoadedRuntime] = useState<{
@@ -133,7 +133,7 @@ export function ArtifactCanvas({
 
   useEffect(() => {
     let alive = true
-    window.api
+    ;(window.api as Partial<typeof window.api>)
       .artifactRuntime?.(artifact.kind)
       .then((r: Record<string, string>) => {
         if (alive) setLoadedRuntime({ kind: artifact.kind, libs: r })

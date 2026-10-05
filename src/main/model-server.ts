@@ -55,6 +55,7 @@ import {
   toDataUrl
 } from './model-server/data-url'
 import { errBody, errMeta } from './model-server/errors'
+import { handleExtensionBridge, handleExtensionUpgrade } from './extension-bridge/bridge-http'
 import { isAsync, matchPollRoute } from './model-server/async-request'
 import { sanitizeChatMessages } from './model-server/chat-messages'
 import { applyThinkingPayload, requestedThinking } from './llm/chat-payload'
@@ -597,7 +598,7 @@ async function handleChat(
     // A client says WHETHER it wants thinking; this server decides HOW, because the second half
     // of the answer (reasoning_format) is a property of the model server running here, not of the
     // request. Without this a phone could ask for thinking and get a reply with nothing in it.
-    if (applyThinkingPayload(body)) changed = true
+    if (applyThinkingPayload(body, llm.currentThinkingDialect)) changed = true
     if (changed) forward = Buffer.from(JSON.stringify(body))
   } catch {
     // Image fetch failed — forward the original valid request unchanged so the
@@ -1257,6 +1258,9 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
       return
     }
 
+    // The browser extension's private, paired, end-to-end sealed link (extension-bridge/).
+    if (url.startsWith('/v1/extension/')) return void handleExtensionBridge(req, res, url, method)
+
     if (url === '/openapi.json') {
       const img = imageGenStatus()
       const modalities = await liveGatewayModalities(img.available)
@@ -1499,6 +1503,10 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
   server.requestTimeout = 0 // no cap on how long a request may take
   server.headersTimeout = 0 // no cap on time-to-headers
   server.keepAliveTimeout = 60_000
+  // The paired browser extension's live socket (extension-bridge/). Every other upgrade is refused.
+  server.on('upgrade', (req, socket, head) => {
+    if (!handleExtensionUpgrade(req, socket, head)) socket.destroy()
+  })
 
   // The gateway has no authentication. Bind the socket itself to loopback so no
   // route can become LAN-accessible through a missing per-handler authorization check.

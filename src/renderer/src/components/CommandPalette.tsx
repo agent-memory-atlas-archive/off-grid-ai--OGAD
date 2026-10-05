@@ -68,12 +68,10 @@ export function CommandPalette({
 
   // Debounced fast search (keyword only for instant feel).
   useEffect(() => {
-    // Every query change bumps the sequence, so a reply for an older query never lands.
+    // Every query change bumps the sequence, so a reply for an older query never lands - including
+    // one that arrives after the box was cleared (onChange clears the hits themselves).
     const id = ++seq.current
-    if (!query.trim()) {
-      setHits([])
-      return undefined
-    }
+    if (!query.trim()) return undefined
     const t = setTimeout(async () => {
       let nextHits: SearchHit[] = []
       try {
@@ -116,7 +114,10 @@ export function CommandPalette({
         <Command shouldFilter={false} className="font-mono">
           <CommandInput
             value={query}
-            onValueChange={setQuery}
+            onValueChange={(value) => {
+              setQuery(value)
+              if (!value.trim()) setHits([])
+            }}
             placeholder="Search everything, or jump to a screen…"
           />
           <CommandList>

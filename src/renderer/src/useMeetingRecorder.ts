@@ -72,8 +72,6 @@ export function useMeetingRecorder(enabled = true): MeetingRecorder {
   // ticks down each second instead of showing a frozen "20s".
   useEffect(() => {
     if (!st.recording || !st.startedAt) {
-      setElapsed(0)
-      setWarningSecondsLeft(0)
       return
     }
     const tick = (): void => {
@@ -101,8 +99,8 @@ export function useMeetingRecorder(enabled = true): MeetingRecorder {
   return {
     recording: st.recording,
     busy: st.busy,
-    elapsed,
-    warningSecondsLeft,
+    elapsed: st.recording ? elapsed : 0,
+    warningSecondsLeft: st.recording ? warningSecondsLeft : 0,
     platform: st.platform,
     error: st.error,
     start,

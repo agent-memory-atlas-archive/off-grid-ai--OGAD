@@ -370,13 +370,18 @@ export function specsForPlatform(
   } else if (platform === 'win32') {
     specs = NATIVE_TOOL_SPECS.filter((spec) => WINDOWS_TOOL_NAMES.has(spec.name))
   } else if (platform === 'linux') {
-    specs = NATIVE_TOOL_SPECS.filter((spec) =>
-      LINUX_TOOL_NAMES.has(spec.name) || (linuxTaskUse && TASK_USE_TOOL_NAMES.has(spec.name))
-    ).map((spec) => spec.name === 'open_url' ? {
-      ...spec,
-      description:
-        "Open a URL or app scheme in the user's default browser or app. It only opens the link and cannot control the browser."
-    } : spec)
+    specs = NATIVE_TOOL_SPECS.filter(
+      (spec) =>
+        LINUX_TOOL_NAMES.has(spec.name) || (linuxTaskUse && TASK_USE_TOOL_NAMES.has(spec.name))
+    ).map((spec) =>
+      spec.name === 'open_url'
+        ? {
+            ...spec,
+            description:
+              "Open a URL or app scheme in the user's default browser or app. It only opens the link and cannot control the browser."
+          }
+        : spec
+    )
   } else {
     specs = []
   }
@@ -385,7 +390,11 @@ export function specsForPlatform(
 
 /** The model-facing capability hint, per platform - never promise a tool the
  *  platform does not expose. */
-export function systemHintForPlatform(platform: NodeJS.Platform, includeTaskUse = true, linuxTaskUse = false): string {
+export function systemHintForPlatform(
+  platform: NodeJS.Platform,
+  includeTaskUse = true,
+  linuxTaskUse = false
+): string {
   if (platform === 'darwin') {
     if (!includeTaskUse) {
       return "You can act on the user's Mac: get their current location for nearby requests (get_current_location), manage calendar events (calendar_create_event, calendar_list_events) and reminders (reminders_create, reminders_list), look up people (contacts_search), and send an iMessage (messages_send) or email (mail_send). Resolve a name to a handle with contacts_search before sending. Open a link or app scheme with open_url; it opens the target without interacting with it. Use ISO 8601 for all times. Actions requested in this Chat run directly; report the real result and never tell the user to approve them."
@@ -419,4 +428,18 @@ export function buildNativeToolSchemas(
     type: 'function',
     function: { name: s.name, description: s.description, parameters: s.parameters }
   }))
+}
+
+/**
+ * Appended to the system hint when Tasks > Web Use runs in the user's default browser and that
+ * browser is connected: web_use then runs signed in as the user, so it also covers tasks that
+ * need their existing session, instead of open_url followed by computer_use.
+ */
+export const WEB_USE_IN_DEFAULT_BROWSER_HINT =
+  "Web Use is set to run in the user's own default browser: it opens a tab of its own there, signed in as the user, and never touches their other tabs. Use web_use for website tasks even when they need the user's existing login, cookies or account."
+
+export function withWebUseTarget(hint: string, inDefaultBrowser: boolean): string {
+  return inDefaultBrowser && hint.includes('web_use')
+    ? `${hint} ${WEB_USE_IN_DEFAULT_BROWSER_HINT}`
+    : hint
 }

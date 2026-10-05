@@ -134,7 +134,7 @@ interface NavigationState {
   selectedProjectId: string | null
 }
 
-function ReprocessingBanner() {
+function ReprocessingBanner(): React.JSX.Element | null {
   const { reprocessing, progress } = useReprocessing()
   if (!reprocessing) return null
 
@@ -281,7 +281,7 @@ function ModelStatusDot({
   )
 }
 
-function AppContent() {
+function AppContent(): React.JSX.Element {
   const { addNotification, unreadCount } = useNotifications()
 
   // Main owns entitlement truth. The preload value seeds this renderer, then
@@ -563,7 +563,7 @@ function AppContent() {
     }
     window.addEventListener('og:navigate', onNav)
     // Main-driven navigation (tray → a screen).
-    const offNav = window.api.onNavigate?.((v: string) => {
+    const offNav = window.api.onNavigate((v: string) => {
       navigateTo(v as ViewMode, () => {
         setNavigationSubroute(null)
         setSettingsSection(null)
@@ -571,7 +571,7 @@ function AppContent() {
     })
     return () => {
       window.removeEventListener('og:navigate', onNav)
-      offNav?.()
+      offNav()
     }
   }, [navigateTo])
 
@@ -912,7 +912,7 @@ function AppContent() {
 
   // Global keyboard shortcuts for back/forward navigation (Cmd+[ and Cmd+])
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.key === '[') {
         e.preventDefault()
         if (activeModelsOpen) setActiveModelsOpen(false)
@@ -1232,7 +1232,12 @@ function AppContent() {
               </div>
 
               {/* Navigation (scrolls; Settings is pinned to the bottom) */}
-              <div className="mt-5 flex flex-1 flex-col overflow-y-auto overflow-x-hidden pr-0.5">
+              <div
+                className={cn(
+                  'mt-5 flex flex-1 flex-col overflow-y-auto overflow-x-hidden pr-0.5',
+                  !sidebarOpen && 'sidebar-nav-scroll-collapsed'
+                )}
+              >
                 {sidebarOpen && (
                   <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
                     Menu
@@ -1391,6 +1396,8 @@ function AppContent() {
                     ) : (
                       // Pro tabs: render through the pro view-router when active,
                       // otherwise show the upgrade writeup for that feature.
+                      // Context carries event callbacks; the router does not read their refs.
+                      // eslint-disable-next-line react-hooks/refs
                       (renderProView(viewMode, {
                         setView: (v) => navigateTo(v as ViewMode),
                         onNavigate: handleProNavigate,
@@ -1483,15 +1490,10 @@ function writeSidebarPinned(pinned: boolean): void {
   }
 }
 
-function App() {
+function App(): React.JSX.Element | null {
   // Onboarding runs FIRST — before the model/permission gate — so a new user sees
   // the intro, then goes straight to model selection (handled by PermissionGate).
-  const [onboarded, setOnboarded] = useState<boolean | null>(null)
-  useEffect(() => {
-    setOnboarded(localStorage.getItem('onboarding_completed') === 'true')
-  }, [])
-
-  if (onboarded === null) return null
+  const [onboarded, setOnboarded] = useState(() => localStorage.getItem('onboarding_completed') === 'true')
   if (!onboarded) return <Onboarding onComplete={() => setOnboarded(true)} />
 
   return (

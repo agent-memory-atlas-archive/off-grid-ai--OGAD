@@ -85,6 +85,13 @@ export const HOOKS = {
   /** (task: TaskRunSnapshot) => void - lets Pro project the normal task outcome onto the
    * approval that started the task. Core task state remains the single source of truth. */
   actionsObserveTaskResult: 'actions:observeTaskResult',
+  /**
+   * (request: unknown, browser: { deviceName: string; deviceId: string }) => Promise<unknown> -
+   * one vault request from a paired browser extension (extension-bridge/), answered per the
+   * extension's vault protocol. Pro registers it; free builds leave it inert and the bridge
+   * reports the vault as unavailable.
+   */
+  extensionVaultRequest: 'vault.extensionRequest',
   /** Legacy MCP-only predecessor of actionsProposeApproval. Kept so a pro build
    *  that has not yet migrated still gates connector writes; remove once
    *  desktop-pro registers actionsProposeApproval. */

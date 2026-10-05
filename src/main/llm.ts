@@ -1086,7 +1086,10 @@ export class LLMService {
     if (generation !== this.launchGeneration) return
     if (await this.launchWithFallback(serverPaths, generation)) return
     if (generation !== this.launchGeneration) return
-    this.lastErrorMsg = 'All model engines failed to load the model.'
+    this.lastErrorMsg =
+      classifyLlamaError(this.stderrTail.join('\n'))?.reason ??
+      this.lastErrorMsg ??
+      'All model engines failed to load the model.'
     this.invalidateHealth()
     throw new Error(this.lastErrorMsg)
   }
@@ -1404,7 +1407,7 @@ export class LLMService {
       await this.init()
     } catch (error) {
       console.error('[LLMService] recovery startup failed:', error)
-      if (generation === this.launchGeneration && !this.server) await this.handleCrash(code)
+      if (generation === this.launchGeneration && !(this.server as ChildProcess | null)) await this.handleCrash(code)
     }
   }
 
@@ -1418,6 +1421,10 @@ export class LLMService {
    *  template llama-server publishes at /props; 'enable-thinking' until then, which is the
    *  behaviour every model got before this was resolved at all. */
   private thinkingDialect: ThinkingDialect = 'enable-thinking'
+  /** The loaded model's thinking dialect, for requests the gateway forwards. */
+  get currentThinkingDialect(): ThinkingDialect {
+    return this.thinkingDialect
+  }
   private mediaMarker: string | null = null
 
   /** Read the loaded model's properties and remember its request dialects.
