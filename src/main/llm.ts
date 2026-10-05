@@ -299,6 +299,12 @@ export class LLMService {
   // flight.
   private launchRestartRequest = 0
   private launchRestartQueue: Promise<void> = Promise.resolve()
+  // Launch changes still waiting in, or running through, the queue above.
+  private launchRestartsPending = 0
+  // The settings the engine last launched with successfully, kept across a chain of queued launch
+  // changes. A save that arrives mid-restart sees the engine stopped, so its own "before" is not a
+  // working launch; a failure at the end of the chain restores this instead.
+  private lastWorkingLaunch: { settings: LlmSettings; explicit: Set<PresetField> } | null = null
   // Last ~50 stderr lines from llama-server, so we can explain WHY it died on
   // load (unknown arch / OOM / OS-too-old) instead of a blank "Down".
   private stderrTail: string[] = []
@@ -707,7 +713,14 @@ export class LLMService {
       this.draftModel = path.basename(compatibleSettings.draftModel)
     // Quantized KV cache requires FlashAttention — auto-enable it so the pair is valid.
     if (this.kvCacheType !== 'f16' && !this.flashAttn) this.flashAttn = true
-    const restorePrior = (): void => {
+    const restorePrior = (
+      snapshot: { settings: LlmSettings; explicit: Set<PresetField> } = {
+        settings: priorSettings,
+        explicit: priorExplicit
+      }
+    ): void => {
+      const priorSettings = snapshot.settings
+      const priorExplicit = snapshot.explicit
       this.performanceMode = priorSettings.performanceMode ?? this.performanceMode
       this.temperature = priorSettings.temperature ?? this.temperature
       this.ctxSize = priorSettings.ctxSize ?? this.ctxSize
@@ -745,15 +758,20 @@ export class LLMService {
       // A running model is only replaced once the new launch succeeds. If it fails, the
       // previous settings are restored and the previous model is relaunched - unless a newer
       // launch change is already queued, which then owns the engine and its settings.
-      const wasRunning = this.initialized
+      if (this.launchRestartsPending === 0) {
+        this.lastWorkingLaunch = this.initialized
+          ? { settings: priorSettings, explicit: priorExplicit }
+          : null
+      }
       const restart = this.restartForLaunchChange()
       const request = this.launchRestartRequest
       try {
         await restart
       } catch (error) {
-        if (!wasRunning || request !== this.launchRestartRequest) throw error
+        const working = this.lastWorkingLaunch
+        if (!working || request !== this.launchRestartRequest) throw error
         const attempted = this.getSettings()
-        restorePrior()
+        restorePrior(working)
         try {
           this.persist()
         } catch (persistError) {
@@ -777,13 +795,19 @@ export class LLMService {
   /** The engine owns restart policy: one spawn at a time, and the newest settings win. */
   private async restartForLaunchChange(): Promise<void> {
     const request = ++this.launchRestartRequest
-    const run = this.launchRestartQueue.then(async () => {
-      // A newer launch change is already queued and will spawn with the newest arguments,
-      // so this one has nothing left to do.
-      if (request !== this.launchRestartRequest) return
-      this.stop()
-      await this.init()
-    })
+    this.launchRestartsPending += 1
+    const run = this.launchRestartQueue
+      .then(async () => {
+        // A newer launch change is already queued and will spawn with the newest arguments,
+        // so this one has nothing left to do.
+        if (request !== this.launchRestartRequest) return
+        this.stop()
+        await this.init()
+        this.lastWorkingLaunch = { settings: this.getSettings(), explicit: new Set(this.userExplicit) }
+      })
+      .finally(() => {
+        this.launchRestartsPending -= 1
+      })
     // The queue itself must never carry a rejection: a failed respawn is reported to the
     // caller that asked for it, and the next request still gets its turn.
     this.launchRestartQueue = run.catch(() => {})
