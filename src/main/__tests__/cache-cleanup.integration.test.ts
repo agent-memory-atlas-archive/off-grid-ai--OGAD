@@ -32,6 +32,7 @@ vi.mock('electron', () => ({
 }))
 
 import { clearEphemeralCache } from '../cache-cleanup'
+import { flushDiagnosticLog } from '../diagnostics-log'
 import { CATALOG } from '@offgrid/models'
 
 const originalDataDir = process.env.OFFGRID_DATA_DIR
@@ -46,7 +47,9 @@ beforeEach(() => {
   boundary.clearCalls.length = 0
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // Clearing a download logs off the main thread into this data folder; let that land first.
+  await flushDiagnosticLog()
   if (originalDataDir === undefined) delete process.env.OFFGRID_DATA_DIR
   else process.env.OFFGRID_DATA_DIR = originalDataDir
   fs.rmSync(temporaryDataDir, { recursive: true, force: true })
