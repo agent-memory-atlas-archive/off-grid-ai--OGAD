@@ -31,7 +31,7 @@ const SETTINGS_SECTION_TITLES: Record<string, string> = {
   'computer-use': 'Computer use',
   remote: 'Remote model server',
   'ai-activity': 'AI activity',
-  'god-twin': 'God Twin',
+  'god-twin': 'God',
   sync: 'Device sync',
   identity: 'You',
   secretary: 'What Off Grid AI has learned',
@@ -216,7 +216,7 @@ export function Settings({
             </SettingsCard>
 
             <SettingsCard
-              title="God Twin"
+              title="God"
               summary="Show or hide Ares on your desktop."
               delay={0.17}
             >

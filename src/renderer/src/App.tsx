@@ -374,9 +374,9 @@ function AppContent(): React.JSX.Element {
     presetId?: string
     draftPrompt?: string
   } | null>(null)
-  // A wake from Ares on the desktop or the wake word: the God Twin opens and listens.
+  // A wake from Ares on the desktop or the wake word: the God opens and listens.
   const [godTwinWake, setGodTwinWake] = useState<GodTwinWakeRequest>({ count: 0 })
-  // The God Twin is using the mic or speaking: the wake-word listener steps aside.
+  // The God is using the mic or speaking: the wake-word listener steps aside.
   const [godTwinBusy, setGodTwinBusy] = useState(false)
   useWakeListener(godTwinBusy)
   // Navigation is unconditional. Leaving a chat with a task running used to prompt, because the
@@ -966,7 +966,7 @@ function AppContent(): React.JSX.Element {
         !featureSupportsPlatform(f, currentPlatform()) ||
         (!isPro &&
           !(route === 'tasks' && TaskWorkspace) &&
-          // The God Twin is for everyone; its prepared workflows inside stay Pro.
+          // The God is for everyone; its prepared workflows inside stay Pro.
           route !== 'explore' &&
           !(route === 'devices' && proActivation === 'entitlement-bootstrap'))
     }

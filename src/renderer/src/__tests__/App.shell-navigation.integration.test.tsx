@@ -50,7 +50,7 @@ describe('<App/> shell navigation integration', () => {
     expect(localStorage.getItem('sidebar_pinned')).toBe('false')
   })
 
-  it('places God Twin directly after Chat and opens it for everyone from Work', async () => {
+  it('places God directly after Chat and opens it for everyone from Work', async () => {
     const user = userEvent.setup()
     render(<App />)
 
@@ -59,7 +59,7 @@ describe('<App/> shell navigation integration', () => {
 
     const work = within(navigation).getByRole('group', { name: 'Work' })
     const chat = within(work).getByRole('button', { name: 'Chat' })
-    const twin = within(work).getByRole('button', { name: 'God Twin' })
+    const twin = within(work).getByRole('button', { name: 'God' })
     const workButtons = within(work).getAllByRole('button')
 
     expect(workButtons.indexOf(twin)).toBe(workButtons.indexOf(chat) + 1)
@@ -67,7 +67,7 @@ describe('<App/> shell navigation integration', () => {
 
     await user.click(twin)
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'God Twin' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 1, name: 'God' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Talk to Ares' })).toBeTruthy()
     expect(screen.getByRole('textbox', { name: 'Ask Ares' })).toBeTruthy()
     // A free build has no prepared workflows and no upgrade wall here.

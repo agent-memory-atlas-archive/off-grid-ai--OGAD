@@ -158,7 +158,7 @@ export function getActiveTranscription(
 
 /**
  * This machine's transcriber, never a remote server. For audio that must not leave the device
- * whatever the user picked for transcription: the God Twin's always-on wake-word check.
+ * whatever the user picked for transcription: the God's always-on wake-word check.
  */
 export function getLocalTranscription(
   readSetting: TranscriptionSettingReader = getSetting

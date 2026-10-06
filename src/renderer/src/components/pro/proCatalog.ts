@@ -55,7 +55,7 @@ export interface ProFeature {
 export const PRO_FEATURES: ProFeature[] = [
   {
     route: 'explore',
-    label: 'God Twin',
+    label: 'God',
     icon: Robot,
     tagline: 'Your assistant. Talk to Ares, hands free.',
     description:
