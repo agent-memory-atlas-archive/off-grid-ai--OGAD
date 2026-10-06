@@ -402,7 +402,7 @@ function AppContent(): React.JSX.Element {
       setGodTwinWake((request) => ({
         count: request.count + 1,
         ...(wake.said ? { said: wake.said } : {}),
-        ...(wake.source ? { source: wake.source } : {})
+        source: wake.source
       }))
     })
   }, [navigateTo])
