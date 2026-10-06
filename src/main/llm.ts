@@ -42,7 +42,7 @@ import { engineSpawnEnv } from './llm/spawn-env'
 import { gpuDeviceAvailable } from './llm/gpu-device-probe'
 import { shouldAutoRecover } from './llm/crash-policy'
 import { enginePriority } from './llm/engine-priority'
-import { modelStartupTimeout } from './llm/startup-timeout'
+import { modelStartupQuietLimit, startupStalled } from './llm/startup-timeout'
 import { getBackendPreference } from './backend-preferences'
 import { prioritizeBackend, type BackendPreference } from '../shared/backend-preferences'
 import { streamCompletion, type StreamResult } from './llm/stream'
@@ -308,6 +308,8 @@ export class LLMService {
   // Last ~50 stderr lines from llama-server, so we can explain WHY it died on
   // load (unknown arch / OOM / OS-too-old) instead of a blank "Down".
   private stderrTail: string[] = []
+  // When the starting llama-server last wrote anything; waitForReady gives up only on silence.
+  private lastServerOutputAt = 0
   // Human, actionable reason the server failed to come up (null when healthy).
   private lastErrorMsg: string | null = null
   private get settingsFile(): string {
@@ -1270,6 +1272,7 @@ export class LLMService {
     this.backendModelPath = this.modelPath
     this.backendPlacement = undefined
     this.stderrTail = []
+    this.lastServerOutputAt = Date.now()
     this.invalidateHealth()
     let abandoned = false // set when we give up on this proc so its close handler is inert
     // True until waitForReady() confirms THIS engine. A close while probing is a failed
@@ -1284,7 +1287,11 @@ export class LLMService {
       console.error(`[LLMService] llama-server process error:`, e)
     })
 
+    proc.stdout?.on('data', () => {
+      this.lastServerOutputAt = Date.now()
+    })
     proc.stderr?.on('data', (data) => {
+      this.lastServerOutputAt = Date.now()
       const text = String(data)
       // Verbosity 4 also emits request traces. Read and log it only during model
       // load so user prompts cannot enter the app log or its diagnostic tail.
@@ -1329,10 +1336,9 @@ export class LLMService {
     })
 
     try {
-      // A cold CUDA load can spend over a minute on model weights and CLIP
-      // initialization while the server is still healthy. Do not kill it and
-      // fall back to CPU at the normal one-minute deadline.
-      await this.waitForReady(modelStartupTimeout(path.basename(binDir)))
+      // No total deadline: a large model loads for as long as llama-server keeps
+      // printing progress. Only a crash or a silent, stuck server moves to the next engine.
+      await this.waitForReady(modelStartupQuietLimit(path.basename(binDir)))
       if (this.server !== proc) throw new Error('Model load was cancelled')
       // Confirmed healthy: from here a close IS a crash worth recovering from.
       probing = false
@@ -1486,10 +1492,9 @@ export class LLMService {
     }
   }
 
-  private async waitForReady(timeout = 60000): Promise<void> {
-    const start = Date.now()
+  private async waitForReady(quietLimit = 60000): Promise<void> {
     let healthOk = false
-    while (Date.now() - start < timeout) {
+    while (!startupStalled(Date.now(), this.lastServerOutputAt, quietLimit)) {
       // The server died during startup (e.g. model load failure) — stop waiting.
       if (!this.server) throw new Error('llama-server exited during startup — model failed to load')
       try {
@@ -1512,7 +1517,7 @@ export class LLMService {
       }
       await new Promise((r) => setTimeout(r, 500)) // NOSONAR: wait between sequential startup probes.
     }
-    throw new Error('Server started but no model was loaded within the timeout')
+    throw new Error('Server stopped responding while loading the model')
   }
 
   // Use Node http module instead of fetch to avoid undici's headersTimeout (300s)
