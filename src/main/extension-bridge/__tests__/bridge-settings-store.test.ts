@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSettingsStore, type SettingsStoreDeps } from '../bridge-settings-store'
+import type { ConnectorsSettings } from '../bridge-settings'
 
 // The desktop's own functions, faked: what a paired browser reads must be what Settings here
 // shows, and what it writes must go through the same setters.
@@ -26,7 +27,7 @@ function fakeDesktop() {
     connectors: [
       { id: 1, name: 'Notes', url: 'https://mcp.test/notes', enabled: 1 },
       { id: 2, name: 'Local script', url: null, enabled: 1 }
-    ],
+    ] as Array<{ id: number; name: string; url: string | null; enabled: number; status?: string }>,
     remote: { activeServerId: null as string | null, textOnRemote: false },
     servers: [
       {
@@ -93,7 +94,7 @@ function fakeDesktop() {
       ]
     })
   }
-  return { state, store: createSettingsStore(deps) }
+  return { state, deps, store: createSettingsStore(deps) }
 }
 
 describe('a paired browser’s view of the desktop settings', () => {
@@ -202,6 +203,31 @@ describe('a paired browser’s view of the desktop settings', () => {
       'add Docs http https://docs.test/mcp',
       'enable 1 false',
       'remove 1'
+    ])
+  })
+
+  it('shows an account with what it can read and how it stands', async () => {
+    const { store, state, deps } = fakeDesktop()
+    state.connectors = [
+      ...state.connectors,
+      {
+        id: 3,
+        name: 'Google (work@example.com)',
+        url: 'https://gmailmcp.googleapis.com/mcp/v1?offgrid-services=workspace',
+        enabled: 1,
+        status: 'error'
+      }
+    ]
+    deps.accountAccess = (id) => (id === 3 ? { services: ['Gmail'], missing: ['Drive'] } : null)
+    expect(((await store.read('connectors')) as ConnectorsSettings).connectors).toEqual([
+      { id: '1', name: 'Notes', url: 'https://mcp.test/notes', enabled: true },
+      expect.objectContaining({
+        id: '3',
+        liveOnly: true,
+        health: 'needs-sign-in',
+        services: ['Gmail'],
+        missing: ['Drive']
+      })
     ])
   })
 

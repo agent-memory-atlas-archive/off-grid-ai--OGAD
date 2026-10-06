@@ -23,7 +23,8 @@ import {
 } from '../database'
 import { getToolExtensions, runTool } from '../tools'
 import { notifyRagConversationChanged } from '../rag-conversation-events'
-import { callHookAsync, hasHook, HOOKS } from '../bootstrap/hookRegistry'
+import { callHook, callHookAsync, hasHook, HOOKS } from '../bootstrap/hookRegistry'
+import { getSecret } from '../secrets'
 import { proEnabled } from '../bootstrap/loadProFeaturesMain'
 import { getWebUseSettings, setWebUseSettings } from '../web-use-settings'
 import { getComputerUseSettings, setComputerUseSettings } from '../computer-use-settings'
@@ -246,6 +247,14 @@ const settingsStore = createSettingsStore({
   listTools: listDesktopTools,
   setToolEnabled,
   listConnectors,
+  // Accounts are live-only connectors; Pro names what each can read.
+  accountAccess: (id) =>
+    getSecret(`connector:${id}:live-only`) === 'true'
+      ? (callHook<{ services: string[]; missing: string[] }>(HOOKS.accountAccess, id) ?? {
+          services: [],
+          missing: []
+        })
+      : null,
   addConnector: (c) => void addConnector(c),
   setConnectorEnabled,
   removeConnector,

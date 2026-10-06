@@ -77,8 +77,26 @@ export interface ToolsSettings {
   readonly tools: readonly { name: string; description: string; enabled: boolean }[]
 }
 
+/** How an account stands: usable, waiting for a new sign-in on the desktop, or switched off. */
+export type AccountHealth = 'connected' | 'needs-sign-in' | 'off'
+
 export interface ConnectorsSettings {
-  readonly connectors: readonly { id: string; name: string; url: string; enabled: boolean }[]
+  readonly connectors: readonly {
+    id: string
+    name: string
+    url: string
+    enabled: boolean
+    /**
+     * An account (Google, Microsoft, an Obsidian vault, a work tool): read live when asked and
+     * never copied into memory. Accounts are added and signed in to on the desktop.
+     */
+    liveOnly?: boolean
+    health?: AccountHealth
+    /** What the account can read, as the desktop names it (Gmail, Calendar, ...). */
+    services?: readonly string[]
+    /** Picked, but not granted at sign-in. */
+    missing?: readonly string[]
+  }[]
 }
 
 export interface ImageSettings {
@@ -188,7 +206,9 @@ const nested =
   (v) =>
     pick(v, rules) ?? undefined
 
-const HTTP_URL = /^https?:\/\/[^\s]+$/
+// A plain web address. An account's internal identity on the desktop (a URL carrying
+// offgrid-services) is not something a browser can add: accounts are signed in to on the desktop.
+const HTTP_URL = /^https?:\/\/(?![^\s]*offgrid-services=)[^\s]+$/
 
 const MODEL_ID = text(400, /^\S*$/)
 const yes: Rule = (v) => (v === true ? v : undefined)

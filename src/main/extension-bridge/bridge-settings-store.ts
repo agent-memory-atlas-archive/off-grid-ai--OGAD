@@ -40,7 +40,15 @@ export interface SettingsStoreDeps {
   saveSetting(key: string, value: unknown): void
   listTools(): { name: string; description: string; enabled: boolean }[]
   setToolEnabled(name: string, enabled: boolean): void
-  listConnectors(): { id: number; name: string; url: string | null; enabled: number }[]
+  listConnectors(): {
+    id: number
+    name: string
+    url: string | null
+    enabled: number
+    status?: string
+  }[]
+  /** An account's access, for accounts (live-only connectors); null for a plain connector. */
+  accountAccess?(id: number): { services: string[]; missing: string[] } | null
   addConnector(c: { name: string; transport: 'http'; url: string }): void
   setConnectorEnabled(id: number, enabled: boolean): void
   removeConnector(id: number): void
@@ -122,12 +130,28 @@ export function createSettingsStore(deps: SettingsStoreDeps): {
       connectors: deps
         .listConnectors()
         .filter((c) => typeof c.url === 'string' && c.url)
-        .map((c) => ({
-          id: String(c.id),
-          name: c.name,
-          url: c.url as string,
-          enabled: c.enabled === 1
-        }))
+        .map((c) => {
+          const access = deps.accountAccess?.(c.id) ?? null
+          return {
+            id: String(c.id),
+            name: c.name,
+            url: c.url as string,
+            enabled: c.enabled === 1,
+            ...(access
+              ? {
+                  liveOnly: true,
+                  health:
+                    c.status === 'error'
+                      ? ('needs-sign-in' as const)
+                      : c.enabled === 1
+                        ? ('connected' as const)
+                        : ('off' as const),
+                  services: access.services,
+                  missing: access.missing
+                }
+              : {})
+          }
+        })
     }),
     image: () => {
       const settings = deps.appSettings()

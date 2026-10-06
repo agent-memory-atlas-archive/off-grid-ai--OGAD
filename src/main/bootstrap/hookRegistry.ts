@@ -62,6 +62,11 @@ export const HOOKS = {
    * its stored sign-in still exists: Pro revokes provider tokens that support it (Google).
    */
   mcpBeforeRemove: 'mcp:beforeRemove',
+  /**
+   * (connectorId: number) => { services: string[]; missing: string[] } | undefined - what an
+   * account can read and what was not granted, named for people (Gmail, Calendar). Pro.
+   */
+  accountAccess: 'accounts:access',
   /** (mutation: SyncMutation) => void - record a committed core data change in Pro sync. */
   syncRecordLocalMutation: 'sync.recordLocalMutation',
   /**
