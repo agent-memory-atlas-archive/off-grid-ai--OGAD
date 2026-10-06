@@ -215,8 +215,7 @@ const offGridApi = {
       state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting'
       spinning: boolean
     }> => ipcRenderer.invoke('god-twin:preferences:set', preferences),
-    setListening: (listening: boolean): void =>
-      ipcRenderer.send('god-twin:listening', listening),
+    setListening: (listening: boolean): void => ipcRenderer.send('god-twin:listening', listening),
     setState: (state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting'): void =>
       ipcRenderer.send('god-twin:state', state),
     resize: (
@@ -1034,6 +1033,10 @@ const offGridApi = {
   }) => ipcRenderer.invoke('mcp:add', c),
   mcpSetEnabled: (id: number, enabled: boolean) =>
     ipcRenderer.invoke('mcp:set-enabled', id, enabled),
+  mcpUpdate: (
+    id: number,
+    changes: { name?: string; url?: string; command?: string; args?: string[] }
+  ) => ipcRenderer.invoke('mcp:update', id, changes),
   mcpRemove: (id: number) => ipcRenderer.invoke('mcp:remove', id),
   mcpCancel: (id: number) => ipcRenderer.invoke('mcp:cancel', id),
   mcpTest: (id: number) => ipcRenderer.invoke('mcp:test', id),

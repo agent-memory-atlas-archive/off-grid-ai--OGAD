@@ -126,6 +126,55 @@ export function addConnector(c: NewConnector): number {
   return id
 }
 
+export interface ConnectorChanges {
+  name?: string
+  url?: string
+  command?: string
+  args?: string[]
+}
+
+/**
+ * Change a connector's name or where it connects. A new address or command is a different
+ * server: its sign-in and discovered tools no longer apply, so they are cleared and the
+ * connector waits for a new test. Other saved secrets (an API token) are kept.
+ */
+export function updateConnector(id: number, changes: ConnectorChanges): Connector {
+  ensure()
+  const current = getConnector(id)
+  if (!current) throw new Error('This connection no longer exists.')
+  const name = changes.name === undefined ? current.name : changes.name.trim()
+  if (!name) throw new Error('Enter a name.')
+  const url = current.transport === 'http' ? (changes.url?.trim() ?? current.url) : null
+  const command =
+    current.transport === 'stdio' ? (changes.command?.trim() ?? current.command) : null
+  const args =
+    current.transport === 'stdio'
+      ? changes.args === undefined
+        ? current.args
+        : changes.args.length
+          ? JSON.stringify(changes.args)
+          : null
+      : null
+  if (current.transport === 'http' && !url) throw new Error('Enter the server address.')
+  if (current.transport === 'stdio' && !command) throw new Error('Enter the command.')
+  const moved = url !== current.url || command !== current.command || args !== current.args
+  const database = getDB()
+  if (moved) cancelOAuthAuthorization(id)
+  database.transaction(() => {
+    if (moved) {
+      deleteSecretsByPrefix(`connector:${id}:oauth:`)
+      database
+        .prepare(
+          "UPDATE connectors SET name=?, url=?, command=?, args=?, tools=NULL, status='unknown', status_detail=? WHERE id=?"
+        )
+        .run(name, url, command, args, 'Settings changed. Test the connection.', id)
+    } else {
+      database.prepare('UPDATE connectors SET name=? WHERE id=?').run(name, id)
+    }
+  })()
+  return getConnector(id)!
+}
+
 export function setConnectorEnabled(id: number, enabled: boolean): void {
   ensure()
   getDB()
