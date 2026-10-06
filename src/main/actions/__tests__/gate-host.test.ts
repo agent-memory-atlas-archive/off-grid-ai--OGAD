@@ -93,7 +93,11 @@ describe('gateHost', () => {
   it('a routine waits for approval even for a native action Chat runs straight away', async () => {
     const queued = vi.fn(() => true)
     registerHook(HOOKS.actionsProposeApproval, queued)
-    const sendMail = { type: 'mail_send', rail: 'semantic' as const, risk: 'mutate' as const }
+    const sendMail: Partial<ActionRecord> = {
+      type: 'mail_send' as ActionRecord['type'],
+      rail: 'semantic',
+      risk: 'mutate'
+    }
 
     // Asked in Chat: runs.
     await expect(gateHost({ action: record(sendMail) })).resolves.toEqual({ kind: 'approve' })
