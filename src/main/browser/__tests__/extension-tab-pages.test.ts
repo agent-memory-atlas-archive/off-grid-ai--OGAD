@@ -27,6 +27,11 @@ function fakeLink(): FakeLink {
       if (op === 'tab.create') {
         return { tabId: ++nextTab, url: String(args.url), title: '' }
       }
+      if (op === 'tab.adopt') {
+        // The extension hands over only the tab it offered (its start-tab.ts fence).
+        if (args.tabId !== 7) throw new Error('That tab was not offered for this task.')
+        return { tabId: 7, url: String(args.url ?? 'https://chat.example.test/'), title: 'Chat' }
+      }
       if (op === 'cdp.send' && args.method === 'Target.getTargetInfo') {
         return { targetInfo: { targetId: `T${String(args.tabId)}` } }
       }
@@ -72,6 +77,25 @@ describe('extension tab pages under the Playwright relay', () => {
       method: 'Target.attachedToTarget',
       params: { targetInfo: { targetId: `T${tab.tabId}`, url: 'https://shop.example.test/' } }
     })
+  })
+
+  it('starts in the tab the browser offered, without opening a new one', async () => {
+    const link = fakeLink()
+    const provider = createExtensionPageProvider(link)
+    const tab = await provider.adopt(7)
+
+    expect(link.calls).toEqual([{ op: 'tab.adopt', args: { tabId: 7 } }])
+    expect([tab.tabId, tab.getURL()]).toEqual([7, 'https://chat.example.test/'])
+    expect(provider.active()).toBe(tab)
+
+    // A task that names a page takes the tab there; a tab never offered is refused.
+    await provider.adopt(7, 'https://shop.example.test/')
+    expect(link.calls.at(-1)).toEqual({
+      op: 'tab.adopt',
+      args: { tabId: 7, url: 'https://shop.example.test/' }
+    })
+    await expect(provider.adopt(8)).rejects.toThrow(/not offered/)
+    expect(link.calls.some((c) => c.op === 'tab.create')).toBe(false)
   })
 
   it("forwards only this tab's CDP events, on Playwright's page session", async () => {
