@@ -59,6 +59,8 @@ interface Connector {
   enabled: number
   status: string
   status_detail: string | null
+  /** Read live when asked; never synced into memory. */
+  liveOnly?: boolean
   tools: string | null
   last_synced: number | null
   synced_count: number | null
@@ -579,7 +581,12 @@ export function ConnectorsScreen(): ReactElement {
                   <p className="text-[11px] text-red-400/80">{cleanError(detail.status_detail)}</p>
                 )}
 
-                {!dNotReady && detail.status === 'ok' && (
+                {!dNotReady && detail.status === 'ok' && detail.liveOnly && (
+                  <p className="text-[11px] leading-relaxed text-neutral-500">
+                    Read live when you ask. Nothing from this account is saved to memory.
+                  </p>
+                )}
+                {!dNotReady && detail.status === 'ok' && !detail.liveOnly && (
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => sync(detail.id)}

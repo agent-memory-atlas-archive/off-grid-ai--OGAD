@@ -1,5 +1,6 @@
 // Core MCP wiring: basic connector management + the chat tool extension. The Pro
 // layer adds CRM ingestion (mcp:ingest / mcp:items) and approval-gating on top.
+import { getSecret } from './secrets'
 import { ipcMain } from 'electron'
 import {
   listConnectors,
@@ -15,7 +16,13 @@ import { registerToolExtension } from './tools'
 import { mcpConnectorToolExtension } from './tools/mcpConnectorToolExtension'
 
 export function setupMcpIpc(): void {
-  ipcMain.handle('mcp:list', () => listConnectors())
+  // Each row says whether it is live-only: read when asked, never synced into memory.
+  ipcMain.handle('mcp:list', () =>
+    listConnectors().map((c) => ({
+      ...c,
+      liveOnly: getSecret(`connector:${c.id}:live-only`) === 'true'
+    }))
+  )
   ipcMain.handle('mcp:add', (_e, c: NewConnector) => addConnector(c))
   ipcMain.handle('mcp:set-enabled', (_e, id: number, enabled: boolean) =>
     setConnectorEnabled(id, enabled)
