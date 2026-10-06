@@ -447,9 +447,10 @@ const TOOLS: ToolDef[] = [
 // otherwise; every other built-in obeys only the disabled-set.
 function schemas(
   imageAvailable: boolean,
-  scope: { projectActive: boolean; allMemory: boolean }
+  scope: { projectActive: boolean; allMemory: boolean },
+  allTools = false
 ): unknown[] {
-  const off = disabledSet()
+  const off = allTools ? new Set<string>() : disabledSet()
   return (
     TOOLS.filter((t) => !off.has(t.name))
       .filter((t) => t.name !== 'generate_image' || imageAvailable)
@@ -560,6 +561,8 @@ export async function toolChat(
   opts: {
     /** Assistant is selected for this turn; always include its browser and desktop tools. */
     assistantOnly?: boolean
+    /** God: every tool is on, whatever the Tools switch and per-tool settings say. */
+    allTools?: boolean
     /** What the user is doing now (God's context): added to the system prompt, bounded. */
     context?: string
     connectors?: boolean
@@ -620,7 +623,7 @@ export async function toolChat(
   // Offer generate_image only when an image model is available. The renderer passes
   // this; fall back to the main-process check so a caller that omits it still gates
   // correctly (single source of truth for "can we make an image right now").
-  const toolsEnabled = getSetting<boolean>('toolsEnabled', true) !== false
+  const toolsEnabled = opts.allTools || getSetting<boolean>('toolsEnabled', true) !== false
   let imageAvailable = opts.imageAvailable ?? false
   if ((!opts.assistantOnly || toolsEnabled) && opts.imageAvailable === undefined) {
     try {
@@ -642,7 +645,7 @@ export async function toolChat(
   const extSchemas: unknown[] = []
   const hints: string[] = []
   const extensionHints: { names: Set<string>; text: string }[] = []
-  const disabled = disabledSet()
+  const disabled = opts.allTools ? new Set<string>() : disabledSet()
   for (const e of exts) {
     try {
       const s = await e.schemas()
@@ -670,10 +673,11 @@ export async function toolChat(
     }
   }
   const builtins = toolsEnabled
-    ? schemas(imageAvailable, {
-        projectActive: !!opts.projectId,
-        allMemory: !!opts.allMemory
-      })
+    ? schemas(
+        imageAvailable,
+        { projectActive: !!opts.projectId, allMemory: !!opts.allMemory },
+        opts.allTools
+      )
     : []
   const assistantRequiredTools = opts.assistantOnly
     ? extSchemas.filter((schema) => {

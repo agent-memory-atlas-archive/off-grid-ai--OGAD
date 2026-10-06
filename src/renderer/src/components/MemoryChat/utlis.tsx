@@ -213,17 +213,17 @@ export function stopFailureMessage(kind: TaskSession['kind']): string {
   return `${kind === 'web_use' ? 'Web Use' : 'Computer Use'} could not be stopped on this device.`
 }
 
-export function readActiveConversationId(): string | null {
+export function readActiveConversationId(key = ACTIVE_CHAT_TAB_KEY): string | null {
   try {
-    return window.localStorage.getItem(ACTIVE_CHAT_TAB_KEY)
+    return window.localStorage.getItem(key)
   } catch {
     return null
   }
 }
 
-export function readOpenChatTabs(): string[] {
+export function readOpenChatTabs(key = OPEN_CHAT_TABS_KEY): string[] {
   try {
-    const saved = JSON.parse(window.localStorage.getItem(OPEN_CHAT_TABS_KEY) ?? '[]') as unknown
+    const saved = JSON.parse(window.localStorage.getItem(key) ?? '[]') as unknown
     return Array.isArray(saved)
       ? saved.filter((value): value is string => typeof value === 'string')
       : []
@@ -247,9 +247,7 @@ export function findDurableWorkMessageId(messages: readonly ChatMessage[]): stri
         message.role === 'assistant' &&
         !isPromptEnhancementMessage(message) &&
         !isPromptEnhancementReasoningLabel(message.reasoningLabel) &&
-        Boolean(
-          message.toolCalls?.length || message.timeline?.length || message.reasoning?.trim()
-        )
+        Boolean(message.toolCalls?.length || message.timeline?.length || message.reasoning?.trim())
     )?.id
 }
 

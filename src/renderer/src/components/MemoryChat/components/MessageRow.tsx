@@ -71,6 +71,7 @@ function VoiceMessageRow({
   copied,
   showTranscriptInitially,
   showGenerationDetails,
+  showToolsSent,
   regenerationDisabled,
   playbackSpeed,
   onPlaybackStateChange,
@@ -95,6 +96,7 @@ function VoiceMessageRow({
   copied: boolean
   showTranscriptInitially: boolean
   showGenerationDetails: boolean
+  showToolsSent?: boolean
   regenerationDisabled: boolean
   playbackSpeed: number
   onPlaybackStateChange: (messageId: string, active: boolean) => void
@@ -342,11 +344,13 @@ function VoiceMessageRow({
       ) : null}
       {isFinalAssistantResponse ? (
         <div className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1 pr-1">
-          <ToolsSentDisclosure
-            names={message.toolsOffered}
-            open={openFooterDetail === 'tools'}
-            onOpenChange={(open) => setOpenFooterDetail(open ? 'tools' : null)}
-          />
+          {showToolsSent !== false ? (
+            <ToolsSentDisclosure
+              names={message.toolsOffered}
+              open={openFooterDetail === 'tools'}
+              onOpenChange={(open) => setOpenFooterDetail(open ? 'tools' : null)}
+            />
+          ) : null}
           {showGenerationDetails ? (
             <GenerationMetricsRow
               metrics={message.metrics}
@@ -546,11 +550,13 @@ function StandardMessageRow({
       {continuation}
       {isFinalAssistantResponse ? (
         <div className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1 pr-1">
-          <ToolsSentDisclosure
-            names={message.toolsOffered}
-            open={openFooterDetail === 'tools'}
-            onOpenChange={(open) => setOpenFooterDetail(open ? 'tools' : null)}
-          />
+          {state.showToolsSent !== false ? (
+            <ToolsSentDisclosure
+              names={message.toolsOffered}
+              open={openFooterDetail === 'tools'}
+              onOpenChange={(open) => setOpenFooterDetail(open ? 'tools' : null)}
+            />
+          ) : null}
           {state.showGenerationDetails ? (
             <GenerationMetricsRow
               metrics={message.metrics}
@@ -653,6 +659,7 @@ function MessageRowComponent({
         copied={state.copiedKey === currentMessage.id}
         showTranscriptInitially={state.latestVoiceAssistantId === currentMessage.id}
         showGenerationDetails={state.showGenerationDetails}
+        showToolsSent={state.showToolsSent}
         regenerationDisabled={state.regenerationDisabled}
         playbackSpeed={state.ttsSpeed}
         onPlaybackStateChange={actions.voicePlaybackChange}
@@ -712,6 +719,7 @@ function sameMessageState(
     left.askSelections[messageId] === right.askSelections[messageId] &&
     sameIncomingFiles(left.incomingFiles, right.incomingFiles) &&
     left.showGenerationDetails === right.showGenerationDetails &&
+    left.showToolsSent === right.showToolsSent &&
     left.regenerationDisabled === right.regenerationDisabled
   )
 }

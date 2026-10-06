@@ -341,16 +341,22 @@ const offGridApi = {
   cancelRag: (streamId: string) => ipcRenderer.send('rag:cancel', streamId),
 
   // RAG Conversation History
-  createRagConversation: (id: string, title?: string, projectId?: string | null) =>
-    ipcRenderer.invoke('rag:create-conversation', id, title, projectId),
+  createRagConversation: (
+    id: string,
+    title?: string,
+    projectId?: string | null,
+    surface?: 'chat' | 'god'
+  ) => ipcRenderer.invoke('rag:create-conversation', id, title, projectId, surface),
   /**
    * One bounded page of the conversation list, newest first. Omit `page` for the newest page;
    * pass `updatedBefore` (the `updated_at` of the last row you hold) to continue.
    */
   getRagConversations: (
     projectId?: string | null,
-    page?: { limit?: number; updatedBefore?: string }
-  ) => ipcRenderer.invoke('rag:get-conversations', projectId, page),
+    page?: { limit?: number; updatedBefore?: string },
+    /** 'chat' leaves out God's conversations; 'god' lists only them. */
+    surface?: 'chat' | 'god'
+  ) => ipcRenderer.invoke('rag:get-conversations', projectId, page, surface),
   onRagConversationsChanged: (
     callback: (data: { conversationId: string; projectId: string | null }) => void
   ) => {
@@ -694,6 +700,7 @@ const offGridApi = {
     history?: { role: string; content: string }[],
     opts?: {
       assistantOnly?: boolean
+      allTools?: boolean
       connectors?: boolean
       conversationId?: string
       projectId?: string

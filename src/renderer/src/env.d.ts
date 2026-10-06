@@ -354,10 +354,17 @@ interface RendererAPIOverrides {
   cancelRag: (streamId: string) => void
 
   // RAG Conversations
-  createRagConversation: (id: string, title?: string, projectId?: string | null) => Promise<string>
+  createRagConversation: (
+    id: string,
+    title?: string,
+    projectId?: string | null,
+    surface?: 'chat' | 'god'
+  ) => Promise<string>
   getRagConversations: (
     projectId?: string | null,
-    page?: { limit?: number; updatedBefore?: string }
+    page?: { limit?: number; updatedBefore?: string },
+    /** 'chat' leaves out God's conversations; 'god' lists only them. */
+    surface?: 'chat' | 'god'
   ) => Promise<RagConversation[]>
   onRagConversationsChanged?: (
     callback: (data: { conversationId: string; projectId: string | null }) => void

@@ -1359,6 +1359,18 @@ function AppContent(): React.JSX.Element {
                           wake={godTwinWake}
                           onBusyChange={setGodTwinBusy}
                           onRunPreset={handleRunPreset}
+                          chat={{
+                            onNavigateToMemory: handleSelectMemory,
+                            onNavigateToChat: handleSelectChat,
+                            onNavigateToMeeting: (meetingId) =>
+                              handleProNavigate({ view: 'meetings', meetingId }),
+                            onNavigateToEntity: handleSelectEntity,
+                            onSeekReplay: (ts) =>
+                              navigateTo('replay', () => setReplayTarget(ts || Date.now())),
+                            onOpenSkillPreset: handleOpenSkillPreset,
+                            onOpenConnectors: () => navigateTo('connectors'),
+                            onTaskDetailModeChange: setTaskDetailSidebarMode
+                          }}
                         />
                       ) : (
                         <UpgradeScreen feature={getProFeature('explore')} />

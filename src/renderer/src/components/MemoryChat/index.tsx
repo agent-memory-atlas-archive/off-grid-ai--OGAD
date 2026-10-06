@@ -215,9 +215,14 @@ export function MemoryChat({
   openTarget,
   onTargetConsumed,
   onActiveConversationChange,
-  onTaskDetailModeChange
+  onTaskDetailModeChange,
+  god
 }: MemoryChatProps): React.JSX.Element {
   const { isPro } = useRendererEntitlement()
+  // God's chat keeps its own conversations, tabs and layout; Chat leaves God's to God.
+  const surface = god ? 'god' : 'chat'
+  const openTabsKey = god ? `${OPEN_CHAT_TABS_KEY}:god` : OPEN_CHAT_TABS_KEY
+  const activeTabKey = god ? `${ACTIVE_CHAT_TAB_KEY}:god` : ACTIVE_CHAT_TAB_KEY
   // Messages are kept PER CONVERSATION so a background tab keeps its own thread and
   // an in-flight stream can't leak into whatever tab you switch to. `messages` (below,
   // after activeConversationId) is the active tab's slice; sends target their own conv.
@@ -370,8 +375,8 @@ export function MemoryChat({
       clearTimeout(t)
     }
   }, [convSearch])
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(
-    readActiveConversationId
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(() =>
+    readActiveConversationId(activeTabKey)
   )
   useEffect(() => {
     console.log('MemoryChat effect: active conversation notification')
@@ -414,25 +419,24 @@ export function MemoryChat({
     stopAllVoicePlayback()
     return () => stopAllVoicePlayback()
   }, [activeConversationId])
-  const [openTabs, setOpenTabs] = useState<string[]>(readOpenChatTabs) // conversation ids open as tabs
+  const [openTabs, setOpenTabs] = useState<string[]>(() => readOpenChatTabs(openTabsKey)) // conversation ids open as tabs
   useEffect(() => {
     console.log('MemoryChat effect: persist open chat tabs')
     try {
-      window.localStorage.setItem(OPEN_CHAT_TABS_KEY, JSON.stringify(openTabs))
+      window.localStorage.setItem(openTabsKey, JSON.stringify(openTabs))
     } catch {
       // Chat still works when renderer storage is unavailable.
     }
-  }, [openTabs])
+  }, [openTabs, openTabsKey])
   useEffect(() => {
     console.log('MemoryChat effect: persist active chat tab')
     try {
-      if (activeConversationId)
-        window.localStorage.setItem(ACTIVE_CHAT_TAB_KEY, activeConversationId)
-      else window.localStorage.removeItem(ACTIVE_CHAT_TAB_KEY)
+      if (activeConversationId) window.localStorage.setItem(activeTabKey, activeConversationId)
+      else window.localStorage.removeItem(activeTabKey)
     } catch {
       // Chat still works when renderer storage is unavailable.
     }
-  }, [activeConversationId])
+  }, [activeConversationId, activeTabKey])
   const TaskWorkspace = getSlot(SLOTS.taskWorkspace)
   const taskWorkspaceVisible = useTaskWorkspaceOpen() && Boolean(TaskWorkspace)
   const [taskWorkspaceDragging, setTaskWorkspaceDragging] = useState(false)
@@ -515,7 +519,9 @@ export function MemoryChat({
   const [assistantGateOpen, setAssistantGateOpen] = useState(false)
   const [connectorsOn, setConnectorsOn] = useState(false)
   const [thinkingEnabled, setThinkingEnabled] = useState(false)
-  const [voiceMode, setVoiceMode] = useState(DEFAULT_VOICE_PREFERENCES.voiceMode)
+  const [chatVoiceMode, setVoiceMode] = useState(DEFAULT_VOICE_PREFERENCES.voiceMode)
+  // God's Chat and Voice modes decide it there; Chat keeps its own saved choice.
+  const voiceMode = god ? god.voiceMode : chatVoiceMode
   const [voiceTurnMode, setVoiceTurnMode] = useState<VoiceTurnMode>(
     DEFAULT_VOICE_PREFERENCES.turnMode
   )
@@ -544,7 +550,7 @@ export function MemoryChat({
     composerNoMemory: noMemory,
     composerConnectorsOn: connectorsOn,
     composerThinking: thinkingEnabled,
-    composerVoiceMode: voiceMode,
+    composerVoiceMode: chatVoiceMode,
     imgSeed,
     imgNegative,
     enhanceImagePrompts: enhanceImg,
@@ -647,8 +653,8 @@ export function MemoryChat({
   }, [persistChangedPreference, thinkingEnabled])
   useEffect(() => {
     console.log('MemoryChat effect: persist voice-mode preference')
-    persistChangedPreference('composerVoiceMode', voiceMode)
-  }, [persistChangedPreference, voiceMode])
+    persistChangedPreference('composerVoiceMode', chatVoiceMode)
+  }, [persistChangedPreference, chatVoiceMode])
   useEffect(() => {
     console.log('MemoryChat effect: voice preferences subscription')
     const applyPreferences = (event: Event): void => {
@@ -923,7 +929,9 @@ export function MemoryChat({
   useEffect(() => {
     console.log('MemoryChat effect: initial chat data load')
     void (async () => {
-      const convos = await window.api.getRagConversations().catch(() => [])
+      const convos = await window.api
+        .getRagConversations(undefined, undefined, surface)
+        .catch(() => [])
       setConversations(convos)
       // Restore every saved tab. Remove tabs for conversations that no longer exist.
       if (!openTarget && convos.length > 0) {
@@ -1156,7 +1164,7 @@ export function MemoryChat({
     if (conversationListRequestRef.current) return conversationListRequestRef.current
     const request = (async () => {
       try {
-        const convos = await window.api.getRagConversations()
+        const convos = await window.api.getRagConversations(undefined, undefined, surface)
         setConversations(convos)
       } catch (e) {
         console.error('Failed to load conversations:', e)
@@ -1427,14 +1435,18 @@ export function MemoryChat({
     // Regenerate/Resend: the user turn already exists in the thread — re-run it
     // in place instead of echoing another user bubble.
     const regen = opts?.regen ?? false
-    const assistantForTurn = opts?.assistantEnabled ?? toolsOn
+    // God always acts (it is Pro) and reads every account; Chat's Assistant is per turn.
+    const assistantForTurn = god ? true : (opts?.assistantEnabled ?? toolsOn)
     if (!regen && opts?.assistantEnabled === undefined) setToolsOn(false)
     // Lock the project for THIS send at send-time, like convId — every attribution
     // below (RAG scope, saved artifacts, generated images) uses it. Reading the live
     // `activeProjectId` at each await instead let a mid-stream project switch land
     // this turn's output in the WRONG project (D21).
-    const projectId =
-      opts?.projectIdOverride !== undefined ? opts.projectIdOverride : activeProjectId
+    const projectId = god
+      ? null
+      : opts?.projectIdOverride !== undefined
+        ? opts.projectIdOverride
+        : activeProjectId
     // Attachments (pasted blocks + processed files) ride along on a normal send
     // from the composer, or on a drained queue item (opts.atts) — not on
     // resend/regenerate/example.
@@ -1536,7 +1548,7 @@ export function MemoryChat({
       convId = crypto.randomUUID()
       const title = trimmed.length > 50 ? trimmed.slice(0, 47) + '...' : trimmed
       try {
-        await window.api.createRagConversation(convId, title, projectId)
+        await window.api.createRagConversation(convId, title, projectId, surface)
         const now = new Date().toISOString()
         const createdConversation: RagConversationContract = {
           id: convId,
@@ -1914,16 +1926,18 @@ export function MemoryChat({
         if (comicPageTotal) await updateComicReader()
         const tr = await window.api.toolChat(modelQuery, fullHistory.slice(0, -1), {
           assistantOnly: assistantForTurn,
-          connectors: connectorsOn,
+          connectors: god ? true : connectorsOn,
           conversationId: convId,
           // Memory scope drives which memory tools the model gets: a project offers its
           // knowledge base; "All memory" offers search_memory; "No memory" offers neither.
           projectId: projectId ?? undefined,
-          allMemory: !projectId && !noMemory,
+          allMemory: god ? true : !projectId && !noMemory,
+          // God is set up to do everything: every tool, and the selected model reasoning.
+          ...(god ? { context: god.context(), allTools: true } : {}),
           images: imagePaths,
           imageAvailable,
           streamId: toolStreamId,
-          thinking: thinkingEnabled
+          thinking: god ? true : thinkingEnabled
         })
         const toolCalls: ProjectedSyncedTool[] = (tr?.toolCalls || []).map(
           (c: { name: string; result: string; status?: 'completed' | 'failed' | 'pending' }) => ({
@@ -2414,6 +2428,31 @@ export function MemoryChat({
     window.api.godTwin?.setListening?.(listening)
     return () => window.api.godTwin?.setListening?.(false)
   }, [voiceTurns.phase])
+
+  // God: questions and the microphone come from outside the chat (Ares, the wake word, Right
+  // now), and Ares shows what the chat is doing.
+  const godRequestCount = useRef(god?.request.count ?? 0)
+  const sendMessageRef = useRef(sendMessage)
+  sendMessageRef.current = sendMessage
+  const godRequest = god?.request
+  useEffect(() => {
+    if (!godRequest || godRequest.count === godRequestCount.current) return
+    godRequestCount.current = godRequest.count
+    if (godRequest.ask?.trim()) void sendMessageRef.current(godRequest.ask, { asUserInput: true })
+    if (godRequest.listen === 'start') voiceTurns.start()
+    else if (godRequest.listen === 'toggle') voiceTurns.toggle()
+    else if (godRequest.listen === 'stop') voiceTurns.cancel()
+  }, [godRequest, voiceTurns])
+  const onGodStateChange = god?.onStateChange
+  const godThinking = Boolean(activeConversationId && generatingConvs.has(activeConversationId))
+  const godSpeaking = voicePlaybackOwner !== null
+  useEffect(() => {
+    onGodStateChange?.({
+      thinking: godThinking,
+      speaking: godSpeaking,
+      voicePhase: voiceTurns.phase
+    })
+  }, [onGodStateChange, godThinking, godSpeaking, voiceTurns.phase])
 
   // Stop the in-flight generation for a conversation: abort the model stream (main
   // keeps whatever streamed so far) or the image job, drop any queued follow-ups, and
@@ -3466,8 +3505,14 @@ export function MemoryChat({
             </svg>
           </div>
           <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-medium tracking-wide text-neutral-200">Off Grid AI</h2>
-            {activeProjectId && activeProjectName ? (
+            <h2 className="text-sm font-medium tracking-wide text-neutral-200">
+              {god ? god.name : 'Off Grid AI'}
+            </h2>
+            {god ? (
+              <p className="truncate text-xs text-neutral-500">
+                Knows your day, memory and accounts. Asks before it acts.
+              </p>
+            ) : activeProjectId && activeProjectName ? (
               <button
                 onClick={() => onOpenProject?.(activeProjectId)}
                 title={`Open project “${activeProjectName}”`}
@@ -3573,7 +3618,7 @@ export function MemoryChat({
           >
             <PanelGroup
               direction="horizontal"
-              autoSaveId="offgrid-memory-chat-layout"
+              autoSaveId={god ? 'offgrid-god-chat-layout' : 'offgrid-memory-chat-layout'}
               className="min-h-0 flex-1"
             >
               <Panel
@@ -3853,7 +3898,9 @@ export function MemoryChat({
                                   latestVoiceAssistantId,
                                   askSelections: askSel,
                                   incomingFiles: incomingFilesFor(message.id),
-                                  showGenerationDetails,
+                                  // God shows the answer and its actions, not how it was made.
+                                  showGenerationDetails: god ? false : showGenerationDetails,
+                                  showToolsSent: !god,
                                   regenerationDisabled:
                                     !!activeConversationId && generatingConvs.has(activeConversationId)
                                 }}
@@ -4383,7 +4430,8 @@ export function MemoryChat({
                                 <DropdownMenuItem onSelect={() => imageInputRef.current?.click()}>
                                   <ImageIcon /> Add image
                                 </DropdownMenuItem>
-                                <DropdownMenuItem
+                                {!god && (
+<><DropdownMenuItem
                                   disabled={!imageAvailable}
                                   onSelect={() => setMode('image')}
                                 >
@@ -4430,7 +4478,8 @@ export function MemoryChat({
                                 >
                                   <Lightning /> Skills
                                 </DropdownMenuItem>
-                                <DropdownMenuItem
+                                {!god && (
+<><DropdownMenuItem
                                   onSelect={(e) => {
                                     e.preventDefault()
                                     setToolsOn((t) => !t)
@@ -4442,7 +4491,8 @@ export function MemoryChat({
                                   >
                                     {toolsOn ? 'On' : 'Off'}
                                   </span>
-                                </DropdownMenuItem>
+                                </DropdownMenuItem></>
+)}
                                 <DropdownMenuItem
                                   onSelect={(e) => {
                                     e.preventDefault()
@@ -4456,8 +4506,10 @@ export function MemoryChat({
                                   <span className={`text-xs ${toolsEnabled ? 'text-primary' : 'text-muted-foreground'}`}>
                                     {toolsEnabled ? 'On' : 'Off'}
                                   </span>
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
+                                </DropdownMenuItem></>
+)}
+                                {!god && (
+<><DropdownMenuItem
                                   onSelect={(e) => {
                                     e.preventDefault()
                                     setConnectorsOn((t) => !t)
@@ -4469,10 +4521,12 @@ export function MemoryChat({
                                   >
                                     {connectorsOn ? 'On' : 'Off'}
                                   </span>
-                                </DropdownMenuItem>
+                                </DropdownMenuItem></>
+)}
                               </DropdownMenuContent>
                             </DropdownMenu>
-                            {/* Scope — Off Grid AI (default) or a project */}
+                            {!god && (
+<>{/* Scope — Off Grid AI (default) or a project */}
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button
@@ -4571,8 +4625,11 @@ export function MemoryChat({
                                   <FolderPlus /> New project
                                 </DropdownMenuItem>
                               </DropdownMenuContent>
-                            </DropdownMenu>
-                            {/* Active model + context window — click to change (opens the same
+                            </DropdownMenu></>
+)}
+                            {/* God is set up already: its model, thinking and voice come from God's own settings. */}
+{!god && (
+<>{/* Active model + context window — click to change (opens the same
                         ModelPicker as the header). Mirrors what the Active-models panel shows. */}
                             {modelSummary.name && (
                               <Tooltip>
@@ -4599,7 +4656,8 @@ export function MemoryChat({
                                 </TooltipContent>
                               </Tooltip>
                             )}
-                            <Tooltip>
+                            {!god && (
+<><Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
                                   type="button"
@@ -4623,7 +4681,8 @@ export function MemoryChat({
                                   ? 'God on - can act with Web Use or Computer Use'
                                   : 'God off - answers without controlling websites or apps'}
                               </TooltipContent>
-                            </Tooltip>
+                            </Tooltip></>
+)}
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
@@ -4675,7 +4734,8 @@ export function MemoryChat({
                                   ? 'Image mode on — your prompt generates an image (click to return to chat)'
                                   : 'Generate an image from your prompt'}
                               </TooltipContent>
-                            </Tooltip>
+                            </Tooltip></>
+)}
                             {mode === 'image' && (
                               <Button
                                 type="button"

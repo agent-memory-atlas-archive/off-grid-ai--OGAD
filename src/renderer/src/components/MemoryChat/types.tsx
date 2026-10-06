@@ -192,6 +192,8 @@ export type MessageRowState = Readonly<{
   askSelections: Readonly<Record<string, readonly string[]>>
   incomingFiles: readonly IncomingSharedFile[]
   showGenerationDetails: boolean
+  /** The tools offered to the model, under an answer. Off in God. */
+  showToolsSent?: boolean
   regenerationDisabled: boolean
 }>
 
