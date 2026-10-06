@@ -59,6 +59,21 @@ import {
 } from './MessageContext'
 import { useStreamViewMessage } from '../stream-view-store'
 
+/** God's reaction to your message, as a tapback sits on a message in iMessage. */
+function ReactionPill({ emoji }: Readonly<{ emoji?: string }>): React.JSX.Element | null {
+  if (!emoji) return null
+  return (
+    <span
+      role="img"
+      aria-label={`Reacted ${emoji}`}
+      title="Reacted"
+      className="-mt-2.5 mr-2 self-end rounded-full border border-border bg-background px-1.5 py-0.5 text-sm leading-none shadow-sm"
+    >
+      {emoji}
+    </span>
+  )
+}
+
 function VoiceMessageRow({
   message,
   nextMessageRole,
@@ -314,6 +329,7 @@ function VoiceMessageRow({
   return (
     <div className={`my-2 flex flex-col gap-1.5 ${alignment}`}>
       {body}
+      {message.role === 'user' ? <ReactionPill emoji={message.reaction} /> : null}
       {continuation}
       {message.role === 'user' ? (
         <div className="flex items-center gap-2 pr-1">
@@ -525,6 +541,7 @@ function StandardMessageRow({
         className={`flex flex-col ${message.role === 'user' ? 'items-end' : 'items-start'} ${message.image || message.attachments?.length || state.editingId === message.id ? 'w-full max-w-2xl' : 'w-fit max-w-[85%]'}`}
       >
         <MessageBubble message={message} state={state} actions={actions} navigation={navigation} />
+        {message.role === 'user' ? <ReactionPill emoji={message.reaction} /> : null}
         {message.role === 'user' ? (
           <div className="mt-1.5 flex items-center justify-end gap-2 pr-1">
             <MessageTime message={message} />

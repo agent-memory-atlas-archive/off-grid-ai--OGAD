@@ -133,6 +133,7 @@ import {
 } from '@phosphor-icons/react'
 
 import type { MemoryChatProps } from './interfaces'
+import { withReactions } from '@offgrid/core/shared/god/god-reaction'
 import type {
   Attachment,
   ChatMessage,
@@ -385,7 +386,11 @@ export function MemoryChat({
   // Active tab's messages (derived) + a shim so the existing active-conversation call
   // sites keep working. The send path targets its own conv via setConvMessages instead.
   const messages = messagesByConv[activeConversationId ?? NEW_CHAT] ?? EMPTY_MSGS
-  const displayMessages = useMemo(() => groupChatTurnWork(messages), [messages])
+  // In God, a reply that is one emoji is a reaction on your message (shared/god/god-reaction.ts).
+  const displayMessages = useMemo(
+    () => groupChatTurnWork(god ? withReactions(messages) : messages),
+    [god, messages]
+  )
   const [remoteWorkPreview, setRemoteWorkPreview] = useState<ChatStreamPreviewRow | null>(null)
   useEffect(() => {
     console.log('MemoryChat effect: reset remote work preview')

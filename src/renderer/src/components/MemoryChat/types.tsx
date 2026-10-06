@@ -75,6 +75,8 @@ export type ChatMessage = {
   id: string
   role: SyncedMessageRole
   content: string
+  /** God reacted to this message with an emoji instead of replying (shared/god/god-reaction.ts). */
+  reaction?: string
   createdAt?: number
   context?: RagContext
   image?: string
