@@ -180,6 +180,27 @@ export function updateConnector(id: number, changes: ConnectorChanges): Connecto
   return getConnector(id)!
 }
 
+/** A secret's name as a connector receives it: an environment variable name. */
+const SECRET_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
+
+/**
+ * Save a connector's credentials (a token, an API key) and record them as what it receives, so
+ * a connector whose command was changed (which cleared them) works again once they are entered.
+ */
+export function setConnectorSecrets(id: number, values: Record<string, string>): void {
+  const current = getConnector(id)
+  if (!current) throw new Error('This connection no longer exists.')
+  const entered = Object.entries(values).filter(([key, value]) => SECRET_KEY.test(key) && value)
+  for (const [key, value] of entered) {
+    if (!setSecret(`connector:${id}:${key}`, value)) throw new Error('Could not save the token.')
+  }
+  const known = current.env_keys ? (JSON.parse(current.env_keys) as string[]) : []
+  const keys = [...new Set([...known, ...entered.map(([key]) => key)])]
+  getDB()
+    .prepare('UPDATE connectors SET env_keys=? WHERE id=?')
+    .run(keys.length ? JSON.stringify(keys) : null, id)
+}
+
 export function setConnectorEnabled(id: number, enabled: boolean): void {
   ensure()
   getDB()

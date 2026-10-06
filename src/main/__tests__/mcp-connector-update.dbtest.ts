@@ -24,6 +24,7 @@ import {
   addConnector,
   listConnectors,
   removeConnector,
+  setConnectorSecrets,
   testConnector,
   updateConnector
 } from '../mcp'
@@ -98,6 +99,13 @@ describe('updateConnector', () => {
     updateConnector(id, { command: 'npx', args: ['other-server'] })
     expect(getSecret(`connector:${id}:API_TOKEN`)).toBeNull()
     expect(listConnectors().find((c) => c.id === id)).toMatchObject({ env_keys: null })
+
+    // Review finding: "Change token" saved the new token, but nothing passed it to the command.
+    setConnectorSecrets(id, { API_TOKEN: 'new-synthetic-token', 'bad key': 'x' })
+    expect(getSecret(`connector:${id}:API_TOKEN`)).toBe('new-synthetic-token')
+    expect(listConnectors().find((c) => c.id === id)).toMatchObject({
+      env_keys: JSON.stringify(['API_TOKEN'])
+    })
   })
 
   it('refuses an empty name, an empty address, and a removed connector', () => {

@@ -1085,6 +1085,8 @@ const offGridApi = {
   mcpRemove: (id: number) => ipcRenderer.invoke('mcp:remove', id),
   mcpCancel: (id: number) => ipcRenderer.invoke('mcp:cancel', id),
   mcpTest: (id: number) => ipcRenderer.invoke('mcp:test', id),
+  mcpSetSecrets: (id: number, values: Record<string, string>) =>
+    ipcRenderer.invoke('mcp:set-secrets', id, values),
   mcpIngest: (id: number, query?: string) => ipcRenderer.invoke('mcp:ingest', id, query),
   mcpItems: (surface: string) => ipcRenderer.invoke('mcp:items', surface),
 

@@ -223,9 +223,8 @@ async function persistConnectorSecrets(
   secretValues: Record<string, string>
 ): Promise<void> {
   if (id == null) return
-  for (const [key, value] of Object.entries(secretValues)) {
-    if (value) await api.secretsSet?.(`connector:${id}:${key}`, value)
-  }
+  // Saved and recorded as what the connector receives, in one place (main/mcp.ts).
+  await api.mcpSetSecrets?.(id, secretValues)
 }
 
 interface ConnectionOutcome {
