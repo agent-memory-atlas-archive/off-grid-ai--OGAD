@@ -2029,6 +2029,8 @@ export function setupIPC(): void {
         imageAvailable?: boolean
         streamId?: string
         thinking?: boolean
+        /** What the user is doing now (God's context), added to the system prompt. */
+        context?: string
       }
     ) => {
       const { toolChat } = await import('./tools')

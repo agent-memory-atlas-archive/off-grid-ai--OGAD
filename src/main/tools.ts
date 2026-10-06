@@ -561,6 +561,8 @@ export async function toolChat(
   opts: {
     /** Assistant is selected for this turn; always include its browser and desktop tools. */
     assistantOnly?: boolean
+    /** What the user is doing now (God's context): added to the system prompt, bounded. */
+    context?: string
     connectors?: boolean
     conversationId?: string
     /** Active project — offers search_knowledge_base + scopes it to this project. */
@@ -816,7 +818,10 @@ export async function toolChat(
     (opts.assistantOnly
       ? ' web_use and computer_use are available for website and desktop tasks.'
       : '') +
-    (hints.length ? ' ' + hints.join(' ') : '')
+    (hints.length ? ' ' + hints.join(' ') : '') +
+    (typeof opts.context === 'string' && opts.context.trim()
+      ? `\n\nWhat you know about the user right now:\n${opts.context.trim().slice(0, 2000)}`
+      : '')
 
   // Attached images ride on the current user turn so the vision model can read
   // them even in tools/connectors mode (otherwise they were silently dropped).

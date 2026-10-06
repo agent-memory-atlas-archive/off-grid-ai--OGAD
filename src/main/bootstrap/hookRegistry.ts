@@ -67,6 +67,11 @@ export const HOOKS = {
    * account can read and what was not granted, named for people (Gmail, Calendar). Pro.
    */
   accountAccess: 'accounts:access',
+  /**
+   * (nowMs: number) => Promise<{ brief, nextEvent, todos, approvals }> - what God knows about the
+   * user's day: the stored plan, the next meeting with its prep, open to-dos and approvals. Pro.
+   */
+  godContext: 'god:context',
   /** (mutation: SyncMutation) => void - record a committed core data change in Pro sync. */
   syncRecordLocalMutation: 'sync.recordLocalMutation',
   /**

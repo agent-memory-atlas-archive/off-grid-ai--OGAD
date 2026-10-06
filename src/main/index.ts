@@ -37,6 +37,7 @@ import { rendererHtmlPath } from './renderer-path'
 import { setMainWindow } from './main-window'
 import { registerGodTwinWindowIpc, showGodTwinWindow } from './god-twin-window'
 import { registerGodTwinWakeIpc } from './god-twin-wake'
+import { registerGodContextIpc } from './god-context-ipc'
 import { startModelServer, stopModelServer } from './model-server'
 import { startMediaServer, stopMediaServer, mediaUrlFor } from './media-server'
 import { capturePathFromUrl, serveCaptureFile } from './ogcapture-serve'
@@ -572,6 +573,7 @@ app.whenReady().then(async () => {
 
   registerGodTwinWindowIpc()
   registerGodTwinWakeIpc()
+  registerGodContextIpc()
 
   // Start optional Pro registration before the renderer loads. The activation
   // code yields between feature groups, so the shell can load at the same time,

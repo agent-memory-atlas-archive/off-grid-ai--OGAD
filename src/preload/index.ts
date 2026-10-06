@@ -703,8 +703,11 @@ const offGridApi = {
       imageAvailable?: boolean
       streamId?: string
       thinking?: boolean
+      context?: string
     }
   ) => ipcRenderer.invoke('tools:chat', query, history, opts),
+  /** What God knows right now: the day, the next meeting, to-dos, approvals, accounts. */
+  godContext: (): Promise<unknown> => ipcRenderer.invoke('god:context'),
 
   // --- LLM inference settings ---
   getLlmSettings: () => ipcRenderer.invoke('llm:get-settings'),

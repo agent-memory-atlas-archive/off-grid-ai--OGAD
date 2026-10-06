@@ -69,9 +69,9 @@ describe('<App/> shell navigation integration', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: 'God' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Talk to Ares' })).toBeTruthy()
-    expect(screen.getByRole('textbox', { name: 'Ask Ares' })).toBeTruthy()
+    expect(screen.getByRole('textbox', { name: 'Ask God' })).toBeTruthy()
     // A free build has no prepared workflows and no upgrade wall here.
-    expect(screen.queryByText('Things Ares can do')).toBeNull()
+    expect(screen.queryByText('All workflows')).toBeNull()
     expect(screen.queryByRole('button', { name: /Get Pro/ })).toBeNull()
     expect(window.location.pathname).toBe('/explore')
   }, 30_000)

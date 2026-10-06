@@ -122,6 +122,8 @@ interface GodTwinWakeEvent {
 }
 
 interface RendererAPIOverrides {
+  /** What God knows right now (main/god-context-ipc.ts). */
+  godContext?: () => Promise<unknown>
   godTwin?: {
     wake?: () => Promise<boolean>
     getEnabled?: () => Promise<boolean>
