@@ -92,10 +92,16 @@ export function createChannel(opts: {
   let sent = 0
   let received = 0
   let broken = false
+  // Encryption is asynchronous, so two seals can finish out of order. Each frame is handed back
+  // only after the one numbered before it, so callers that send on resolve send in sequence.
+  let previous: Promise<unknown> = Promise.resolve()
   return {
-    async seal(message) {
+    seal(message) {
       const aad = frameAad(opts, send, sent++)
-      return JSON.stringify(await seal(opts.key, aad, message))
+      const sealing = seal(opts.key, aad, message).then((frame) => JSON.stringify(frame))
+      const inOrder = previous.then(() => sealing)
+      previous = inOrder.catch(() => undefined)
+      return inOrder
     },
     async open(frame) {
       // The expected number is taken now, in arrival order, before any await.
