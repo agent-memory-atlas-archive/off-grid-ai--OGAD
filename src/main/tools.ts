@@ -31,6 +31,7 @@ import {
   toolResultCharBudget
 } from '@offgrid/models'
 import { toolPromptChars } from './tools/prompt-budget'
+import { ANSWER_NOW_INSTRUCTION, emptyAnswerReason } from '../shared/empty-answer'
 
 // Per-tool enable/disable, persisted as a list of disabled tool names.
 function disabledSet(): Set<string> {
@@ -1161,6 +1162,24 @@ export async function toolChat(
       continue // let the model use the results
     }
     // No tool calls this round: `content` is the final answer (already streamed via onDelta).
+    if (!answerFrom(content).trim() && !opts.signal?.aborted) {
+      // Finished with nothing to say (often reasoning used the whole allowance): ask once more
+      // for an answer from what is already here, then say why if there is still none.
+      const retry = await llm.streamChat(
+        [...messages, { role: 'system', content: ANSWER_NOW_INSTRUCTION }],
+        onDelta,
+        { temperature: 0.3, maxTokens: roundMaxTokens, thinking: false, signal: opts.signal }
+      )
+      const retried = answerFrom(retry.content)
+      return resultWithImages({
+        answer: retried.trim()
+          ? retried
+          : emptyAnswerReason(retry.finishReason ?? finishReason, roundMaxTokens),
+        toolCalls,
+        unified,
+        metrics: retry.metrics ?? metrics
+      })
+    }
     return resultWithImages({
       answer: answerFrom(content),
       toolCalls,

@@ -110,6 +110,24 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
     expect(steps).toEqual([]) // no tool call -> no step
   })
 
+  it('asks once more when a turn ends with no answer, and says why if there is still none', async () => {
+    // Reported: God showed "No response returned." after its searches, with no reason given.
+    enqueueReactiveAfterEmptyPlan(
+      { content: '', finishReason: 'length' },
+      { content: 'Here is what I found.' }
+    )
+    expect((await toolChat('what did Morgan send me?', [])).answer).toBe('Here is what I found.')
+    expect(fake.requests).toHaveLength(2)
+
+    fake.reset()
+    enqueueReactiveAfterEmptyPlan(
+      { content: '', finishReason: 'length' },
+      { content: '', finishReason: 'length' }
+    )
+    const { answer } = await toolChat('and yesterday?', [])
+    expect(answer).toMatch(/whole output allowance \(\d+ tokens\)/)
+  })
+
   it('sends the user Max-output setting to the model, not the old hardcoded 1024 cap (essay cut-off)', async () => {
     // The agentic path used to force maxTokens: 1024, so a long "All memory" answer was truncated
     // mid-sentence at ~1024 tokens regardless of the setting/window. Now it inherits the setting.
@@ -602,6 +620,7 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
   it('does not save successful tool output as the answer when the final model turn is empty', async () => {
     enqueueReactiveAfterEmptyPlan(
       { toolCalls: [{ name: 'calculator', args: { expression: '2+2' } }] },
+      { content: '' },
       { content: '' }
     )
     const deltas: string[] = []
@@ -612,7 +631,9 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
       }
     })
 
-    expect(result.answer).toBe('')
+    // Never the tool's raw output: an empty turn is asked once more, then explained.
+    expect(result.answer).not.toContain('4')
+    expect(result.answer).toMatch(/without an answer/)
     expect(deltas.join('')).toBe('')
   })
 

@@ -422,7 +422,12 @@ export async function streamRemoteChatCompletion(input: {
     log?.update({ response: result, metrics: { ...result.metrics } })
     writeDiagnosticLog('remote_chat', 'request.completed', {
       provider: remote.provider,
-      model: remote.model
+      model: remote.model,
+      // Why it stopped and what came back (sizes only), so an empty answer can be explained.
+      finishReason: result.finishReason ?? 'none',
+      contentChars: result.content.length,
+      toolCalls: result.toolCalls.length,
+      maxTokens: request.maxTokens
     })
     return result
   } catch (error) {
