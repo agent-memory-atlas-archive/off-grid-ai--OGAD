@@ -1309,6 +1309,11 @@ export async function activateModel(
         : modality
           ? activateRemoteVisionMediaModel(remote.serverId, modality, remote.modelId)
           : false
+    // Chat now runs remotely: the local chat engine lets go of its memory. Chat starts it again
+    // on demand if the user switches back to a local model.
+    if (activated && modality === 'text') {
+      void llm.unload().catch((error) => console.error('[models] local chat unload failed', error))
+    }
     return activated
       ? { success: true }
       : { success: false, error: 'Remote model is no longer available.' }

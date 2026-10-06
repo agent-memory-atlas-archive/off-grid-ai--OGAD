@@ -668,7 +668,10 @@ app.whenReady().then(async () => {
         const { llm } = await import('./llm')
         registerRuntime(llm.runtime)
         applyQueueConfig(modalityQueue, readQueueConfig(getSetting))
-        if (llm.modelsExist()) await llm.init()
+        // A remote chat model needs no local engine: loading one anyway holds gigabytes of
+        // memory for nothing. Chat starts it on demand if the user switches back.
+        const { getActiveRemoteVisionServer } = await import('./vision/remote-vision-server')
+        if (llm.modelsExist() && !getActiveRemoteVisionServer()) await llm.init()
       }
     })
   })()
