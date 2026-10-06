@@ -6,6 +6,11 @@ import { loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { createRendererContentSecurityPolicy } from './src/shared/renderer-csp'
+import {
+  checkOauthBuildConfig,
+  readUserBuildEnv,
+  resolveOauthBuildConfig
+} from './scripts/oauth-build-config.mjs'
 
 // Open-core seam: the private `pro/` git submodule is present only in paid
 // builds. When it's missing (free / contributor build) we alias the pro entry
@@ -23,19 +28,18 @@ const proRenderer = proExists ? resolve('pro/renderer/index.tsx') : stub
 // Baked into every bundle so runtime code can tell a pro build from a free build
 // without relying on an env var default (which can't distinguish "unset" from "pro").
 const proDefine = { __OFFGRID_PRO__: JSON.stringify(proExists) }
-// Explicitly select a Desktop registration. A Web application's confidential secret must not
-// enter an installed app. Google's Desktop client credential is a public application identity.
-const microsoftEnv = loadEnv('production', process.cwd(), 'MICROSOFT_')
-const microsoftClientId = process.env.MICROSOFT_CLIENT_ID || microsoftEnv.MICROSOFT_CLIENT_ID || ''
-const googleEnv = loadEnv('production', process.cwd(), 'GOOGLE_')
-const googleDesktopClient =
-  (process.env.GOOGLE_OAUTH_CLIENT_TYPE || googleEnv.GOOGLE_OAUTH_CLIENT_TYPE) === 'desktop'
-const googleClientId = googleDesktopClient
-  ? process.env.GOOGLE_CLIENT_ID || googleEnv.GOOGLE_CLIENT_ID || ''
-  : ''
-const googleClientSecret = googleDesktopClient
-  ? process.env.GOOGLE_CLIENT_SECRET || googleEnv.GOOGLE_CLIENT_SECRET || ''
-  : ''
+// App registrations for Connect with Off Grid AI (scripts/oauth-build-config.mjs). Only a Desktop
+// Google registration is accepted: a Web application's confidential secret must not enter an
+// installed app. A release build (OFFGRID_REQUIRE_OAUTH=1) fails rather than ship without them.
+const oauth = resolveOauthBuildConfig([
+  process.env,
+  loadEnv('production', process.cwd(), ['GOOGLE_', 'MICROSOFT_']),
+  readUserBuildEnv()
+])
+checkOauthBuildConfig(oauth, { pro: proExists, require: process.env.OFFGRID_REQUIRE_OAUTH === '1' })
+const microsoftClientId = oauth.microsoftClientId
+const googleClientId = oauth.google.clientId
+const googleClientSecret = oauth.google.clientSecret
 
 // Sourcemaps, for one purpose: making the e2e run's coverage land on source.
 //
