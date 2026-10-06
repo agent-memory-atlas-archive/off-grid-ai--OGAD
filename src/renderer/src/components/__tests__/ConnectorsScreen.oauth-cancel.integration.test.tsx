@@ -24,7 +24,9 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('Google browser authorization cancellation', () => {
+// Any OAuth connector in the gallery: Gmail and Google Calendar are offered as a direct Google
+// account instead when that is available, so the flow is exercised on another one.
+describe('browser authorization cancellation', () => {
   it('lets the user cancel a pending OAuth attempt and restores the Connect action', async () => {
     let finishTest: ((result: { ok: false; error: string }) => void) | undefined
     const mcpRemove = vi.fn(async () => {
@@ -47,7 +49,7 @@ describe('Google browser authorization cancellation', () => {
     const user = userEvent.setup()
     render(<ConnectorsScreen />)
 
-    const calendarCard = (await screen.findByText('Google Calendar')).closest('div.flex.flex-col')
+    const calendarCard = (await screen.findByText('Vercel')).closest('div.flex.flex-col')
     expect(calendarCard).toBeTruthy()
     await user.click(
       within(calendarCard as HTMLElement).getByRole('button', { name: /Connect with OAuth/i })

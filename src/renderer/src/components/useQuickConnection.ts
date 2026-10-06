@@ -62,9 +62,10 @@ export function useQuickConnection(onBusyChange?: (busy: boolean) => void): Quic
 
   const reload = useCallback(async () => {
     try {
-      const rows = (await window.api.mcpList()) as QuickConnectionRecord[]
+      const rows = (await window.api.mcpList()) as QuickConnectionRecord[] | undefined
       if (mounted.current) {
-        setItems(rows)
+        // A missing list is no connections, never a crash of the whole section.
+        setItems(Array.isArray(rows) ? rows : [])
         setErrors((previous) => ({ ...previous, load: '' }))
       }
     } catch {

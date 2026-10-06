@@ -61,15 +61,16 @@ describe('getThemeMode', () => {
     expect(getThemeMode()).toBe('light')
   })
 
-  it('defaults to system when nothing is stored', async () => {
+  // Off Grid is dark by default; System and Light are choices.
+  it('defaults to dark when nothing is stored', async () => {
     const { getThemeMode } = await loadTheme()
-    expect(getThemeMode()).toBe('system')
+    expect(getThemeMode()).toBe('dark')
   })
 
-  it('defaults to system when the stored value is invalid', async () => {
+  it('defaults to dark when the stored value is invalid', async () => {
     localStorage.setItem('og-theme', 'neon')
     const { getThemeMode } = await loadTheme()
-    expect(getThemeMode()).toBe('system')
+    expect(getThemeMode()).toBe('dark')
   })
 })
 
