@@ -111,13 +111,13 @@ import {
   DropdownMenuSubContent
 } from '@renderer/components/ui/dropdown-menu'
 import { captureUrlForPath } from '../../../../shared/ogcapture-url'
+import { GodIcon } from '../GodIcon'
 import {
   Plus,
   Paperclip,
   Image as ImageIcon,
   Sparkle as Sparkles,
   FolderPlus,
-  Robot,
   Wrench,
   Plug,
   SlidersHorizontal,
@@ -4436,7 +4436,7 @@ export function MemoryChat({
                                     setToolsOn((t) => !t)
                                   }}
                                 >
-                                  <Robot /> <span className="flex-1">God</span>
+                                  <GodIcon /> <span className="flex-1">God</span>
                                   <span
                                     className={`text-xs ${toolsOn ? 'text-primary' : 'text-muted-foreground'}`}
                                   >
@@ -4615,7 +4615,7 @@ export function MemoryChat({
                                   }}
                                   className={`h-8 gap-1.5 rounded-full ${toolsOn ? 'border-primary text-primary' : 'text-muted-foreground'}`}
                                 >
-                                  <Robot className="h-3.5 w-3.5" /> God
+                                  <GodIcon className="h-3.5 w-3.5" /> God
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent>

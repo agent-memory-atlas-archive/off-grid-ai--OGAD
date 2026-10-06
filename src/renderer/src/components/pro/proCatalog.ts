@@ -8,13 +8,13 @@ import {
   MagnifyingGlass,
   Broadcast,
   ClipboardText,
-  Robot,
   ListChecks,
   Waveform,
   ShieldCheck,
   Devices as DevicesIcon
 } from '@phosphor-icons/react'
 import type { ComponentType } from 'react'
+import { GodIcon } from '../GodIcon'
 import { deviceNoun, primaryModifier } from '@renderer/lib/device'
 import { isMac, type DevicePlatform } from '@offgrid/core/shared/device'
 import { PRO_PURCHASE_URL } from '@offgrid/core/shared/product-links'
@@ -56,11 +56,15 @@ export const PRO_FEATURES: ProFeature[] = [
   {
     route: 'explore',
     label: 'God',
-    icon: Robot,
+    icon: GodIcon,
     tagline: 'Your assistant. It knows your day and asks before it acts.',
     description:
       'Chat or talk with Ares. It answers from your memory, accounts and tools, raises what needs you, acts on websites and apps with your approval, and keeps you up to date on what is new in Off Grid AI. Wake-word audio is checked on your device and never saved.',
-    highlights: ['Chat or voice, wake word "Ares"', 'Approvals and what needs you', 'Acts with Web Use and Computer Use'],
+    highlights: [
+      'Chat or voice, wake word "Ares"',
+      'Approvals and what needs you',
+      'Acts with Web Use and Computer Use'
+    ],
     platforms: ['darwin', 'win32', 'linux']
   },
   {
