@@ -82,6 +82,7 @@ import {
 import { callHook } from './bootstrap/hookRegistry'
 import { GodTwinScreen, type GodTwinWakeRequest } from './components/god-twin/GodTwinScreen'
 import { useWakeListener } from './components/god-twin/use-wake-listener'
+import { playListeningChime } from './components/god-twin/listening-chime'
 import { useGodProfile } from './components/god-twin/use-god-profile'
 import { useGodNews } from './components/god-twin/use-god-news'
 import { internalTabLocation, internalTabPath, isInternalTabView } from './lib/internal-tab-route'
@@ -395,6 +396,8 @@ function AppContent(): React.JSX.Element {
   }, [])
   useEffect(() => {
     return window.api.godTwin?.onWake?.((wake) => {
+      // Heard its name: a ding says it is listening before the screen even comes up.
+      if (wake.source === 'wake-word') playListeningChime()
       navigateTo('explore')
       setGodTwinWake((request) => ({
         count: request.count + 1,
