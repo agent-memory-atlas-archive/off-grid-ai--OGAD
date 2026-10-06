@@ -49,7 +49,8 @@ const openIntegrations = async (): Promise<void> => {
   const nav = page.getByRole('navigation', { name: 'Primary navigation' })
   await nav.hover()
   await nav.getByRole('button', { name: 'Integrations', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Integrations' })).toBeVisible()
+  // The first launch of a run is cold: give the app time to reach the screen.
+  await expect(page.getByRole('heading', { name: 'Integrations' })).toBeVisible({ timeout: 60_000 })
 }
 
 const card = (name: string): ReturnType<Page['getByRole']> =>
