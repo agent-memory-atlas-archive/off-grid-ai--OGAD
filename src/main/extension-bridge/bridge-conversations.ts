@@ -97,23 +97,25 @@ export function parseBridgeConversation(raw: unknown): BridgeConversation | null
 }
 
 /**
- * The turns to append so the desktop catches up with the browser: everything past the desktop's
- * stored turns, provided the stored turns are a prefix of what the browser sent (same roles and
- * text). A diverged history appends nothing, so the desktop's copy is never contradicted.
+ * The turns to append so the desktop catches up with the browser. The browser keeps only its
+ * latest turns, so what it sends is a window: the end of the desktop's stored turns must match the
+ * start of that window, and whatever follows the overlap is new. The longest overlap wins, so a
+ * repeated short turn never makes old turns look new. With no overlap (a diverged or stale
+ * history) nothing is appended, so the desktop's copy is never contradicted.
  */
 export function turnsToAppend(
   stored: readonly MessageRow[],
   incoming: readonly BridgeTurn[]
 ): BridgeTurn[] {
   const have = stored.filter((m) => m.role === 'user' || m.role === 'assistant')
-  if (incoming.length <= have.length) return []
-  const prefix = have.every((m, i) => {
-    const turn = incoming.at(i)
-    return (
-      turn !== undefined &&
-      m.role === turn.role &&
-      m.content.slice(0, MAX_TURN_CHARS) === turn.content
-    )
-  })
-  return prefix ? incoming.slice(have.length) : []
+  if (!have.length) return [...incoming]
+  const same = (m: MessageRow, turn: BridgeTurn | undefined): boolean =>
+    turn !== undefined &&
+    m.role === turn.role &&
+    m.content.slice(0, MAX_TURN_CHARS) === turn.content
+  for (let overlap = Math.min(have.length, incoming.length); overlap > 0; overlap--) {
+    const tail = have.slice(have.length - overlap)
+    if (tail.every((m, i) => same(m, incoming[i]))) return incoming.slice(overlap)
+  }
+  return []
 }

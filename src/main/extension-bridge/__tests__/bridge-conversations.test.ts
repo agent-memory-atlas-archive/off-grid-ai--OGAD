@@ -106,4 +106,20 @@ describe('turnsToAppend', () => {
     expect(turnsToAppend([u('q'), a('r')], [u('q')])).toEqual([])
     expect(turnsToAppend([u('q'), a('r')], [u('different'), a('r'), u('x')])).toEqual([])
   })
+
+  it("keeps syncing past the browser's 40-turn window", () => {
+    // Review finding: once the desktop had 40 turns, the browser's window of its latest 40 was
+    // never a superset, so new messages stopped syncing after about 20 exchanges.
+    const turn = (n: number): BridgeTurn => (n % 2 ? u(`q${n}`) : a(`r${n}`))
+    const stored = Array.from({ length: 40 }, (_, i) => turn(i + 1))
+    const window = Array.from({ length: 40 }, (_, i) => turn(i + 3))
+    expect(turnsToAppend(stored, window)).toEqual([turn(41), turn(42)])
+    expect(turnsToAppend(stored, stored)).toEqual([])
+  })
+
+  it('takes the longest overlap, so a repeated short turn never re-adds old ones', () => {
+    expect(
+      turnsToAppend([u('ok'), a('done'), u('ok'), a('done')], [u('ok'), a('done'), u('next')])
+    ).toEqual([u('next')])
+  })
 })
