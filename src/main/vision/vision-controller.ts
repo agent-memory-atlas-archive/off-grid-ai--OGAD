@@ -204,10 +204,16 @@ export class VisionController {
   /** Tasks stopped while queued, before any run registered: their run must not start. */
   private readonly stoppedBeforeStart = new Set<string>()
 
-  /** A Stop that found no run in progress but did stop the task: its queued run, if one comes,
-   *  is stopped as it registers. Used once, so a later Continue of the task runs. */
+  /** A Stop that found no run in progress but did stop the task: the run already on its way, if
+   *  one comes, is stopped as it registers. A Continue clears it first (forgetStoppedBeforeStart),
+   *  so only a run that was waiting when Stop came can be stopped by it. */
   markStoppedBeforeStart(taskId: string): void {
     this.stoppedBeforeStart.add(taskId)
+  }
+
+  /** A deliberate Continue starts a new run of the task: no earlier Stop carries over to it. */
+  forgetStoppedBeforeStart(taskId: string): void {
+    this.stoppedBeforeStart.delete(taskId)
   }
 
   hasActiveSession(taskId: string): boolean {
@@ -342,6 +348,11 @@ export function registerVisionSession(
   sessionLimitMs?: number
 ): () => void {
   return controller.registerSession(taskId, guard, request, project, sessionLimitMs)
+}
+
+/** Continue is starting a new run of `taskId`: it must not inherit a Stop meant for an earlier one. */
+export function forgetVisionStopBeforeStart(taskId: string): void {
+  controller.forgetStoppedBeforeStart(taskId)
 }
 
 export function emitVisionStep(taskId: string, note: string): void {

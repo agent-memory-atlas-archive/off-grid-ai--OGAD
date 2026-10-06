@@ -4,13 +4,15 @@ import { initializeTaskHistory, listTaskRuns, removeTaskRuns } from './task-hist
 import { registerTaskRetryIpc } from './task-retry-ipc'
 import { registerTaskGuideIpc } from './task-guide-ipc'
 import { configureTaskRetryRunner } from './task-retry'
-import { hasActiveVisionSession } from '../vision/vision-controller'
+import { forgetVisionStopBeforeStart, hasActiveVisionSession } from '../vision/vision-controller'
 
 export function registerTaskHistoryIpc(): void {
   initializeTaskHistory()
   configureTaskRetryRunner({
     isActive: hasActiveVisionSession,
     async web(task, taskId, checkpoint) {
+      // Continue is a new run: a Stop sent to an earlier, never-started one does not apply.
+      forgetVisionStopBeforeStart(taskId)
       const { getBrowserRailHost } = await import('../browser/browser-host')
       return getBrowserRailHost().runTask({
         goal: task.title,
@@ -21,6 +23,7 @@ export function registerTaskHistoryIpc(): void {
       })
     },
     async computer(task, taskId, checkpoint) {
+      forgetVisionStopBeforeStart(taskId)
       const [{ getVisionRailHost }, { getAxRailHost }, { axRailViable }] = await Promise.all([
         import('../vision/vision-host'),
         import('../accessibility/ax-host'),

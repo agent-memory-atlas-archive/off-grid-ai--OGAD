@@ -99,6 +99,19 @@ describe('registerVisionIpc', () => {
     releaseAgain()
   })
 
+  it('a Continue of a task stopped with no run waiting is not stopped by that Stop', () => {
+    // An orphaned task (from sync, or before a restart) stopped while nothing was queued for it.
+    owner.markStoppedBeforeStart('orphan-task')
+    // The user continues it: a new run under the same id.
+    owner.forgetStoppedBeforeStart('orphan-task')
+    const guard = new VisionGuard({ taskId: 'orphan-task', kind: 'web_use' })
+    const request = new AbortController()
+    const release = owner.registerSession('orphan-task', guard, request)
+    expect(guard.isHalted).toBe(false)
+    expect(request.signal.aborted).toBe(false)
+    release()
+  })
+
   it('projects Web Use controls from the shared owner without creating Computer Use state', () => {
     const guard = new VisionGuard({ taskId: 'web-control-task', kind: 'web_use' })
     const request = new AbortController()
