@@ -69,8 +69,12 @@ import {
   getActiveRemoteVisionServer,
   getActiveRemoteVisionServerForModality
 } from './vision/remote-vision-server'
-import { REASONING_BUDGET_AUTO, openRouterReasoningPayload } from '@offgrid/models'
-import { remoteReasoningCapability, remoteTextModelProviderError } from './llm/remote-chat'
+import { REASONING_BUDGET_AUTO } from '@offgrid/models'
+import {
+  remoteReasoningCapability,
+  remoteReasoningFields,
+  remoteTextModelProviderError
+} from './llm/remote-chat'
 
 const UPSTREAM_HOST = '127.0.0.1'
 // The upstream llama-server port is LIVE, not fixed: llm.getPort() moves off LLAMA_SERVER_PORT when
@@ -280,11 +284,23 @@ function proxyToSelectedRemote(
     return true
   }
 
+  void forwardToRemote(res, body, remote, activity)
+  return true
+}
+
+/** Send the request to the remote provider, with its reasoning control translated for it. */
+async function forwardToRemote(
+  res: http.ServerResponse,
+  body: Record<string, unknown>,
+  remote: NonNullable<ReturnType<typeof getActiveRemoteVisionServer>>,
+  activity?: AIRequestHandle
+): Promise<void> {
   const target = new URL(`${remote.endpoint.replace(/\/+$/, '')}/chat/completions`)
   const thinkingRequested = requestedThinking(body)
   const forwarded: Record<string, unknown> = { ...body, model: remote.model }
-  // The phone sends llama.cpp controls to this gateway. OpenRouter needs its
-  // reasoning control for both OFF and the selected thinking budget.
+  // The phone and the browser send llama.cpp controls to this gateway. OpenRouter needs its own
+  // reasoning control, built exactly as Chat builds it (remoteReasoningFields): a model whose
+  // reasoning is mandatory is never told to switch it off.
   if (remote.provider === 'openrouter' && thinkingRequested !== undefined) {
     const budget =
       typeof body.reasoning_budget_tokens === 'number' && body.reasoning_budget_tokens > 0
@@ -293,9 +309,11 @@ function proxyToSelectedRemote(
     delete forwarded.chat_template_kwargs
     delete forwarded.reasoning_format
     delete forwarded.reasoning_budget_tokens
-    forwarded.reasoning = thinkingRequested
-      ? openRouterReasoningPayload(true, budget).reasoning
-      : { effort: 'none' }
+    delete forwarded.reasoning
+    Object.assign(
+      forwarded,
+      remoteReasoningFields(thinkingRequested, budget, await remoteReasoningCapability(remote))
+    )
   }
   writeDiagnosticLog('gateway', 'remote_chat.thinking_control', {
     requestId: String(res.getHeader('X-Request-Id') ?? ''),
@@ -374,7 +392,6 @@ function proxyToSelectedRemote(
     }
   })
   proxyReq.end(payload)
-  return true
 }
 
 // Fetch an image reference into a Buffer. Accepts data: URLs, http(s):// URLs,

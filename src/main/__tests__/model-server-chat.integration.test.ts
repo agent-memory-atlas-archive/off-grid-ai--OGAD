@@ -336,6 +336,74 @@ describe('model gateway chat streaming', () => {
     }
   })
 
+  it('never switches off reasoning an OpenRouter model requires, as Chat does', async () => {
+    // Gemini 3.7 Flash on OpenRouter refuses "reasoning off" with HTTP 400 ("Reasoning is mandatory
+    // for this endpoint and cannot be disabled"). The browser's Agent asks with thinking off.
+    const remote = await import('../vision/remote-vision-server')
+    const codec = await import('../../shared/remote-vision-server')
+    const bodies: Record<string, unknown>[] = []
+    const provider = http.createServer((request, response) => {
+      if (request.method === 'GET' && request.url === '/v1/models') {
+        response.writeHead(200, { 'Content-Type': 'application/json' })
+        response.end(
+          JSON.stringify({
+            data: [
+              { id: 'google/gemini-3.7-flash', reasoning: { mandatory: true } },
+              { id: 'openai/gpt-5.6', reasoning: { mandatory: false } }
+            ]
+          })
+        )
+        return
+      }
+      let raw = ''
+      request.setEncoding('utf8')
+      request.on('data', (chunk) => {
+        raw += chunk
+      })
+      request.on('end', () => {
+        bodies.push(JSON.parse(raw) as Record<string, unknown>)
+        response.writeHead(200, { 'Content-Type': 'application/json' })
+        response.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }))
+      })
+    })
+    await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve))
+    const port = (provider.address() as AddressInfo).port
+    const ask = async (serverId: string, model: string): Promise<Record<string, unknown>> => {
+      remote.setRemoteVisionServerSettings({
+        provider: 'openrouter',
+        endpoint: `http://127.0.0.1:${port}/v1`,
+        model,
+        serverId,
+        name: 'Synthetic OpenRouter',
+        apiKey: 'synthetic-key'
+      })
+      const response = await fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: codec.remoteVisionModelId(serverId, model),
+          stream: false,
+          chat_template_kwargs: { enable_thinking: false },
+          messages: [{ role: 'user', content: 'Reply with three words' }]
+        })
+      })
+      expect(response.status).toBe(200)
+      return bodies.at(-1)!
+    }
+
+    try {
+      const mandatory = await ask('or-mandatory', 'google/gemini-3.7-flash')
+      expect(mandatory).not.toHaveProperty('reasoning')
+      expect(mandatory).not.toHaveProperty('chat_template_kwargs')
+      const optional = await ask('or-optional', 'openai/gpt-5.6')
+      expect(optional).toMatchObject({ reasoning: { effort: 'none' } })
+    } finally {
+      remote.removeRemoteVisionServer('or-mandatory')
+      remote.removeRemoteVisionServer('or-optional')
+      await new Promise<void>((resolve) => provider.close(() => resolve()))
+    }
+  })
+
   it('rejects malformed input with a stable JSON envelope and remains healthy', async () => {
     const response = await fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
       method: 'POST',

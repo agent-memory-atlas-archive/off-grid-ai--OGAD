@@ -209,35 +209,49 @@ export function remoteTextModelProviderError(status: number, rawBody: string): E
   )
 }
 
+/**
+ * The request fields that turn a remote model's reasoning on or off, for its provider. One owner for
+ * Chat and the gateway: a model whose reasoning is mandatory never gets it switched off, which the
+ * provider refuses ("Reasoning is mandatory for this endpoint and cannot be disabled").
+ */
+export function remoteReasoningFields(
+  thinking: boolean | undefined,
+  budget: number,
+  capability: RemoteReasoningCapability
+): Record<string, unknown> {
+  const ollamaEffort =
+    budget > 0 ? (budget <= 1024 ? 'low' : budget <= 4096 ? 'medium' : 'high') : 'medium'
+  return thinking === undefined || capability.control === 'none'
+    ? {}
+    : capability.control === 'openrouter'
+      ? thinking
+        ? openRouterReasoningPayload(true, budget)
+        : capability.mandatory
+          ? {}
+          : { reasoning: { effort: 'none' } }
+      : capability.control === 'ollama'
+        ? { reasoning_effort: thinking ? ollamaEffort : 'none' }
+        : capability.control === 'reasoning-strength'
+          ? { chat_template_kwargs: { reasoning_strength: thinking ? 'high' : 'none' } }
+          : {
+              chat_template_kwargs: { enable_thinking: thinking },
+              ...(thinking && capability.tokenBudget && budget > 0
+                ? { reasoning_budget_tokens: budget }
+                : {})
+            }
+}
+
 /** The OpenAI-compatible request body. Pure: what we send, with nothing about how we send it. */
 function completionRequestBody(
   remote: RemoteTextModelConnection,
   request: RemoteChatRequest,
   capability: RemoteReasoningCapability
 ): string {
-  const thinking = request.thinking
-  const budget = request.reasoningBudget ?? REASONING_BUDGET_AUTO
-  const ollamaEffort =
-    budget > 0 ? (budget <= 1024 ? 'low' : budget <= 4096 ? 'medium' : 'high') : 'medium'
-  const reasoning =
-    thinking === undefined || capability.control === 'none'
-      ? {}
-      : capability.control === 'openrouter'
-        ? thinking
-          ? openRouterReasoningPayload(true, budget)
-          : capability.mandatory
-            ? {}
-            : { reasoning: { effort: 'none' } }
-        : capability.control === 'ollama'
-          ? { reasoning_effort: thinking ? ollamaEffort : 'none' }
-          : capability.control === 'reasoning-strength'
-            ? { chat_template_kwargs: { reasoning_strength: thinking ? 'high' : 'none' } }
-            : {
-                chat_template_kwargs: { enable_thinking: thinking },
-                ...(thinking && capability.tokenBudget && budget > 0
-                  ? { reasoning_budget_tokens: budget }
-                  : {})
-              }
+  const reasoning = remoteReasoningFields(
+    request.thinking,
+    request.reasoningBudget ?? REASONING_BUDGET_AUTO,
+    capability
+  )
   return JSON.stringify({
     model: remote.model,
     messages: request.messages,
