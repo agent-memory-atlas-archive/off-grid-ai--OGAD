@@ -716,6 +716,14 @@ const offGridApi = {
   ) => ipcRenderer.invoke('tools:chat', query, history, opts),
   /** What God knows right now: the day, the next meeting, to-dos, approvals, accounts. */
   godContext: (): Promise<unknown> => ipcRenderer.invoke('god:context'),
+  /** God's scheduled tasks (routines): main/god-routines.ts. */
+  godRoutines: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('god:routines:list'),
+    update: (id: string, patch: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('god:routines:update', id, patch),
+    remove: (id: string): Promise<boolean> => ipcRenderer.invoke('god:routines:delete', id),
+    run: (id: string): Promise<string> => ipcRenderer.invoke('god:routines:run', id)
+  },
 
   // --- LLM inference settings ---
   getLlmSettings: () => ipcRenderer.invoke('llm:get-settings'),
