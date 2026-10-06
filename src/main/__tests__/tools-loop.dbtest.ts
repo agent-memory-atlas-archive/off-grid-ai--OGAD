@@ -423,31 +423,35 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
     }
   })
 
-  it('answers a plain question in assistant mode without offering a Web Use task', async () => {
-    // God (and Chat's assistant mode) used to start a web task, open a browser and load a
-    // vision model for a simple question. A question gets an answer; a request gets a task.
+  it('in assistant mode, acting is always offered and the model is told when to use it', async () => {
+    // God's tools do not depend on the words of the message: the model decides from the prompt.
     const extension = new NativeActionToolExtension(
       { run: async () => ({ ok: true, result: undefined }), taskUseEnabled: () => true },
       'darwin'
     )
     registerToolExtension(extension)
-    const offered = (): string[] =>
-      ((fake.requests[0] as { tools?: { function?: { name?: string } }[] }).tools ?? []).map(
-        (tool) => tool.function?.name ?? ''
-      )
+    const first = (): {
+      tools?: { function?: { name?: string } }[]
+      messages?: { content?: unknown }[]
+    } => fake.requests[0] as never
+    const offered = (): string[] => (first().tools ?? []).map((t) => t.function?.name ?? '')
     try {
       fake.enqueue({ content: 'Pick one with good reviews.' })
       const question = await toolChat('what is a good cooking video on youtube?', [], {
         assistantOnly: true
       })
-      expect(question.answer).toBe('Pick one with good reviews.')
       expect(question.toolCalls).toEqual([])
-      expect(offered()).not.toContain('web_use')
-      expect(offered()).not.toContain('computer_use')
+      expect(offered()).toContain('web_use')
+      expect(String(first().messages?.[0]?.content)).toContain(
+        'Answer questions directly. Call web_use only when the user asks you to do something on a website.'
+      )
 
+      // A request that shares no words with the tool still has it.
       fake.reset()
       fake.enqueue({ content: 'ok' })
-      await toolChat('play a cooking video on youtube', [], { assistantOnly: true })
+      await toolChat('can you do a sanity check of this entire website?', [], {
+        assistantOnly: true
+      })
       expect(offered()).toContain('web_use')
     } finally {
       unregisterToolExtension(extension.id, extension)

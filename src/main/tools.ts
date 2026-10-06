@@ -22,7 +22,6 @@ import { evaluateArithmetic } from './calculator'
 import type { SearchKind, SearchResult } from '../shared/search-contract'
 import { selectToolExtensions } from './tools/extension-select'
 import { isTaskAction } from './tools/nativeActionToolExtension-logic'
-import { shouldPlan } from './tools/planner-logic'
 import { callHookAsync, HOOKS } from './bootstrap/hookRegistry'
 import {
   boundToolResult,
@@ -757,17 +756,12 @@ export async function toolChat(
       ...relevantTools.filter((schema) => !explicitNames.has(schema))
     ]
   }
-  // A plain question is answered, not acted on: a Web Use or Computer Use task opens a
-  // browser and loads a vision model, so it starts only when the user asks for something
-  // to be done (or names the tool). Semantic routing alone can rank web_use close to
-  // web_search for "what is..." questions.
-  if (!shouldPlan(query)) {
-    relevantTools = relevantTools.filter((schema) => {
-      const name = (schema as { function?: { name?: unknown } }).function?.name
-      return (
-        typeof name !== 'string' || !isTaskAction(name) || explicitlyNamedTools.includes(schema)
-      )
-    })
+  // Acting is offered whenever the assistant may act, and the model decides from the prompt
+  // (answer questions; act when asked to do something on a website or in an app). Routing by the
+  // words of the message must not hide it: "can you check this site?" shares no words with it.
+  if (assistantRequiredTools.length) {
+    const acting = new Set(assistantRequiredTools)
+    relevantTools = [...assistantRequiredTools, ...relevantTools.filter((t) => !acting.has(t))]
   }
   if (!/\bbrave\b/i.test(query)) {
     const hasPrimarySearch = relevantTools.some(
@@ -790,7 +784,9 @@ export async function toolChat(
       .filter((hint) => [...hint.names].some((name) => relevantNames.has(name)))
       .map((hint) => hint.text)
   )
-  const protectedToolCount = explicitlyNamedTools.length
+  const protectedToolCount =
+    explicitlyNamedTools.length +
+    assistantRequiredTools.filter((t) => !explicitlyNamedTools.includes(t)).length
   const { budgetTools } = await import('./tools/tool-budget')
   const ctx = llm.effectiveContextSize()
   // Cap tool tokens in ABSOLUTE terms too, not just as a fraction of context:
