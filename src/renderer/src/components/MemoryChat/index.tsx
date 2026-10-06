@@ -203,6 +203,9 @@ import {
   textRecordingTooltip
 } from './utlis'
 
+/** God's own voice turn mode (hands-free unless changed in its voice composer). */
+const GOD_TURN_MODE_SETTING = 'god:voiceTurnMode'
+
 export function MemoryChat({
   onNavigateToMemory,
   onNavigateToChat,
@@ -530,8 +533,9 @@ export function MemoryChat({
   const [chatVoiceTurnMode, setVoiceTurnMode] = useState<VoiceTurnMode>(
     DEFAULT_VOICE_PREFERENCES.turnMode
   )
-  // God talks hands-free: say its name, ask, and it answers and listens again, no taps.
-  const voiceTurnMode: VoiceTurnMode = god ? 'handsfree' : chatVoiceTurnMode
+  // God has its own turn mode, hands-free until the user picks another in its voice composer.
+  const [godVoiceTurnMode, setGodVoiceTurnMode] = useState<VoiceTurnMode>('handsfree')
+  const voiceTurnMode: VoiceTurnMode = god ? godVoiceTurnMode : chatVoiceTurnMode
   const [voiceSilenceAfterSpeechMs, setVoiceSilenceAfterSpeechMs] = useState(
     DEFAULT_VOICE_PREFERENCES.silenceAfterSpeechMs
   )
@@ -619,6 +623,9 @@ export function MemoryChat({
           persistedPreferenceValues.current.composerVoiceMode = voicePreferences.voiceMode
           setVoiceMode(voicePreferences.voiceMode)
           setVoiceTurnMode(voicePreferences.turnMode)
+          if (['tap', 'silence', 'handsfree'].includes(String(s[GOD_TURN_MODE_SETTING]))) {
+            setGodVoiceTurnMode(s[GOD_TURN_MODE_SETTING] as VoiceTurnMode)
+          }
           setVoiceSilenceAfterSpeechMs(voicePreferences.silenceAfterSpeechMs)
           setVoiceSpeakerDrainMs(voicePreferences.speakerDrainMs)
           setTtsEnabled(voicePreferences.ttsEnabled)
@@ -4405,6 +4412,14 @@ export function MemoryChat({
                             transcriptionLabel={voiceTurns.transcriptionLabel}
                             error={voiceTurns.error}
                             onToggleRecording={toggleRecording}
+                            {...(god
+                              ? {
+                                  onTurnModeChange: (mode: VoiceTurnMode) => {
+                                    setGodVoiceTurnMode(mode)
+                                    void window.api.saveSetting(GOD_TURN_MODE_SETTING, mode)
+                                  }
+                                }
+                              : {})}
                           />
                         ) : (
                           <ChatDraftInput

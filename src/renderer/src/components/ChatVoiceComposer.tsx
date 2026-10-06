@@ -1,8 +1,54 @@
-import { Microphone, SlidersHorizontal, SpeakerHigh, Stop, X } from '@phosphor-icons/react'
+import {
+  CaretDown,
+  Microphone,
+  SlidersHorizontal,
+  SpeakerHigh,
+  Stop,
+  X
+} from '@phosphor-icons/react'
 import { VOICE_TURN_LABELS, type VoiceTurnMode } from '@offgrid/speech'
 import { Button } from './ui/button'
 import { LoadingDots } from './ui/loading-dots'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger
+} from './ui/dropdown-menu'
+
+const TURN_MODES: readonly VoiceTurnMode[] = ['tap', 'silence', 'handsfree']
+
+/** The turn mode, as a small dropdown where the composer may change it (God's voice mode). */
+function TurnModePicker(props: {
+  readonly mode: VoiceTurnMode
+  readonly onChange: (mode: VoiceTurnMode) => void
+}): React.JSX.Element {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label={`Voice turns: ${VOICE_TURN_LABELS[props.mode].label}`}
+        className="flex shrink-0 items-center gap-1 rounded px-1 text-[10px] uppercase tracking-wide text-primary hover:bg-white/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-green-500"
+      >
+        {VOICE_TURN_LABELS[props.mode].label}
+        <CaretDown className="h-2.5 w-2.5" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <DropdownMenuRadioGroup
+          value={props.mode}
+          onValueChange={(value) => props.onChange(value as VoiceTurnMode)}
+        >
+          {TURN_MODES.map((mode) => (
+            <DropdownMenuRadioItem key={mode} value={mode} className="text-xs">
+              {VOICE_TURN_LABELS[mode].label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
 import type { ChatVoicePhase } from './use-chat-voice-turns'
 
 interface ChatVoiceComposerProps {
@@ -12,6 +58,8 @@ interface ChatVoiceComposerProps {
   transcriptionLabel: string
   error: string | null
   onToggleRecording: () => void
+  /** Lets the user change the turn mode here (God's voice mode); absent, it is just shown. */
+  onTurnModeChange?: (mode: VoiceTurnMode) => void
 }
 
 function recordButtonLabel(phase: ChatVoicePhase, suspended: boolean): string {
@@ -51,7 +99,8 @@ export function ChatVoiceComposer({
   suspended,
   transcriptionLabel,
   error,
-  onToggleRecording
+  onToggleRecording,
+  onTurnModeChange
 }: ChatVoiceComposerProps): React.JSX.Element {
   const active = phase !== 'idle'
   const transcribing = phase === 'transcribing'
@@ -82,9 +131,13 @@ export function ChatVoiceComposer({
           <TooltipContent>{label}</TooltipContent>
         </Tooltip>
         <div className="flex min-w-0 items-baseline gap-2">
-          <span className="shrink-0 text-[10px] uppercase tracking-wide text-primary">
-            {VOICE_TURN_LABELS[turnMode].label}
-          </span>
+          {onTurnModeChange ? (
+            <TurnModePicker mode={turnMode} onChange={onTurnModeChange} />
+          ) : (
+            <span className="shrink-0 text-[10px] uppercase tracking-wide text-primary">
+              {VOICE_TURN_LABELS[turnMode].label}
+            </span>
+          )}
           <span aria-live="polite" className="truncate text-xs text-neutral-500">
             {statusText({
               phase,
