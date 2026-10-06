@@ -211,6 +211,10 @@ export async function gateHost({ action }: { action: ActionRecord }): Promise<Ga
       notifyParked(action.id)
     })
   }
+  // Nobody is watching a routine: what it would change runs only once someone approved it.
+  if (unattended(action)) {
+    return { kind: 'reject', reason: 'Nothing could ask for approval, so this did not run.' }
+  }
   // Nothing queued and no inline surface (tests, headless): the unchanged
   // behaviour is to run. The engine still verifies.
   return { kind: 'approve' }

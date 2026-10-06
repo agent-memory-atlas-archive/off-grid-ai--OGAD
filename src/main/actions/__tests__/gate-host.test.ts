@@ -73,9 +73,22 @@ describe('gateHost', () => {
   it('a handler that declines to queue also lets the action run', async () => {
     registerHook(HOOKS.actionsProposeApproval, () => false)
     const decision = await gateHost({
-      action: record({ source: 'routine', sourceRef: undefined })
+      action: record({ source: 'reasoning', sourceRef: undefined })
     })
     expect(decision).toEqual({ kind: 'approve' })
+  })
+
+  it('a routine never runs a change that nothing could ask approval for', async () => {
+    // Review finding: with no approval queued, a routine's write ran unattended.
+    registerHook(HOOKS.actionsProposeApproval, () => false)
+    const routine = record({ source: 'routine', sourceRef: undefined })
+    expect(await gateHost({ action: routine })).toMatchObject({ kind: 'reject' })
+    unregisterHook(HOOKS.actionsProposeApproval)
+    expect(await gateHost({ action: routine })).toMatchObject({ kind: 'reject' })
+    // Reading is fine on its own.
+    expect(
+      await gateHost({ action: record({ source: 'routine', risk: 'read', rail: 'semantic' }) })
+    ).toEqual({ kind: 'approve' })
   })
 
   it('a non-chat queued action parks until Action Approval resolves it', async () => {
