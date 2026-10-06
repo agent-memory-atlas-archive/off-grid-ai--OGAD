@@ -527,9 +527,11 @@ export function MemoryChat({
   const [chatVoiceMode, setVoiceMode] = useState(DEFAULT_VOICE_PREFERENCES.voiceMode)
   // God's Chat and Voice modes decide it there; Chat keeps its own saved choice.
   const voiceMode = god ? god.voiceMode : chatVoiceMode
-  const [voiceTurnMode, setVoiceTurnMode] = useState<VoiceTurnMode>(
+  const [chatVoiceTurnMode, setVoiceTurnMode] = useState<VoiceTurnMode>(
     DEFAULT_VOICE_PREFERENCES.turnMode
   )
+  // God talks hands-free: say its name, ask, and it answers and listens again, no taps.
+  const voiceTurnMode: VoiceTurnMode = god ? 'handsfree' : chatVoiceTurnMode
   const [voiceSilenceAfterSpeechMs, setVoiceSilenceAfterSpeechMs] = useState(
     DEFAULT_VOICE_PREFERENCES.silenceAfterSpeechMs
   )
