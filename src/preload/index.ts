@@ -1,3 +1,4 @@
+import type { WakeListenSettings } from '../shared/god-twin/wake-word'
 import type { RuntimeBackend } from '../shared/runtime-backends'
 import type { PerformancePackStatus } from '../shared/performance-pack'
 import { contextBridge, ipcRenderer } from 'electron'
@@ -44,6 +45,8 @@ function unsubscribe(channel: string, listener: IpcListener): () => void {
     ipcRenderer.removeListener(channel, listener)
   }
 }
+
+type GodTwinListen = WakeListenSettings & { available: boolean }
 
 const offGridApi = {
   // Open-core: is the pro tier active in this build/session? The main process
@@ -221,11 +224,26 @@ const offGridApi = {
       deltaX: number,
       deltaY: number
     ): void => ipcRenderer.send('god-twin:resize', { edge, deltaX, deltaY }),
-    onWake: (callback: () => void): (() => void) => {
-      const listener = (): void => callback()
+    onWake: (
+      callback: (wake: { source: 'companion' | 'wake-word'; said?: string }) => void
+    ): (() => void) => {
+      const listener = (
+        _event: unknown,
+        wake?: { source: 'companion' | 'wake-word'; said?: string }
+      ): void => callback(wake ?? { source: 'companion' })
       ipcRenderer.on('god-twin:wake', listener)
       return unsubscribe('god-twin:wake', listener)
     },
+    getListen: (): Promise<GodTwinListen> => ipcRenderer.invoke('god-twin:listen:get'),
+    setListen: (patch: Partial<WakeListenSettings>): Promise<GodTwinListen> =>
+      ipcRenderer.invoke('god-twin:listen:set', patch),
+    onListenChanged: (callback: (settings: WakeListenSettings) => void): (() => void) => {
+      const listener = (_event: unknown, settings: WakeListenSettings): void => callback(settings)
+      ipcRenderer.on('god-twin:listen:changed', listener)
+      return unsubscribe('god-twin:listen:changed', listener)
+    },
+    /** A short 16 kHz WAV clip to check for the wake word, on this machine. */
+    hear: (wav: Uint8Array): Promise<boolean> => ipcRenderer.invoke('god-twin:hear', wav),
     onListening: (callback: (listening: boolean) => void): (() => void) => {
       const listener = (_event: unknown, listening: boolean): void => callback(listening)
       ipcRenderer.on('god-twin:listening', listener)

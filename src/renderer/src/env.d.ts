@@ -113,6 +113,14 @@ interface SessionEntityRecord {
 
 type ArtifactKind = import('../../shared/ipc-contracts').ArtifactKindContract
 
+type GodTwinListenSettings = import('../../shared/god-twin/wake-word').WakeListenSettings
+type GodTwinListenState = GodTwinListenSettings & { available: boolean }
+interface GodTwinWakeEvent {
+  source: 'companion' | 'wake-word'
+  /** What was said after the wake word in the same breath. */
+  said?: string
+}
+
 interface RendererAPIOverrides {
   godTwin?: {
     wake?: () => Promise<boolean>
@@ -136,7 +144,11 @@ interface RendererAPIOverrides {
       deltaX: number,
       deltaY: number
     ) => void
-    onWake?: (callback: () => void) => () => void
+    onWake?: (callback: (wake: GodTwinWakeEvent) => void) => () => void
+    getListen?: () => Promise<GodTwinListenState>
+    setListen?: (patch: Partial<GodTwinListenSettings>) => Promise<GodTwinListenState>
+    onListenChanged?: (callback: (settings: GodTwinListenSettings) => void) => () => void
+    hear?: (wav: Uint8Array) => Promise<boolean>
     onListening?: (callback: (listening: boolean) => void) => () => void
     onState?: (
       callback: (state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting') => void
