@@ -420,6 +420,41 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
     }
   })
 
+  it(
+    'answers a plain question in assistant mode without offering a Web Use task',
+    { timeout: 120_000 },
+    async () => {
+      // God (and Chat's assistant mode) used to start a web task, open a browser and load a
+      // vision model for a simple question. A question gets an answer; a request gets a task.
+      const extension = new NativeActionToolExtension(
+        { run: async () => ({ ok: true, result: undefined }), taskUseEnabled: () => true },
+        'darwin'
+      )
+      registerToolExtension(extension)
+      const offered = (): string[] =>
+        ((fake.requests[0] as { tools?: { function?: { name?: string } }[] }).tools ?? []).map(
+          (tool) => tool.function?.name ?? ''
+        )
+      try {
+        fake.enqueue({ content: 'Pick one with good reviews.' })
+        const question = await toolChat('what is a good cooking video on youtube?', [], {
+          assistantOnly: true
+        })
+        expect(question.answer).toBe('Pick one with good reviews.')
+        expect(question.toolCalls).toEqual([])
+        expect(offered()).not.toContain('web_use')
+        expect(offered()).not.toContain('computer_use')
+
+        fake.reset()
+        fake.enqueue({ content: 'ok' })
+        await toolChat('play a cooking video on youtube', [], { assistantOnly: true })
+        expect(offered()).toContain('web_use')
+      } finally {
+        unregisterToolExtension(extension.id, extension)
+      }
+    }
+  )
+
   it('passes the tool schemas + tool_choice to the model on the first round', async () => {
     enqueueReactiveAfterEmptyPlan({ content: 'ok' })
     await toolChat('get_datetime: what time is it', [])

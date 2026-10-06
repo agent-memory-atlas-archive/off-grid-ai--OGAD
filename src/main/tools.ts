@@ -9,11 +9,7 @@ import { offgridGuideTool } from './tools/offgrid-guide-tool'
 import { llm } from './llm'
 import type { GenerationMetrics } from '../shared/generation-metrics'
 import type { ResponseCutoffContract } from '../shared/ipc-contracts'
-import {
-  SEARCH_KB_TOOL,
-  makeSearchKnowledgeBaseHandler,
-  sanitizePromptExcerpt
-} from '@offgrid/rag'
+import { SEARCH_KB_TOOL, makeSearchKnowledgeBaseHandler, sanitizePromptExcerpt } from '@offgrid/rag'
 import { stripChatControlTokens } from '@offgrid/sync'
 import { isMemoryToolAllowed } from './tools/memory-scope'
 import { parseToolCallsFromText, stripQwenToolCallMarkup } from './tools/tool-call-parse'
@@ -25,6 +21,7 @@ import { evaluateArithmetic } from './calculator'
 import type { SearchKind, SearchResult } from '../shared/search-contract'
 import { selectToolExtensions } from './tools/extension-select'
 import { isTaskAction } from './tools/nativeActionToolExtension-logic'
+import { shouldPlan } from './tools/planner-logic'
 import { callHookAsync, HOOKS } from './bootstrap/hookRegistry'
 import {
   boundToolResult,
@@ -749,6 +746,18 @@ export async function toolChat(
       ...relevantTools.filter((schema) => !explicitNames.has(schema))
     ]
   }
+  // A plain question is answered, not acted on: a Web Use or Computer Use task opens a
+  // browser and loads a vision model, so it starts only when the user asks for something
+  // to be done (or names the tool). Semantic routing alone can rank web_use close to
+  // web_search for "what is..." questions.
+  if (!shouldPlan(query)) {
+    relevantTools = relevantTools.filter((schema) => {
+      const name = (schema as { function?: { name?: unknown } }).function?.name
+      return (
+        typeof name !== 'string' || !isTaskAction(name) || explicitlyNamedTools.includes(schema)
+      )
+    })
+  }
   if (!/\bbrave\b/i.test(query)) {
     const hasPrimarySearch = relevantTools.some(
       (schema) => (schema as { function?: { name?: unknown } }).function?.name === 'web_search'
@@ -809,7 +818,7 @@ export async function toolChat(
         ?.systemPrompt.trim()
     : undefined
   const sys =
-    'You are Off Grid AI, a private on-device assistant. Answer general questions using your knowledge. Use the provided tools when they help answer precisely. Before calling web_use, use the full conversation and ask the user one concise set of questions only when a material fact is missing. If the task is actionable, call web_use immediately. Keep answers concise.' +
+    'You are Off Grid AI, a private on-device assistant. Answer general questions using your knowledge. Use the provided tools when they help answer precisely. Before calling web_use, use the full conversation and ask the user one concise set of questions only when a material fact is missing. Answer questions directly. Call web_use only when the user asks you to do something on a website. Keep answers concise.' +
     (opts.allMemory
       ? ' Use search_memory when the user asks about their memories, past conversations, people, or captured activity. Do not invent personal facts or claim to have searched when you have not. Cite retrieved sources accurately.'
       : '') +
@@ -818,7 +827,7 @@ export async function toolChat(
       : '') +
     (projectPrompt ? `\n\nProject instructions:\n${projectPrompt}` : '') +
     (opts.assistantOnly
-      ? ' web_use and computer_use are available for website and desktop tasks.'
+      ? ' web_use and computer_use are available when the user asks you to do something on a website or in a desktop app.'
       : '') +
     (hints.length ? ' ' + hints.join(' ') : '') +
     (typeof opts.context === 'string' && opts.context.trim()
