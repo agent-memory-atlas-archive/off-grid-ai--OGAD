@@ -16,6 +16,7 @@ import { getSlot, registerSlot, SLOTS } from '../bootstrap/slotRegistry'
 import { clearProFeaturesRenderer } from '../bootstrap/loadProFeaturesRenderer'
 import { registerProView } from '../bootstrap/proView'
 import { PRO_FEATURES } from '../components/pro/proCatalog'
+import { TooltipProvider } from '../components/ui/tooltip'
 import { PRO_PURCHASE_URL } from '@offgrid/core/shared/product-links'
 import {
   installAppBoundary,
@@ -58,7 +59,12 @@ describe('<App/> locked Pro navigation integration', () => {
       proInvoke
     })
 
-    render(<App />)
+    // Wrapped as main.tsx wraps the app.
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>
+    )
     // The sidebar is a collapsed rail until the user points at it. Exercise the
     // production hover interaction before reading its labels.
     const navigation = await screen.findByRole('navigation', { name: 'Primary navigation' })
@@ -136,7 +142,12 @@ describe('<App/> locked Pro navigation integration', () => {
     // packaged Pro build uses, then test the real App gate around it.
     registerProView((view) => (view === 'day' ? <h1>Today</h1> : null))
 
-    render(<App />)
+    // Wrapped as main.tsx wraps the app.
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>
+    )
     expect(await screen.findByRole('heading', { name: 'Today' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Get Pro/ })).toBeNull()
 
@@ -160,7 +171,12 @@ describe('<App/> locked Pro navigation integration', () => {
     const openExternal = vi.fn()
     installAppBoundary({ platform: 'linux', isPro: false, openExternal })
 
-    render(<App />)
+    // Wrapped as main.tsx wraps the app.
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>
+    )
 
     expect(await screen.findByRole('heading', { name: 'Day' })).toBeTruthy()
     expect(screen.getByText(/Off Grid AI Pro · Available now/)).toBeTruthy()
@@ -173,7 +189,12 @@ describe('<App/> locked Pro navigation integration', () => {
     window.history.replaceState(null, '', '/vault')
     installAppBoundary({ platform: 'linux', isPro: false })
 
-    render(<App />)
+    // Wrapped as main.tsx wraps the app.
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>
+    )
 
     expect(await screen.findByRole('heading', { name: 'Vault' })).toBeTruthy()
     expect(screen.getByText(/Off Grid AI Pro · Available now/)).toBeTruthy()
@@ -189,7 +210,12 @@ describe('<App/> locked Pro navigation integration', () => {
     registerProView(paidView)
     registerSlot(SLOTS.taskWorkspace, taskWorkspace)
 
-    render(<App />)
+    // Wrapped as main.tsx wraps the app.
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>
+    )
     const navigation = await screen.findByRole('navigation', { name: 'Primary navigation' })
     await user.hover(navigation)
     await waitFor(() => expect(navigation.getAttribute('aria-expanded')).toBe('true'))
@@ -217,7 +243,12 @@ describe('<App/> locked Pro navigation integration', () => {
     window.history.replaceState(null, '', '/settings')
     installAppBoundary({ platform: 'linux', isPro: false })
 
-    render(<App />)
+    // Wrapped as main.tsx wraps the app.
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>
+    )
 
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeTruthy()
     expect(
