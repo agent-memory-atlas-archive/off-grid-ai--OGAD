@@ -110,7 +110,8 @@ vi.mock('electron', () => ({
   }
 }))
 
-vi.mock('@xenova/transformers', () => ({
+// The embedding model is the one boundary replaced: a real ONNX run cannot work inside jsdom.
+vi.mock('@huggingface/transformers', () => ({
   env: {},
   pipeline: async () => async () => ({ data: new Float32Array(384).fill(0.01) })
 }))
