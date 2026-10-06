@@ -216,6 +216,8 @@ const offGridApi = {
       spinning: boolean
     }> => ipcRenderer.invoke('god-twin:preferences:set', preferences),
     setListening: (listening: boolean): void => ipcRenderer.send('god-twin:listening', listening),
+    /** The God screen is open: desktop Ares hides while the app shows God in front. */
+    setGodScreenOpen: (open: boolean): void => ipcRenderer.send('god-twin:god-screen', open),
     setState: (state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting'): void =>
       ipcRenderer.send('god-twin:state', state),
     resize: (

@@ -140,6 +140,7 @@ interface RendererAPIOverrides {
       spinning: boolean
     }>
     setListening?: (listening: boolean) => void
+    setGodScreenOpen?: (open: boolean) => void
     setState?: (state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting') => void
     resize?: (
       edge: 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw',
