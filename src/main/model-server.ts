@@ -1419,6 +1419,10 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
             return json(res, 200, { installed: await mm.listInstalled() })
           if (url === '/v1/models/active' && method === 'GET')
             return json(res, 200, mm.getActiveModalities())
+          // Every model this desktop counts active, as catalog ids (the Models screen's own
+          // answer): a kind can hold more than one, as Computer Use's specialist and decider do.
+          if (url === '/v1/models/active-ids' && method === 'GET')
+            return json(res, 200, { ids: await mm.getActiveModelIds() })
           if (url === '/v1/models/pull/status' && method === 'GET') {
             const id = (req.url || '').split('?')[1]?.match(/(?:^|&)id=([^&]+)/)?.[1]
             return json(
