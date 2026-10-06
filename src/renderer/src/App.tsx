@@ -83,6 +83,7 @@ import { callHook } from './bootstrap/hookRegistry'
 import { GodTwinScreen, type GodTwinWakeRequest } from './components/god-twin/GodTwinScreen'
 import { useWakeListener } from './components/god-twin/use-wake-listener'
 import { useGodProfile } from './components/god-twin/use-god-profile'
+import { useGodNews } from './components/god-twin/use-god-news'
 import { internalTabLocation, internalTabPath, isInternalTabView } from './lib/internal-tab-route'
 import {
   NOTIFICATION_OPEN_TARGET_CHANNEL,
@@ -381,6 +382,8 @@ function AppContent(): React.JSX.Element {
   const [godTwinBusy, setGodTwinBusy] = useState(false)
   // God is Pro: a free build never listens for the wake word, and chat mode does not listen.
   const godProfile = useGodProfile()
+  // A dot on God when it has something new since you last opened it (a reply, an approval).
+  const godNews = useGodNews(viewMode === 'explore', isPro)
   useWakeListener(godTwinBusy || !isPro || godProfile.mode === 'chat')
   // Navigation is unconditional. Leaving a chat with a task running used to prompt, because the
   // live view was lost on the way out; a running task now follows you in a floating card
@@ -1074,6 +1077,17 @@ function AppContent(): React.JSX.Element {
         )}
         {item.icon}
         {sidebarOpen && <span className="flex-1 text-left whitespace-pre">{item.label}</span>}
+        {item.view === 'explore' && godNews && (
+          <span
+            role="status"
+            aria-label="God has something new"
+            title="God has something new"
+            className={cn(
+              'h-2 w-2 shrink-0 rounded-full bg-green-500',
+              !sidebarOpen && 'absolute right-1.5 top-1.5'
+            )}
+          />
+        )}
         {notificationCount > 0 && (
           <span
             aria-label={`${notificationCount} unread notifications`}
