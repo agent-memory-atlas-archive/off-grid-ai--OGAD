@@ -20,11 +20,13 @@ import { AIRequestLogs } from './components/AIRequestLogs'
 // exports a no-op ClipboardPopup), and in free builds the popup window never opens.
 import * as ProRenderer from '@offgrid/pro/renderer'
 const ClipboardPopup: FC = (ProRenderer as { ClipboardPopup?: FC }).ClipboardPopup ?? (() => null)
+// Ares on the desktop (God, Pro): nothing in a free build, where its window never opens.
+const GodTwinCompanion: FC =
+  (ProRenderer as { GodTwinCompanion?: FC }).GodTwinCompanion ?? (() => null)
 const ComputerUseSupervisor: FC =
   (ProRenderer as { ComputerUseSupervisor?: FC }).ComputerUseSupervisor ?? (() => null)
 // DictationOverlay is a free-tier / open-core feature — lives in core, not pro.
 import { DictationOverlay } from './components/DictationOverlay'
-import { GodTwinCompanion } from './components/GodTwinCompanion'
 // The Pro computer-use supervisor has its own surface so it can float over the
 // app being driven. A free build resolves no component and renders nothing.
 

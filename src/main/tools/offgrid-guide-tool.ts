@@ -1,6 +1,6 @@
 // The offgrid_guide tool: what Off Grid AI does, and what is new, from its public release notes,
 // articles and community. Reads public pages only, and only when God or chat calls it.
-// Wiring only: parsing and formatting are in shared/god/offgrid-guide.ts, tested.
+// Wiring only: parsing and formatting are in shared/offgrid-guide.ts, tested.
 
 import {
   OFFGRID_SOURCES,
@@ -12,7 +12,7 @@ import {
   parseOrgRepos,
   parseReddit,
   type OffgridUpdate
-} from '../../shared/god/offgrid-guide'
+} from '../../shared/offgrid-guide'
 
 const HEADERS = { 'User-Agent': 'OffGridAI-Desktop', Accept: 'application/json, text/html' }
 // Release notes from the most recently pushed public repositories.

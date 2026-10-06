@@ -33,6 +33,17 @@ export interface GodChatOptions {
   readonly voiceMode: boolean
   readonly request: GodChatRequest
   readonly onStateChange?: (state: GodChatState) => void
+  /** How its turns are shown (God shows reactions on your messages). */
+  readonly presentMessages?: <
+    T extends {
+      role: string
+      content: string
+      turnStatus?: string
+      toolCalls?: ReadonlyArray<{ status: string }>
+    }
+  >(
+    messages: readonly T[]
+  ) => Array<T & { reactions?: readonly string[] }>
 }
 
 export interface MemoryChatProps {

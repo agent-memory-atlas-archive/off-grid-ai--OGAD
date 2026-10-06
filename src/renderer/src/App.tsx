@@ -80,10 +80,6 @@ import {
   type ModelSettingsPanelTab
 } from './lib/model-settings-panel'
 import { callHook } from './bootstrap/hookRegistry'
-import { GodTwinScreen, type GodTwinWakeRequest } from './components/god-twin/GodTwinScreen'
-import { useWakeListener } from './components/god-twin/use-wake-listener'
-import { playListeningChime } from './components/god-twin/listening-chime'
-import { useGodNews } from './components/god-twin/use-god-news'
 import { internalTabLocation, internalTabPath, isInternalTabView } from './lib/internal-tab-route'
 import {
   NOTIFICATION_OPEN_TARGET_CHANNEL,
@@ -376,15 +372,6 @@ function AppContent(): React.JSX.Element {
     presetId?: string
     draftPrompt?: string
   } | null>(null)
-  // A wake from Ares on the desktop or the wake word: the God opens and listens.
-  const [godTwinWake, setGodTwinWake] = useState<GodTwinWakeRequest>({ count: 0 })
-  // The God is using the mic or speaking: the wake-word listener steps aside.
-  const [godTwinBusy, setGodTwinBusy] = useState(false)
-  // A dot on God when it has something new since you last opened it (a reply, an approval).
-  const godNews = useGodNews(viewMode === 'explore', isPro)
-  // God is Pro: a free build never listens for the wake word. Its own switch decides, in Chat
-  // and in Voice alike.
-  useWakeListener(godTwinBusy || !isPro)
   // Navigation is unconditional. Leaving a chat with a task running used to prompt, because the
   // live view was lost on the way out; a running task now follows you in a floating card
   // (tasks.floatingView), so there is nothing left to warn about.
@@ -393,18 +380,11 @@ function AppContent(): React.JSX.Element {
     prepare?.()
     commitViewMode(destination)
   }, [])
-  useEffect(() => {
-    return window.api.godTwin?.onWake?.((wake) => {
-      // Heard its name: a ding says it is listening before the screen even comes up.
-      if (wake.source === 'wake-word') playListeningChime()
-      navigateTo('explore')
-      setGodTwinWake((request) => ({
-        count: request.count + 1,
-        ...(wake.said ? { said: wake.said } : {}),
-        source: wake.source
-      }))
-    })
-  }, [navigateTo])
+  // God (Pro) mounts through slots: its screen, an always-on root, and its nav item's dot.
+  const GodScreen = proReady && isPro ? getSlot(SLOTS.godScreen) : undefined
+  const GodRoot = proReady && isPro ? getSlot(SLOTS.godRoot) : undefined
+  const GodBadge = proReady && isPro ? getSlot(SLOTS.godBadge) : undefined
+  const openGod = useCallback((): void => navigateTo('explore'), [navigateTo])
   const [sidebarHovered, setSidebarHovered] = useState(false)
   const [sidebarPinned, setSidebarPinned] = useState(() => readSidebarPinned())
   const sidebarOpen = sidebarPinned || sidebarHovered
@@ -1079,16 +1059,8 @@ function AppContent(): React.JSX.Element {
         )}
         {item.icon}
         {sidebarOpen && <span className="flex-1 text-left whitespace-pre">{item.label}</span>}
-        {item.view === 'explore' && godNews && (
-          <span
-            role="status"
-            aria-label="God has something new"
-            title="God has something new"
-            className={cn(
-              'h-2 w-2 shrink-0 rounded-full bg-green-500',
-              !sidebarOpen && 'absolute right-1.5 top-1.5'
-            )}
-          />
+        {item.view === 'explore' && GodBadge && (
+          <GodBadge open={viewMode === 'explore'} compact={!sidebarOpen} />
         )}
         {notificationCount > 0 && (
           <span
@@ -1371,23 +1343,23 @@ function AppContent(): React.JSX.Element {
                     ) : viewMode === 'explore' ? (
                       // God is Pro: a free build shows what it does and how to get it.
                       isPro ? (
-                        <GodTwinScreen
-                          wake={godTwinWake}
-                          onBusyChange={setGodTwinBusy}
-                          onRunPreset={handleRunPreset}
-                          chat={{
-                            onNavigateToMemory: handleSelectMemory,
-                            onNavigateToChat: handleSelectChat,
-                            onNavigateToMeeting: (meetingId) =>
-                              handleProNavigate({ view: 'meetings', meetingId }),
-                            onNavigateToEntity: handleSelectEntity,
-                            onSeekReplay: (ts) =>
-                              navigateTo('replay', () => setReplayTarget(ts || Date.now())),
-                            onOpenSkillPreset: handleOpenSkillPreset,
-                            onOpenConnectors: () => navigateTo('connectors'),
-                            onTaskDetailModeChange: setTaskDetailSidebarMode
-                          }}
-                        />
+                        GodScreen ? (
+                          <GodScreen
+                            onRunPreset={handleRunPreset}
+                            chat={{
+                              onNavigateToMemory: handleSelectMemory,
+                              onNavigateToChat: handleSelectChat,
+                              onNavigateToMeeting: (meetingId) =>
+                                handleProNavigate({ view: 'meetings', meetingId }),
+                              onNavigateToEntity: handleSelectEntity,
+                              onSeekReplay: (ts) =>
+                                navigateTo('replay', () => setReplayTarget(ts || Date.now())),
+                              onOpenSkillPreset: handleOpenSkillPreset,
+                              onOpenConnectors: () => navigateTo('connectors'),
+                              onTaskDetailModeChange: setTaskDetailSidebarMode
+                            }}
+                          />
+                        ) : null
                       ) : (
                         <UpgradeScreen feature={getProFeature('explore')} />
                       )
@@ -1500,6 +1472,7 @@ function AppContent(): React.JSX.Element {
         )}
       </AnimatePresence>
       {TaskFloatingView ? <TaskFloatingView /> : null}
+      {GodRoot ? <GodRoot isOpen={viewMode === 'explore'} open={openGod} /> : null}
     </div>
   )
 }
@@ -1546,7 +1519,9 @@ function writeSidebarPinned(pinned: boolean): void {
 function App(): React.JSX.Element | null {
   // Onboarding runs FIRST — before the model/permission gate — so a new user sees
   // the intro, then goes straight to model selection (handled by PermissionGate).
-  const [onboarded, setOnboarded] = useState(() => localStorage.getItem('onboarding_completed') === 'true')
+  const [onboarded, setOnboarded] = useState(
+    () => localStorage.getItem('onboarding_completed') === 'true'
+  )
   if (!onboarded) return <Onboarding onComplete={() => setOnboarded(true)} />
 
   return (

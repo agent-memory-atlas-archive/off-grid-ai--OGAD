@@ -19,15 +19,7 @@ vi.mock('electron', () => ({
   }
 }))
 
-import {
-  addRagMessage,
-  createRagConversation,
-  getRagConversation,
-  getRagConversations,
-  getSetting,
-  saveSetting
-} from '../database'
-import { adoptEarlierGodConversations } from '../god-context-ipc'
+import { createRagConversation, getRagConversations } from '../database'
 
 afterAll(() => {
   fs.rmSync(TMP_DIR, { recursive: true, force: true })
@@ -45,25 +37,5 @@ describe('conversation surface', () => {
     expect(ids('chat')).not.toContain('god-1')
     // Asking for no surface keeps every conversation, as before.
     expect(ids()).toEqual(expect.arrayContaining(['chat-1', 'god-1']))
-  })
-
-  it('moves God conversations kept in settings to God once, named by their first question', () => {
-    createRagConversation('old-god-a', 'God')
-    addRagMessage('old-god-a', 'user', 'Plan my week around the launch')
-    addRagMessage('old-god-a', 'assistant', 'Here is a plan.')
-    createRagConversation('old-god-b', 'God')
-    saveSetting('godTwin:conversations', ['old-god-a'])
-    saveSetting('godTwin:conversationId', 'old-god-b')
-
-    adoptEarlierGodConversations()
-
-    expect(getRagConversation('old-god-a')).toMatchObject({
-      surface: 'god',
-      title: 'Plan my week around the launch'
-    })
-    // No question yet: it keeps its name rather than taking an empty one.
-    expect(getRagConversation('old-god-b')).toMatchObject({ surface: 'god', title: 'God' })
-    expect(getSetting('godTwin:conversations', null)).toBeNull()
-    expect(getSetting('godTwin:conversationId', null)).toBeNull()
   })
 })

@@ -2,6 +2,7 @@ import { resolve } from 'path'
 import { existsSync } from 'fs'
 import { defineConfig } from 'vitest/config'
 import { createVitestProjects } from './src/main/__tests__/vitest-projects'
+import { assetPathPlugin } from './scripts/config/vitest-asset-plugin'
 
 // The pro/ submodule is present in the working tree when you have access, absent
 // otherwise (and in a fork CI without the cross-repo token). Only enforce the
@@ -34,6 +35,8 @@ const commonExcludes = ['e2e/**', 'node_modules/**', 'out/**']
 // The 85% floor is enforced here and on pre-push. `all: true` means a new pure module
 // with no test drags the number down, so untested logic cannot sneak in.
 export default defineConfig({
+  // `?asset` imports resolve to the file's path, as electron-vite does in the app.
+  plugins: [assetPathPlugin()],
   // Renderer path aliases, mirrored 1:1 from tsconfig.web.json `paths`. Without these
   // a .tsx render test cannot import any renderer module (electron-vite provides them
   // in the app build, but vitest has no tsconfig-paths plugin), so the *.test.tsx glob

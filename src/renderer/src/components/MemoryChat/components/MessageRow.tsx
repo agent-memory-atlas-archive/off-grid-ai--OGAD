@@ -34,11 +34,7 @@ import { PromptEnhancementMessageRow } from './PromptEnhancementMessageRow'
 import { ToolMessageTimelineRow } from './ToolMessageTimelineRow'
 import { MessageThinkingHeader } from './MessageThinkingHeader'
 import { IncomingFileRows, MessageAttachments, MessageEditor } from './MessageContent'
-import {
-  GenerationMetricsRow,
-  ResponseCutoffNotice,
-  ToolsSentDisclosure
-} from './MessageMetadata'
+import { GenerationMetricsRow, ResponseCutoffNotice, ToolsSentDisclosure } from './MessageMetadata'
 import { ArtifactCard, AskCard, ImageMemoryRetryAction } from './MessageCards'
 import {
   CopyAction,
@@ -47,29 +43,27 @@ import {
   VoiceMessageActions
 } from './MessageActions'
 import { MessageMarkdown } from './MessageMarkdown'
-import {
-  AssistantMessageActions,
-  MessageTime,
-  speechControlState
-} from './AssistantMessageActions'
-import {
-  ContextDisclosure,
-  hasInlineMemorySources,
-  UnifiedContextSection
-} from './MessageContext'
+import { AssistantMessageActions, MessageTime, speechControlState } from './AssistantMessageActions'
+import { ContextDisclosure, hasInlineMemorySources, UnifiedContextSection } from './MessageContext'
 import { useStreamViewMessage } from '../stream-view-store'
 
-/** God's reaction to your message, as a tapback sits on a message in iMessage. */
-function ReactionPill({ emoji }: Readonly<{ emoji?: string }>): React.JSX.Element | null {
-  if (!emoji) return null
+/** God's reactions to your message, as tapbacks sit on a message in iMessage. They only add up:
+ *  each new one settles in beside the last, and none is replaced. */
+function Reactions({ emojis }: Readonly<{ emojis?: readonly string[] }>): React.JSX.Element | null {
+  if (!emojis?.length) return null
   return (
-    <span
-      role="img"
-      aria-label={`Reacted ${emoji}`}
-      title="Reacted"
-      className="-mt-2.5 mr-2 self-end rounded-full border border-border bg-background px-1.5 py-0.5 text-sm leading-none shadow-sm"
-    >
-      {emoji}
+    <span className="-mt-2.5 mr-2 flex gap-1 self-end">
+      {emojis.map((emoji) => (
+        <span
+          key={emoji}
+          role="img"
+          aria-label={`Reacted ${emoji}`}
+          title="Reacted"
+          className="og-reaction rounded-full border border-border bg-background px-1.5 py-0.5 text-sm leading-none shadow-sm"
+        >
+          {emoji}
+        </span>
+      ))}
     </span>
   )
 }
@@ -138,9 +132,9 @@ function VoiceMessageRow({
   const thinking =
     timelineThinking ??
     (message.role === 'assistant' &&
-      (!message.timeline?.some((entry) => entry.kind === 'thinking') || message.reasoningLabel) &&
-      (message.turnStatus !== 'cancelled' || Boolean(message.reasoning?.trim())) &&
-      (message.streaming || message.reasoning?.trim() || message.reasoningRequested) ? (
+    (!message.timeline?.some((entry) => entry.kind === 'thinking') || message.reasoningLabel) &&
+    (message.turnStatus !== 'cancelled' || Boolean(message.reasoning?.trim())) &&
+    (message.streaming || message.reasoning?.trim() || message.reasoningRequested) ? (
       <MessageThinkingHeader message={message} timeline />
     ) : undefined)
   const isFinalAssistantResponse =
@@ -151,9 +145,9 @@ function VoiceMessageRow({
     !isSupportingMessage(message)
   const memorySources = hasInlineMemorySources(message)
     ? {
-      count: message.context.unified.length,
-      content: <UnifiedContextSection items={message.context.unified} navigation={navigation} />
-    }
+        count: message.context.unified.length,
+        content: <UnifiedContextSection items={message.context.unified} navigation={navigation} />
+      }
     : undefined
   const transcribeAgain = useCallback(async (): Promise<void> => {
     if (!audioUrl || transcribing) return
@@ -165,7 +159,9 @@ function VoiceMessageRow({
       const bytes = new Uint8Array(await response.arrayBuffer())
       const source =
         message.attachments?.find(
-          (attachment) => attachment.kind === 'audio' || attachmentKindFor({ fileName: attachment.name }) === 'audio'
+          (attachment) =>
+            attachment.kind === 'audio' ||
+            attachmentKindFor({ fileName: attachment.name }) === 'audio'
         )?.path ?? audioUrl
       const extension = source.match(/\.([a-z0-9]+)(?:$|[?#])/i)?.[1] ?? 'webm'
       const transcript = (
@@ -329,7 +325,7 @@ function VoiceMessageRow({
   return (
     <div className={`my-2 flex flex-col gap-1.5 ${alignment}`}>
       {body}
-      {message.role === 'user' ? <ReactionPill emoji={message.reaction} /> : null}
+      {message.role === 'user' ? <Reactions emojis={message.reactions} /> : null}
       {continuation}
       {message.role === 'user' ? (
         <div className="flex items-center gap-2 pr-1">
@@ -501,9 +497,9 @@ function StandardMessageRow({
     !isSupportingMessage(message)
   const memorySources = hasInlineMemorySources(message)
     ? {
-      count: message.context.unified.length,
-      content: <UnifiedContextSection items={message.context.unified} navigation={navigation} />
-    }
+        count: message.context.unified.length,
+        content: <UnifiedContextSection items={message.context.unified} navigation={navigation} />
+      }
     : undefined
   return (
     <div className={standardMessageRowClass(message)} data-testid={`chat-message-${message.id}`}>
@@ -541,7 +537,7 @@ function StandardMessageRow({
         className={`flex flex-col ${message.role === 'user' ? 'items-end' : 'items-start'} ${message.image || message.attachments?.length || state.editingId === message.id ? 'w-full max-w-2xl' : 'w-fit max-w-[85%]'}`}
       >
         <MessageBubble message={message} state={state} actions={actions} navigation={navigation} />
-        {message.role === 'user' ? <ReactionPill emoji={message.reaction} /> : null}
+        {message.role === 'user' ? <Reactions emojis={message.reactions} /> : null}
         {message.role === 'user' ? (
           <div className="mt-1.5 flex items-center justify-end gap-2 pr-1">
             <MessageTime message={message} />

@@ -8,7 +8,7 @@ import {
   parseGithubReleases,
   parseOrgRepos,
   parseReddit
-} from '../god/offgrid-guide'
+} from '../offgrid-guide'
 
 describe('Off Grid AI guide', () => {
   it('reads public repos, skipping archived ones and junk', () => {

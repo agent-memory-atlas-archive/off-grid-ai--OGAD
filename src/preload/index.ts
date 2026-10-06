@@ -1,4 +1,3 @@
-import type { WakeListenSettings } from '../shared/god-twin/wake-word'
 import type { RuntimeBackend } from '../shared/runtime-backends'
 import type { PerformancePackStatus } from '../shared/performance-pack'
 import { contextBridge, ipcRenderer } from 'electron'
@@ -46,7 +45,6 @@ function unsubscribe(channel: string, listener: IpcListener): () => void {
   }
 }
 
-type GodTwinListen = WakeListenSettings & { available: boolean }
 
 const offGridApi = {
   // Open-core: is the pro tier active in this build/session? The main process
@@ -207,107 +205,6 @@ const offGridApi = {
       callback(change)
     ipcRenderer.on('task-settings:changed', listener)
     return unsubscribe('task-settings:changed', listener)
-  },
-  godTwin: {
-    wake: (): Promise<boolean> => ipcRenderer.invoke('god-twin:wake'),
-    getEnabled: (): Promise<boolean> => ipcRenderer.invoke('god-twin:enabled:get'),
-    setEnabled: (enabled: boolean): Promise<boolean> =>
-      ipcRenderer.invoke('god-twin:enabled:set', enabled),
-    getPreferences: (): Promise<{
-      state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting'
-      spinning: boolean
-    }> => ipcRenderer.invoke('god-twin:preferences:get'),
-    setPreferences: (preferences: {
-      state?: 'idle' | 'walking' | 'running' | 'fighting' | 'resting'
-      spinning?: boolean
-    }): Promise<{
-      state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting'
-      spinning: boolean
-    }> => ipcRenderer.invoke('god-twin:preferences:set', preferences),
-    setListening: (listening: boolean): void => ipcRenderer.send('god-twin:listening', listening),
-    /** The God screen is open: desktop Ares hides while the app shows God in front. */
-    setGodScreenOpen: (open: boolean): void => ipcRenderer.send('god-twin:god-screen', open),
-    /** Desktop Ares takes the mouse only over its controls; elsewhere clicks pass through. */
-    setPointerOverControls: (over: boolean): void =>
-      ipcRenderer.send('god-twin:pointer-over-controls', over),
-    setState: (state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting'): void =>
-      ipcRenderer.send('god-twin:state', state),
-    resize: (
-      edge: 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw',
-      deltaX: number,
-      deltaY: number
-    ): void => ipcRenderer.send('god-twin:resize', { edge, deltaX, deltaY }),
-    onWake: (
-      callback: (wake: { source: 'companion' | 'wake-word'; said?: string }) => void
-    ): (() => void) => {
-      const listener = (
-        _event: unknown,
-        wake?: { source: 'companion' | 'wake-word'; said?: string }
-      ): void => callback(wake ?? { source: 'companion' })
-      ipcRenderer.on('god-twin:wake', listener)
-      return unsubscribe('god-twin:wake', listener)
-    },
-    getListen: (): Promise<GodTwinListen> => ipcRenderer.invoke('god-twin:listen:get'),
-    setListen: (patch: Partial<WakeListenSettings>): Promise<GodTwinListen> =>
-      ipcRenderer.invoke('god-twin:listen:set', patch),
-    onListenChanged: (callback: (settings: WakeListenSettings) => void): (() => void) => {
-      const listener = (_event: unknown, settings: WakeListenSettings): void => callback(settings)
-      ipcRenderer.on('god-twin:listen:changed', listener)
-      return unsubscribe('god-twin:listen:changed', listener)
-    },
-    /** A short 16 kHz WAV clip to check for the wake word, on this machine. */
-    hear: (wav: Uint8Array): Promise<boolean> => ipcRenderer.invoke('god-twin:hear', wav),
-    /** 16 kHz samples for the always-on wake-word model, once it is trained. */
-    wakeAudio: (samples: Float32Array): Promise<boolean> =>
-      ipcRenderer.invoke('god-twin:wake-audio', samples),
-    /** Teach the wake word: recordings of it (16 kHz WAVs) and one of other speech. */
-    wakeTrain: (input: { recordings: Uint8Array[]; other?: Uint8Array }): Promise<unknown> =>
-      ipcRenderer.invoke('god-twin:wake-train', input),
-    wakeForget: (): Promise<unknown> => ipcRenderer.invoke('god-twin:wake-forget'),
-    setWakeTeaching: (on: boolean): void => ipcRenderer.send('god-twin:wake-teaching', on),
-    onWakeTrainProgress: (callback: (done: number) => void): (() => void) => {
-      const listener = (_event: unknown, done: number): void => callback(done)
-      ipcRenderer.on('god-twin:wake-train:progress', listener)
-      return unsubscribe('god-twin:wake-train:progress', listener)
-    },
-    onListening: (callback: (listening: boolean) => void): (() => void) => {
-      const listener = (_event: unknown, listening: boolean): void => callback(listening)
-      ipcRenderer.on('god-twin:listening', listener)
-      return unsubscribe('god-twin:listening', listener)
-    },
-    onState: (
-      callback: (state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting') => void
-    ): (() => void) => {
-      const listener = (
-        _event: unknown,
-        state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting'
-      ): void => callback(state)
-      ipcRenderer.on('god-twin:state', listener)
-      return unsubscribe('god-twin:state', listener)
-    },
-    /** Ares's pose or spin changed, here or in the other Ares: both show the same. */
-    onPreferencesChanged: (
-      callback: (preferences: {
-        state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting'
-        spinning: boolean
-      }) => void
-    ): (() => void) => {
-      const listener = (
-        _event: unknown,
-        preferences: {
-          state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting'
-          spinning: boolean
-        }
-      ): void => callback(preferences)
-      ipcRenderer.on('god-twin:preferences:changed', listener)
-      return unsubscribe('god-twin:preferences:changed', listener)
-    },
-    /** Ares heard his name: every Ares swings his sword once. */
-    onFlourish: (callback: () => void): (() => void) => {
-      const listener = (): void => callback()
-      ipcRenderer.on('god-twin:flourish', listener)
-      return unsubscribe('god-twin:flourish', listener)
-    }
   },
   // Loopback HTTP URL for seekable local media (meeting recordings) — <video>
   // can't reliably stream large files over the custom protocol, so use real HTTP.
@@ -762,21 +659,6 @@ const offGridApi = {
       context?: string
     }
   ) => ipcRenderer.invoke('tools:chat', query, history, opts),
-  /** What God knows right now: the day, the next meeting, to-dos, approvals, accounts. */
-  godContext: (): Promise<unknown> => ipcRenderer.invoke('god:context'),
-  /** God's scheduled tasks (routines): main/god-routines.ts. */
-  godRoutines: {
-    list: (): Promise<unknown[]> => ipcRenderer.invoke('god:routines:list'),
-    create: (input: {
-      title: string
-      instruction: string
-      schedule: Record<string, unknown>
-    }): Promise<unknown> => ipcRenderer.invoke('god:routines:create', input),
-    update: (id: string, patch: Record<string, unknown>): Promise<unknown> =>
-      ipcRenderer.invoke('god:routines:update', id, patch),
-    remove: (id: string): Promise<boolean> => ipcRenderer.invoke('god:routines:delete', id),
-    run: (id: string): Promise<string> => ipcRenderer.invoke('god:routines:run', id)
-  },
 
   // --- LLM inference settings ---
   getLlmSettings: () => ipcRenderer.invoke('llm:get-settings'),

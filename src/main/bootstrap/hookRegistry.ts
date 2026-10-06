@@ -47,6 +47,8 @@ export async function callHookAsync<R = unknown>(
 
 /** Known hook names, centralised so core and pro stay in sync. */
 export const HOOKS = {
+  /** The main window was shown at startup (not a hidden launch). */
+  mainWindowShown: 'app:mainWindowShown',
   /** (basePrompt: string, query: string) => Promise<string> — augment the chat
    *  system/context with captured memory + entity/observation context (pro). */
   chatAugmentContext: 'chat.augmentContext',
@@ -67,11 +69,6 @@ export const HOOKS = {
    * account can read and what was not granted, named for people (Gmail, Calendar). Pro.
    */
   accountAccess: 'accounts:access',
-  /**
-   * (nowMs: number) => Promise<{ brief, nextEvent, todos, approvals }> - what God knows about the
-   * user's day: the stored plan, the next meeting with its prep, open to-dos and approvals. Pro.
-   */
-  godContext: 'god:context',
   /** (mutation: SyncMutation) => void - record a committed core data change in Pro sync. */
   syncRecordLocalMutation: 'sync.recordLocalMutation',
   /**
@@ -107,12 +104,6 @@ export const HOOKS = {
    * reports the vault as unavailable.
    */
   extensionVaultRequest: 'vault.extensionRequest',
-  /** () => Promise<GodPendingApproval[]> - what waits for approval, for God's routines that react
-   *  to it (main/god-routines.ts). Pro registers it. */
-  godPendingApprovals: 'god:pendingApprovals',
-  /** () => Promise<GodMail[]> - the newest mail across the user's accounts, for routines that react
-   *  to new email. Pro registers it; it reads only accounts with mail selected. */
-  godRecentMail: 'god:recentMail',
   /** Legacy MCP-only predecessor of actionsProposeApproval. Kept so a pro build
    *  that has not yet migrated still gates connector writes; remove once
    *  desktop-pro registers actionsProposeApproval. */

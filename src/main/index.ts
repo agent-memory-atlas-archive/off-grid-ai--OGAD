@@ -35,10 +35,6 @@ import { setupDesktopBackupIPC } from './backup/ipc'
 import { preloadPath } from './preload-path'
 import { rendererHtmlPath } from './renderer-path'
 import { setMainWindow } from './main-window'
-import { registerGodTwinWindowIpc, showGodTwinWindow } from './god-twin-window'
-import { registerGodTwinWakeIpc } from './god-twin-wake'
-import { registerGodContextIpc } from './god-context-ipc'
-import { registerRoutineIpc, startRoutineClock } from './god-routines'
 import { startModelServer, stopModelServer } from './model-server'
 import { startMediaServer, stopMediaServer, mediaUrlFor } from './media-server'
 import { capturePathFromUrl, serveCaptureFile } from './ogcapture-serve'
@@ -46,6 +42,7 @@ import { serveArtifactPreview } from './artifact-preview'
 import { ipcMain } from 'electron'
 import { loadProEntitlementProvider, loadProFeaturesMain } from './bootstrap/loadProFeaturesMain'
 import { resolveWindowPresentation } from './bootstrap/window-presentation'
+import { callHook, HOOKS } from './bootstrap/hookRegistry'
 import { mayUseIsolatedEvidenceInstance } from './bootstrap/isolated-evidence-instance'
 
 /**
@@ -572,13 +569,6 @@ app.whenReady().then(async () => {
     }
   ])
 
-  registerGodTwinWindowIpc()
-  registerGodTwinWakeIpc()
-  registerGodContextIpc()
-  // God's scheduled tasks: run each when it is due (Pro; the clock checks every minute).
-  registerRoutineIpc()
-  startRoutineClock()
-
   // Start optional Pro registration before the renderer loads. The activation
   // code yields between feature groups, so the shell can load at the same time,
   // while Pro IPC handlers still get a head start before the renderer mounts.
@@ -596,7 +586,8 @@ app.whenReady().then(async () => {
   // imports and local-model startup begin competing for CPU and memory.
   await new Promise<void>((resolve) => setImmediate(resolve))
 
-  if (windowPresentation.showWindow) showGodTwinWindow()
+  // Features that show something beside the main window (Pro's desktop companion) start now.
+  if (windowPresentation.showWindow) callHook(HOOKS.mainWindowShown)
 
   // Network checks, model work, and optional services now run beside the visible shell.
   void runIndependentStartupStages([

@@ -209,6 +209,8 @@ describe('<App/> locked Pro navigation integration', () => {
     const taskWorkspace = (): React.JSX.Element => <h1>Paid Tasks workspace</h1>
     registerProView(paidView)
     registerSlot(SLOTS.taskWorkspace, taskWorkspace)
+    // God's screen comes from Pro, like the other paid screens here.
+    registerSlot(SLOTS.godScreen, () => <h1>Paid God</h1>)
 
     // Wrapped as main.tsx wraps the app.
     render(
@@ -231,7 +233,7 @@ describe('<App/> locked Pro navigation integration', () => {
             feature.route === 'tasks'
               ? 'Paid Tasks workspace'
               : feature.route === 'explore'
-                ? 'God'
+                ? 'Paid God'
                 : `Paid ${feature.route}`
         })
       ).toBeTruthy()

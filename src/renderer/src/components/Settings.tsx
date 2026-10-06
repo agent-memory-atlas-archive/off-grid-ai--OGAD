@@ -7,6 +7,7 @@ import { StoragePanel } from './setup/StoragePanel'
 import { DataPrivacyPanel } from './setup/DataPrivacyPanel'
 import { getRegisteredSettingsSections } from '../bootstrap/sectionRegistry'
 import { useRendererEntitlement } from '../bootstrap/useRendererEntitlement'
+import { getSlot, SLOTS } from '../bootstrap/slotRegistry'
 import { PRO_SETTINGS_SLOTS } from './pro/proSettingsCatalog'
 // Shared card chrome, in its own light module so the pro package can reuse it without
 // importing this whole god-file (which pulls SetupPanel/etc. + their window.api types).
@@ -20,7 +21,6 @@ import { BackupRestoreSection } from './BackupRestoreSection'
 import { SettingsPermissionsPanel } from './PermissionsPanel'
 import { RemoteVisionSettingsTab } from './RemoteVisionSettingsTab'
 import { AIRequestLogs } from './AIRequestLogs'
-import { GodTwinSettings } from './GodTwinSettings'
 export { ModelPipelineSection } from './ProcessingControls'
 
 const SETTINGS_SECTION_TITLES: Record<string, string> = {
@@ -77,6 +77,8 @@ export function Settings({
   const registeredSections = getRegisteredSettingsSections()
   const captureSection = registeredSections.find((section) => section.id === 'capture')
   const CaptureContribution = captureSection?.component
+  // God is Pro: its settings card comes from Pro through a slot, looked up once per opening.
+  const [GodSettings] = useState(() => getSlot(SLOTS.godSettings))
   const [appVersion, setAppVersion] = useState('')
 
   useEffect(() => {
@@ -216,13 +218,13 @@ export function Settings({
             </SettingsCard>
 
             {/* God is Pro: its settings show only where God does. */}
-            {isPro && (
+            {isPro && GodSettings && (
               <SettingsCard
                 title="God"
                 summary="Your assistant's name, rules, wake word and Ares on the desktop."
                 delay={0.17}
               >
-                <GodTwinSettings />
+                <GodSettings />
               </SettingsCard>
             )}
 

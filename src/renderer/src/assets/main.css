@@ -132,14 +132,6 @@ body {
   user-select: none;
 }
 
-.god-twin-drag {
-  -webkit-app-region: drag;
-}
-
-.god-twin-no-drag {
-  -webkit-app-region: no-drag;
-}
-
 /* Body disables selection for native-feel app chrome; re-enable it for actual
    text content so chat messages (yours and the responses) can be selected/copied. */
 p,
@@ -638,5 +630,25 @@ code {
 @media (max-width: 640px) {
   .connection-item {
     flex-wrap: wrap;
+  }
+}
+
+/* A reaction on a message settles in beside the ones already there (👀, then 👍). */
+@keyframes og-reaction-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.og-reaction {
+  animation: og-reaction-in 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .og-reaction {
+    animation: og-overlay-in 160ms ease-out;
   }
 }

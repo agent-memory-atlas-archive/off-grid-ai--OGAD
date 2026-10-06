@@ -6,7 +6,6 @@
 // until it answers. Built-in tools and selected connector extensions share it.
 
 import { offgridGuideTool } from './tools/offgrid-guide-tool'
-import { godRoutineTools } from './tools/god-routine-tools'
 import { llm } from './llm'
 import type { GenerationMetrics } from '../shared/generation-metrics'
 import type { ResponseCutoffContract } from '../shared/ipc-contracts'
@@ -177,7 +176,6 @@ export async function readUrlText(url: string): Promise<string> {
 // --- Built-in tools --------------------------------------------------------
 const TOOLS: ToolDef[] = [
   offgridGuideTool,
-  ...godRoutineTools,
   {
     name: 'web_search',
     description:
