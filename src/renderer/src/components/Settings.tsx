@@ -13,7 +13,7 @@ import { PRO_SETTINGS_SLOTS } from './pro/proSettingsCatalog'
 import { SettingsCard, ProPlaceholder, SettingsCardsGroup } from './SettingsCard'
 import { KeyboardShortcuts } from './KeyboardShortcuts'
 import { currentPlatform } from '@renderer/lib/device'
-import { proComingSoonHere } from './pro/proCatalog'
+import { getProFeature, proComingSoonHere, featureSupportsPlatform } from './pro/proCatalog'
 import { SoftwareUpdateSection } from './SoftwareUpdateSection'
 import { ProcessingControls } from './ProcessingControls'
 import { BackupRestoreSection } from './BackupRestoreSection'
@@ -68,6 +68,9 @@ export function Settings({
   // subtitle copy.
   const { isPro } = useRendererEntitlement()
   const proComingSoon = proComingSoonHere(currentPlatform(), isPro)
+  const replayFeature = getProFeature('replay')
+  const captureAvailable =
+    !!replayFeature && featureSupportsPlatform(replayFeature, currentPlatform())
   // Pro sections registered by the pro renderer at activation (empty in free build).
   const registeredSections = getRegisteredSettingsSections()
   const captureSection = registeredSections.find((section) => section.id === 'capture')
@@ -187,7 +190,7 @@ export function Settings({
               summary="See capture health, recover pending frames, and control model scheduling in one place."
               delay={0.14}
             >
-              {CaptureContribution && !(proComingSoon && currentPlatform() !== 'darwin') ? (
+              {CaptureContribution && captureAvailable ? (
                 <CaptureContribution />
               ) : (
                 <div className="mb-5 border border-neutral-800 bg-neutral-950/40 p-3 text-xs text-neutral-500">
@@ -195,8 +198,8 @@ export function Settings({
                     Pro
                   </span>
                   {currentPlatform() === 'linux'
-                    ? 'Pro capture controls are coming soon to Linux. Core processing controls work now.'
-                    : 'Screen capture, backlog recovery, and proactive delivery are available with Pro on Windows and macOS.'}
+                    ? 'Capture and Replay controls are available with Pro on Linux.'
+                    : 'Screen capture, backlog recovery, and proactive delivery are available with Pro on Windows, Linux, and macOS.'}
                 </div>
               )}
               <ProcessingControls />
@@ -226,8 +229,7 @@ export function Settings({
                     delay={slot.delay}
                     title={slot.placeholder?.title ?? slot.id}
                     description={
-                      slot.comingSoonDescription ??
-                      'Pro features are coming soon to Linux. Core features work now.'
+                      slot.comingSoonDescription ?? 'This section is unavailable on this device.'
                     }
                     variant="coming-soon"
                   />
@@ -243,13 +245,8 @@ export function Settings({
                   key={slot.id}
                   delay={slot.delay}
                   title={slot.placeholder.title}
-                  description={
-                    currentPlatform() === 'linux'
-                      ? (slot.comingSoonDescription ??
-                        'Pro features are coming soon to Linux. Core features work now.')
-                      : slot.placeholder.description
-                  }
-                  variant={currentPlatform() === 'linux' ? 'coming-soon' : 'pro'}
+                  description={slot.placeholder.description}
+                  variant="pro"
                 />
               )
             })}

@@ -1,5 +1,4 @@
 import { appLocationPath, replaceAppLocation } from './lib/app-location'
-import { ChatList } from './components/ChatList'
 import { ChatDetail } from './components/ChatDetail'
 import { CommandPalette } from './components/CommandPalette'
 import logo from './assets/logo.png'
@@ -30,8 +29,13 @@ import { shouldRemovePaidRendererAccess } from './bootstrap/entitlementRegistry'
 import { useRendererEntitlement } from './bootstrap/useRendererEntitlement'
 import { renderProView, type ProViewContext } from './bootstrap/proView'
 import { UpgradeScreen } from './components/pro/UpgradeScreen'
-import { getProFeature, proFeatureComingSoon } from './components/pro/proCatalog'
-import { currentPlatform, isMac } from './lib/device'
+import {
+  featureSupportsPlatform,
+  getProFeature,
+  proFeatureComingSoon,
+  landingView
+} from './components/pro/proCatalog'
+import { currentPlatform, primaryModifier } from './lib/device'
 import { NotificationProvider } from './hooks/NotificationProvider'
 import { useNotifications } from './hooks/useNotifications'
 import { ToastProvider } from './hooks/ToastProvider'
@@ -131,7 +135,7 @@ interface NavigationState {
   selectedProjectId: string | null
 }
 
-function ReprocessingBanner() {
+function ReprocessingBanner(): React.JSX.Element | null {
   const { reprocessing, progress } = useReprocessing()
   if (!reprocessing) return null
 
@@ -278,7 +282,7 @@ function ModelStatusDot({
   )
 }
 
-function AppContent() {
+function AppContent(): React.JSX.Element {
   const { addNotification, unreadCount } = useNotifications()
 
   // Main owns entitlement truth. The preload value seeds this renderer, then
@@ -326,9 +330,8 @@ function AppContent() {
     )
   }, [addNotification, isPro, proReady])
 
-  // Free users land on Models (download a model first, with the sidebar to
-  // explore); Mac Pro users land on Day. Never land on a locked or unavailable tab.
-  const [viewMode, commitViewMode] = useState<ViewMode>(isPro && isMac() ? 'day' : 'models')
+  // Open on Day only where the catalog supports it.
+  const [viewMode, commitViewMode] = useState<ViewMode>(landingView(currentPlatform(), isPro))
   const [settingsSection, setSettingsSection] = useState<string | null>(null)
   const [settingsNavigationKey, setSettingsNavigationKey] = useState(0)
   const [navigationSubroute, setNavigationSubroute] = useState<string | null>(null)
@@ -387,7 +390,7 @@ function AppContent() {
       return !pinned
     })
   }
-  const rec = useMeetingRecorder()
+  const rec = useMeetingRecorder(isPro && proReady)
 
   const setTaskDetailSidebarMode = useCallback((detailOpen: boolean): void => {
     if (detailOpen) setSidebarHovered(false)
@@ -401,7 +404,7 @@ function AppContent() {
   // memory-mirror views (Day/Replay/Entities/…) and avoid looping the graph.
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ; (window.api as any)?.reportSelfView?.(viewMode)
+    ;(window.api as any)?.reportSelfView?.(viewMode)
   }, [viewMode])
 
   // Navigation history stacks (back and forward)
@@ -473,7 +476,7 @@ function AppContent() {
     void license
       .status()
       .then(applyStatus)
-      .catch(() => { })
+      .catch(() => {})
     return () => {
       active = false
       off()
@@ -493,7 +496,6 @@ function AppContent() {
       '/connectors': 'connectors',
       '/meetings': 'meetings',
       '/chat': CHAT_VIEW,
-      '/chats': 'chats',
       '/memories': 'memories',
       '/entities': 'entities',
       '/models': 'models',
@@ -503,6 +505,7 @@ function AppContent() {
       '/search': 'search',
       '/settings': 'settings',
       '/voice': 'voice',
+      '/vault': 'vault',
       '/devices': 'devices'
     }
 
@@ -561,7 +564,7 @@ function AppContent() {
     }
     window.addEventListener('og:navigate', onNav)
     // Main-driven navigation (tray → a screen).
-    const offNav = window.api.onNavigate?.((v: string) => {
+    const offNav = window.api.onNavigate((v: string) => {
       navigateTo(v as ViewMode, () => {
         setNavigationSubroute(null)
         setSettingsSection(null)
@@ -569,7 +572,7 @@ function AppContent() {
     })
     return () => {
       window.removeEventListener('og:navigate', onNav)
-      offNav?.()
+      offNav()
     }
   }, [navigateTo])
 
@@ -704,7 +707,7 @@ function AppContent() {
       .then((v) => {
         if (v) setUpdateReady(v)
       })
-      .catch(() => { })
+      .catch(() => {})
     unsubscribers.push(
       window.api.onUpdateDownloaded((data) => {
         setUpdateReady(data.version)
@@ -910,7 +913,7 @@ function AppContent() {
 
   // Global keyboard shortcuts for back/forward navigation (Cmd+[ and Cmd+])
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.key === '[') {
         e.preventDefault()
         if (activeModelsOpen) setActiveModelsOpen(false)
@@ -945,9 +948,10 @@ function AppContent() {
       icon: <f.icon className="h-5 w-5 shrink-0 text-neutral-400" weight="regular" />,
       view: f.route as ViewMode,
       locked:
-        !isPro &&
-        !(route === 'tasks' && TaskWorkspace) &&
-        !(route === 'devices' && proActivation === 'entitlement-bootstrap')
+        !featureSupportsPlatform(f, currentPlatform()) ||
+        (!isPro &&
+          !(route === 'tasks' && TaskWorkspace) &&
+          !(route === 'devices' && proActivation === 'entitlement-bootstrap'))
     }
   }
   // Icons take no color — the nav button drives it (emerald when active).
@@ -1063,7 +1067,10 @@ function AppContent() {
           </span>
         )}
         {sidebarOpen && item.locked && (
-          <IconLock className="h-3.5 w-3.5 shrink-0 text-neutral-400/60" title="Pro" />
+          <IconLock
+            className="h-3.5 w-3.5 shrink-0 text-neutral-400/60"
+            title={proFeatureComingSoon(item.view, currentPlatform(), true) ? 'Coming soon' : 'Pro'}
+          />
         )}
       </button>
     )
@@ -1203,7 +1210,7 @@ function AppContent() {
                   onClick={navigateBack}
                   disabled={!canGoBack}
                   aria-label="Back"
-                  title="Back (⌘[)"
+                  title={`Back (${primaryModifier()}+[)`}
                   className={cn(
                     'flex items-center justify-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-800/40 text-neutral-300 transition-colors hover:border-neutral-700 hover:bg-neutral-800 hover:text-white disabled:opacity-30 disabled:hover:bg-neutral-800/40',
                     sidebarOpen ? 'flex-1 px-2 py-1.5' : 'h-9 w-9'
@@ -1217,7 +1224,7 @@ function AppContent() {
                     onClick={navigateForward}
                     disabled={!canGoForward}
                     aria-label="Forward"
-                    title="Forward (⌘])"
+                    title={`Forward (${primaryModifier()}+])`}
                     className="flex items-center justify-center rounded-lg border border-neutral-800 bg-neutral-800/40 px-2 py-1.5 text-neutral-300 transition-colors hover:border-neutral-700 hover:bg-neutral-800 hover:text-white disabled:opacity-30 disabled:hover:bg-neutral-800/40"
                   >
                     <IconArrowRight className="h-4 w-4 shrink-0" />
@@ -1226,7 +1233,12 @@ function AppContent() {
               </div>
 
               {/* Navigation (scrolls; Settings is pinned to the bottom) */}
-              <div className="mt-5 flex flex-1 flex-col overflow-y-auto overflow-x-hidden pr-0.5">
+              <div
+                className={cn(
+                  'mt-5 flex flex-1 flex-col overflow-y-auto overflow-x-hidden pr-0.5',
+                  !sidebarOpen && 'sidebar-nav-scroll-collapsed'
+                )}
+              >
                 {sidebarOpen && (
                   <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
                     Menu
@@ -1319,7 +1331,9 @@ function AppContent() {
                     transition={{ duration: 0.12, ease: [0.25, 0.46, 0.45, 0.94] }}
                     className="p-6 h-full overflow-y-auto"
                   >
-                    {viewMode === 'explore' ? (
+                    {proFeatureComingSoon(viewMode, currentPlatform(), true) ? (
+                      <UpgradeScreen variant="coming-soon" feature={getProFeature(viewMode)} />
+                    ) : viewMode === 'explore' ? (
                       isPro ? (
                         <ExploreScreen onRunPreset={handleRunPreset} />
                       ) : (
@@ -1352,8 +1366,6 @@ function AppContent() {
                       ) : (
                         <UpgradeScreen feature={getProFeature(viewMode)} />
                       )
-                    ) : viewMode === 'chats' ? (
-                      <ChatList onSelectSession={setSelectedSessionId} />
                     ) : viewMode === 'models' ? (
                       <ModelsScreen
                         navigationSubroute={navigationSubroute}
@@ -1375,13 +1387,18 @@ function AppContent() {
                         activeSection={settingsSection}
                         onSectionChange={setSettingsSection}
                       />
+                    ) : isPro && !proReady ? (
+                      <div className="flex h-full items-center justify-center" role="status">
+                        <IconLoader2 className="h-5 w-5 animate-spin text-neutral-500" />
+                        <span className="sr-only">Loading Pro features</span>
+                      </div>
                     ) : !isPro ? (
                       <UpgradeScreen feature={getProFeature(viewMode)} />
-                    ) : proFeatureComingSoon(viewMode, currentPlatform(), isPro) ? (
-                      <UpgradeScreen variant="coming-soon" feature={getProFeature(viewMode)} />
                     ) : (
                       // Pro tabs: render through the pro view-router when active,
                       // otherwise show the upgrade writeup for that feature.
+                      // Context carries event callbacks; the router does not read their refs.
+                      // eslint-disable-next-line react-hooks/refs
                       (renderProView(viewMode, {
                         setView: (v) => navigateTo(v as ViewMode),
                         onNavigate: handleProNavigate,
@@ -1410,8 +1427,8 @@ function AppContent() {
                         onOpenHit: handleOpenHit,
                         openChatOwner: handleOpenChatOwner
                       } satisfies ProViewContext) ?? (
-                          <UpgradeScreen feature={getProFeature(viewMode)} />
-                        ))
+                        <UpgradeScreen feature={getProFeature(viewMode)} />
+                      ))
                     )}
                   </motion.div>
                 )}
@@ -1474,15 +1491,10 @@ function writeSidebarPinned(pinned: boolean): void {
   }
 }
 
-function App() {
+function App(): React.JSX.Element | null {
   // Onboarding runs FIRST — before the model/permission gate — so a new user sees
   // the intro, then goes straight to model selection (handled by PermissionGate).
-  const [onboarded, setOnboarded] = useState<boolean | null>(null)
-  useEffect(() => {
-    setOnboarded(localStorage.getItem('onboarding_completed') === 'true')
-  }, [])
-
-  if (onboarded === null) return null
+  const [onboarded, setOnboarded] = useState(() => localStorage.getItem('onboarding_completed') === 'true')
   if (!onboarded) return <Onboarding onComplete={() => setOnboarded(true)} />
 
   return (

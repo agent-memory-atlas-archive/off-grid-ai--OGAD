@@ -7,7 +7,7 @@
 // owner. Outside-Chat proposals enter the engine through the Actions surface, whose gate
 // remains responsible for approval. Reads and navigation stay inline.
 
-import { app, shell } from 'electron'
+import { shell } from 'electron'
 import type { ToolCallStatus, ToolContext, ToolExtension, ToolResult } from '../tools'
 import type { ProposeOutcome, TickOutcome } from '@offgrid/use'
 import { shouldGate } from '../actions/approval'
@@ -15,6 +15,7 @@ import { getActionsRuntime } from '../actions/use-runtime'
 import { makeWinInlineRunner } from '../actions/semantic-rail-win'
 import { runPowerShell } from '../actions/win-powershell'
 import { runNativeAction } from '../actions/native-helper'
+import { currentLinuxLocation } from '../actions/native-location'
 import type { NativeActionCommand, NativeActionResponse } from '../actions/native-helper-logic'
 import {
   actionTypeForTool,
@@ -24,9 +25,12 @@ import {
   specsForPlatform,
   systemHintForPlatform,
   taskSessionLimitMinutes,
+  withWebUseTarget,
   type NativeToolSpec
 } from './nativeActionToolExtension-logic'
 import { createHash } from 'node:crypto'
+import { getWebUseSettings } from '../web-use-settings'
+import { getBrowserLinks } from '../extension-bridge/bridge-electron'
 import { actionArgsWithTaskLaunch } from '../tasks/task-launch-identity'
 
 /** The engine port the extension needs - implemented by the actions runtime,
@@ -42,6 +46,8 @@ export interface NativeActionToolBoundary {
   run: (cmd: NativeActionCommand) => Promise<NativeActionResponse>
   /** Allows a host or test boundary to disable long-running task tools. */
   taskUseEnabled: () => boolean
+  /** Web Use runs in the user's connected default browser (Tasks > Web Use > Browser). */
+  webUseInDefaultBrowser?: () => boolean
   actions?: ActionsPort
 }
 
@@ -90,6 +96,7 @@ export function inlineRunnerForPlatform(
   }
   if (platform === 'linux') {
     return async (cmd) => {
+      if (cmd.command === 'location.current') return currentLinuxLocation()
       if (cmd.command !== 'system.openURL') {
         return { ok: false, error: 'native actions are not available on this platform' }
       }
@@ -132,6 +139,8 @@ function needsCurrentLocation(args: Record<string, unknown>, context?: ToolConte
 const productionBoundary: NativeActionToolBoundary = {
   run: inlineRun,
   taskUseEnabled: () => true,
+  webUseInDefaultBrowser: () =>
+    getWebUseSettings().browserTarget === 'default_browser' && getBrowserLinks().length > 0,
   get actions(): ActionsPort {
     // The import is static (the main bundle is one CJS chunk); the runtime
     // itself builds lazily on first access, once the DB exists.
@@ -146,8 +155,7 @@ export class NativeActionToolExtension implements ToolExtension {
   category = 'tool' as const
 
   private get linuxTaskUse(): boolean {
-    return this.platform === 'linux' &&
-      (app.isPackaged || process.env.OFFGRID_LINUX_TASK_USE === '1')
+    return this.platform === 'linux'
   }
 
   constructor(
@@ -156,7 +164,9 @@ export class NativeActionToolExtension implements ToolExtension {
   ) {}
 
   schemas(): unknown[] {
-    return buildNativeToolSchemas(specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse))
+    return buildNativeToolSchemas(
+      specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse)
+    )
   }
 
   /** What the Tools settings tab lists and toggles. A getter, not a field: the set depends on the
@@ -165,10 +175,12 @@ export class NativeActionToolExtension implements ToolExtension {
    *  which is why every native action - web_use and computer_use included - was invisible and
    *  untoggleable in Settings even while the model could call it. */
   get settings(): readonly { name: string; description: string }[] {
-    return specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse).map((spec) => ({
-      name: spec.name,
-      description: spec.description
-    }))
+    return specsForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse).map(
+      (spec) => ({
+        name: spec.name,
+        description: spec.description
+      })
+    )
   }
 
   canHandle(name: string): boolean {
@@ -178,7 +190,10 @@ export class NativeActionToolExtension implements ToolExtension {
   }
 
   systemHint(): string {
-    return systemHintForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse)
+    return withWebUseTarget(
+      systemHintForPlatform(this.platform, this.boundary.taskUseEnabled(), this.linuxTaskUse),
+      this.boundary.webUseInDefaultBrowser?.() ?? false
+    )
   }
 
   async execute(
@@ -203,18 +218,11 @@ export class NativeActionToolExtension implements ToolExtension {
     }
     if (isTaskAction(name) && needsCurrentLocation(args, context)) {
       const location = context?.currentLocation
-      if (!location) {
-        return {
-          text: context?.currentLocationFailed
-            ? 'I could not get your current location. Provide a starting address or neighborhood before I start this nearby task.'
-            : 'I need your current coordinates before I start this nearby task. I did not start Web Use.',
-          status: 'failed',
-          authoritative: true
+      if (location) {
+        args = {
+          ...args,
+          goal: `${typeof args.goal === 'string' ? args.goal : ''}\n\nStart from latitude ${location.latitude}, longitude ${location.longitude}.`
         }
-      }
-      args = {
-        ...args,
-        goal: `${typeof args.goal === 'string' ? args.goal : ''}\n\nStart from latitude ${location.latitude}, longitude ${location.longitude}.`
       }
     }
     if (shouldGate(spec.risk)) {

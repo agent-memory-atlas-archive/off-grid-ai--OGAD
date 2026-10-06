@@ -291,6 +291,20 @@ export class LLMService {
   // a server that keeps dying (e.g. memory pressure on a too-large model) can NOT
   // thrash-respawn a multi-GB process forever.
   private restartTimes: number[] = []
+  // Launch-setting restarts are serialized and last-wins. A slider drag or a fast
+  // sequence of settings writes used to call stop()+init() once per change, so several
+  // spawns raced and an EARLIER one could win and leave the engine running arguments the
+  // user had already moved past. Each request takes the next id; a request whose id is no
+  // longer the latest is superseded and never spawns, and at most one spawn is ever in
+  // flight.
+  private launchRestartRequest = 0
+  private launchRestartQueue: Promise<void> = Promise.resolve()
+  // Launch changes still waiting in, or running through, the queue above.
+  private launchRestartsPending = 0
+  // The settings the engine last launched with successfully, kept across a chain of queued launch
+  // changes. A save that arrives mid-restart sees the engine stopped, so its own "before" is not a
+  // working launch; a failure at the end of the chain restores this instead.
+  private lastWorkingLaunch: { settings: LlmSettings; explicit: Set<PresetField> } | null = null
   // Last ~50 stderr lines from llama-server, so we can explain WHY it died on
   // load (unknown arch / OOM / OS-too-old) instead of a blank "Down".
   private stderrTail: string[] = []
@@ -300,8 +314,30 @@ export class LLMService {
     return path.join(getModelsDir(), 'llm-settings.json')
   }
 
-  constructor() {
+  /** Whether the persisted state (active model + user settings) has been read yet. */
+  private loaded = false
+
+  /** Read persisted state ONCE, on first use — never from the constructor.
+   *
+   *  `llm` is a module-level singleton, so it is constructed while index.ts's IMPORTS
+   *  are still evaluating, which under ESM completes before index.ts's own body runs
+   *  `unifyUserDataPath()` → `app.setPath('userData', …)`. Resolving paths at
+   *  construction therefore reads the PRE-override profile: an OFFGRID_USER_DATA
+   *  harness dir is ignored, and in production the canonical-dir migration ("My
+   *  Memories" / "my-memories" → "Off Grid AI Desktop") has not happened yet, so the
+   *  user's active model and saved settings are silently missed and replaced by
+   *  defaults. Writes never had this bug — `persist()` goes through the settingsFile
+   *  getter, which resolves late. This is exactly the hazard the activeModelFile /
+   *  settingsFile getters were introduced to avoid; calling resolveModel() and reading
+   *  the settings file from the constructor defeated them. */
+  private ensureLoaded(): void {
+    if (this.loaded) return
+    this.loaded = true
     this.resolveModel()
+    this.loadPersistedSettings()
+  }
+
+  private loadPersistedSettings(): void {
     try {
       const s = JSON.parse(fs.readFileSync(this.settingsFile, 'utf-8'))
       if (typeof s.temperature === 'number') this.temperature = s.temperature
@@ -387,6 +423,7 @@ export class LLMService {
   /** The model's trained context window, or null if unknown — exposed so the UI can offer the
    *  slider up to the model's own maximum instead of a hardcoded cap. */
   modelMaxContext(): number | null {
+    this.ensureLoaded()
     return this.trainedContext()
   }
 
@@ -432,6 +469,7 @@ export class LLMService {
 
   /** The selected app context cap for local and remote inference. */
   effectiveContextSize(): number {
+    this.ensureLoaded()
     return this.ctxSize
   }
 
@@ -460,6 +498,7 @@ export class LLMService {
   }
 
   getSettings(): LlmSettings {
+    this.ensureLoaded()
     const speculativeCapabilities = this.speculativeModelCapabilities()
     return {
       temperature: this.temperature,
@@ -498,6 +537,7 @@ export class LLMService {
   /** The exact argv handed to `llama-server` for the current settings.
    *  Both `_doInit` and tests use the same `buildLaunchArgs` path. */
   launchArgs(): string[] {
+    this.ensureLoaded()
     return this.launchArgsFor(this.ctxSize, this.gpuLayers)
   }
 
@@ -574,6 +614,7 @@ export class LLMService {
   /** Update inference settings; respawns the server if any launch-time arg changed
    *  (context, KV-cache type, flash-attn, GPU layers, threads, batch). */
   async setSettings(s: LlmSettings, options: LlmSettingsUpdateOptions = {}): Promise<void> {
+    this.ensureLoaded()
     this.resolveModel()
     const requestedMode = s.speculativeDecoding ?? this.speculativeDecoding
     const requestedDraft =
@@ -672,16 +713,21 @@ export class LLMService {
       this.draftModel = path.basename(compatibleSettings.draftModel)
     // Quantized KV cache requires FlashAttention — auto-enable it so the pair is valid.
     if (this.kvCacheType !== 'f16' && !this.flashAttn) this.flashAttn = true
-    try {
-      this.persist()
-    } catch (error) {
+    const restorePrior = (
+      snapshot: { settings: LlmSettings; explicit: Set<PresetField> } = {
+        settings: priorSettings,
+        explicit: priorExplicit
+      }
+    ): void => {
+      const priorSettings = snapshot.settings
+      const priorExplicit = snapshot.explicit
       this.performanceMode = priorSettings.performanceMode ?? this.performanceMode
       this.temperature = priorSettings.temperature ?? this.temperature
       this.ctxSize = priorSettings.ctxSize ?? this.ctxSize
-      this.topP = priorSettings.topP ?? this.topP
-      this.topK = priorSettings.topK ?? this.topK
-      this.minP = priorSettings.minP ?? this.minP
-      this.repeatPenalty = priorSettings.repeatPenalty ?? this.repeatPenalty
+      this.topP = priorSettings.topP
+      this.topK = priorSettings.topK
+      this.minP = priorSettings.minP
+      this.repeatPenalty = priorSettings.repeatPenalty
       this.maxTokens = priorSettings.maxTokens ?? this.maxTokens
       this.maxToolCalls = priorSettings.maxToolCalls ?? this.maxToolCalls
       this.reasoningBudget = priorSettings.reasoningBudget ?? this.reasoningBudget
@@ -689,12 +735,17 @@ export class LLMService {
       this.kvCacheType = priorSettings.kvCacheType ?? this.kvCacheType
       this.flashAttn = priorSettings.flashAttn ?? this.flashAttn
       this.gpuLayers = priorSettings.gpuLayers ?? this.gpuLayers
-      this.threads = priorSettings.threads ?? this.threads
-      this.batchSize = priorSettings.batchSize ?? this.batchSize
+      this.threads = priorSettings.threads
+      this.batchSize = priorSettings.batchSize
       this.speculativeDecoding = priorSettings.speculativeDecoding ?? this.speculativeDecoding
       this.draftModel = priorSettings.draftModel ?? this.draftModel
       this.userExplicit.clear()
       priorExplicit.forEach((field) => this.userExplicit.add(field))
+    }
+    try {
+      this.persist()
+    } catch (error) {
+      restorePrior()
       throw error
     }
     if (before) {
@@ -704,9 +755,67 @@ export class LLMService {
       )
     }
     if (launchChanged && !this.paused) {
+      // A running model is only replaced once the new launch succeeds. If it fails, the
+      // previous settings are restored and the previous model is relaunched - unless a newer
+      // launch change is already queued, which then owns the engine and its settings.
+      if (this.launchRestartsPending === 0) {
+        this.lastWorkingLaunch = this.initialized
+          ? { settings: priorSettings, explicit: priorExplicit }
+          : null
+      }
+      // Held until this save's restart AND any recovery it triggers have settled, so a save that
+      // arrives meanwhile joins the chain and keeps the working checkpoint instead of clearing it.
+      this.launchRestartsPending += 1
+      try {
+        const restart = this.restartForLaunchChange()
+        const request = this.launchRestartRequest
+        try {
+          await restart
+        } catch (error) {
+          const working = this.lastWorkingLaunch
+          if (!working || request !== this.launchRestartRequest) throw error
+          const attempted = this.getSettings()
+          restorePrior(working)
+          try {
+            this.persist()
+          } catch (persistError) {
+            console.error('[llm] could not restore settings after a failed relaunch:', persistError)
+          }
+          if (before) {
+            emitChangedLlmSettings(
+              attempted as Record<string, unknown>,
+              this.getSettings() as Record<string, unknown>
+            )
+          }
+          // The relaunch is a queued restart too: one spawn at a time, and a newer save that
+          // arrives during recovery runs after it rather than racing it.
+          await this.restartForLaunchChange().catch((restartError: unknown) => {
+            console.error('[llm] could not relaunch the previous model:', restartError)
+          })
+          throw error
+        }
+      } finally {
+        this.launchRestartsPending -= 1
+      }
+    }
+  }
+
+  /** The engine owns restart policy: one spawn at a time, and the newest settings win. */
+  private async restartForLaunchChange(): Promise<void> {
+    const request = ++this.launchRestartRequest
+    const run = this.launchRestartQueue.then(async () => {
+      // A newer launch change is already queued and will spawn with the newest arguments,
+      // so this one has nothing left to do.
+      if (request !== this.launchRestartRequest) return
+      // A successful spawn records the settings its arguments were built from as the working
+      // launch (launchWithFallback), so a save made while this loads is never mistaken for it.
       this.stop()
       await this.init()
-    }
+    })
+    // The queue itself must never carry a rejection: a failed respawn is reported to the
+    // caller that asked for it, and the next request still gets its turn.
+    this.launchRestartQueue = run.catch(() => {})
+    await run
   }
 
   // Resolve the active model's files. The Models screen writes active-model.json
@@ -754,6 +863,7 @@ export class LLMService {
 
   /** Switch the active model without terminating a generation already using it. */
   reloadModel(): void {
+    this.ensureLoaded()
     if (this.activeGenerations > 0) {
       this.modelReloadPending = true
       return
@@ -794,6 +904,7 @@ export class LLMService {
   // on mmproj wrongly kept "Setup Required" up for an activated vision model.)
   /** Whether the active chat model can read images (has a vision projector / mmproj). */
   hasVision(): boolean {
+    this.ensureLoaded()
     this.resolveModel()
     return !!this.mmProjPath && fs.existsSync(this.mmProjPath)
   }
@@ -809,6 +920,7 @@ export class LLMService {
   }
 
   modelsExist(): boolean {
+    this.ensureLoaded()
     this.resolveModel()
     return fs.existsSync(this.modelPath)
   }
@@ -823,6 +935,7 @@ export class LLMService {
    *  loaded it yet (otherwise an idle/headless gateway reports no chat model).
    *  Returns null when no model is downloaded. */
   activeModelInfo(): { id: string; vision: boolean } | null {
+    this.ensureLoaded()
     this.resolveModel()
     if (!fs.existsSync(this.modelPath)) return null
     let id = this.runtimeModelOverride?.id ?? path.basename(this.modelPath)
@@ -839,6 +952,7 @@ export class LLMService {
 
   /** Exact active artifacts for a model-family policy adapter. */
   activeModelArtifacts(): VisionModelArtifacts | null {
+    this.ensureLoaded()
     this.resolveModel()
     if (!fs.existsSync(this.modelPath)) return null
     let id = this.runtimeModelOverride?.id ?? path.basename(this.modelPath)
@@ -874,6 +988,7 @@ export class LLMService {
   }
 
   async init(): Promise<void> {
+    this.ensureLoaded()
     await prepareModelMemory('chat')
     if (this.paused) {
       // A chat/tool turn needs the LLM NOW, but it's paused for a resident image
@@ -999,7 +1114,10 @@ export class LLMService {
     if (generation !== this.launchGeneration) return
     if (await this.launchWithFallback(serverPaths, generation)) return
     if (generation !== this.launchGeneration) return
-    this.lastErrorMsg = 'All model engines failed to load the model.'
+    this.lastErrorMsg =
+      classifyLlamaError(this.stderrTail.join('\n'))?.reason ??
+      this.lastErrorMsg ??
+      'All model engines failed to load the model.'
     this.invalidateHealth()
     throw new Error(this.lastErrorMsg)
   }
@@ -1030,10 +1148,6 @@ export class LLMService {
             .map((serverPath) => ({ serverPath, cpuOnly: true }))
         ]
     for (const { serverPath, cpuOnly } of candidates) {
-      const attempts = loadAttempts(
-        this.ctxSize,
-        cpuOnly || enginePriority(serverPath) === 2 ? 0 : this.gpuLayers
-      ).slice(0, 1)
       if (generation !== this.launchGeneration) return false
       if (!serverPath) continue
       const engineDir = path.basename(path.dirname(serverPath))
@@ -1052,6 +1166,12 @@ export class LLMService {
           continue
         }
       }
+      // Read after the device probe's wait, with no await before the launch arguments, so a save made
+      // during the probe cannot leave the checkpoint and the arguments describing different launches.
+      const attempts = loadAttempts(
+        this.ctxSize,
+        cpuOnly || enginePriority(serverPath) === 2 ? 0 : this.gpuLayers
+      ).slice(0, 1)
       for (let a = 0; a < attempts.length; a++) {
         if (generation !== this.launchGeneration) return false
         const at = attempts[a]
@@ -1060,7 +1180,11 @@ export class LLMService {
           console.warn(`[LLMService] out of memory — retrying load at ${at.reason}`)
         }
         const args = this.launchArgsFor(at.ctxSize, at.gpuLayers)
+        // Captured in the same step as the arguments: a save can land during init's earlier awaits,
+        // so only this matches what actually ran. A successful spawn makes it the working launch.
+        const launchedWith = { settings: this.getSettings(), explicit: new Set(this.userExplicit) }
         if (await this.launchServer(serverPath, args)) {
+          this.lastWorkingLaunch = launchedWith
           if (a > 0) {
             console.warn(`[LLMService] model loaded via fallback: ${at.reason}`)
           }
@@ -1081,9 +1205,13 @@ export class LLMService {
           }
           await this.prepareModelPort()
           if (generation !== this.launchGeneration) return false
-          if (
-            await this.launchServer(serverPath, this.launchArgsFor(at.ctxSize, at.gpuLayers))
-          ) {
+          const retryArgs = this.launchArgsFor(
+            this.ctxSize,
+            cpuOnly || enginePriority(serverPath) === 2 ? 0 : this.gpuLayers
+          )
+          const retriedWith = { settings: this.getSettings(), explicit: new Set(this.userExplicit) }
+          if (await this.launchServer(serverPath, retryArgs)) {
+            this.lastWorkingLaunch = retriedWith
             return true
           }
         }
@@ -1317,7 +1445,7 @@ export class LLMService {
       await this.init()
     } catch (error) {
       console.error('[LLMService] recovery startup failed:', error)
-      if (generation === this.launchGeneration && !this.server) await this.handleCrash(code)
+      if (generation === this.launchGeneration && !(this.server as ChildProcess | null)) await this.handleCrash(code)
     }
   }
 
@@ -1331,6 +1459,10 @@ export class LLMService {
    *  template llama-server publishes at /props; 'enable-thinking' until then, which is the
    *  behaviour every model got before this was resolved at all. */
   private thinkingDialect: ThinkingDialect = 'enable-thinking'
+  /** The loaded model's thinking dialect, for requests the gateway forwards. */
+  get currentThinkingDialect(): ThinkingDialect {
+    return this.thinkingDialect
+  }
   private mediaMarker: string | null = null
 
   /** Read the loaded model's properties and remember its request dialects.

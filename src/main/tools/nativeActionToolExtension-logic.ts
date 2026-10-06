@@ -70,7 +70,7 @@ export const NATIVE_TOOL_SPECS: NativeToolSpec[] = [
   {
     name: 'get_current_location',
     description:
-      "Get the user's current device location as latitude, longitude, accuracy, and timestamp. Read-only; use it before a nearby task when the user has not supplied another starting location. If it fails, do not start Web Use or Computer Use; ask for an address or neighborhood.",
+      "Get the user's current device location as latitude, longitude, accuracy, and timestamp. Read-only; use it before a nearby task when the user has not supplied another starting location. Exact coordinates are optional. Use a supplied city, neighborhood, or address, or the website’s own location result. If none is available, ask for a starting location. Report the location used and do not invent coordinates.",
     parameters: { type: 'object', properties: {} },
     command: 'location.current',
     risk: 'read',
@@ -223,7 +223,7 @@ export const NATIVE_TOOL_SPECS: NativeToolSpec[] = [
   {
     name: WEB_USE_TOOL_NAME,
     description:
-      "Do a task on a website in Off Grid AI's own built-in browser - playing or watching a video (YouTube, etc.), searching a site and opening a result, checking in for a flight, placing an order, filling a form, or logging in. Use this whenever the goal needs to click, type, or navigate a page, not merely open it, unless the user explicitly requires their existing default-browser session, cookies, history, cache, or signed-in account. That case requires open_url followed by computer_use. For a task near the user's current location, call get_current_location first and start Web Use only when it returns coordinates. Web Use runs INSIDE Off Grid AI's browser and never touches the user's cursor, keyboard, or their own browser, so the user keeps working while it goes; it hands control back for any sign-in, one-time code, or payment. Use the full conversation. Ask the user before calling this tool only when a material fact is missing. Call it once for the complete goal. Do not call it again while that task runs. Live progress and the final result appear in the chat.",
+      "Do a task on a website in Off Grid AI's own built-in browser - playing or watching a video (YouTube, etc.), searching a site and opening a result, checking in for a flight, placing an order, filling a form, or logging in. Use this whenever the goal needs to click, type, or navigate a page, not merely open it, unless the user explicitly requires their existing default-browser session, cookies, history, cache, or signed-in account. That case requires open_url followed by computer_use. For a nearby task, exact coordinates are optional. Use a supplied city, neighborhood, or address, or the website’s own location result. Use get_current_location when useful. Report the location used and ask for a starting location only if none is available. Web Use runs INSIDE Off Grid AI's browser and never touches the user's cursor, keyboard, or their own browser, so the user keeps working while it goes; it hands control back for any sign-in, one-time code, or payment. Use the full conversation. Ask the user before calling this tool only when a material fact is missing. Call it once for the complete goal. Do not call it again while that task runs. Live progress and the final result appear in the chat.",
     parameters: {
       type: 'object',
       properties: {
@@ -354,8 +354,8 @@ export const WINDOWS_TOOL_NAMES: ReadonlySet<string> = new Set([
 ])
 
 // Linux exposes task tools when the host has enabled its watched workspace.
-// The core-only path exposes only the link opener.
-export const LINUX_TOOL_NAMES: ReadonlySet<string> = new Set(['open_url'])
+// Location and the link opener are also available without task tools.
+export const LINUX_TOOL_NAMES: ReadonlySet<string> = new Set(['open_url', 'get_current_location'])
 
 export const TASK_USE_TOOL_NAMES: ReadonlySet<string> = new Set([WEB_USE_TOOL_NAME, 'computer_use'])
 
@@ -370,13 +370,18 @@ export function specsForPlatform(
   } else if (platform === 'win32') {
     specs = NATIVE_TOOL_SPECS.filter((spec) => WINDOWS_TOOL_NAMES.has(spec.name))
   } else if (platform === 'linux') {
-    specs = NATIVE_TOOL_SPECS.filter((spec) =>
-      LINUX_TOOL_NAMES.has(spec.name) || (linuxTaskUse && TASK_USE_TOOL_NAMES.has(spec.name))
-    ).map((spec) => spec.name === 'open_url' ? {
-      ...spec,
-      description:
-        "Open a URL or app scheme in the user's default browser or app. It only opens the link and cannot control the browser."
-    } : spec)
+    specs = NATIVE_TOOL_SPECS.filter(
+      (spec) =>
+        LINUX_TOOL_NAMES.has(spec.name) || (linuxTaskUse && TASK_USE_TOOL_NAMES.has(spec.name))
+    ).map((spec) =>
+      spec.name === 'open_url'
+        ? {
+            ...spec,
+            description:
+              "Open a URL or app scheme in the user's default browser or app. It only opens the link and cannot control the browser."
+          }
+        : spec
+    )
   } else {
     specs = []
   }
@@ -385,7 +390,11 @@ export function specsForPlatform(
 
 /** The model-facing capability hint, per platform - never promise a tool the
  *  platform does not expose. */
-export function systemHintForPlatform(platform: NodeJS.Platform, includeTaskUse = true, linuxTaskUse = false): string {
+export function systemHintForPlatform(
+  platform: NodeJS.Platform,
+  includeTaskUse = true,
+  linuxTaskUse = false
+): string {
   if (platform === 'darwin') {
     if (!includeTaskUse) {
       return "You can act on the user's Mac: get their current location for nearby requests (get_current_location), manage calendar events (calendar_create_event, calendar_list_events) and reminders (reminders_create, reminders_list), look up people (contacts_search), and send an iMessage (messages_send) or email (mail_send). Resolve a name to a handle with contacts_search before sending. Open a link or app scheme with open_url; it opens the target without interacting with it. Use ISO 8601 for all times. Actions requested in this Chat run directly; report the real result and never tell the user to approve them."
@@ -400,9 +409,9 @@ export function systemHintForPlatform(platform: NodeJS.Platform, includeTaskUse 
   }
   if (platform === 'linux') {
     if (includeTaskUse && linuxTaskUse) {
-      return "Use web_use for website tasks in the built-in browser. Use computer_use for visible desktop apps or the user's existing browser session. Use open_url only to open a link. Linux has no location, calendar, mail, or contact tools. Report only results observed through the tools."
+      return "Exact coordinates are optional for nearby tasks. Use a supplied city, neighborhood, or address, or the website’s own location result. Use get_current_location when useful. Report the location used; ask for a starting location only if none is available. Use web_use for website tasks in the built-in browser. Use computer_use for visible desktop apps or the user's existing browser session. Use open_url only to open a link. Linux has no calendar, mail, or contact tools. Report only results observed through the tools."
     }
-    return "You can use open_url to open a link in the user's default browser. You cannot control that browser or desktop apps, or use calendar, mail, contact, or location tools on Linux."
+    return "Use get_current_location to get the user's current device coordinates. If location is unavailable, ask for a starting address or neighborhood. Use open_url to open a link in the user's default browser. You cannot control that browser or desktop apps, or use calendar, mail, or contact tools on Linux."
   }
   return ''
 }
@@ -419,4 +428,18 @@ export function buildNativeToolSchemas(
     type: 'function',
     function: { name: s.name, description: s.description, parameters: s.parameters }
   }))
+}
+
+/**
+ * Appended to the system hint when Tasks > Web Use runs in the user's default browser and that
+ * browser is connected: web_use then runs signed in as the user, so it also covers tasks that
+ * need their existing session, instead of open_url followed by computer_use.
+ */
+export const WEB_USE_IN_DEFAULT_BROWSER_HINT =
+  "Web Use is set to run in the user's own default browser: it opens a tab of its own there, signed in as the user, and never touches their other tabs. Use web_use for website tasks even when they need the user's existing login, cookies or account."
+
+export function withWebUseTarget(hint: string, inDefaultBrowser: boolean): string {
+  return inDefaultBrowser && hint.includes('web_use')
+    ? `${hint} ${WEB_USE_IN_DEFAULT_BROWSER_HINT}`
+    : hint
 }

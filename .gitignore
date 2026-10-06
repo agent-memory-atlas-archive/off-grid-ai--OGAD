@@ -18,6 +18,7 @@ resources/bin/kev-runtime/
 # Off Grid AI SD-GGUF conversion build dir
 build-sd-gguf/
 build/linux-bin/
+build/image-macos/
 
 # Swift build artifacts (embedded repos)
 electron/coreml-sd/.build/
@@ -54,6 +55,7 @@ resources/bin/location.node
 .env
 .env.local
 test-results/
+outputs/video-verification/
 
 # Marketing material (dev.to drafts, emails, assets) — publishing, not app code
 /marketing/
@@ -82,3 +84,11 @@ coverage-db/
 # Raw V8 output and the converted report from the e2e coverage capture
 coverage-e2e-raw/
 coverage-e2e/
+
+# Pinned Linux desktop tools staged by the packaging script
+resources/linux-desktop/bin/
+resources/linux-desktop/__pycache__/
+coverage-native-raw/
+coverage-native/
+coverage-native-desktop-raw/
+coverage-native-desktop/

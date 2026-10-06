@@ -392,4 +392,39 @@ describe('Web Use shared lifecycle', () => {
     )
     expect(guard.snapshot()).toMatchObject({ status: 'failed', kind: 'web_use' })
   })
+
+  it('stops after a few stale references on an unchanged page instead of using every step', async () => {
+    // Found against a real browser extension: a small model kept acting on a ref the page did
+    // not have, re-observed after each stale-reference error, and used all 24 steps.
+    for (let i = 0; i < 24; i += 1) {
+      model.replies.push(decision({ action: 'click', ref: 'e9', element: 'Heading' }))
+    }
+    const calls: string[] = []
+    const session = {
+      snapshot: async (): Promise<PlaywrightToolResult> => ({
+        text: 'button "Submit" [ref=s1]',
+        isError: false
+      }),
+      call: async (name: string): Promise<PlaywrightToolResult> => {
+        calls.push(name)
+        return { text: 'Element 9 not found, the id is stale. Take a fresh snapshot.', isError: true }
+      },
+      recoverPage: async (): Promise<PlaywrightToolResult> => ({ text: 'ok', isError: false })
+    } as unknown as PlaywrightMcpSession
+    const result = await runBrowserPlaywrightTask({
+      goal: 'Read the heading',
+      plan,
+      session,
+      guard: new VisionGuard({ taskId: 'web-stale-loop', kind: 'web_use' }),
+      activeDriver: () => pointerDriver([]),
+      activeUrl: () => 'https://example.test/form',
+      waitForUser: async () => undefined,
+      takeGuidance: () => [],
+      onStep: () => undefined,
+      onPhase: () => undefined,
+      onProgress: () => undefined
+    })
+    expect(result.ok).toBe(false)
+    expect(calls.length).toBeLessThanOrEqual(3)
+  })
 })
