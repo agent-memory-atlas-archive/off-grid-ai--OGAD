@@ -6,7 +6,7 @@
  * the off-topic one is dropped — the actual behavior the user gets.
  */
 import { describe, it, expect } from 'vitest'
-import { terms, scoreTool, rankConnectorTools } from '../tool-ranking'
+import { terms, scoreTool, rankConnectorTools, selectRelevantTools } from '../tool-ranking'
 import { budgetTools } from '../tool-budget'
 
 const tool = (name: string, description: string): unknown => ({
@@ -76,5 +76,64 @@ describe('rankConnectorTools', () => {
     const keptNames = budgeted.tools.map((t) => (t as { function: { name: string } }).function.name)
     expect(keptNames).toContain('web_search') // built-in never dropped
     expect(keptNames).toContain('calendar_list_events') // relevant tool kept
+  })
+})
+
+describe('email across several accounts', () => {
+  const tool = (name: string, description: string): unknown => ({
+    type: 'function',
+    function: { name, description }
+  })
+  // A catalog shaped like a real one: three Google accounts, one Microsoft account, and a
+  // Notion connector whose user tools mention email addresses. All synthetic.
+  const catalog = [
+    tool(
+      'mcp__4__notion-get-users',
+      '[Notion] List all users in the workspace, with their names and email addresses.'
+    ),
+    tool('mcp__4__notion-create-comment', '[Notion] Add a comment to a page or discussion.'),
+    ...[7, 8, 9].map((id) =>
+      tool(
+        `mcp__${id}__search_messages`,
+        `[Google (person${id}@example.test)] Search this account's email in Gmail (inbox and other mail) and return message subjects, senders, recipients, dates, snippets, and links.`
+      )
+    ),
+    tool(
+      'mcp__10__search_messages',
+      "[Microsoft (person@example.test)] Read or search this account's email in Outlook (inbox and other mail). Returns message previews and pagination."
+    )
+  ]
+  const names = (tools: unknown[]): string[] =>
+    tools.map((t) => (t as { function: { name: string } }).function.name)
+
+  it('offers every account mailbox for "top emails across my email accounts"', () => {
+    const picked = names(
+      selectRelevantTools(
+        'Tell me the top 10 emails today across all of my email accounts',
+        catalog
+      )
+    )
+    expect(picked).toEqual(
+      expect.arrayContaining([
+        'mcp__7__search_messages',
+        'mcp__8__search_messages',
+        'mcp__9__search_messages',
+        'mcp__10__search_messages'
+      ])
+    )
+    expect(picked.indexOf('mcp__7__search_messages')).toBeLessThan(
+      picked.indexOf('mcp__4__notion-get-users') === -1
+        ? Infinity
+        : picked.indexOf('mcp__4__notion-get-users')
+    )
+  })
+
+  it('folds plurals both ways', () => {
+    expect(terms('emails calendars inboxes class')).toEqual([
+      'email',
+      'calendar',
+      'inboxe',
+      'class'
+    ])
   })
 })
