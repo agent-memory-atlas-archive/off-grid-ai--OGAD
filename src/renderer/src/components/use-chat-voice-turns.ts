@@ -58,6 +58,7 @@ interface ChatVoiceTurns {
   microphoneDenied: boolean
   error: string | null
   transcriptionLabel: string
+  start: () => void
   toggle: () => void
   cancel: () => void
 }
@@ -449,6 +450,10 @@ export function useChatVoiceTurns(options: ChatVoiceTurnOptions): ChatVoiceTurns
     finishCapture(optionsRef.current.mode === 'handsfree')
   }, [finishCapture, startCapture])
 
+  const start = useCallback((): void => {
+    if (phaseRef.current === 'idle') void startCapture(true)
+  }, [startCapture])
+
   const cancel = useCallback((): void => {
     discardCapture()
     setAwaitingReply(false)
@@ -561,6 +566,7 @@ export function useChatVoiceTurns(options: ChatVoiceTurnOptions): ChatVoiceTurns
     microphoneDenied,
     error,
     transcriptionLabel,
+    start,
     toggle,
     cancel
   }
