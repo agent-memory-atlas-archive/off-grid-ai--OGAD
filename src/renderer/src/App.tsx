@@ -82,6 +82,7 @@ import {
 import { callHook } from './bootstrap/hookRegistry'
 import { GodTwinScreen, type GodTwinWakeRequest } from './components/god-twin/GodTwinScreen'
 import { useWakeListener } from './components/god-twin/use-wake-listener'
+import { useGodProfile } from './components/god-twin/use-god-profile'
 import { internalTabLocation, internalTabPath, isInternalTabView } from './lib/internal-tab-route'
 import {
   NOTIFICATION_OPEN_TARGET_CHANNEL,
@@ -378,7 +379,9 @@ function AppContent(): React.JSX.Element {
   const [godTwinWake, setGodTwinWake] = useState<GodTwinWakeRequest>({ count: 0 })
   // The God is using the mic or speaking: the wake-word listener steps aside.
   const [godTwinBusy, setGodTwinBusy] = useState(false)
-  useWakeListener(godTwinBusy)
+  // God is Pro: a free build never listens for the wake word, and chat mode does not listen.
+  const godProfile = useGodProfile()
+  useWakeListener(godTwinBusy || !isPro || godProfile.mode === 'chat')
   // Navigation is unconditional. Leaving a chat with a task running used to prompt, because the
   // live view was lost on the way out; a running task now follows you in a floating card
   // (tasks.floatingView), so there is nothing left to warn about.
@@ -967,8 +970,6 @@ function AppContent(): React.JSX.Element {
         !featureSupportsPlatform(f, currentPlatform()) ||
         (!isPro &&
           !(route === 'tasks' && TaskWorkspace) &&
-          // The God is for everyone; its prepared workflows inside stay Pro.
-          route !== 'explore' &&
           !(route === 'devices' && proActivation === 'entitlement-bootstrap'))
     }
   }
@@ -1352,11 +1353,16 @@ function AppContent(): React.JSX.Element {
                     {proFeatureComingSoon(viewMode, currentPlatform(), true) ? (
                       <UpgradeScreen variant="coming-soon" feature={getProFeature(viewMode)} />
                     ) : viewMode === 'explore' ? (
-                      <GodTwinScreen
-                        wake={godTwinWake}
-                        onBusyChange={setGodTwinBusy}
-                        {...(isPro ? { onRunPreset: handleRunPreset } : {})}
-                      />
+                      // God is Pro: a free build shows what it does and how to get it.
+                      isPro ? (
+                        <GodTwinScreen
+                          wake={godTwinWake}
+                          onBusyChange={setGodTwinBusy}
+                          onRunPreset={handleRunPreset}
+                        />
+                      ) : (
+                        <UpgradeScreen feature={getProFeature('explore')} />
+                      )
                     ) : viewMode === 'memory-chat' ? (
                       <MemoryChat
                         onNavigateToMemory={handleSelectMemory}

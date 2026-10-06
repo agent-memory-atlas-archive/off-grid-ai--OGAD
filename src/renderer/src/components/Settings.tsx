@@ -215,13 +215,16 @@ export function Settings({
               <RemoteVisionSettingsTab />
             </SettingsCard>
 
-            <SettingsCard
-              title="God"
-              summary="Show or hide Ares on your desktop."
-              delay={0.17}
-            >
-              <GodTwinSettings />
-            </SettingsCard>
+            {/* God is Pro: its settings show only where God does. */}
+            {isPro && (
+              <SettingsCard
+                title="God"
+                summary="Your assistant's name, rules, wake word and Ares on the desktop."
+                delay={0.17}
+              >
+                <GodTwinSettings />
+              </SettingsCard>
+            )}
 
             {/* Remaining Pro Settings sections (You / What Off Grid AI has learned /
               Your Pro plan). The pro package registers the real section
