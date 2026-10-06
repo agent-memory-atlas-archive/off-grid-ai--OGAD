@@ -553,9 +553,7 @@ export async function summarizeSession(sessionId: string): Promise<string | null
   const memories = getMemoriesForSession(sessionId)
   if (memories.length === 0) return null
 
-  const conversationText = memories
-    .map((m) => `[${m.role || 'unknown'}]: ${m.content}`)
-    .join('\n')
+  const conversationText = memories.map((m) => `[${m.role || 'unknown'}]: ${m.content}`).join('\n')
   const prompt = getPrompt('sessionSummary', { CONVERSATION_TEXT: conversationText })
 
   try {
@@ -914,7 +912,12 @@ export function setupIPC(): void {
       // which failed the whole retrieval. Preserves the any-term (OR) recall the retrieval expects.
       const ftsQuery = ftsMatchExpression(query)
 
-      let memories: Array<{ source_app: string | null; created_at: string; content: string; score?: number }> = []
+      let memories: Array<{
+        source_app: string | null
+        created_at: string
+        content: string
+        score?: number
+      }> = []
       try {
         const queryVector = await embeddings.generateEmbedding(query)
         const vecStr = JSON.stringify(queryVector)
@@ -966,7 +969,18 @@ export function setupIPC(): void {
         messageParams.push(msgFilter.param)
       }
       messageQuery += ` ORDER BY score ASC LIMIT 12`
-      const messages = db.prepare<unknown[], { app_name: string | null; title: string | null; created_at: string; role: string; content: string }>(messageQuery).all(...messageParams)
+      const messages = db
+        .prepare<
+          unknown[],
+          {
+            app_name: string | null
+            title: string | null
+            created_at: string
+            role: string
+            content: string
+          }
+        >(messageQuery)
+        .all(...messageParams)
 
       const summaryParams: unknown[] = [ftsQuery]
       let summaryQuery = `
@@ -983,7 +997,12 @@ export function setupIPC(): void {
         summaryParams.push(sumFilter.param)
       }
       summaryQuery += ` ORDER BY score ASC LIMIT 8`
-      const summaries = db.prepare<unknown[], { app_name: string | null; title: string | null; summary: string }>(summaryQuery).all(...summaryParams)
+      const summaries = db
+        .prepare<
+          unknown[],
+          { app_name: string | null; title: string | null; summary: string }
+        >(summaryQuery)
+        .all(...summaryParams)
 
       const entityParams: unknown[] = [ftsQuery]
       let entityQuery = `
@@ -1006,7 +1025,12 @@ export function setupIPC(): void {
         entityParams.push(entFilter.param)
       }
       entityQuery += ` ORDER BY score ASC LIMIT 8`
-      const entities = db.prepare<unknown[], { type: string | null; name: string; summary: string | null }>(entityQuery).all(...entityParams)
+      const entities = db
+        .prepare<
+          unknown[],
+          { type: string | null; name: string; summary: string | null }
+        >(entityQuery)
+        .all(...entityParams)
 
       const factParams: unknown[] = [ftsQuery]
       let factQuery = `
@@ -1023,15 +1047,16 @@ export function setupIPC(): void {
         factParams.push(factFilter.param)
       }
       factQuery += ` ORDER BY score ASC LIMIT 8`
-      const entityFacts = db.prepare<unknown[], { type: string | null; name: string; fact: string }>(factQuery).all(...factParams)
+      const entityFacts = db
+        .prepare<unknown[], { type: string | null; name: string; fact: string }>(factQuery)
+        .all(...factParams)
 
       // Supplementary context (no bracket labels — the ONLY citeable tags are the
       // numbered [S#] SOURCES below, so the model can't invent uncited labels).
       const memoryLines = memories
         .slice(0, 6)
         .map(
-          (m) =>
-            `- (${m.source_app || 'Unknown'} | ${m.created_at}): ${clipText(m.content, 500)}`
+          (m) => `- (${m.source_app || 'Unknown'} | ${m.created_at}): ${clipText(m.content, 500)}`
         )
         .join('\n')
 
@@ -1265,8 +1290,14 @@ export function setupIPC(): void {
 
   ipcMain.handle(
     'rag:create-conversation',
-    (_, id: string, title?: string, projectId?: string | null) => {
-      return createRagConversation(id, title, projectId)
+    (
+      _,
+      id: string,
+      title?: string,
+      projectId?: string | null,
+      surface?: import('../shared/ipc-contracts').ConversationSurface
+    ) => {
+      return createRagConversation(id, title, projectId, surface)
     }
   )
 
@@ -1275,8 +1306,12 @@ export function setupIPC(): void {
   // page rather than the whole table.
   ipcMain.handle(
     'rag:get-conversations',
-    (_, projectId?: string | null, page?: import('./database').RagConversationPage) =>
-      getRagConversations(projectId, page)
+    (
+      _,
+      projectId?: string | null,
+      page?: import('./database').RagConversationPage,
+      surface?: import('../shared/ipc-contracts').ConversationSurface
+    ) => getRagConversations(projectId, page, surface)
   )
 
   ipcMain.handle('rag:search-conversation-ids', (_, query: string, limit?: number) =>
@@ -1363,11 +1398,14 @@ export function setupIPC(): void {
     setResidencyMode(modality, mode)
   )
   ipcMain.handle('runtime:backend:get', () => getBackendPreferences())
-  ipcMain.handle('runtime:backend:set', async (_e, modality: BackendModality, preference: BackendPreference) => {
-    const next = setBackendPreference(modality, preference)
-    // A loaded engine keeps its present backend until its next load. The UI says so.
-    return next
-  })
+  ipcMain.handle(
+    'runtime:backend:set',
+    async (_e, modality: BackendModality, preference: BackendPreference) => {
+      const next = setBackendPreference(modality, preference)
+      // A loaded engine keeps its present backend until its next load. The UI says so.
+      return next
+    }
+  )
   // Unload one modality's model from memory now (the "free RAM" button). Goes through
   // the same evict() seam as residency/shutdown; the engine reloads on next use.
   ipcMain.handle('runtime:unload', async (_e, modality: Modality) => {
@@ -2021,6 +2059,7 @@ export function setupIPC(): void {
       history?: { role: string; content: string }[],
       opts?: {
         assistantOnly?: boolean
+        allTools?: boolean
         connectors?: boolean
         conversationId?: string
         projectId?: string

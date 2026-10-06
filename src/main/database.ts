@@ -9,6 +9,7 @@ import crypto from 'crypto'
 import { createSettingsStore, initializeSettingsStore } from './settings-store'
 import { CORE_SYNC_ENTITIES, emitSyncMutation } from './sync-mutation'
 import type {
+  ConversationSurface,
   RagConversationContract,
   RagMessageContract,
   UserProfileContract
@@ -439,6 +440,12 @@ export function getDB(): Database.Database {
   // Migration: Add project_id to rag_conversations (chats can be scoped to a project)
   try {
     db.exec(`ALTER TABLE rag_conversations ADD COLUMN project_id TEXT`)
+  } catch {
+    // Column already exists, ignore
+  }
+  // Migration: which screen a conversation belongs to. NULL is Chat; 'god' is a God conversation.
+  try {
+    db.exec(`ALTER TABLE rag_conversations ADD COLUMN surface TEXT`)
   } catch {
     // Column already exists, ignore
   }
@@ -1127,20 +1134,34 @@ export function saveUserProfile(profile: UserProfile): void {
 // === RAG CONVERSATIONS ===
 
 export type RagConversation = RagConversationContract
+export type { ConversationSurface }
+
+/** Move existing conversations to a screen, e.g. God conversations kept before the column. */
+export function setRagConversationsSurface(
+  ids: readonly string[],
+  surface: ConversationSurface
+): void {
+  if (!ids.length) return
+  const statement = getDB().prepare('UPDATE rag_conversations SET surface = ? WHERE id = ?')
+  getDB().transaction(() => {
+    for (const id of ids) statement.run(surface === 'god' ? 'god' : null, id)
+  })()
+}
 export type RagMessage = RagMessageContract
 
 export function createRagConversation(
   id: string,
   title?: string,
-  projectId?: string | null
+  projectId?: string | null,
+  surface?: ConversationSurface
 ): string {
   const db = getDB()
   db.prepare(
     `
-        INSERT INTO rag_conversations (id, title, project_id, created_at, updated_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        INSERT INTO rag_conversations (id, title, project_id, surface, created_at, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `
-  ).run(id, title || null, projectId || null)
+  ).run(id, title || null, projectId || null, surface === 'god' ? 'god' : null)
   emitSyncMutation({ entity: CORE_SYNC_ENTITIES.conversation, entityId: id, kind: 'put' })
   return id
 }
@@ -1175,11 +1196,15 @@ function conversationPageLimit(page?: RagConversationPage): number {
  */
 export function getRagConversations(
   projectId?: string | null,
-  page?: RagConversationPage
+  page?: RagConversationPage,
+  surface?: ConversationSurface
 ): RagConversation[] {
   const db = getDB()
   const conditions: string[] = []
   const parameters: unknown[] = []
+  // Omitted: every conversation. Chat lists its own and leaves God's to God.
+  if (surface === 'god') conditions.push("rc.surface = 'god'")
+  else if (surface === 'chat') conditions.push("(rc.surface IS NULL OR rc.surface <> 'god')")
   if (projectId === null) conditions.push('rc.project_id IS NULL')
   else if (projectId !== undefined) {
     conditions.push('rc.project_id = ?')
@@ -1196,8 +1221,8 @@ export function getRagConversations(
   // another; both joins below are index lookups over the page's conversations only.
   const stmt = db.prepare(`
         WITH page AS (
-            SELECT rc.id, rc.title, rc.project_id, rc.origin_device_id, rc.origin_device_name,
-                   rc.created_at, rc.updated_at
+            SELECT rc.id, rc.title, rc.project_id, rc.surface, rc.origin_device_id,
+                   rc.origin_device_name, rc.created_at, rc.updated_at
             FROM rag_conversations rc
             ${where}
             ORDER BY rc.updated_at DESC
@@ -1207,6 +1232,7 @@ export function getRagConversations(
             page.id,
             page.title,
             page.project_id,
+            page.surface,
             page.origin_device_id,
             page.origin_device_name,
             page.created_at,
@@ -1244,7 +1270,8 @@ export function getRagConversation(id: string): RagConversation | null {
   return db
     .prepare(
       `
-        SELECT id, title, project_id, origin_device_id, origin_device_name, created_at, updated_at
+        SELECT id, title, project_id, surface, origin_device_id, origin_device_name, created_at,
+               updated_at
         FROM rag_conversations
         WHERE id = ?
     `
@@ -1346,14 +1373,32 @@ export function searchProjectConversations(
   limit = 6
 ): { role: string; content: string; title: string | null }[] {
   const stopWords = new Set([
-    'about', 'and', 'are', 'did', 'for', 'from', 'how', 'our', 'project',
-    'the', 'this', 'was', 'what', 'when', 'where', 'who', 'with', 'you'
+    'about',
+    'and',
+    'are',
+    'did',
+    'for',
+    'from',
+    'how',
+    'our',
+    'project',
+    'the',
+    'this',
+    'was',
+    'what',
+    'when',
+    'where',
+    'who',
+    'with',
+    'you'
   ])
   const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])]
     .filter((term) => term.length > 2 && !stopWords.has(term))
     .slice(0, 6)
   if (!terms.length) return []
-  const score = terms.map(() => '(CASE WHEN lower(rm.content) LIKE ? THEN 1 ELSE 0 END)').join(' + ')
+  const score = terms
+    .map(() => '(CASE WHEN lower(rm.content) LIKE ? THEN 1 ELSE 0 END)')
+    .join(' + ')
   const patterns = terms.map((term) => `%${term}%`)
   return getDB()
     .prepare(
@@ -1365,7 +1410,13 @@ export function searchProjectConversations(
         ORDER BY (${score}) DESC, rm.created_at DESC, rm.id DESC
         LIMIT ?`
     )
-    .all(projectId, excludeConversationId, ...patterns, ...patterns, Math.min(12, Math.max(1, limit))) as {
+    .all(
+      projectId,
+      excludeConversationId,
+      ...patterns,
+      ...patterns,
+      Math.min(12, Math.max(1, limit))
+    ) as {
     role: string
     content: string
     title: string | null
