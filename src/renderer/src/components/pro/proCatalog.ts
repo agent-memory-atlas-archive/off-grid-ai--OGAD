@@ -8,13 +8,13 @@ import {
   MagnifyingGlass,
   Broadcast,
   ClipboardText,
-  Robot,
   ListChecks,
   Waveform,
   ShieldCheck,
   Devices as DevicesIcon
 } from '@phosphor-icons/react'
 import type { ComponentType } from 'react'
+import { GodIcon } from '../GodIcon'
 import { deviceNoun, primaryModifier } from '@renderer/lib/device'
 import { isMac, type DevicePlatform } from '@offgrid/core/shared/device'
 import { PRO_PURCHASE_URL } from '@offgrid/core/shared/product-links'
@@ -56,7 +56,7 @@ export const PRO_FEATURES: ProFeature[] = [
   {
     route: 'explore',
     label: 'God',
-    icon: Robot,
+    icon: GodIcon,
     tagline: 'Your assistant. Talk to Ares, hands free.',
     description:
       'Say "Ares" or tap Ares to talk. Ares answers from your memory, accounts and tools, out loud, and with Pro acts on websites and apps and runs prepared workflows. Wake-word audio is checked on your device and never saved.',
