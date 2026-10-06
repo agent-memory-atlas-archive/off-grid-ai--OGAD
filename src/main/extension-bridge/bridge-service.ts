@@ -79,8 +79,13 @@ export interface BridgeData {
     tabId?: number
   ): Promise<unknown>
   /** This browser's latest task started at or after `since` (ms): web_use answers "started" at
-   *  once, so a browser waiting on the result asks here. Null when none has started yet. */
-  latestTask(browser: PairedBrowser, since: number): Promise<BrowserTaskProgress | null>
+   *  once, so a browser waiting on the result asks here. Null when none has started yet. With
+   *  `taskId`, that task only (when it is this browser's), so two chats never read each other's. */
+  latestTask(
+    browser: PairedBrowser,
+    since: number,
+    taskId?: string
+  ): Promise<BrowserTaskProgress | null>
   /** Stops a task this browser started (its journey is this browser's). False otherwise. */
   stopTask(browser: PairedBrowser, taskId: string): Promise<boolean>
   vault(request: unknown, browser: PairedBrowser): Promise<unknown>
@@ -103,6 +108,9 @@ export interface BridgeDeps {
 export type BridgeReply = { status: number; body: unknown }
 
 const UNAUTHORIZED: BridgeReply = { status: 401, body: { error: 'unauthorized' } }
+
+const isTaskId = (value: unknown): value is string =>
+  typeof value === 'string' && /^[\w-]{1,128}$/.test(value)
 
 type Handler = (params: Record<string, unknown>, browser: PairedBrowser) => Promise<unknown>
 
@@ -174,12 +182,16 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
       if (tabId !== undefined && !(Number.isSafeInteger(tabId) && Number(tabId) >= 0)) {
         throw new Error('invalid')
       }
-      // What tools.list offers, this runs: a free desktop's connector tools included.
+      // What tools.list offers, this runs: a free desktop's connector tools included. Anything
+      // else (a tool turned off since the browser listed it) never runs.
       const name = p.name
       const listed = (await deps.data.listTools()).some(
         (tool) => (tool as { name?: unknown }).name === name
       )
-      if (!listed) requireFeature('tools')
+      if (!listed) {
+        requireFeature('tools')
+        throw new Error('tool_unavailable')
+      }
       return deps.data.runTool(
         p.name,
         p.args as Record<string, unknown>,
@@ -192,11 +204,14 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
       if (typeof p.since !== 'number' || !Number.isFinite(p.since)) {
         throw new Error('invalid')
       }
-      return deps.data.latestTask(browser, p.since)
+      if (p.taskId !== undefined && !isTaskId(p.taskId)) {
+        throw new Error('invalid')
+      }
+      return deps.data.latestTask(browser, p.since, p.taskId)
     },
     'tasks.stop': async (p, browser) => {
       requireFeature('tools')
-      if (typeof p.taskId !== 'string' || !/^[\w-]{1,128}$/.test(p.taskId)) {
+      if (!isTaskId(p.taskId)) {
         throw new Error('invalid')
       }
       return deps.data.stopTask(browser, p.taskId)

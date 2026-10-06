@@ -81,13 +81,17 @@ async function setup(opts: { approve?: boolean; features?: BridgeFeatures } = {}
     deleteConversation: async (id) => {
       calls.push(`delete:${id}`)
     },
-    listTools: async () => [{ name: 'notion_search' }],
+    // As the desktop lists them: connector tools always, its own tools only when it has them.
+    listTools: async () =>
+      (opts.features ?? FREE).tools
+        ? [{ name: 'notion_search' }, { name: 'mail_send' }, { name: 'web_use' }]
+        : [{ name: 'notion_search' }],
     runTool: async (name, _args, _browser, tabId) => ({
       ok: true,
       output: `ran ${name}${tabId === undefined ? '' : ` in tab ${tabId}`}`
     }),
-    latestTask: async (browser, since) =>
-      since > 2_000_000
+    latestTask: async (browser, since, taskId) =>
+      since > 2_000_000 || (taskId !== undefined && taskId !== 'task-1')
         ? null
         : {
             taskId: 'task-1',
@@ -309,6 +313,10 @@ describe('sealed rpc', () => {
       ok: false,
       error: 'invalid'
     })
+    // Review finding: a tool turned off since the browser listed it must not run, Pro or not.
+    expect(
+      (await pro.call('device000001', 'tools.run', { name: 'calendar_delete', args: {} })).body
+    ).toMatchObject({ ok: false, error: 'tool_unavailable' })
     // A web task can name the chat's tab to start in; anything but a tab id is refused.
     expect(
       (await pro.call('device000001', 'tools.run', { name: 'web_use', args: {}, tabId: 42 })).body
@@ -339,6 +347,16 @@ describe('sealed rpc', () => {
     expect((await pro.call('device000001', 'tasks.latest', { since: 3_000_000 })).body).toMatchObject(
       { ok: true, result: null }
     )
+    // A chat asks for its own task by id, so a newer task from another chat never hides it.
+    expect(
+      (await pro.call('device000001', 'tasks.latest', { since: 1, taskId: 'task-2' })).body
+    ).toMatchObject({ ok: true, result: null })
+    expect(
+      (await pro.call('device000001', 'tasks.latest', { since: 1, taskId: 'task-1' })).body
+    ).toMatchObject({ ok: true, result: { taskId: 'task-1' } })
+    expect(
+      (await pro.call('device000001', 'tasks.latest', { since: 1, taskId: 'a b' })).body
+    ).toMatchObject({ ok: false, error: 'invalid' })
     expect((await pro.call('device000001', 'tasks.latest', { since: 'x' })).body).toMatchObject({
       ok: false,
       error: 'invalid'

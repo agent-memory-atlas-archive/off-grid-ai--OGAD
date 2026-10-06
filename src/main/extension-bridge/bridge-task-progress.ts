@@ -23,15 +23,18 @@ export function browserTaskProgress(run: TaskRow): BrowserTaskProgress {
   }
 }
 
-/** The newest task of this browser's journey started at or after `since`, as it sees it. */
+/** The newest task of this browser's journey started at or after `since`, as it sees it; with
+ *  `taskId`, that one task, so a chat follows its own task while another chat starts one. */
 export function latestBrowserTask(
   runs: readonly TaskRow[],
   journeyId: string,
-  since: number
+  since: number,
+  taskId?: string
 ): BrowserTaskProgress | null {
   // Rows come newest-updated first; the browser asks for the task it started last.
   const run = runs
     .filter((task) => task.journeyId === journeyId && task.startedAt >= since)
+    .filter((task) => taskId === undefined || task.taskId === taskId)
     .reduce<TaskRow | null>((a, b) => (a && a.startedAt >= b.startedAt ? a : b), null)
   return run ? browserTaskProgress(run) : null
 }

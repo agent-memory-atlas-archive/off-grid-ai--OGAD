@@ -66,4 +66,14 @@ describe("a browser's view of the web task it started", () => {
     expect(latestBrowserTask(runs, 'browser:a', 400)).toBeNull()
     expect(latestBrowserTask(runs, 'browser:c', 0)).toBeNull()
   })
+
+  it('follows the task a chat asked for, though a newer one started since', () => {
+    // Review finding: chat A lost its task once chat B started a newer one.
+    const runs = [
+      row({ taskId: 'a-task', startedAt: 120 }),
+      row({ taskId: 'b-task', startedAt: 300 })
+    ]
+    expect(latestBrowserTask(runs, 'browser:a', 0, 'a-task')?.taskId).toBe('a-task')
+    expect(latestBrowserTask(runs, 'browser:b', 0, 'a-task')).toBeNull()
+  })
 })

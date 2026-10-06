@@ -325,8 +325,12 @@ const data: BridgeData = {
     const task = ok && name === WEB_USE_TOOL_NAME ? newestTaskOf(journeyId, startedAfter) : null
     return { ok, output: result.text, ...(task ? { taskId: task.taskId } : {}) }
   },
-  latestTask: async (browser, since) =>
-    latestBrowserTask(listTaskRuns(20), journeyOf(browser), since),
+  latestTask: async (browser, since, taskId) => {
+    if (taskId === undefined) return latestBrowserTask(listTaskRuns(20), journeyOf(browser), since)
+    // Its own task, however many have started since.
+    const run = getTaskRun(taskId)
+    return run ? latestBrowserTask([run], journeyOf(browser), since, taskId) : null
+  },
   stopTask: async (browser, taskId) =>
     getTaskRun(taskId)?.journeyId === journeyOf(browser) && controlVisionTask('stop', taskId),
   vault: async (request, browser) =>
