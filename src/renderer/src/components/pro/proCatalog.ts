@@ -59,8 +59,8 @@ export const PRO_FEATURES: ProFeature[] = [
     icon: Robot,
     tagline: 'Your assistant. Talk to Ares, hands free.',
     description:
-      'Say "Aries" or tap Ares to talk. Ares answers from your memory, accounts and tools, out loud, and with Pro acts on websites and apps and runs prepared workflows. Wake-word audio is checked on your device and never saved.',
-    highlights: ['Wake word "Aries"', 'Spoken answers', 'Acts and runs workflows with Pro'],
+      'Say "Ares" or tap Ares to talk. Ares answers from your memory, accounts and tools, out loud, and with Pro acts on websites and apps and runs prepared workflows. Wake-word audio is checked on your device and never saved.',
+    highlights: ['Wake word "Ares"', 'Spoken answers', 'Acts and runs workflows with Pro'],
     platforms: ['darwin', 'win32', 'linux']
   },
   {
