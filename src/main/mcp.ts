@@ -379,7 +379,9 @@ export async function testConnector(
         }
       }
       await source.verify()
-      tools = source.tools
+      // Built again after sign-in: the services the user granted at consent decide its tools,
+      // not the ones it was created with before they chose.
+      tools = (connectorToolSource(c) ?? source).tools
     } else {
       const { client, close } = await connect(c, true) // user-initiated → allow browser OAuth
       try {

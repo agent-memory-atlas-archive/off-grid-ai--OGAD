@@ -19,7 +19,14 @@ vi.mock('electron', () => ({
 }))
 
 import { getDB } from '../database'
-import { addConnector, listConnectors, removeConnector, updateConnector } from '../mcp'
+import { HOOKS, registerHook, unregisterHook } from '../bootstrap/hookRegistry'
+import {
+  addConnector,
+  listConnectors,
+  removeConnector,
+  testConnector,
+  updateConnector
+} from '../mcp'
 import { getSecret, setSecret } from '../secrets'
 
 afterAll(() => {
@@ -99,5 +106,33 @@ describe('updateConnector', () => {
     expect(() => updateConnector(id, { url: '' })).toThrow('Enter the server address.')
     removeConnector(id)
     expect(() => updateConnector(id, { name: 'Back' })).toThrow('This connection no longer exists.')
+  })
+})
+
+describe('testConnector', () => {
+  it('saves the tools for the services granted at sign-in, not the ones it started with', async () => {
+    // Review finding: the first test saved tools for services the user declined at consent.
+    let granted = ['mail', 'files']
+    registerHook(HOOKS.mcpConnectorToolSource, () => ({
+      tools: granted.map((service) => ({ name: `${service}_search` })),
+      authorize: async () => {
+        granted = ['mail']
+      },
+      verify: async () => undefined,
+      callTool: async () => ({ ok: true, text: '' })
+    }))
+    try {
+      const id = addConnector({
+        name: 'Work',
+        transport: 'http',
+        url: 'https://a.example.test/mcp'
+      })
+      expect(await testConnector(id)).toMatchObject({ ok: true, tools: [{ name: 'mail_search' }] })
+      expect(JSON.parse(listConnectors().find((c) => c.id === id)!.tools!)).toEqual([
+        { name: 'mail_search' }
+      ])
+    } finally {
+      unregisterHook(HOOKS.mcpConnectorToolSource)
+    }
   })
 })
