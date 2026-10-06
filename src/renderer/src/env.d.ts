@@ -186,6 +186,7 @@ interface RendererAPIOverrides {
       }) => void
     ) => () => void
     onFlourish?: (callback: () => void) => () => void
+    setPointerOverControls?: (over: boolean) => void
   }
   // Open-core bridge
   isPro?: boolean
