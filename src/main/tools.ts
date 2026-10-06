@@ -6,6 +6,7 @@
 // until it answers. Built-in tools and selected connector extensions share it.
 
 import { offgridGuideTool } from './tools/offgrid-guide-tool'
+import { godRoutineTools } from './tools/god-routine-tools'
 import { llm } from './llm'
 import type { GenerationMetrics } from '../shared/generation-metrics'
 import type { ResponseCutoffContract } from '../shared/ipc-contracts'
@@ -52,6 +53,8 @@ export function setToolEnabled(name: string, enabled: boolean): void {
 // excludes the current conversation so it can't cite itself).
 export interface ToolContext {
   conversationId?: string
+  /** Who asked: a person in a chat, or a routine nobody is watching (its actions always wait for approval). */
+  actionSource?: 'chat' | 'routine'
   /** Authenticated Mobile launch identity. Only the MCP admission boundary sets it. */
   taskLaunch?: { launchId: string; requestingDeviceId: string }
   /** The exact user message. Approval-gated tools use this instead of trusting model-made args. */
@@ -174,6 +177,7 @@ export async function readUrlText(url: string): Promise<string> {
 // --- Built-in tools --------------------------------------------------------
 const TOOLS: ToolDef[] = [
   offgridGuideTool,
+  ...godRoutineTools,
   {
     name: 'web_search',
     description:
@@ -563,6 +567,8 @@ export async function toolChat(
     assistantOnly?: boolean
     /** God: every tool is on, whatever the Tools switch and per-tool settings say. */
     allTools?: boolean
+    /** A routine runs this turn: what it tries to do waits for approval (god-routines.ts). */
+    actionSource?: 'chat' | 'routine'
     /** What the user is doing now (God's context): added to the system prompt, bounded. */
     context?: string
     connectors?: boolean
@@ -614,6 +620,7 @@ export async function toolChat(
   const onDelta = opts.onDelta ?? ((): void => {})
   const toolContext: ToolContext = {
     conversationId: opts.conversationId,
+    ...(opts.actionSource ? { actionSource: opts.actionSource } : {}),
     projectId: opts.projectId,
     userQuery: query,
     history: boundedToolHistory(history),

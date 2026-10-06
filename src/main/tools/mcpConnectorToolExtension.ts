@@ -143,7 +143,8 @@ export class McpConnectorToolExtension implements ToolExtension {
         connector: meta.connector,
         tool: meta.tool,
         args,
-        sourceRef: context?.conversationId
+        sourceRef: context?.conversationId,
+        ...(context?.actionSource ? { source: context.actionSource } : {})
       })
       return formatChatConnectorExecution(execution, meta)
     }

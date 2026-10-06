@@ -36,7 +36,7 @@ import { actionArgsWithTaskLaunch } from '../tasks/task-launch-identity'
 /** The engine port the extension needs - implemented by the actions runtime,
  *  faked in tests. Optional: absent means the legacy path only. */
 export interface ActionsPort {
-  propose(input: unknown, meta: { source: 'chat' }): Promise<ProposeOutcome>
+  propose(input: unknown, meta: { source: 'chat' | 'routine' }): Promise<ProposeOutcome>
   waitForOutcome(actionId: string, timeoutMs: number): Promise<TickOutcome | undefined>
   whenParked(actionId: string): Promise<void>
   kick(): void
@@ -282,7 +282,7 @@ export class NativeActionToolExtension implements ToolExtension {
         risk: spec.risk
       },
       {
-        source: 'chat',
+        source: context?.actionSource ?? 'chat',
         ...(context?.conversationId ? { sourceRef: context.conversationId } : {}),
         ...(context?.taskLaunch
           ? {

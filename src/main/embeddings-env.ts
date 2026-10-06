@@ -16,6 +16,8 @@ import { env } from '@huggingface/transformers'
  */
 export function configureTransformersEnv(modelsDir: string): void {
   env.localModelPath = modelsDir
-  env.allowRemoteModels = true // first run still downloads
+  // The first run still downloads. OFFGRID_EMBEDDINGS_OFFLINE=1 (tests that do not test embeddings)
+  // uses only what is already on disk, so a fresh temp folder fails fast instead of fetching ~23MB.
+  env.allowRemoteModels = process.env.OFFGRID_EMBEDDINGS_OFFLINE !== '1'
   env.cacheDir = path.join(modelsDir, '.cache')
 }

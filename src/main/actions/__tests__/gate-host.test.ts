@@ -90,6 +90,32 @@ describe('gateHost', () => {
     expect(pendingActionGateCount()).toBe(0)
   })
 
+  it('a routine waits for approval even for a native action Chat runs straight away', async () => {
+    const queued = vi.fn(() => true)
+    registerHook(HOOKS.actionsProposeApproval, queued)
+    const sendMail = { type: 'mail_send', rail: 'semantic' as const, risk: 'mutate' as const }
+
+    // Asked in Chat: runs.
+    await expect(gateHost({ action: record(sendMail) })).resolves.toEqual({ kind: 'approve' })
+    expect(queued).not.toHaveBeenCalled()
+
+    // From a routine, with nobody watching: waits for the approval card.
+    const parked = gateHost({
+      action: record({ ...sendMail, source: 'routine', sourceRef: 'god-1' })
+    })
+    expect(queued).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'native', source: 'routine' })
+    )
+    expect(pendingActionGateCount()).toBe(1)
+    resolveActionGate('act_1', { kind: 'approve' })
+    await expect(parked).resolves.toEqual({ kind: 'approve' })
+
+    // Reading needs no approval, from anywhere.
+    await expect(
+      gateHost({ action: record({ ...sendMail, risk: 'read', source: 'routine' }) })
+    ).resolves.toEqual({ kind: 'approve' })
+  })
+
   it('the request carries what the card needs: id, type, hash, mapped kind, args', async () => {
     let request: Record<string, unknown> = {}
     registerHook(HOOKS.actionsProposeApproval, (req: Record<string, unknown>) => {
