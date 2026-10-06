@@ -304,6 +304,14 @@ export class NativeActionToolExtension implements ToolExtension {
       )
     }
     actions.kick()
+    const unattendedRun = context?.actionSource === 'routine'
+    if (isTaskAction(actionType) && unattendedRun) {
+      const label = actionType === 'computer_use' ? 'Computer Use' : 'Web Use'
+      return reply(
+        `${taskReference}${label}: Waiting for the user's approval in Action Approval; it runs once they approve. Tell the user it is waiting for them.`,
+        'pending'
+      )
+    }
     if (isTaskAction(actionType)) {
       const label = actionType === 'computer_use' ? 'Computer Use' : 'Web Use'
       return reply(
@@ -317,6 +325,12 @@ export class NativeActionToolExtension implements ToolExtension {
         .then((outcome) => ({ kind: 'outcome' as const, outcome })),
       actions.whenParked(proposed.id).then(() => ({ kind: 'parked' as const }))
     ])
+    if (raced.kind === 'parked' && unattendedRun) {
+      return reply(
+        `${taskReference}"${spec.title(args)}": Waiting for the user's approval in Action Approval; it runs once they approve. Tell the user it is waiting for them.`,
+        'pending'
+      )
+    }
     if (raced.kind === 'parked') {
       return reply(
         `${taskReference}Error: the action engine held this Chat action instead of starting it. No approval was created.`,
