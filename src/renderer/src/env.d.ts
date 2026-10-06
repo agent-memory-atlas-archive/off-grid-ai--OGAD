@@ -167,6 +167,13 @@ interface RendererAPIOverrides {
     onState?: (
       callback: (state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting') => void
     ) => () => void
+    onPreferencesChanged?: (
+      callback: (preferences: {
+        state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting'
+        spinning: boolean
+      }) => void
+    ) => () => void
+    onFlourish?: (callback: () => void) => () => void
   }
   // Open-core bridge
   isPro?: boolean

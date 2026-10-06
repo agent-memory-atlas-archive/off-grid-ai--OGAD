@@ -259,6 +259,29 @@ const offGridApi = {
       ): void => callback(state)
       ipcRenderer.on('god-twin:state', listener)
       return unsubscribe('god-twin:state', listener)
+    },
+    /** Ares's pose or spin changed, here or in the other Ares: both show the same. */
+    onPreferencesChanged: (
+      callback: (preferences: {
+        state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting'
+        spinning: boolean
+      }) => void
+    ): (() => void) => {
+      const listener = (
+        _event: unknown,
+        preferences: {
+          state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting'
+          spinning: boolean
+        }
+      ): void => callback(preferences)
+      ipcRenderer.on('god-twin:preferences:changed', listener)
+      return unsubscribe('god-twin:preferences:changed', listener)
+    },
+    /** Ares heard his name: every Ares swings his sword once. */
+    onFlourish: (callback: () => void): (() => void) => {
+      const listener = (): void => callback()
+      ipcRenderer.on('god-twin:flourish', listener)
+      return unsubscribe('god-twin:flourish', listener)
     }
   },
   // Loopback HTTP URL for seekable local media (meeting recordings) — <video>
