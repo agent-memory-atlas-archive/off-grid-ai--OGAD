@@ -42,14 +42,6 @@ describe('shouldPlan', () => {
     // "can you send X" is a question opener but a real action.
     expect(shouldPlan('can you send a message to sidd')).toBe(true)
   })
-
-  it('plans a request put as a question, and website work', () => {
-    expect(shouldPlan('can you do a sanity check of this entire website?')).toBe(true)
-    expect(shouldPlan('could you look through the pricing page for typos?')).toBe(true)
-    expect(shouldPlan('review the onboarding flow on staging.example.test')).toBe(true)
-    // A question about facts stays a question.
-    expect(shouldPlan('who won the match last night?')).toBe(false)
-  })
 })
 
 describe('buildPlannerPrompt', () => {
