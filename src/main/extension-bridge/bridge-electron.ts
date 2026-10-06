@@ -5,7 +5,10 @@
 // core; the native action tools and the vault exist only when Pro is active, because only then
 // are they registered. Nothing here grants a browser more than the desktop app itself has.
 
-import { listTaskRuns } from '../tasks/task-history'
+import { getTaskRun, listTaskRuns } from '../tasks/task-history'
+import { controlVisionTask } from '../vision/vision-controller'
+import { startTabOffers } from '../browser/browser-start-tab'
+import { WEB_USE_TOOL_NAME } from '../tools/nativeActionToolExtension-logic'
 import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
@@ -62,6 +65,7 @@ import {
   turnsToAppend
 } from './bridge-conversations'
 import { generateKeyPair } from './bridge-protocol'
+import { latestBrowserTask } from './bridge-task-progress'
 import { createLinkRegistry, type BrowserLink } from './bridge-socket'
 
 const storePath = (): string => path.join(app.getPath('userData'), 'extension-bridge.json')
@@ -272,6 +276,13 @@ const settingsStore = createSettingsStore({
   transcription: readTranscriptionInfo
 })
 
+/** The journey every task a browser starts belongs to: its chats' origin. */
+const journeyOf = (browser: PairedBrowser): string => `${BROWSER_ORIGIN_PREFIX}${browser.id}`
+
+/** The task a run just started for this journey, as task history recorded it at launch. */
+const newestTaskOf = (journeyId: string, since: number): { taskId: string } | null =>
+  latestBrowserTask(listTaskRuns(20), journeyId, since)
+
 const data: BridgeData = {
   features,
   desktopName: () => 'Off Grid AI Desktop',
@@ -288,7 +299,7 @@ const data: BridgeData = {
         .prepare(
           'UPDATE rag_conversations SET origin_device_id = ?, origin_device_name = ? WHERE id = ?'
         )
-        .run(`${BROWSER_ORIGIN_PREFIX}${browser.id}`, browser.name, conversation.id)
+        .run(journeyOf(browser), browser.name, conversation.id)
     }
     for (const turn of turnsToAppend(getRagMessages(conversation.id), conversation.turns)) {
       addRagMessage(conversation.id, turn.role, turn.content)
@@ -301,22 +312,23 @@ const data: BridgeData = {
     notifyRagConversationChanged({ conversationId: id })
   },
   listTools,
-  runTool: async (name, args, browser) => {
-    const result = await runTool(
-      name,
-      args,
-      { conversationId: `${BROWSER_ORIGIN_PREFIX}${browser.id}` },
-      getToolExtensions()
-    )
-    return { ok: result.status !== 'failed', output: result.text }
+  runTool: async (name, args, browser, tabId) => {
+    const journeyId = journeyOf(browser)
+    const startedAfter = Date.now()
+    // A web task works in the tab the browser offered (its chat's), not a new one.
+    if (name === WEB_USE_TOOL_NAME) {
+      startTabOffers.offer(journeyId, tabId === undefined ? null : { browserId: browser.id, tabId })
+    }
+    const result = await runTool(name, args, { conversationId: journeyId }, getToolExtensions())
+    const ok = result.status !== 'failed'
+    if (name === WEB_USE_TOOL_NAME && !ok) startTabOffers.offer(journeyId, null)
+    const task = ok && name === WEB_USE_TOOL_NAME ? newestTaskOf(journeyId, startedAfter) : null
+    return { ok, output: result.text, ...(task ? { taskId: task.taskId } : {}) }
   },
-  latestTask: async (browser, since) => {
-    const run = listTaskRuns(20).find(
-      (task) =>
-        task.journeyId === `${BROWSER_ORIGIN_PREFIX}${browser.id}` && task.startedAt >= since
-    )
-    return run ? { status: run.status, summary: run.summary ?? '' } : null
-  },
+  latestTask: async (browser, since) =>
+    latestBrowserTask(listTaskRuns(20), journeyOf(browser), since),
+  stopTask: async (browser, taskId) =>
+    getTaskRun(taskId)?.journeyId === journeyOf(browser) && controlVisionTask('stop', taskId),
   vault: async (request, browser) =>
     callHookAsync(HOOKS.extensionVaultRequest, request, {
       deviceName: browser.name,

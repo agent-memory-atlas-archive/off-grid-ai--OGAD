@@ -51,6 +51,19 @@ export interface BridgeFeatures {
   readonly browserTasks?: boolean
 }
 
+/** What a paired browser sees of a web task it started (desktop task-progress.ts). */
+export interface BrowserTaskProgress {
+  readonly taskId: string
+  readonly status: string
+  readonly summary: string
+  /** Phase titles in order; empty before the plan is made. */
+  readonly plan: readonly string[]
+  /** Index into `plan` of the phase in progress, or -1 with no plan. */
+  readonly phase: number
+  readonly steps: readonly string[]
+  readonly action: string
+}
+
 export interface BridgeData {
   features(): BridgeFeatures
   desktopName(): string
@@ -58,14 +71,19 @@ export interface BridgeData {
   putConversation(conversation: unknown, browser: PairedBrowser): Promise<void>
   deleteConversation(id: string): Promise<void>
   listTools(): Promise<unknown[]>
-  runTool(name: string, args: Record<string, unknown>, browser: PairedBrowser): Promise<unknown>
-  vault(request: unknown, browser: PairedBrowser): Promise<unknown>
+  /** `tabId`: the browser's tab a web task should start in (browser-start-tab.ts). */
+  runTool(
+    name: string,
+    args: Record<string, unknown>,
+    browser: PairedBrowser,
+    tabId?: number
+  ): Promise<unknown>
   /** This browser's latest task started at or after `since` (ms): web_use answers "started" at
    *  once, so a browser waiting on the result asks here. Null when none has started yet. */
-  latestTask(
-    browser: PairedBrowser,
-    since: number
-  ): Promise<{ status: string; summary: string } | null>
+  latestTask(browser: PairedBrowser, since: number): Promise<BrowserTaskProgress | null>
+  /** Stops a task this browser started (its journey is this browser's). False otherwise. */
+  stopTask(browser: PairedBrowser, taskId: string): Promise<boolean>
+  vault(request: unknown, browser: PairedBrowser): Promise<unknown>
   /** One section of the desktop's settings (settings.ts), as its Settings screen shows it. */
   readSettings(section: SettingsSection): Promise<unknown>
   /** Apply an already-validated patch through the desktop's own setters. */
@@ -152,13 +170,22 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
       if (typeof p.name !== 'string' || typeof p.args !== 'object' || p.args === null) {
         throw new Error('invalid')
       }
+      const tabId = p.tabId
+      if (tabId !== undefined && !(Number.isSafeInteger(tabId) && Number(tabId) >= 0)) {
+        throw new Error('invalid')
+      }
       // What tools.list offers, this runs: a free desktop's connector tools included.
       const name = p.name
       const listed = (await deps.data.listTools()).some(
         (tool) => (tool as { name?: unknown }).name === name
       )
       if (!listed) requireFeature('tools')
-      return deps.data.runTool(p.name, p.args as Record<string, unknown>, browser)
+      return deps.data.runTool(
+        p.name,
+        p.args as Record<string, unknown>,
+        browser,
+        tabId === undefined ? undefined : Number(tabId)
+      )
     },
     'tasks.latest': async (p, browser) => {
       requireFeature('tools')
@@ -166,6 +193,13 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
         throw new Error('invalid')
       }
       return deps.data.latestTask(browser, p.since)
+    },
+    'tasks.stop': async (p, browser) => {
+      requireFeature('tools')
+      if (typeof p.taskId !== 'string' || !/^[\w-]{1,128}$/.test(p.taskId)) {
+        throw new Error('invalid')
+      }
+      return deps.data.stopTask(browser, p.taskId)
     },
     vault: async (p, browser) => {
       requireFeature('vault')

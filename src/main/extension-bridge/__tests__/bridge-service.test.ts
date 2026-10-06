@@ -82,9 +82,23 @@ async function setup(opts: { approve?: boolean; features?: BridgeFeatures } = {}
       calls.push(`delete:${id}`)
     },
     listTools: async () => [{ name: 'notion_search' }],
-    runTool: async (name) => ({ ok: true, output: `ran ${name}` }),
+    runTool: async (name, _args, _browser, tabId) => ({
+      ok: true,
+      output: `ran ${name}${tabId === undefined ? '' : ` in tab ${tabId}`}`
+    }),
     latestTask: async (browser, since) =>
-      since > 2_000_000 ? null : { status: 'done', summary: `for ${browser.name}` },
+      since > 2_000_000
+        ? null
+        : {
+            taskId: 'task-1',
+            status: 'done',
+            summary: `for ${browser.name}`,
+            plan: ['Open the shop'],
+            phase: 0,
+            steps: ['opened the shop'],
+            action: ''
+          },
+    stopTask: async (_browser, taskId) => taskId === 'task-1',
     readSettings: async (section) => settings.read(section),
     writeSettings: async (section, patch) => settings.write(section, patch),
     vault: async () => ({ type: 'status', state: 'unlocked' })
@@ -295,6 +309,15 @@ describe('sealed rpc', () => {
       ok: false,
       error: 'invalid'
     })
+    // A web task can name the chat's tab to start in; anything but a tab id is refused.
+    expect(
+      (await pro.call('device000001', 'tools.run', { name: 'web_use', args: {}, tabId: 42 })).body
+    ).toMatchObject({ ok: true, result: { output: 'ran web_use in tab 42' } })
+    for (const tabId of [-1, 1.5, '42', null]) {
+      expect(
+        (await pro.call('device000001', 'tools.run', { name: 'web_use', args: {}, tabId })).body
+      ).toMatchObject({ ok: false, error: 'invalid' })
+    }
   })
 
   it('tasks.latest reports this browser\'s latest task, for a run that started one', async () => {
@@ -303,7 +326,15 @@ describe('sealed rpc', () => {
     await pro.pair()
     expect((await pro.call('device000001', 'tasks.latest', { since: 1 })).body).toMatchObject({
       ok: true,
-      result: { status: 'done', summary: 'for Chrome on this Mac' }
+      result: {
+        taskId: 'task-1',
+        status: 'done',
+        summary: 'for Chrome on this Mac',
+        plan: ['Open the shop'],
+        phase: 0,
+        steps: ['opened the shop'],
+        action: ''
+      }
     })
     expect((await pro.call('device000001', 'tasks.latest', { since: 3_000_000 })).body).toMatchObject(
       { ok: true, result: null }
@@ -318,6 +349,28 @@ describe('sealed rpc', () => {
       ok: false,
       error: 'pro_required'
     })
+  })
+
+  it('tasks.stop stops the task this browser names, and refuses anything but a task id', async () => {
+    const pro = await setup({ features: PRO })
+    await pro.pair()
+    expect((await pro.call('device000001', 'tasks.stop', { taskId: 'task-1' })).body).toMatchObject(
+      { ok: true, result: true }
+    )
+    expect((await pro.call('device000001', 'tasks.stop', { taskId: 'task-2' })).body).toMatchObject(
+      { ok: true, result: false }
+    )
+    for (const taskId of [3, '', 'a b', 'x'.repeat(200)]) {
+      expect((await pro.call('device000001', 'tasks.stop', { taskId })).body).toMatchObject({
+        ok: false,
+        error: 'invalid'
+      })
+    }
+    const free = await setup()
+    await free.pair()
+    expect(
+      (await free.call('device000001', 'tasks.stop', { taskId: 'task-1' })).body
+    ).toMatchObject({ ok: false, error: 'pro_required' })
   })
 
   it('unpair removes the browser; its key stops working', async () => {
