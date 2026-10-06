@@ -719,6 +719,11 @@ const offGridApi = {
   /** God's scheduled tasks (routines): main/god-routines.ts. */
   godRoutines: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('god:routines:list'),
+    create: (input: {
+      title: string
+      instruction: string
+      schedule: Record<string, unknown>
+    }): Promise<unknown> => ipcRenderer.invoke('god:routines:create', input),
     update: (id: string, patch: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('god:routines:update', id, patch),
     remove: (id: string): Promise<boolean> => ipcRenderer.invoke('god:routines:delete', id),

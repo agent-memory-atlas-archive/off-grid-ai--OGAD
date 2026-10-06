@@ -107,6 +107,12 @@ export const HOOKS = {
    * reports the vault as unavailable.
    */
   extensionVaultRequest: 'vault.extensionRequest',
+  /** () => Promise<GodPendingApproval[]> - what waits for approval, for God's routines that react
+   *  to it (main/god-routines.ts). Pro registers it. */
+  godPendingApprovals: 'god:pendingApprovals',
+  /** () => Promise<GodMail[]> - the newest mail across the user's accounts, for routines that react
+   *  to new email. Pro registers it; it reads only accounts with mail selected. */
+  godRecentMail: 'god:recentMail',
   /** Legacy MCP-only predecessor of actionsProposeApproval. Kept so a pro build
    *  that has not yet migrated still gates connector writes; remove once
    *  desktop-pro registers actionsProposeApproval. */

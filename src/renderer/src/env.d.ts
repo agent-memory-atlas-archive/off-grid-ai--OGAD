@@ -126,6 +126,11 @@ interface RendererAPIOverrides {
   godContext?: () => Promise<unknown>
   godRoutines?: {
     list: () => Promise<unknown[]>
+    create: (input: {
+      title: string
+      instruction: string
+      schedule: Record<string, unknown>
+    }) => Promise<unknown>
     update: (id: string, patch: Record<string, unknown>) => Promise<unknown>
     remove: (id: string) => Promise<boolean>
     run: (id: string) => Promise<string>
