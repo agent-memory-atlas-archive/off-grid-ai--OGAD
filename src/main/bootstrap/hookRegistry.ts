@@ -57,6 +57,11 @@ export const HOOKS = {
    * providers own verification, read-tool discovery, and execution through their supported protocol.
    */
   mcpConnectorToolSource: 'mcp:connectorToolSource',
+  /**
+   * (connectorId: number, url: string | null) => void - a connector is about to be removed, while
+   * its stored sign-in still exists: Pro revokes provider tokens that support it (Google).
+   */
+  mcpBeforeRemove: 'mcp:beforeRemove',
   /** (mutation: SyncMutation) => void - record a committed core data change in Pro sync. */
   syncRecordLocalMutation: 'sync.recordLocalMutation',
   /**

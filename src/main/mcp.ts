@@ -151,6 +151,12 @@ export function setConnectorStatus(
 export function removeConnector(id: number): void {
   ensure()
   cancelOAuthAuthorization(id)
+  // Before the stored sign-in goes: the provider may be told to forget it too.
+  try {
+    callHook(HOOKS.mcpBeforeRemove, id, getConnector(id)?.url ?? null)
+  } catch {
+    /* Removing locally never waits on, or fails for, the provider. */
+  }
   const database = getDB()
   database.transaction(() => {
     deleteSecretsByPrefix(`connector:${id}:`)
