@@ -83,7 +83,6 @@ import { callHook } from './bootstrap/hookRegistry'
 import { GodTwinScreen, type GodTwinWakeRequest } from './components/god-twin/GodTwinScreen'
 import { useWakeListener } from './components/god-twin/use-wake-listener'
 import { playListeningChime } from './components/god-twin/listening-chime'
-import { useGodProfile } from './components/god-twin/use-god-profile'
 import { useGodNews } from './components/god-twin/use-god-news'
 import { internalTabLocation, internalTabPath, isInternalTabView } from './lib/internal-tab-route'
 import {
@@ -381,11 +380,11 @@ function AppContent(): React.JSX.Element {
   const [godTwinWake, setGodTwinWake] = useState<GodTwinWakeRequest>({ count: 0 })
   // The God is using the mic or speaking: the wake-word listener steps aside.
   const [godTwinBusy, setGodTwinBusy] = useState(false)
-  // God is Pro: a free build never listens for the wake word, and chat mode does not listen.
-  const godProfile = useGodProfile()
   // A dot on God when it has something new since you last opened it (a reply, an approval).
   const godNews = useGodNews(viewMode === 'explore', isPro)
-  useWakeListener(godTwinBusy || !isPro || godProfile.mode === 'chat')
+  // God is Pro: a free build never listens for the wake word. Its own switch decides, in Chat
+  // and in Voice alike.
+  useWakeListener(godTwinBusy || !isPro)
   // Navigation is unconditional. Leaving a chat with a task running used to prompt, because the
   // live view was lost on the way out; a running task now follows you in a floating card
   // (tasks.floatingView), so there is nothing left to warn about.
