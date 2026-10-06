@@ -6,7 +6,7 @@
 // closed — we don't hold long-lived child processes.
 
 import { getDB } from './database'
-import { deleteSecretsByPrefix, getSecret, setSecret } from './secrets'
+import { deleteSecret, deleteSecretsByPrefix, getSecret, setSecret } from './secrets'
 import { makeOAuthProvider, ensureLoopback, hasOAuthTokens } from './mcp-oauth'
 import { cancelOAuthAuthorization } from './mcp-oauth-cancellation'
 import { callHook, HOOKS } from './bootstrap/hookRegistry'
@@ -163,9 +163,14 @@ export function updateConnector(id: number, changes: ConnectorChanges): Connecto
   database.transaction(() => {
     if (moved) {
       deleteSecretsByPrefix(`connector:${id}:oauth:`)
+      // The secrets it handed the old server or command (API keys as environment variables)
+      // are not the new one's to receive.
+      for (const key of current.env_keys ? (JSON.parse(current.env_keys) as string[]) : []) {
+        deleteSecret(`connector:${id}:${key}`)
+      }
       database
         .prepare(
-          "UPDATE connectors SET name=?, url=?, command=?, args=?, tools=NULL, status='unknown', status_detail=? WHERE id=?"
+          "UPDATE connectors SET name=?, url=?, command=?, args=?, env_keys=NULL, tools=NULL, status='unknown', status_detail=? WHERE id=?"
         )
         .run(name, url, command, args, 'Settings changed. Test the connection.', id)
     } else {

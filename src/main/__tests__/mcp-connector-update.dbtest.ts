@@ -75,6 +75,24 @@ describe('updateConnector', () => {
     })
   })
 
+  it("a new command does not inherit the old one's secrets", () => {
+    // Review finding: the new command started with the old command's environment secrets.
+    const id = addConnector({
+      name: 'Local',
+      transport: 'stdio',
+      command: 'node',
+      args: ['a.js'],
+      envKeys: ['API_TOKEN']
+    })
+    connected(id)
+    updateConnector(id, { name: 'Local notes' })
+    expect(getSecret(`connector:${id}:API_TOKEN`)).toBe('synthetic-token')
+
+    updateConnector(id, { command: 'npx', args: ['other-server'] })
+    expect(getSecret(`connector:${id}:API_TOKEN`)).toBeNull()
+    expect(listConnectors().find((c) => c.id === id)).toMatchObject({ env_keys: null })
+  })
+
   it('refuses an empty name, an empty address, and a removed connector', () => {
     const id = addConnector({ name: 'Notes', transport: 'http', url: 'https://a.example.test/mcp' })
     expect(() => updateConnector(id, { name: ' ' })).toThrow('Enter a name.')
