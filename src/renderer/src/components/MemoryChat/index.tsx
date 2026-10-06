@@ -3528,6 +3528,9 @@ export function MemoryChat({
             )}
           </div>
 
+          {/* God is set up already: no model, settings or gallery buttons. */}
+          {!god && (
+            <>
           {/* Active models — pick the model per modality (text/image/voice/STT) */}
           <button
             onClick={() => {
@@ -3594,6 +3597,8 @@ export function MemoryChat({
               <circle cx="9" cy="9" r="1.5" fill="currentColor" />
             </svg>
           </button>
+            </>
+          )}
           <TaskPanelTrigger conversationId={activeConversationId} />
         </header>
 
@@ -3776,10 +3781,16 @@ export function MemoryChat({
                                   </svg>
                                 </div>
                                 <h2 className="text-3xl font-semibold tracking-tight text-foreground">
-                                  {mode === 'image' ? 'Create an image' : 'Start a conversation'}
+                                  {god
+                                    ? `Ask ${god.name}`
+                                    : mode === 'image'
+                                      ? 'Create an image'
+                                      : 'Start a conversation'}
                                 </h2>
                                 <p className="mt-3 max-w-md text-sm text-muted-foreground">
-                                  {mode === 'image'
+                                  {god
+                                    ? 'It knows your day, memory and accounts, and asks before it acts.'
+                                    : mode === 'image'
                                     ? 'Pick a style, then describe your subject — generated on-device.'
                                     : activeProjectName
                                       ? `Grounded in the “${activeProjectName}” knowledge base.`
@@ -3788,7 +3799,8 @@ export function MemoryChat({
                                         : 'Ask anything, generate images, or build — all on-device.'}
                                 </p>
                               </div>
-                              {mode !== 'image' ? (
+                              {/* God's workflows and suggestions sit beside Ares. */}
+                              {god ? null : mode !== 'image' ? (
                                 <ExploreSection
                                   onRun={(preset) => {
                                     setPresetSetup(preset)
@@ -3798,7 +3810,7 @@ export function MemoryChat({
                                   className="mt-6 w-full text-left"
                                 />
                               ) : null}
-                              {mode === 'image' ? (
+                              {god ? null : mode === 'image' ? (
                                 showImageOptions ? (
                                   <StylePresetPicker
                                     activeStyle={activeStyle}
