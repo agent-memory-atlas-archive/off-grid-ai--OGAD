@@ -245,6 +245,19 @@ const offGridApi = {
     },
     /** A short 16 kHz WAV clip to check for the wake word, on this machine. */
     hear: (wav: Uint8Array): Promise<boolean> => ipcRenderer.invoke('god-twin:hear', wav),
+    /** 16 kHz samples for the always-on wake-word model, once it is trained. */
+    wakeAudio: (samples: Float32Array): Promise<boolean> =>
+      ipcRenderer.invoke('god-twin:wake-audio', samples),
+    /** Teach the wake word: recordings of it (16 kHz WAVs) and one of other speech. */
+    wakeTrain: (input: { recordings: Uint8Array[]; other?: Uint8Array }): Promise<unknown> =>
+      ipcRenderer.invoke('god-twin:wake-train', input),
+    wakeForget: (): Promise<unknown> => ipcRenderer.invoke('god-twin:wake-forget'),
+    setWakeTeaching: (on: boolean): void => ipcRenderer.send('god-twin:wake-teaching', on),
+    onWakeTrainProgress: (callback: (done: number) => void): (() => void) => {
+      const listener = (_event: unknown, done: number): void => callback(done)
+      ipcRenderer.on('god-twin:wake-train:progress', listener)
+      return unsubscribe('god-twin:wake-train:progress', listener)
+    },
     onListening: (callback: (listening: boolean) => void): (() => void) => {
       const listener = (_event: unknown, listening: boolean): void => callback(listening)
       ipcRenderer.on('god-twin:listening', listener)

@@ -114,7 +114,11 @@ interface SessionEntityRecord {
 type ArtifactKind = import('../../shared/ipc-contracts').ArtifactKindContract
 
 type GodTwinListenSettings = import('../../shared/god-twin/wake-word').WakeListenSettings
-type GodTwinListenState = GodTwinListenSettings & { available: boolean }
+type GodTwinListenState = GodTwinListenSettings & {
+  available: boolean
+  /** The always-on wake-word model is trained for this wake word. */
+  trained?: boolean
+}
 interface GodTwinWakeEvent {
   source: 'companion' | 'wake-word'
   /** What was said after the wake word in the same breath. */
@@ -161,8 +165,16 @@ interface RendererAPIOverrides {
     onWake?: (callback: (wake: GodTwinWakeEvent) => void) => () => void
     getListen?: () => Promise<GodTwinListenState>
     setListen?: (patch: Partial<GodTwinListenSettings>) => Promise<GodTwinListenState>
-    onListenChanged?: (callback: (settings: GodTwinListenSettings) => void) => () => void
+    onListenChanged?: (callback: (settings: GodTwinListenState) => void) => () => void
     hear?: (wav: Uint8Array) => Promise<boolean>
+    wakeAudio?: (samples: Float32Array) => Promise<boolean>
+    wakeTrain?: (input: {
+      recordings: Uint8Array[]
+      other?: Uint8Array
+    }) => Promise<GodTwinListenState>
+    wakeForget?: () => Promise<GodTwinListenState>
+    setWakeTeaching?: (on: boolean) => void
+    onWakeTrainProgress?: (callback: (done: number) => void) => () => void
     onListening?: (callback: (listening: boolean) => void) => () => void
     onState?: (
       callback: (state: 'idle' | 'walking' | 'running' | 'fighting' | 'resting') => void
