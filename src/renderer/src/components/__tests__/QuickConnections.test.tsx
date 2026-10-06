@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QuickConnections } from '../QuickConnections'
+import { rowToReconnect } from '../useQuickConnection'
 
 let records: Array<{ id: number; name: string; url: string; status: string; enabled: number }>
 let testResult: { ok: boolean; error?: string }
@@ -52,7 +53,7 @@ describe('quick connections', () => {
       )
     )
     await user.click(screen.getAllByRole('button', { name: 'Connect' })[0]!)
-    await screen.findByText('Connected')
+    await screen.findByText('1 connected')
     expect(api.mcpAdd).toHaveBeenCalledWith(
       expect.objectContaining({ url: 'https://mcp.notion.com/mcp', liveOnly: true })
     )
@@ -74,7 +75,7 @@ describe('quick connections', () => {
     expect(api.mcpSetEnabled).not.toHaveBeenCalled()
     testResult = { ok: true }
     await user.click(screen.getAllByRole('button', { name: 'Connect' })[0]!)
-    await screen.findByText('Connected')
+    await screen.findByText('1 connected')
   })
   it('cancels pending sign-in without marking the connection ready', async () => {
     waitForLogin = true
@@ -92,5 +93,29 @@ describe('quick connections', () => {
     expect(api.mcpCancel).toHaveBeenCalledWith(7)
     expect(api.mcpSetEnabled).not.toHaveBeenCalled()
     expect(screen.queryByText('Connected')).toBeNull()
+  })
+})
+
+describe('rowToReconnect', () => {
+  const row = (
+    id: number,
+    status: string,
+    enabled = 1
+  ): { id: number; name: string; url: string; status: string; enabled: number } => ({
+    id,
+    name: `Notion ${id}`,
+    url: 'https://mcp.notion.com/mcp',
+    status,
+    enabled
+  })
+  it('picks the account that needs it, not just the first', () => {
+    expect(rowToReconnect([row(1, 'ok'), row(2, 'error')], 'https://mcp.notion.com/mcp')?.id).toBe(
+      2
+    )
+    expect(rowToReconnect([row(1, 'ok'), row(2, 'ok', 0)], 'https://mcp.notion.com/mcp')?.id).toBe(
+      2
+    )
+    expect(rowToReconnect([row(1, 'ok')], 'https://mcp.notion.com/mcp')?.id).toBe(1)
+    expect(rowToReconnect([row(1, 'error')], 'https://mcp.linear.app/mcp')).toBeUndefined()
   })
 })

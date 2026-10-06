@@ -22,6 +22,7 @@ export function QuickConnections({
   onBusyChange?: (busy: boolean) => void
 }): JSX.Element {
   const [, refreshProviders] = useState(0)
+  const [providersFailed, setProvidersFailed] = useState(false)
   useEffect(() => {
     let active = true
     if (!getSlot(SLOTS.quickConnectionProviders) && getRendererIsPro()) {
@@ -37,7 +38,8 @@ export function QuickConnections({
           refreshProviders((value) => value + 1)
         })
         .catch(() => {
-          /* Core builds have no provider UI. */
+          // A Pro build whose account cards did not load: say so, rather than show nothing.
+          if (active) setProvidersFailed(true)
         })
     }
     return () => {
@@ -60,9 +62,15 @@ export function QuickConnections({
       <div>
         <h2 className="text-lg text-neutral-100">Connect your work</h2>
         <p className="mt-2 text-sm text-neutral-400">
-          Bring your accounts and tools into your private workspace.
+          Bring your accounts and tools into your private workspace. Accounts are read live when
+          you ask and nothing from them is copied into memory. Add as many as you use.
         </p>
       </div>
+      {providersFailed && (
+        <div role="alert" className="flex items-center gap-3 text-xs">
+          <p>Google, Microsoft and Obsidian could not load. Open Integrations later to add them.</p>
+        </div>
+      )}
       {connection.errors.load && (
         <div role="alert" className="flex items-center gap-3 text-xs">
           <p>{connection.errors.load}</p>

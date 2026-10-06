@@ -41,6 +41,15 @@ interface QuickConnectionState {
 }
 const wasCancelled = (attempt: Attempt): boolean => attempt.cancelled
 
+/** The row for this provider that a reconnect should fix: a broken one first, else the first. */
+export function rowToReconnect(
+  rows: readonly QuickConnectionRecord[],
+  url: string
+): QuickConnectionRecord | undefined {
+  const mine = rows.filter((row) => row.url === url)
+  return mine.find((row) => row.status !== 'ok' || !row.enabled) ?? mine[0]
+}
+
 export function useQuickConnection(onBusyChange?: (busy: boolean) => void): QuickConnectionState {
   const [items, setItems] = useState<QuickConnectionRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -105,7 +114,8 @@ export function useQuickConnection(onBusyChange?: (busy: boolean) => void): Quic
     try {
       // Read current state rather than a stale rendered list before creating a record.
       const current = (await window.api.mcpList()) as QuickConnectionRecord[]
-      const existing = entry.newAccount ? undefined : current.find((item) => item.url === entry.url)
+      // Reconnect the row that needs it: with several accounts, the broken one, not the first.
+      const existing = entry.newAccount ? undefined : rowToReconnect(current, entry.url)
       if (wasCancelled(attempt)) return
       attempt.id =
         existing?.id ??
@@ -148,6 +158,6 @@ export function useQuickConnection(onBusyChange?: (busy: boolean) => void): Quic
   }
 
   const recordFor = (entry: QuickConnectionEntry): QuickConnectionRecord | undefined =>
-    items.find((item) => item.url === entry.url)
+    rowToReconnect(items, entry.url)
   return { items, loading, busy, errors, connect, cancel, reload, recordFor }
 }
