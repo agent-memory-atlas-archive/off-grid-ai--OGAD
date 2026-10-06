@@ -466,6 +466,25 @@ function schemas(
   )
 }
 
+/** The tools a paired browser's agent is offered: the same built-ins and extensions this chat
+ *  uses, minus what Settings turned off. generate_image is left out; its image lands in chat. */
+export async function enabledToolSchemas(
+  exts: ToolExtension[]
+): Promise<{ schema: unknown; extension?: ToolExtension }[]> {
+  const off = disabledSet()
+  const builtins = schemas(false, { projectActive: false, allMemory: true }).map((schema) => ({
+    schema
+  }))
+  const extended = await Promise.all(
+    exts.map(async (extension) =>
+      (await extension.schemas())
+        .filter((s) => !off.has((s as { function?: { name?: string } }).function?.name ?? ''))
+        .map((schema) => ({ schema, extension }))
+    )
+  )
+  return [...builtins, ...extended.flat()]
+}
+
 /** Normalize a tool's return (bare string or structured) to a ToolResult. */
 function asToolResult(r: string | ToolResult): ToolResult {
   return typeof r === 'string' ? { text: r } : r

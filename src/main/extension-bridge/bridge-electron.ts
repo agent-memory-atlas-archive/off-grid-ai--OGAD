@@ -21,7 +21,7 @@ import {
   getSettings,
   saveSetting
 } from '../database'
-import { getToolExtensions, runTool } from '../tools'
+import { enabledToolSchemas, getToolExtensions, runTool } from '../tools'
 import { notifyRagConversationChanged } from '../rag-conversation-events'
 import { callHook, callHookAsync, hasHook, HOOKS } from '../bootstrap/hookRegistry'
 import { getSecret } from '../secrets'
@@ -191,21 +191,19 @@ function features(): BridgeFeatures {
 
 async function listTools(): Promise<unknown[]> {
   const out: unknown[] = []
-  for (const ext of getToolExtensions()) {
-    const source = ext.category === 'tool' ? 'native' : 'connector'
-    for (const schema of await ext.schemas()) {
-      const fn = (
-        schema as { function?: { name?: unknown; description?: unknown; parameters?: unknown } }
-      ).function
-      if (typeof fn?.name === 'string') {
-        out.push({
-          name: fn.name,
-          description: typeof fn.description === 'string' ? fn.description : '',
-          parameters: fn.parameters ?? { type: 'object', properties: {} },
-          source,
-          ...(source === 'connector' ? { connector: ext.id } : {})
-        })
-      }
+  for (const { schema, extension } of await enabledToolSchemas(getToolExtensions())) {
+    const fn = (
+      schema as { function?: { name?: unknown; description?: unknown; parameters?: unknown } }
+    ).function
+    if (typeof fn?.name === 'string') {
+      const source = !extension || extension.category === 'tool' ? 'native' : 'connector'
+      out.push({
+        name: fn.name,
+        description: typeof fn.description === 'string' ? fn.description : '',
+        parameters: fn.parameters ?? { type: 'object', properties: {} },
+        source,
+        ...(source === 'connector' && extension ? { connector: extension.id } : {})
+      })
     }
   }
   return out
