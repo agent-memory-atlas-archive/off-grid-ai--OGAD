@@ -4436,7 +4436,7 @@ export function MemoryChat({
                                     setToolsOn((t) => !t)
                                   }}
                                 >
-                                  <Robot /> <span className="flex-1">Assistant</span>
+                                  <Robot /> <span className="flex-1">God Twin</span>
                                   <span
                                     className={`text-xs ${toolsOn ? 'text-primary' : 'text-muted-foreground'}`}
                                   >
@@ -4615,13 +4615,13 @@ export function MemoryChat({
                                   }}
                                   className={`h-8 gap-1.5 rounded-full ${toolsOn ? 'border-primary text-primary' : 'text-muted-foreground'}`}
                                 >
-                                  <Robot className="h-3.5 w-3.5" /> Assistant
+                                  <Robot className="h-3.5 w-3.5" /> God Twin
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent>
                                 {toolsOn
-                                  ? 'Assistant on - can use Web Use or Computer Use'
-                                  : 'Assistant off - answers without controlling websites or apps'}
+                                  ? 'God Twin on - can act with Web Use or Computer Use'
+                                  : 'God Twin off - answers without controlling websites or apps'}
                               </TooltipContent>
                             </Tooltip>
                             <Tooltip>
@@ -5130,9 +5130,9 @@ export function MemoryChat({
         <Dialog open={assistantGateOpen} onOpenChange={setAssistantGateOpen}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Assistant requires Pro</DialogTitle>
+              <DialogTitle>God Twin acting needs Pro</DialogTitle>
               <DialogDescription>
-                Assistant uses Web Use and Computer Use on this Desktop.
+                God Twin acts with Web Use and Computer Use on this Desktop.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>

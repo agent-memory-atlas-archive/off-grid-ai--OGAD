@@ -122,7 +122,7 @@ type ToolSetting = { name: string; description: string; enabled?: boolean }
 
 const TOOL_GROUPS = [
   {
-    label: 'Assistant',
+    label: 'God Twin',
     matches: (name: string): boolean => ['computer_use', 'web_use'].includes(name)
   },
   {
