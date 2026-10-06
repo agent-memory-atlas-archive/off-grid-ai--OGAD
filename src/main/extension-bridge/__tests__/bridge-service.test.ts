@@ -265,6 +265,12 @@ describe('sealed rpc', () => {
       (await free.call('device000001', 'tools.run', { name: 'mail_send', args: {} })).body
     ).toMatchObject({ ok: false, error: 'pro_required' })
 
+    // A connector tool the desktop lists runs on a free desktop too (review finding: it was
+    // listed, then refused as Pro-only).
+    expect(
+      (await free.call('device000001', 'tools.run', { name: 'notion_search', args: {} })).body
+    ).toMatchObject({ ok: true, result: { output: 'ran notion_search' } })
+
     // Pro, but this desktop cannot answer for the vault or tools yet: never "upgrade".
     const stale = await setup({ features: { ...PRO, vault: false, tools: false } })
     await stale.pair()

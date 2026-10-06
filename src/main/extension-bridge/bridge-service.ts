@@ -149,10 +149,15 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
     },
     'tools.list': async () => deps.data.listTools(),
     'tools.run': async (p, browser) => {
-      requireFeature('tools')
       if (typeof p.name !== 'string' || typeof p.args !== 'object' || p.args === null) {
         throw new Error('invalid')
       }
+      // What tools.list offers, this runs: a free desktop's connector tools included.
+      const name = p.name
+      const listed = (await deps.data.listTools()).some(
+        (tool) => (tool as { name?: unknown }).name === name
+      )
+      if (!listed) requireFeature('tools')
       return deps.data.runTool(p.name, p.args as Record<string, unknown>, browser)
     },
     'tasks.latest': async (p, browser) => {
