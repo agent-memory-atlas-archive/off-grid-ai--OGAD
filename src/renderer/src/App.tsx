@@ -392,7 +392,8 @@ function AppContent(): React.JSX.Element {
       navigateTo('explore')
       setGodTwinWake((request) => ({
         count: request.count + 1,
-        ...(wake.said ? { said: wake.said } : {})
+        ...(wake.said ? { said: wake.said } : {}),
+        ...(wake.source ? { source: wake.source } : {})
       }))
     })
   }, [navigateTo])
