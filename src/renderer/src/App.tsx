@@ -4,7 +4,6 @@ import { CommandPalette } from './components/CommandPalette'
 import logo from './assets/logo.png'
 import { useMeetingRecorder } from './useMeetingRecorder'
 import { MemoryChat } from './components/MemoryChat'
-import { ExploreScreen } from './components/explore/ExploreScreen'
 import type { DemoPreset } from './components/explore/presetCatalog'
 import { Settings, SETTINGS_DESTINATIONS } from './components/Settings'
 import { SettingsPanel } from './components/SettingsPanel'
@@ -81,6 +80,8 @@ import {
   type ModelSettingsPanelTab
 } from './lib/model-settings-panel'
 import { callHook } from './bootstrap/hookRegistry'
+import { GodTwinScreen, type GodTwinWakeRequest } from './components/god-twin/GodTwinScreen'
+import { useWakeListener } from './components/god-twin/use-wake-listener'
 import { internalTabLocation, internalTabPath, isInternalTabView } from './lib/internal-tab-route'
 import {
   NOTIFICATION_OPEN_TARGET_CHANNEL,
@@ -373,7 +374,11 @@ function AppContent(): React.JSX.Element {
     presetId?: string
     draftPrompt?: string
   } | null>(null)
-  const [godTwinWakeRequest, setGodTwinWakeRequest] = useState(0)
+  // A wake from Ares on the desktop or the wake word: the God Twin opens and listens.
+  const [godTwinWake, setGodTwinWake] = useState<GodTwinWakeRequest>({ count: 0 })
+  // The God Twin is using the mic or speaking: the wake-word listener steps aside.
+  const [godTwinBusy, setGodTwinBusy] = useState(false)
+  useWakeListener(godTwinBusy)
   // Navigation is unconditional. Leaving a chat with a task running used to prompt, because the
   // live view was lost on the way out; a running task now follows you in a floating card
   // (tasks.floatingView), so there is nothing left to warn about.
@@ -383,9 +388,12 @@ function AppContent(): React.JSX.Element {
     commitViewMode(destination)
   }, [])
   useEffect(() => {
-    return window.api.godTwin?.onWake?.(() => {
-      navigateTo('memory-chat')
-      setGodTwinWakeRequest((request) => request + 1)
+    return window.api.godTwin?.onWake?.((wake) => {
+      navigateTo('explore')
+      setGodTwinWake((request) => ({
+        count: request.count + 1,
+        ...(wake.said ? { said: wake.said } : {})
+      }))
     })
   }, [navigateTo])
   const [sidebarHovered, setSidebarHovered] = useState(false)
@@ -958,6 +966,8 @@ function AppContent(): React.JSX.Element {
         !featureSupportsPlatform(f, currentPlatform()) ||
         (!isPro &&
           !(route === 'tasks' && TaskWorkspace) &&
+          // The God Twin is for everyone; its prepared workflows inside stay Pro.
+          route !== 'explore' &&
           !(route === 'devices' && proActivation === 'entitlement-bootstrap'))
     }
   }
@@ -1341,14 +1351,13 @@ function AppContent(): React.JSX.Element {
                     {proFeatureComingSoon(viewMode, currentPlatform(), true) ? (
                       <UpgradeScreen variant="coming-soon" feature={getProFeature(viewMode)} />
                     ) : viewMode === 'explore' ? (
-                      isPro ? (
-                        <ExploreScreen onRunPreset={handleRunPreset} />
-                      ) : (
-                        <UpgradeScreen feature={getProFeature(viewMode)} />
-                      )
+                      <GodTwinScreen
+                        wake={godTwinWake}
+                        onBusyChange={setGodTwinBusy}
+                        {...(isPro ? { onRunPreset: handleRunPreset } : {})}
+                      />
                     ) : viewMode === 'memory-chat' ? (
                       <MemoryChat
-                        godTwinWakeRequest={godTwinWakeRequest}
                         onNavigateToMemory={handleSelectMemory}
                         onNavigateToChat={handleSelectChat}
                         onNavigateToMeeting={(meetingId) =>

@@ -55,12 +55,12 @@ export interface ProFeature {
 export const PRO_FEATURES: ProFeature[] = [
   {
     route: 'explore',
-    label: 'Assistant',
+    label: 'God Twin',
     icon: Robot,
-    tagline: 'Start a prepared run.',
+    tagline: 'Talk to Ares, hands free.',
     description:
-      'Choose a workflow, add its details, and start it in Chat. The work stays on your device.',
-    highlights: ['Prepared workflows', 'One intake before the run', 'Starts in your local Chat'],
+      'Say "Aries" or tap Ares to talk. Ares answers from your memory, accounts and tools, out loud, and runs prepared workflows with Pro. Wake-word audio is checked on your device and never saved.',
+    highlights: ['Wake word "Aries"', 'Spoken answers', 'Prepared workflows with Pro'],
     platforms: ['darwin', 'win32', 'linux']
   },
   {

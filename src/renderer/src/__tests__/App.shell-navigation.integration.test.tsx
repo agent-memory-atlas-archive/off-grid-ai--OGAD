@@ -50,7 +50,7 @@ describe('<App/> shell navigation integration', () => {
     expect(localStorage.getItem('sidebar_pinned')).toBe('false')
   })
 
-  it('places locked Assistant directly after Chat and opens its Pro journey from Work', async () => {
+  it('places God Twin directly after Chat and opens it for everyone from Work', async () => {
     const user = userEvent.setup()
     render(<App />)
 
@@ -59,15 +59,20 @@ describe('<App/> shell navigation integration', () => {
 
     const work = within(navigation).getByRole('group', { name: 'Work' })
     const chat = within(work).getByRole('button', { name: 'Chat' })
-    const assistant = within(work).getByRole('button', { name: 'Assistant' })
+    const twin = within(work).getByRole('button', { name: 'God Twin' })
     const workButtons = within(work).getAllByRole('button')
 
-    expect(workButtons.indexOf(assistant)).toBe(workButtons.indexOf(chat) + 1)
+    expect(workButtons.indexOf(twin)).toBe(workButtons.indexOf(chat) + 1)
+    expect(within(twin).queryByTitle('Pro')).toBeNull()
 
-    await user.click(assistant)
+    await user.click(twin)
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Assistant' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Get Pro/ })).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 1, name: 'God Twin' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Talk to Ares' })).toBeTruthy()
+    expect(screen.getByRole('textbox', { name: 'Ask Ares' })).toBeTruthy()
+    // A free build has no prepared workflows and no upgrade wall here.
+    expect(screen.queryByText('Things Ares can do')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Get Pro/ })).toBeNull()
     expect(window.location.pathname).toBe('/explore')
   }, 30_000)
 })

@@ -66,7 +66,9 @@ describe('<App/> locked Pro navigation integration', () => {
     await user.hover(navigation)
     await waitFor(() => expect(navigation.getAttribute('aria-expanded')).toBe('true'))
 
-    for (const feature of PRO_FEATURES) {
+    // The God Twin is open to everyone (its prepared workflows stay Pro); every other Pro route
+    // is visible but locked.
+    for (const feature of PRO_FEATURES.filter((f) => f.route !== 'explore')) {
       if (!within(navigation).queryByText(feature.label)) {
         const closedGroups = Array.from(
           navigation.querySelectorAll<HTMLButtonElement>('button[aria-expanded="false"]')
@@ -203,7 +205,7 @@ describe('<App/> locked Pro navigation integration', () => {
             feature.route === 'tasks'
               ? 'Paid Tasks workspace'
               : feature.route === 'explore'
-                ? 'Assistant'
+                ? 'God Twin'
                 : `Paid ${feature.route}`
         })
       ).toBeTruthy()
