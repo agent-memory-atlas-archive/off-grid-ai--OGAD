@@ -103,8 +103,12 @@ export function shouldPlan(message: string): boolean {
   // action verb is conversational.
   const questionOpener =
     /^(what|why|how|who|when|where|which|is |are |can |could |do |does |did |should |would |will |tell me|explain|summar|define)/
+  // A request put politely is still a request: "can you do a sanity check of this site?".
+  if (/^(can|could|would|will) you\b|^please\b/.test(m)) {
+    return true
+  }
   const actionVerb =
-    /\b(open|play|watch|send|message|text|email|mail|call|search|find|book|order|buy|schedule|create|add|remind|set|post|share|check in|log in|sign in|navigate|go to|download|upload)\b/
+    /\b(open|play|watch|send|message|text|email|mail|call|search|find|book|order|buy|schedule|create|add|remind|set|post|share|check|review|audit|browse|visit|compare|click|fill|scroll|check in|log in|sign in|navigate|go to|download|upload)\b/
   if (!actionVerb.test(m) && (questionOpener.test(m) || m.endsWith('?'))) {
     return false
   }
