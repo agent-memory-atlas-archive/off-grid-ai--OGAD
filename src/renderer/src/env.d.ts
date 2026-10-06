@@ -316,6 +316,10 @@ interface RendererAPIOverrides {
   proInvoke?: (channel: string, ...args: unknown[]) => Promise<unknown>
   proOn?: (channel: string, cb: (...a: unknown[]) => void) => () => void
   proOff?: (channel: string) => void
+  /** Web Use or Computer Use settings changed, here or from a paired browser. */
+  onTaskSettingsChanged?: (
+    callback: (change: { key: string; value: unknown }) => void
+  ) => () => void
 
   // Keygen licensing (activation + status for the upgrade/settings UI)
   license?: {

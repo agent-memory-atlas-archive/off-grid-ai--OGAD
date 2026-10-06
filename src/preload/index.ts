@@ -199,6 +199,15 @@ const offGridApi = {
     return unsubscribe(channel, sub)
   },
   proOff: (channel: string) => ipcRenderer.removeAllListeners(channel),
+  /** Web Use or Computer Use settings changed, here or from a paired browser. */
+  onTaskSettingsChanged: (
+    callback: (change: { key: string; value: unknown }) => void
+  ): (() => void) => {
+    const listener = (_event: unknown, change: { key: string; value: unknown }): void =>
+      callback(change)
+    ipcRenderer.on('task-settings:changed', listener)
+    return unsubscribe('task-settings:changed', listener)
+  },
   godTwin: {
     wake: (): Promise<boolean> => ipcRenderer.invoke('god-twin:wake'),
     getEnabled: (): Promise<boolean> => ipcRenderer.invoke('god-twin:enabled:get'),
