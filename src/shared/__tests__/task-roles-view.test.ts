@@ -30,13 +30,13 @@ describe('taskRolesView', () => {
         models: [model('decision', 'jev', true), model('reasoner', 'gemini', true)]
       }
     })
+    // The reasoner is the Text model: not a task model, so not in a lineup or a badge.
     expect(view.tasks.map((t) => [t.taskLabel, t.slots.map((s) => s.label)])).toEqual([
-      ['Web Use', ['Decision model', 'Reasoner']],
-      ['Computer Use', ['Decision model', 'Reasoner', 'Grounding specialist']]
+      ['Web Use', ['Decision model']],
+      ['Computer Use', ['Decision model', 'Grounding specialist']]
     ])
     expect(view.badges).toEqual({
       jev: 'Decision model · Web Use',
-      gemini: 'Reasoner · Web Use and Computer Use',
       'kev-4b': 'Decision model · Computer Use',
       'ui-tars': 'Grounding specialist · Computer Use'
     })

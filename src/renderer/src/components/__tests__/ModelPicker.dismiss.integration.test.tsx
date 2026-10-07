@@ -95,9 +95,8 @@ describe('<ModelPicker/> dismissal', () => {
     expect(screen.queryByText(/swaps the chat model/i)).toBeNull()
     const computerUse = screen.getByRole('region', { name: 'Computer Use' })
     expect(computerUse.textContent).toContain('Text + Specialist')
-    expect(computerUse.textContent).toContain('Reasoner')
-    expect(computerUse.textContent).toContain('Qwen Reasoner')
-    expect(computerUse.textContent).toContain('Remote')
+    // The reasoner is the Text model, listed with Text: only task models here.
+    expect(computerUse.textContent).not.toContain('Qwen Reasoner')
     expect(computerUse.textContent).toContain('Grounding specialist')
     expect(computerUse.textContent).toContain('UI-TARS 1.5 7B')
     expect(computerUse.textContent).toContain('On device')

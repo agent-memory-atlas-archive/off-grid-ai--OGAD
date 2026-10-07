@@ -1,5 +1,6 @@
-// What the Models screens show about task models: for each task, the models that run together and
-// the role each plays, and for each model, the roles it holds. Built once from the task projections
+// What the Models screens show about task models: for each task, the task models that run together
+// (decision model, grounding specialist) and the role each plays, and for each model, the roles it
+// holds. The reasoner is the Text model and is shown with the Text models, not here. Built once from the task projections
 // (the same ones a task records), and sent as is to every screen: the desktop's and a paired
 // browser's. Pure.
 
@@ -54,13 +55,16 @@ export function taskRolesView(projections: {
     task,
     taskLabel: TASK_LABELS[task],
     strategyLabel: projection.strategyLabel,
-    slots: projection.models.map((model) => ({
-      role: model.role,
-      ...TASK_ROLE_LABELS[model.role],
-      modelId: model.modelId,
-      modelName: model.modelName,
-      remote: model.remote
-    }))
+    // The reasoner is the Text model, shown with the Text models: lineups name only task models.
+    slots: projection.models
+      .filter((model) => model.role !== 'reasoner')
+      .map((model) => ({
+        role: model.role,
+        ...TASK_ROLE_LABELS[model.role],
+        modelId: model.modelId,
+        modelName: model.modelName,
+        remote: model.remote
+      }))
   }))
   // role label -> tasks, per model, in the order roles first appear.
   const held = new Map<string, Map<string, string[]>>()

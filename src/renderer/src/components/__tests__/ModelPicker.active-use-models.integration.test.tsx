@@ -53,12 +53,12 @@ describe('<ModelPicker/> use model details', () => {
 
     const computerUse = await screen.findByRole('region', { name: 'Computer Use' })
     expect(computerUse.textContent).toContain('Reasoning + Specialist')
-    expect(computerUse.textContent).toContain('Qwen 3.5 9B')
+    // The reasoner is the Text model, listed with Text: only task models here.
+    expect(computerUse.textContent).not.toContain('Qwen 3.5 9B')
     expect(computerUse.textContent).toContain('UI Grounder')
 
     const webUse = screen.getByRole('region', { name: 'Web Use' })
     expect(webUse.textContent).toContain('Same as Chat')
-    expect(webUse.textContent).toContain('Remote Chat Model')
-    expect(webUse.textContent).toContain('Remote')
+    expect(webUse.textContent).toContain('Web Use uses the Chat model.')
   })
 })
