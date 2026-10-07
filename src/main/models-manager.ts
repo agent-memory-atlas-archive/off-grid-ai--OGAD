@@ -66,8 +66,9 @@ import {
   deactivateRemoteVisionMediaModel,
   getRemoteVisionServerSettings
 } from './vision/remote-vision-server'
-import { getComputerUseSettings, setComputerUseSettings } from './computer-use-settings'
-import { getWebUseSettings, setWebUseSettings } from './web-use-settings'
+import { getComputerUseSettings } from './computer-use-settings'
+import { getWebUseSettings } from './web-use-settings'
+import { clearTaskRolesFor, setTaskRoleModel } from './task-role-models'
 import { strategyTaskRoles } from '../shared/computer-use-settings'
 import { binRoots } from './runtime-env'
 
@@ -1105,21 +1106,6 @@ export async function deleteModel(modelId: string): Promise<DeleteModelResult> {
   return { success: true, freedFiles: freed }
 }
 
-/** A deleted model leaves every Computer Use and Web Use role it held: Tasks falls back to its
- *  default for that role instead of naming a model that is gone. */
-function clearTaskRolesFor(modelId: string): void {
-  const computer = getComputerUseSettings()
-  if (computer.groundingModelId === modelId || computer.decisionModelId === modelId) {
-    setComputerUseSettings({
-      ...computer,
-      groundingModelId: computer.groundingModelId === modelId ? null : computer.groundingModelId,
-      decisionModelId: computer.decisionModelId === modelId ? null : computer.decisionModelId
-    })
-  }
-  const web = getWebUseSettings()
-  if (web.decisionModelId === modelId) setWebUseSettings({ ...web, decisionModelId: null })
-}
-
 type LlamaModelKindGate = (kind: string) => boolean
 
 async function setActiveLlamaModel(
@@ -1338,12 +1324,7 @@ export async function activateModel(
       (candidate) => server?.roleModels?.[candidate] === remote.modelId
     )
     if (!modality && role) {
-      const settings = getComputerUseSettings()
-      setComputerUseSettings(
-        role === 'grounding'
-          ? { ...settings, groundingModelId: modelId }
-          : { ...settings, decisionModelId: modelId }
-      )
+      setTaskRoleModel('computer_use', role, modelId)
       return { success: true }
     }
     const activated =
@@ -1384,17 +1365,12 @@ export async function activateModel(
       requestedKind === 'computer_use' &&
       catalogEntry?.tags?.some((tag) => tag.toLowerCase() === 'decision')
     ) {
-      setComputerUseSettings({ ...getComputerUseSettings(), decisionModelId: modelId })
+      setTaskRoleModel('computer_use', 'decision', modelId)
       return { success: true }
     }
   }
   const modal = requestedModal ?? modalityForModel(kind)
   const result = modal ? await setActiveModalChoice(modal, modelId) : await setActiveModel(modelId)
-  // A Computer Use model is the grounding specialist Web Use and Computer Use share: activating it
-  // here sets it there, so the Models screen and Tasks never disagree.
-  if (result.success && modal === 'computer_use') {
-    setComputerUseSettings({ ...getComputerUseSettings(), groundingModelId: modelId })
-  }
   return result
 }
 
@@ -1422,6 +1398,8 @@ export async function setActiveModalChoice(
       }
     }
     setModal(modal, stored)
+    // A Computer Use pick, from any screen, is the grounding specialist both tasks share.
+    if (modal === 'computer_use' && modelId) setTaskRoleModel('computer_use', 'grounding', modelId)
     if (modal === 'image') deactivateRemoteVisionMediaModel('image')
     if (modal === 'speech') deactivateRemoteVisionMediaModel('voice')
     if (modal === 'transcription') deactivateRemoteVisionMediaModel('transcription')
