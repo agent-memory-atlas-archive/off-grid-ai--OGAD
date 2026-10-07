@@ -161,15 +161,18 @@ export function parseArticleIndex(html: string, base = 'https://getoffgridai.co'
   const re = /<a\b[^>]*href="([^"]*\/articles\/[^"#?]+)"[^>]*>([\s\S]*?)<\/a>/gi
   let m: RegExpExecArray | null
   while ((m = re.exec(html)) && out.length < 10) {
-    const url = new URL(m[1]!, base).toString()
+    const link = new URL(m[1]!, base)
+    const url = link.toString()
+    // &amp; last: decoding it first would turn "&amp;quot;" into a quote mark.
     const title = m[2]!
       .replace(/<[^>]+>/g, ' ')
-      .replace(/&amp;/g, '&')
       .replace(/&#39;|&apos;/g, "'")
       .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, '&')
       .replace(/\s+/g, ' ')
       .trim()
-    if (!title || seen.has(url) || !url.startsWith(base)) {
+    // The same site, by origin: a prefix would also accept getoffgridai.co.example.com.
+    if (!title || seen.has(url) || link.origin !== new URL(base).origin) {
       continue
     }
     seen.add(url)

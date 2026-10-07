@@ -65,12 +65,21 @@ describe('Off Grid AI guide', () => {
     const html = `<a href="/articles/private-ai">Private <b>AI</b> &amp; you</a>
       <a href="/articles/private-ai">dup</a>
       <a href="https://elsewhere.example/articles/x">off site</a>
+      <a href="https://getoffgridai.co.example.com/articles/lookalike">look-alike host</a>
+      <a href="/articles/quotes">Say &amp;quot;hi&amp;quot;</a>
       <a href="/pro">Pro</a>`
     expect(parseArticleIndex(html)).toEqual([
       {
         kind: 'article',
         title: 'Private AI & you',
         url: 'https://getoffgridai.co/articles/private-ai',
+        source: 'getoffgridai.co'
+      },
+      // Decoded once: the page's text says &quot; literally, so the title does too.
+      {
+        kind: 'article',
+        title: 'Say &quot;hi&quot;',
+        url: 'https://getoffgridai.co/articles/quotes',
         source: 'getoffgridai.co'
       }
     ])
