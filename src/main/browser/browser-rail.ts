@@ -30,6 +30,8 @@ export interface BrowserTaskRequest {
   taskId: string
   journeyId: string
   checkpoint?: TaskRetryCheckpoint
+  /** Shown as the task's first step: why it runs where it does, when that is not what was chosen. */
+  notice?: string
 }
 
 export interface BrowserRailHost {

@@ -6,6 +6,7 @@
 import { defaultBrowserTarget } from '../accessibility/ax-host'
 import { getBrowserLinks } from '../extension-bridge/bridge-electron'
 import { getWebUseSettings } from '../web-use-settings'
+import { DEFAULT_BROWSER_FALLBACK_NOTE } from '../../shared/web-use-settings'
 import { getBrowserRailHost } from './browser-host'
 import type { BrowserRailHost } from './browser-rail'
 import { startTabOffers } from './browser-start-tab'
@@ -31,9 +32,13 @@ export function getWebUseRailHost(): BrowserRailHost {
           ? ((await defaultBrowserTarget().catch(() => null))?.name ?? null)
           : null
       const link = pickBrowserLink(browserTarget, links, defaultName)
-      return link
-        ? createExtensionBrowserHost(() => link).runTask(request)
-        : getBrowserRailHost().runTask(request)
+      if (link) return createExtensionBrowserHost(() => link).runTask(request)
+      // The default browser was chosen but none is connected: run here, and say so on the task.
+      return getBrowserRailHost().runTask(
+        browserTarget === 'default_browser'
+          ? { ...request, notice: DEFAULT_BROWSER_FALLBACK_NOTE }
+          : request
+      )
     }
   }
 }
