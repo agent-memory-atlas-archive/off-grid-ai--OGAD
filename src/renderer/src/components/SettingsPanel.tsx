@@ -37,6 +37,7 @@ import { RemoteVisionSettingsTab } from './RemoteVisionSettingsTab'
 import { SettingsRow as Row } from './SettingsRow'
 import { SettingsSelect } from './SettingsSelect'
 import { BackendPreferencesSection } from './ProcessingControls'
+import { useReplySound } from '../lib/reply-sound'
 import type { SpeechLanguage } from '@offgrid/speech'
 import { CaretRight, X } from '@phosphor-icons/react'
 import { getSlot, SLOTS } from '@renderer/bootstrap/slotRegistry'
@@ -259,6 +260,7 @@ export function SettingsPanel({
   initialTab?: Tab
 }): React.JSX.Element {
   const TaskSettings = getSlot(SLOTS.taskSettings)
+  const [replySound, setReplySound] = useReplySound()
   const [tab, setTab] = useState<Tab>(initialTab)
   const [s, setS] = useState<LlmSettings>({})
   const [transcriptionInfo, setTranscriptionInfo] = useState<TranscriptionInfo | null>(null)
@@ -565,6 +567,27 @@ export function SettingsPanel({
                 }`}
               >
                 {showGenerationDetails ? 'Showing under each answer' : 'Hidden'}
+              </button>
+            </Row>
+            <Row
+              label="Reply sound"
+              controlId="reply-sound-toggle"
+              value={replySound ? 'On' : 'Off'}
+              hint="A soft ding when an answer arrives, here and in God. The same setting in both."
+            >
+              <button
+                id="reply-sound-toggle"
+                type="button"
+                role="switch"
+                aria-checked={replySound}
+                onClick={() => setReplySound(!replySound)}
+                className={`w-full border px-3 py-1.5 text-left text-xs transition-colors ${
+                  replySound
+                    ? 'border-green-500/40 text-green-500'
+                    : 'border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                {replySound ? 'Ding when an answer arrives' : 'Off'}
               </button>
             </Row>
             <Row

@@ -134,6 +134,8 @@ import {
 
 import type { MemoryChatProps } from './interfaces'
 import { announceAssistantActivity, announceAssistantListening } from '../../lib/assistant-activity'
+import { playChime } from '../../lib/chime'
+import { useReplySound } from '../../lib/reply-sound'
 import type {
   Attachment,
   ChatMessage,
@@ -824,10 +826,16 @@ export function MemoryChat({
   const generatingRef = useRef<Set<string>>(new Set())
   const [generatingConvs, setGeneratingConvs] = useState<Set<string>>(new Set())
   const restTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [replySound] = useReplySound()
+  const replySoundRef = useRef(replySound)
+  replySoundRef.current = replySound
   const markGenerating = useCallback((cid: string, on: boolean): void => {
     if (restTimerRef.current) clearTimeout(restTimerRef.current)
     if (on) announceAssistantActivity('working')
     else {
+      // A reply (or God's reaction) arrived: the ding, unless it is off or the user stopped it.
+      const arrived = generatingRef.current.has(cid) && !cancelledRef.current.has(cid)
+      if (arrived && replySoundRef.current) playChime()
       announceAssistantActivity('done')
       restTimerRef.current = setTimeout(() => announceAssistantActivity('idle'), 900)
     }
