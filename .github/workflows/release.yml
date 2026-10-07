@@ -302,6 +302,10 @@ jobs:
           if [ -n "$UI_TOKEN" ]; then
             git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
           fi
+          # npm skips an optional package it cannot read without saying so: say it here, plainly.
+          if ! git ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/component-library-animations.git" HEAD >/dev/null 2>&1; then
+            echo "::error::CI cannot read wednesday-solutions/component-library-animations. Give OPERATOR_UI_TOKEN Contents read access to that repo (an org admin may need to approve the token). Pro will not build without it."
+          fi
       - name: Install dependencies
         run: npm ci
       # Stamp the resolved version into package.json so electron-builder picks the
@@ -614,6 +618,10 @@ jobs:
           if [ -n "$UI_TOKEN" ]; then
             git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
           fi
+          # npm skips an optional package it cannot read without saying so: say it here, plainly.
+          if ! git ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/component-library-animations.git" HEAD >/dev/null 2>&1; then
+            echo "::error::CI cannot read wednesday-solutions/component-library-animations. Give OPERATOR_UI_TOKEN Contents read access to that repo (an org admin may need to approve the token). Pro will not build without it."
+          fi
       - name: Install dependencies
         run: npm ci
       - name: Fetch Windows native binaries (llama/whisper/sd/ffmpeg)
@@ -832,6 +840,10 @@ jobs:
         run: |
           if [ -n "$UI_TOKEN" ]; then
             git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
+          fi
+          # npm skips an optional package it cannot read without saying so: say it here, plainly.
+          if ! git ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/component-library-animations.git" HEAD >/dev/null 2>&1; then
+            echo "::error::CI cannot read wednesday-solutions/component-library-animations. Give OPERATOR_UI_TOKEN Contents read access to that repo (an org admin may need to approve the token). Pro will not build without it."
           fi
       - name: Install dependencies
         run: npm ci
