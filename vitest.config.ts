@@ -104,6 +104,8 @@ export default defineConfig({
         '**/*.dbtest.ts',
         '**/__tests__/**',
         '**/*.d.ts',
+        // Pro's Playwright journeys (pro/e2e) drive the built app; they are not product source.
+        'pro/e2e/**',
         // Vendored / built - not our source (its own package builds + tests it).
         '**/dist/**',
         'packages/**',
