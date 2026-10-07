@@ -17,7 +17,11 @@ const mocks = vi.hoisted(() => ({
   forgetStop: vi.fn()
 }))
 
-vi.mock('electron', () => ({ ipcMain: { handle: mocks.handle } }))
+// Retries now run inside the screen-task gate, whose run telemetry writes under userData.
+vi.mock('electron', () => ({
+  ipcMain: { handle: mocks.handle },
+  app: { getPath: () => `/tmp/offgrid-task-history-ipc-${process.pid}` }
+}))
 vi.mock('../tasks/task-history', () => ({
   initializeTaskHistory: mocks.initialize,
   listTaskRuns: mocks.list,
