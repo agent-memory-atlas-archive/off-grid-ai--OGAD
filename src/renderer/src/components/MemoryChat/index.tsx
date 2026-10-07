@@ -200,7 +200,6 @@ import {
 } from './utlis'
 
 /** God's own voice turn mode (hands-free unless changed in its voice composer). */
-const GOD_TURN_MODE_SETTING = 'god:voiceTurnMode'
 
 export function MemoryChat({
   onNavigateToMemory,
@@ -526,12 +525,11 @@ export function MemoryChat({
   const [chatVoiceMode, setVoiceMode] = useState(DEFAULT_VOICE_PREFERENCES.voiceMode)
   // God's Chat and Voice modes decide it there; Chat keeps its own saved choice.
   const voiceMode = god ? god.voiceMode : chatVoiceMode
-  const [chatVoiceTurnMode, setVoiceTurnMode] = useState<VoiceTurnMode>(
+  // One turn mode (Manual, Auto, Hands-free) for Chat and God alike: Settings > Voice and the
+  // voice composer's picker change the same saved choice.
+  const [voiceTurnMode, setVoiceTurnMode] = useState<VoiceTurnMode>(
     DEFAULT_VOICE_PREFERENCES.turnMode
   )
-  // God has its own turn mode, hands-free until the user picks another in its voice composer.
-  const [godVoiceTurnMode, setGodVoiceTurnMode] = useState<VoiceTurnMode>('handsfree')
-  const voiceTurnMode: VoiceTurnMode = god ? godVoiceTurnMode : chatVoiceTurnMode
   const [voiceSilenceAfterSpeechMs, setVoiceSilenceAfterSpeechMs] = useState(
     DEFAULT_VOICE_PREFERENCES.silenceAfterSpeechMs
   )
@@ -618,10 +616,8 @@ export function MemoryChat({
         const voicePreferences = readVoicePreferences(s)
         persistedPreferenceValues.current.composerVoiceMode = voicePreferences.voiceMode
         setVoiceMode(voicePreferences.voiceMode)
+        persistedPreferenceValues.current.composerVoiceTurnMode = voicePreferences.turnMode
         setVoiceTurnMode(voicePreferences.turnMode)
-        if (['tap', 'silence', 'handsfree'].includes(String(s[GOD_TURN_MODE_SETTING]))) {
-          setGodVoiceTurnMode(s[GOD_TURN_MODE_SETTING] as VoiceTurnMode)
-        }
         setVoiceSilenceAfterSpeechMs(voicePreferences.silenceAfterSpeechMs)
         setVoiceSpeakerDrainMs(voicePreferences.speakerDrainMs)
         setTtsEnabled(voicePreferences.ttsEnabled)
@@ -4436,14 +4432,10 @@ export function MemoryChat({
                             transcriptionLabel={voiceTurns.transcriptionLabel}
                             error={voiceTurns.error}
                             onToggleRecording={toggleRecording}
-                            {...(god
-                              ? {
-                                  onTurnModeChange: (mode: VoiceTurnMode) => {
-                                    setGodVoiceTurnMode(mode)
-                                    void window.api.saveSetting(GOD_TURN_MODE_SETTING, mode)
-                                  }
-                                }
-                              : {})}
+                            onTurnModeChange={(mode: VoiceTurnMode) => {
+                              setVoiceTurnMode(mode)
+                              persistChangedPreference('composerVoiceTurnMode', mode)
+                            }}
                           />
                         ) : (
                           <ChatDraftInput

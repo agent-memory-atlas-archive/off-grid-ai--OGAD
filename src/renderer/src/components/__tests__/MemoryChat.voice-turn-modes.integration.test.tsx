@@ -202,7 +202,7 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     expect(transcribeAudio).toHaveBeenCalledTimes(2)
   })
 
-  it('keeps the voice composer compact and Auto sends after speech ends in silence', async () => {
+  it('starts in Auto, changed in the voice box, and Auto sends after speech ends in silence', async () => {
     const { getUserMedia } = installMicrophone()
     const boundary = new ChatBoundary()
     const transcribeAudio = vi.fn(async () => 'Schedule the planning review')
@@ -215,17 +215,12 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     renderChat({ conversationId: 'conversation-a' })
 
     expect(await screen.findByRole('group', { name: 'Voice mode' })).toBeTruthy()
-    expect(screen.getByText('Manual')).toBeTruthy()
-    expect(screen.getByText('Click the microphone to record')).toBeTruthy()
+    // Auto by default, and changed right in the voice box: one picker, the same choice as
+    // Settings > Voice, for Chat and God alike.
+    expect(screen.getByRole('button', { name: 'Voice turns: Auto' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Voice options' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Manual' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Voice settings' }))
-    expect(await screen.findByRole('button', { name: 'Auto' })).toBeTruthy()
 
     vi.useFakeTimers()
-    fireEvent.click(screen.getByRole('button', { name: 'Auto' }))
-    await flush()
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     fireEvent.click(screen.getByRole('button', { name: 'Start voice recording' }))
     await flush()
     expect(getUserMedia).toHaveBeenCalledOnce()

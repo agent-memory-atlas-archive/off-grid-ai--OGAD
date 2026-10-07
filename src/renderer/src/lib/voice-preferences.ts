@@ -19,7 +19,8 @@ export interface VoicePreferences {
 
 export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
   voiceMode: false,
-  turnMode: 'tap',
+  // Auto: you start it, and it ends when you stop speaking.
+  turnMode: 'silence',
   silenceAfterSpeechMs: DEFAULT_SILENCE_AFTER_SPEECH_MS,
   speakerDrainMs: DEFAULT_SPEAKER_DRAIN_MS,
   ttsEnabled: true,
