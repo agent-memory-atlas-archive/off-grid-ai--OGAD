@@ -13,8 +13,9 @@ export function registerTaskHistoryIpc(): void {
     async web(task, taskId, checkpoint) {
       // Continue is a new run: a Stop sent to an earlier, never-started one does not apply.
       forgetVisionStopBeforeStart(taskId)
-      const { getBrowserRailHost } = await import('../browser/browser-host')
-      return getBrowserRailHost().runTask({
+      // The same choice as a new task: Tasks > Web Use decides which browser a retry runs in.
+      const { getWebUseRailHost } = await import('../browser/web-use-host')
+      return getWebUseRailHost().runTask({
         goal: task.title,
         url: task.lastUrl,
         taskId,
