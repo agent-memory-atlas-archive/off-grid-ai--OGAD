@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { ModelPicker } from '../ModelPicker'
+import { withTaskRoles } from './harness/task-roles'
 
 afterEach(() => cleanup())
 
@@ -45,6 +46,8 @@ describe('<ModelPicker/> use model details', () => {
         ]
       })
     } as unknown as Window['api']
+
+    withTaskRoles((window as unknown as { api: Record<string, unknown> }).api)
 
     render(<ModelPicker onClose={() => undefined} />)
 

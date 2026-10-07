@@ -8,14 +8,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { IconLoader2, IconCheck, IconCpu, IconPower } from '@tabler/icons-react'
 import { X } from '@phosphor-icons/react'
 import { SidePanel } from './SidePanel'
-import type { ComputerUseActiveModelProjection } from '../../../shared/computer-use-settings'
-import {
-  COMPUTER_USE_SETTINGS_KEY,
-  normalizeComputerUseSettings
-} from '../../../shared/computer-use-settings'
-import { WEB_USE_SETTINGS_KEY, normalizeWebUseSettings } from '../../../shared/web-use-settings'
 import { openModelSettingsPanel } from '@renderer/lib/model-settings-panel'
-import { SettingsSelect } from './SettingsSelect'
+import { TaskLineups } from './TaskLineups'
+import { useTaskRoles } from '../lib/task-roles'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (): any => (window as any).api
@@ -72,16 +67,6 @@ function primaryVariant(m: ModelEntry): string | null {
   return file.slice(0, -'.gguf'.length).split('-').at(-1) ?? null
 }
 
-function isGroundingSpecialist(model: ModelEntry): boolean {
-  return (
-    model.grounder === true || (model.kind === 'computer_use' && !model.tags?.includes('Decision'))
-  )
-}
-
-function isDecisionModel(model: ModelEntry): boolean {
-  return model.kind === 'computer_use' && Boolean(model.tags?.includes('Decision'))
-}
-
 function openSettings(onClose: () => void): void {
   onClose()
   openModelSettingsPanel('model')
@@ -98,8 +83,7 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState<string | null>(null)
   const [unload, setUnload] = useState<Record<string, UnloadStatus>>({})
-  const [computerUse, setComputerUse] = useState<ComputerUseActiveModelProjection | null>(null)
-  const [webUse, setWebUse] = useState<ComputerUseActiveModelProjection | null>(null)
+  const [taskRoles, reloadTaskRoles] = useTaskRoles()
 
   const load = useCallback(async () => {
     const cat = await api().getModelCatalog?.()
@@ -109,8 +93,6 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
     const text = await api().getActiveModel?.()
     const modal = (await api().getActiveModalities?.()) ?? {}
     const nextActiveIds = new Set<string>((await api().getActiveModelIds?.()) ?? [])
-    const computerUseProjection = await api().getComputerUseActiveModels?.()
-    const webUseProjection = await api().getWebUseActiveModels?.()
     const remoteTextActive = catalogModels.some(
       (model) => model.remoteServerId && nextActiveIds.has(model.id)
     )
@@ -122,8 +104,6 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
       transcription: modal.transcription ?? null,
       computer_use: modal.computer_use ?? null
     })
-    setComputerUse(computerUseProjection ?? null)
-    setWebUse(webUseProjection ?? null)
   }, [])
   useEffect(() => {
     void load()
@@ -162,40 +142,6 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
           setActive((a) => ({ ...a, [mode]: fname }))
         }
       }
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const chooseComputerUse = async (modelId: string): Promise<void> => {
-    if (!modelId) return
-    setBusy(modelId)
-    try {
-      const result = await api().setActiveModalModel?.('computer_use', modelId)
-      if (result?.success !== false) {
-        setActive((current) => ({ ...current, computer_use: modelId }))
-        await load()
-      }
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const chooseDecisionModel = async (
-    task: 'computer_use' | 'web_use',
-    modelId: string
-  ): Promise<void> => {
-    if (!modelId) return
-    setBusy(modelId)
-    try {
-      const stored = ((await api().getSettings?.()) ?? {}) as Record<string, unknown>
-      const key = task === 'computer_use' ? COMPUTER_USE_SETTINGS_KEY : WEB_USE_SETTINGS_KEY
-      const current =
-        task === 'computer_use'
-          ? normalizeComputerUseSettings(stored[key])
-          : normalizeWebUseSettings(stored[key])
-      await api().saveSetting?.(key, { ...current, decisionModelId: modelId })
-      await load()
     } finally {
       setBusy(null)
     }
@@ -249,182 +195,28 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
         </div>
       </div>
       <div className="flex-1 space-y-5 overflow-y-auto p-4">
-        <section aria-label="Computer Use">
-          <div className="mb-1.5 flex items-center justify-between gap-3">
-            <span className="text-[10px] uppercase tracking-wide text-neutral-600">
-              Computer Use
-            </span>
-            {computerUse ? (
-              <span className="text-[10px] text-neutral-500">{computerUse.strategyLabel}</span>
-            ) : null}
-          </div>
-          {computerUse?.models.length ? (
-            <div className="space-y-1">
-              {computerUse.models.map((model) => (
-                <div
-                  key={model.role}
-                  className="flex items-center justify-between gap-3 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-xs"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[9px] uppercase tracking-wide text-neutral-600">
-                      {model.role === 'reasoner'
-                        ? 'Reasoner'
-                        : model.role === 'decision'
-                          ? 'Decision model'
-                          : 'Grounding specialist'}
-                    </span>
-                    {model.role === 'grounding_specialist' || model.role === 'decision' ? (
-                      <SettingsSelect<string>
-                        id={`active-computer-use-${model.role}-model`}
-                        label={
-                          model.role === 'decision'
-                            ? 'Active Computer Use Decision model'
-                            : 'Active Computer Use model'
-                        }
-                        value={model.modelId}
-                        disabled={busy !== null}
-                        onValueChange={(modelId) =>
-                          void (model.role === 'decision'
-                            ? chooseDecisionModel('computer_use', modelId)
-                            : chooseComputerUse(modelId))
-                        }
-                        options={[
-                          ...models
-                            .filter(
-                              (candidate) =>
-                                installed.includes(candidate.id) &&
-                                candidate.availability !== 'coming_soon' &&
-                                (model.role === 'decision'
-                                  ? isDecisionModel(candidate)
-                                  : isGroundingSpecialist(candidate))
-                            )
-                            .map((candidate) => ({ value: candidate.id, label: candidate.name })),
-                          ...(models.some((candidate) => candidate.id === model.modelId)
-                            ? []
-                            : [{ value: model.modelId, label: model.modelName }])
-                        ]}
-                      />
-                    ) : (
-                      <span className="block truncate text-neutral-200">{model.modelName}</span>
-                    )}
-                  </span>
-                  {model.remote ? (
-                    <span className="shrink-0 rounded-sm border border-green-500/50 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-                      Remote
-                    </span>
-                  ) : (
-                    <span className="max-w-[45%] text-right text-[9px] text-neutral-500">
-                      On device ·{' '}
-                      {backendFor(
-                        model.role === 'reasoner'
-                          ? 'chat'
-                          : model.role === 'decision'
-                            ? 'decision'
-                            : 'grounding',
-                        [
-                          model.modelId,
-                          ...(models.find((m) => m.id === model.modelId)?.files ?? []).map(
-                            (f) => f.name
-                          )
-                        ]
-                      )}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="px-2 py-1.5 text-xs text-neutral-600">
-              No Computer Use model is selected.
-            </p>
-          )}
-        </section>
-        <section aria-label="Web Use">
-          <div className="mb-1.5 flex items-center justify-between gap-3">
-            <span className="text-[10px] uppercase tracking-wide text-neutral-600">Web Use</span>
-            {webUse ? (
-              <span className="text-[10px] text-neutral-500">{webUse.strategyLabel}</span>
-            ) : null}
-          </div>
-          {webUse?.models.length ? (
-            <div className="space-y-1">
-              {webUse.models.map((model) => (
-                <div
-                  key={model.role}
-                  className="flex items-center justify-between gap-3 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-xs"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[9px] uppercase tracking-wide text-neutral-600">
-                      {model.role === 'reasoner'
-                        ? 'Reasoner'
-                        : model.role === 'decision'
-                          ? 'Decision model'
-                          : 'Grounding specialist'}
-                    </span>
-                    {model.role === 'grounding_specialist' || model.role === 'decision' ? (
-                      <SettingsSelect<string>
-                        id={`active-web-use-${model.role}-model`}
-                        label={
-                          model.role === 'decision'
-                            ? 'Active Web Use Decision model'
-                            : 'Active Web Use grounding model'
-                        }
-                        value={model.modelId}
-                        disabled={busy !== null}
-                        onValueChange={(modelId) =>
-                          void (model.role === 'decision'
-                            ? chooseDecisionModel('web_use', modelId)
-                            : chooseComputerUse(modelId))
-                        }
-                        options={[
-                          ...models
-                            .filter(
-                              (candidate) =>
-                                installed.includes(candidate.id) &&
-                                candidate.availability !== 'coming_soon' &&
-                                (model.role === 'decision'
-                                  ? isDecisionModel(candidate)
-                                  : isGroundingSpecialist(candidate))
-                            )
-                            .map((candidate) => ({ value: candidate.id, label: candidate.name })),
-                          ...(models.some((candidate) => candidate.id === model.modelId)
-                            ? []
-                            : [{ value: model.modelId, label: model.modelName }])
-                        ]}
-                      />
-                    ) : (
-                      <span className="block truncate text-neutral-200">{model.modelName}</span>
-                    )}
-                  </span>
-                  {model.remote ? (
-                    <span className="shrink-0 rounded-sm border border-green-500/50 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-                      Remote
-                    </span>
-                  ) : (
-                    <span className="max-w-[45%] text-right text-[9px] text-neutral-500">
-                      On device ·{' '}
-                      {backendFor(
-                        model.role === 'reasoner'
-                          ? 'chat'
-                          : model.role === 'decision'
-                            ? 'decision'
-                            : 'grounding',
-                        [
-                          model.modelId,
-                          ...(models.find((m) => m.id === model.modelId)?.files ?? []).map(
-                            (f) => f.name
-                          )
-                        ]
-                      )}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="px-2 py-1.5 text-xs text-neutral-600">No Web Use model is selected.</p>
-          )}
-        </section>
+        <TaskLineups
+          view={taskRoles}
+          models={models}
+          installed={installed}
+          onChanged={async () => {
+            await reloadTaskRoles()
+            await load()
+          }}
+          localDetail={(slot) =>
+            backendFor(
+              slot.role === 'reasoner'
+                ? 'chat'
+                : slot.role === 'decision'
+                  ? 'decision'
+                  : 'grounding',
+              [
+                slot.modelId,
+                ...(models.find((m) => m.id === slot.modelId)?.files ?? []).map((f) => f.name)
+              ]
+            )
+          }
+        />
         {MODALITIES.map(({ label, kinds, mode }) => {
           const list = models.filter((m) => kinds.includes(m.kind) && installed.includes(m.id))
           const duplicateNames = new Set(
@@ -535,7 +327,9 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
           )
         })}
         <section aria-label="Embeddings">
-          <div className="mb-1.5 text-[10px] uppercase tracking-wide text-neutral-600">Embeddings</div>
+          <div className="mb-1.5 text-[10px] uppercase tracking-wide text-neutral-600">
+            Embeddings
+          </div>
           <div className="rounded-md border border-neutral-800 px-3 py-2 text-xs text-neutral-300">
             <span className="block">Search and RAG</span>
             <span className="block text-[10px] text-neutral-500">

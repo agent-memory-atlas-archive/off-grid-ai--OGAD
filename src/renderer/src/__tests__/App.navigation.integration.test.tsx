@@ -569,7 +569,7 @@ describe('<App/> desktop navigation integration', () => {
       routes: [
         ['Text', '/models'],
         ['Image', '/models/image'],
-        ['Computer Use', '/models/computer-use'],
+        ['Tasks', '/models/computer-use'],
         ['Voice', '/models/voice'],
         ['Transcription', '/models/transcription']
       ] as const

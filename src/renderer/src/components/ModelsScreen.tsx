@@ -1,4 +1,6 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { TaskLineups } from './TaskLineups'
+import { useTaskRoles } from '../lib/task-roles'
 import { AnimatePresence } from 'motion/react'
 import {
   IconDownload,
@@ -361,8 +363,11 @@ export function ModelsScreen({
   // one truth from the backend; the UI never re-derives "active" per kind.
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set())
   const isActive = (id: string): boolean => activeIds.has(id)
+  // The task models' lineups and each model's roles (Tasks tab), from the same view main builds.
+  const [taskRoles, reloadTaskRoles] = useTaskRoles()
   const refreshActive = (): void => {
     void api.getActiveModelIds?.().then((ids: string[]) => setActiveIds(new Set(ids)))
+    void reloadTaskRoles()
   }
   const [switching, setSwitching] = useState<string | null>(null)
   const [switchError, setSwitchError] = useState<string | null>(null)
@@ -432,12 +437,17 @@ export function ModelsScreen({
         if (!cancelled) setDetailFiles(files ?? [])
       })
       .catch((error: unknown) => {
-        if (!cancelled) setDetailFilesError(error instanceof Error ? error.message : 'Could not load model files.')
+        if (!cancelled)
+          setDetailFilesError(
+            error instanceof Error ? error.message : 'Could not load model files.'
+          )
       })
       .finally(() => {
         if (!cancelled) setDetailFilesLoading(false)
       })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [detail])
 
   const importModel = async (): Promise<void> => {
@@ -636,10 +646,7 @@ export function ModelsScreen({
 
   // The image model recommended for this machine's RAM (Light Q4 on <=16GB, full
   // Q8 above) — one pure rule, reused for both the badge and the top-of-list sort.
-  const recommendedImageId = useMemo(
-    () => recommendedImageModelId(models, ramGb),
-    [models, ramGb]
-  )
+  const recommendedImageId = useMemo(() => recommendedImageModelId(models, ramGb), [models, ramGb])
   const bonsaiFits = (m: ModelEntry): boolean =>
     (m.sourceModelId ?? m.id) === BONSAI_2_ID &&
     ramGb !== null &&
@@ -757,10 +764,12 @@ export function ModelsScreen({
     const tier: FitTier = isHf ? 'easy' : ramTier(m)
     const tags = (m.tags ?? []).filter((t) => !/tight|risky|fit/i.test(t))
     const comingSoon = m.availability === 'coming_soon'
-    const worksBest = bonsaiFits(m) || /(?:^|[\s/_-])UI[\s_-]?Mate(?:[\s/_-]|$)/i.test(`${m.id} ${m.name}`)
+    const worksBest =
+      bonsaiFits(m) || /(?:^|[\s/_-])UI[\s_-]?Mate(?:[\s/_-]|$)/i.test(`${m.id} ${m.name}`)
     // The single image pick best-suited to THIS machine's RAM (Light on <=16GB,
     // full above) — a prominent filled-emerald badge, distinct from the outlined tags.
-    const recommended = !isHf && (bonsaiFits(m) || (!!recommendedImageId && m.id === recommendedImageId))
+    const recommended =
+      !isHf && (bonsaiFits(m) || (!!recommendedImageId && m.id === recommendedImageId))
 
     return (
       <div
@@ -878,7 +887,9 @@ export function ModelsScreen({
             </span>
           ) : active ? (
             <span className="flex items-center gap-1 text-[11px] text-green-500">
-              <IconCircleCheck className="h-3.5 w-3.5" /> Active
+              <IconCircleCheck className="h-3.5 w-3.5 shrink-0" />{' '}
+              {/* A task model says the role it plays, and where: several are active at once. */}
+              {(m.kind === 'computer_use' && taskRoles?.badges[m.id]) || 'Active'}
             </span>
           ) : isInstalled ? (
             // Every installed model is activatable for its type — no kind branch.
@@ -966,7 +977,7 @@ export function ModelsScreen({
             </>
           ) : (
             <button
-              onClick={() => isHf ? void chooseVariant(m) : download(m.id)}
+              onClick={() => (isHf ? void chooseVariant(m) : download(m.id))}
               className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
             >
               <IconDownload className="h-3 w-3" /> Download
@@ -1278,15 +1289,41 @@ export function ModelsScreen({
                 const comingSoonModels = displayedCatalog.filter(
                   (m) => m.availability === 'coming_soon'
                 )
+                // A saved remote server's models are not on this device: listed apart, by name.
+                const localModels = installedModels.filter((m) => !m.remoteServerId)
+                const remoteModels = installedModels.filter((m) => m.remoteServerId)
                 return (
                   <>
-                    {installedModels.length > 0 && (
+                    {activeKind === 'computer_use' && (
+                      <div className="px-6 pt-3">
+                        <div className="mb-2 text-[9px] uppercase tracking-widest text-neutral-600">
+                          Working together now
+                        </div>
+                        <TaskLineups
+                          view={taskRoles}
+                          models={list}
+                          installed={installed}
+                          onChanged={refreshActive}
+                        />
+                      </div>
+                    )}
+                    {localModels.length > 0 && (
                       <>
                         <div className="px-6 pt-3 text-[9px] uppercase tracking-widest text-neutral-600">
                           On this device
                         </div>
                         <div role="list" aria-label="Models on this device" className={GRID}>
-                          {installedModels.map((m) => renderCard(m))}
+                          {localModels.map((m) => renderCard(m))}
+                        </div>
+                      </>
+                    )}
+                    {remoteModels.length > 0 && (
+                      <>
+                        <div className="px-6 pt-3 text-[9px] uppercase tracking-widest text-neutral-600">
+                          Remote
+                        </div>
+                        <div role="list" aria-label="Remote models" className={GRID}>
+                          {remoteModels.map((m) => renderCard(m))}
                         </div>
                       </>
                     )}
@@ -1581,25 +1618,48 @@ export function ModelsScreen({
                 <h2 className="text-sm font-medium text-white">Choose a model file</h2>
                 <p className="mt-1 text-[10px] text-neutral-500">{variantModel.name}</p>
               </div>
-              <button onClick={() => setVariantModel(null)} aria-label="Close file picker" className="text-neutral-500 hover:text-white"><IconX className="h-4 w-4" /></button>
+              <button
+                onClick={() => setVariantModel(null)}
+                aria-label="Close file picker"
+                className="text-neutral-500 hover:text-white"
+              >
+                <IconX className="h-4 w-4" />
+              </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-              {variantLoading && <p className="text-xs text-neutral-400">Loading available files…</p>}
-              {variantError && <p className="text-xs text-red-400" role="alert">{variantError}</p>}
+              {variantLoading && (
+                <p className="text-xs text-neutral-400">Loading available files…</p>
+              )}
+              {variantError && (
+                <p className="text-xs text-red-400" role="alert">
+                  {variantError}
+                </p>
+              )}
               <div className="space-y-2">
                 {variants.map((variant) => (
                   <button
                     key={variant.fileName}
                     onClick={() => {
-                      setChosenVariants((current) => ({ ...current, [variantModel.id]: variant.fileName }))
+                      setChosenVariants((current) => ({
+                        ...current,
+                        [variantModel.id]: variant.fileName
+                      }))
                       download(variantModel.id, variant.fileName)
                       setVariantModel(null)
                     }}
                     className="flex w-full flex-col gap-1 rounded border border-neutral-800 px-3 py-2 text-left transition-colors hover:border-green-500 hover:bg-green-500/5"
                   >
-                    <span className="break-all text-[11px] text-neutral-200">{variant.fileName}</span>
-                    <span className="text-[10px] text-neutral-400">{formatSize(variant.sizeBytes)}</span>
-                    {variant.mmproj && <span className="break-all text-[9px] text-neutral-500">Includes {variant.mmproj.fileName}</span>}
+                    <span className="break-all text-[11px] text-neutral-200">
+                      {variant.fileName}
+                    </span>
+                    <span className="text-[10px] text-neutral-400">
+                      {formatSize(variant.sizeBytes)}
+                    </span>
+                    {variant.mmproj && (
+                      <span className="break-all text-[9px] text-neutral-500">
+                        Includes {variant.mmproj.fileName}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
