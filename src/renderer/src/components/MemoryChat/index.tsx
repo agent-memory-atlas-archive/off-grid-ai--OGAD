@@ -3570,9 +3570,7 @@ export function MemoryChat({
             )}
           </div>
 
-          {/* God is set up already: no model, settings or gallery buttons. */}
-          {!god && (
-            <>
+          {/* Active models and Settings: the same drawers in Chat and God (God runs tasks too). */}
           {/* Active models — pick the model per modality (text/image/voice/STT) */}
           <button
             onClick={() => {
@@ -3617,6 +3615,9 @@ export function MemoryChat({
               />
             </svg>
           </button>
+          {/* God has no image gallery. */}
+          {!god && (
+            <>
           <button
             ref={galleryTriggerRef}
             onClick={openGallery}

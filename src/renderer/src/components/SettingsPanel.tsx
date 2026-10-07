@@ -38,6 +38,7 @@ import { SettingsRow as Row } from './SettingsRow'
 import { SettingsSelect } from './SettingsSelect'
 import { BackendPreferencesSection } from './ProcessingControls'
 import { useReplySound } from '../lib/reply-sound'
+import { SettingsSection } from './SettingsSection'
 import type { SpeechLanguage } from '@offgrid/speech'
 import { CaretRight, X } from '@phosphor-icons/react'
 import { getSlot, SLOTS } from '@renderer/bootstrap/slotRegistry'
@@ -498,413 +499,456 @@ export function SettingsPanel({
             {/* eslint-disable-next-line react-hooks/static-components */}
             <TaskSettings />
             {/* The task models' own backends live with the task settings that choose them. */}
-            <BackendPreferencesSection modalities={['grounding', 'decision']} />
+            <SettingsSection
+              id="tasks.backends"
+              title="Task model backends"
+              summary="Which processor runs the grounding specialist and the decision model."
+            >
+              <BackendPreferencesSection modalities={['grounding', 'decision']} />
+            </SettingsSection>
           </>
         ) : null}
         {tab === 'model' && (
           <>
-            <div
-              className="mb-5 grid grid-cols-2 gap-px border border-neutral-800 bg-neutral-800 lg:grid-cols-4"
-              role="status"
+            <SettingsSection
+              id="text.model"
+              title="Model and memory"
+              summary={`${activeModelName ?? 'No active model'} · context ${formatContextWindow(s.ctxSize) ?? 'checking'}`}
+              defaultOpen
             >
-              {[
-                ['Current model', activeModelName ?? 'No active model'],
-                ['Configured', formatContextWindow(s.ctxSize) ?? 'Checking'],
-                ['Running', formatContextWindow(s.effectiveCtxSize) ?? 'Checking'],
-                [
-                  'Recommended',
-                  formatContextWindow(recommendedContextWindow(s.modelMaxCtx)) ?? 'Not supported'
-                ]
-              ].map(([label, value]) => (
-                <div key={label} className="bg-neutral-950/90 p-3">
-                  <div className="text-[10px] uppercase tracking-wide text-neutral-600">
-                    {label}
-                  </div>
-                  <div className="mt-1 truncate text-xs text-neutral-200" title={value}>
-                    {value}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <p className="mb-5 text-[11px] leading-5 text-neutral-500">
-              16K is recommended for capture and chat. Capture needs at least 8K; smaller windows
-              can save memory but leave captured frames waiting for analysis.
-            </p>
-            <Row
-              label="Temperature"
-              value={(s.temperature ?? 0.7).toFixed(2)}
-              hint="Lower = focused, higher = creative."
-            >
-              <input
-                type="range"
-                min={0}
-                max={1.5}
-                step={0.05}
-                value={s.temperature ?? 0.7}
-                onChange={(e) =>
-                  setS((current) => ({ ...current, temperature: Number(e.target.value) }))
-                }
-                onBlur={(e) => set({ temperature: Number(e.target.value) })}
-                className="w-full accent-green-500"
-              />
-            </Row>
-            <Row
-              label="Generation details"
-              controlId="generation-details-toggle"
-              value={showGenerationDetails ? 'Shown' : 'Hidden'}
-              hint="Show context use, speed, token count, and time under each answer."
-            >
-              <button
-                id="generation-details-toggle"
-                type="button"
-                role="switch"
-                aria-checked={showGenerationDetails}
-                onClick={toggleGenerationDetails}
-                className={`w-full border px-3 py-1.5 text-left text-xs transition-colors ${
-                  showGenerationDetails
-                    ? 'border-green-500/40 text-green-500'
-                    : 'border-neutral-800 text-neutral-400 hover:text-neutral-200'
-                }`}
+              <div
+                className="mb-5 grid grid-cols-2 gap-px border border-neutral-800 bg-neutral-800 lg:grid-cols-4"
+                role="status"
               >
-                {showGenerationDetails ? 'Showing under each answer' : 'Hidden'}
-              </button>
-            </Row>
-            <Row
-              label="Reply sound"
-              controlId="reply-sound-toggle"
-              value={replySound ? 'On' : 'Off'}
-              hint="A soft ding when an answer arrives, here and in God. The same setting in both."
-            >
-              <button
-                id="reply-sound-toggle"
-                type="button"
-                role="switch"
-                aria-checked={replySound}
-                onClick={() => setReplySound(!replySound)}
-                className={`w-full border px-3 py-1.5 text-left text-xs transition-colors ${
-                  replySound
-                    ? 'border-green-500/40 text-green-500'
-                    : 'border-neutral-800 text-neutral-400 hover:text-neutral-200'
-                }`}
-              >
-                {replySound ? 'Ding when an answer arrives' : 'Off'}
-              </button>
-            </Row>
-            <Row
-              label="Maximum tool calls"
-              controlId="maximum-tool-calls"
-              value={String(s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS)}
-              hint="Emergency limit for tool calls in one response."
-            >
-              <input
-                id="maximum-tool-calls"
-                type="range"
-                min={MIN_MAX_TOOL_CALLS}
-                max={MAX_MAX_TOOL_CALLS}
-                step={1}
-                value={s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS}
-                onChange={(e) =>
-                  setS((current) => ({
-                    ...current,
-                    maxToolCalls: Math.round(Number(e.target.value))
-                  }))
-                }
-                onBlur={(e) => set({ maxToolCalls: Math.round(Number(e.target.value)) })}
-                className="w-full accent-green-500"
-              />
-            </Row>
-            <Row label="Top-P" value={(s.topP ?? 0.95).toFixed(2)} hint="Nucleus sampling cutoff.">
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.01}
-                value={s.topP ?? 0.95}
-                onChange={(e) => setS((current) => ({ ...current, topP: Number(e.target.value) }))}
-                onBlur={(e) => set({ topP: Number(e.target.value) })}
-                className="w-full accent-green-500"
-              />
-            </Row>
-            <Row
-              label="Top-K"
-              value={String(s.topK ?? 40)}
-              hint="0 disables. Limits candidate tokens."
-            >
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={s.topK ?? 40}
-                onChange={(e) => setS((current) => ({ ...current, topK: Number(e.target.value) }))}
-                onBlur={(e) => set({ topK: Number(e.target.value) })}
-                className="w-full accent-green-500"
-              />
-            </Row>
-            <Row
-              label="Min-P"
-              value={(s.minP ?? 0.05).toFixed(2)}
-              hint="Min probability relative to the top token."
-            >
-              <input
-                type="range"
-                min={0}
-                max={0.5}
-                step={0.01}
-                value={s.minP ?? 0.05}
-                onChange={(e) => setS((current) => ({ ...current, minP: Number(e.target.value) }))}
-                onBlur={(e) => set({ minP: Number(e.target.value) })}
-                className="w-full accent-green-500"
-              />
-            </Row>
-            <Row
-              label="Repeat penalty"
-              value={(s.repeatPenalty ?? 1.1).toFixed(2)}
-              hint="Higher discourages repetition."
-            >
-              <input
-                type="range"
-                min={1}
-                max={1.5}
-                step={0.01}
-                value={s.repeatPenalty ?? 1.1}
-                onChange={(e) =>
-                  setS((current) => ({ ...current, repeatPenalty: Number(e.target.value) }))
-                }
-                onBlur={(e) => set({ repeatPenalty: Number(e.target.value) })}
-                className="w-full accent-green-500"
-              />
-            </Row>
-            {/* Order matters: the OUTER budget first, because each inner one is bounded by it.
-                thinking budget within max output within context window (rule in @offgrid/models). */}
-            <BackendPreferencesSection modalities={['llm']} />
-            <Row label="Context window" controlId="context-window" hint={contextWindowHint(s)}>
-              <SettingsSelect
-                id="context-window"
-                label="Context window"
-                value={String(s.ctxSize ?? DEFAULT_CTX_SIZE)}
-                onValueChange={(value) => set(budgetChange(s, { ctxSize: Number(value) }))}
-                options={contextWindowOptions(
-                  CTX_OPTIONS,
-                  s.modelMaxCtx,
-                  s.ctxSize ?? DEFAULT_CTX_SIZE
-                ).map((value) => ({
-                  value: String(value),
-                  label: `${value >= 1024 ? `${value / 1024}K` : value} tokens${
-                    value === s.modelMaxCtx
-                      ? " (model's max)"
-                      : value === DEFAULT_CTX_SIZE
-                        ? ' (recommended)'
-                        : value < MIN_CAPTURE_CTX_SIZE
-                          ? ' (capture unavailable)'
-                          : ''
-                  }`
-                }))}
-              />
-            </Row>
-            <Row
-              label="Max output"
-              controlId="max-output"
-              hint={
-                (s.maxTokens ?? MAX_OUTPUT_AUTO) === MAX_OUTPUT_AUTO
-                  ? 'Auto: the reply runs until the model stops or the context window fills - no fixed cap.'
-                  : 'Hard cap on the response length. Cannot exceed the context window.'
-              }
-            >
-              <SettingsSelect
-                id="max-output"
-                label="Max output"
-                value={String(s.maxTokens ?? MAX_OUTPUT_AUTO)}
-                onValueChange={(value) => set(budgetChange(s, { maxTokens: Number(value) }))}
-                options={[
-                  { value: String(MAX_OUTPUT_AUTO), label: 'Auto (until the model stops)' },
-                  ...optionsWithinCeiling(MAX_OUTPUT_OPTIONS, s.ctxSize ?? DEFAULT_CTX_SIZE).map(
-                    (value) => ({ value: String(value), label: `${value / 1024}K tokens` })
-                  )
-                ]}
-              />
-            </Row>
-            <Row
-              label="Thinking budget"
-              controlId="thinking-budget"
-              hint={
-                (s.reasoningBudget ?? REASONING_BUDGET_AUTO) === REASONING_BUDGET_AUTO
-                  ? 'Auto: when Thinking is on, the model reasons for as long as it wants - it can spend the whole response reasoning and never answer.'
-                  : 'Cap on the tokens spent thinking. At the cap the model stops reasoning and answers. Cannot exceed Max output.'
-              }
-            >
-              <SettingsSelect
-                id="thinking-budget"
-                label="Thinking budget"
-                value={String(s.reasoningBudget ?? REASONING_BUDGET_AUTO)}
-                onValueChange={(value) => set(budgetChange(s, { reasoningBudget: Number(value) }))}
-                options={[
-                  REASONING_BUDGET_AUTO,
-                  ...optionsWithinCeiling(REASONING_BUDGET_OPTIONS, thinkingCeiling(s))
-                ].map((value) => ({ value: String(value), label: reasoningBudgetLabel(value) }))}
-              />
-            </Row>
-            <Row
-              label="System prompt"
-              hint="Prepended to every chat as a system message. Leave blank for the default."
-            >
-              <textarea
-                value={s.systemPrompt ?? ''}
-                onChange={(e) => setS((current) => ({ ...current, systemPrompt: e.target.value }))}
-                onBlur={(e) => set({ systemPrompt: e.target.value })}
-                rows={5}
-                placeholder="e.g. You are a concise, technical assistant."
-                className="w-full resize-none rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
-              />
-            </Row>
-
-            {/* Advanced — launch-time params; changing any reloads the model. */}
-            <div className="mb-3 mt-6 border-t border-neutral-800 pt-4 text-[10px] font-medium uppercase tracking-widest text-neutral-600">
-              Advanced (reloads the model)
-            </div>
-            <Row
-              label="KV cache"
-              hint="Quantize the KV cache to cut memory and allow a larger context. q8_0 ≈ half, q4_0 ≈ quarter of f16. Auto-enables FlashAttention."
-            >
-              <div className="flex gap-1.5">
-                {(['f16', 'q8_0', 'q4_0'] as const).map((t) => (
-                  <button
-                    key={t}
-                    onClick={() =>
-                      set({ kvCacheType: t, ...(t !== 'f16' ? { flashAttn: true } : {}) })
-                    }
-                    className={`flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors ${(s.kvCacheType ?? 'f16') === t ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}
-                  >
-                    {t}
-                  </button>
+                {[
+                  ['Current model', activeModelName ?? 'No active model'],
+                  ['Configured', formatContextWindow(s.ctxSize) ?? 'Checking'],
+                  ['Running', formatContextWindow(s.effectiveCtxSize) ?? 'Checking'],
+                  [
+                    'Recommended',
+                    formatContextWindow(recommendedContextWindow(s.modelMaxCtx)) ?? 'Not supported'
+                  ]
+                ].map(([label, value]) => (
+                  <div key={label} className="bg-neutral-950/90 p-3">
+                    <div className="text-[10px] uppercase tracking-wide text-neutral-600">
+                      {label}
+                    </div>
+                    <div className="mt-1 truncate text-xs text-neutral-200" title={value}>
+                      {value}
+                    </div>
+                  </div>
                 ))}
               </div>
-            </Row>
-            <Row
-              label="FlashAttention"
-              value={(s.flashAttn ?? false) ? 'On' : 'Off'}
-              hint="Faster, lower memory. Required for a quantized KV cache."
-            >
-              <button
-                onClick={() => set({ flashAttn: !(s.flashAttn ?? false) })}
-                disabled={(s.kvCacheType ?? 'f16') !== 'f16'}
-                className={`w-full rounded-md border px-2 py-1.5 text-xs transition-colors disabled:opacity-50 ${s.flashAttn ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}
-              >
-                {s.flashAttn ? 'Enabled' : 'Disabled'}
-              </button>
-            </Row>
-            <Row
-              label="Speculative decoding"
-              controlId="speculative-decoding"
-              hint="N-gram needs no second model. MTP uses prediction heads in a compatible main model. Draft and DFlash need a compatible installed draft GGUF."
-            >
-              <SettingsSelect
-                id="speculative-decoding"
-                label="Speculative decoding"
-                value={s.speculativeDecoding ?? 'off'}
-                onValueChange={(value) =>
-                  set({
-                    speculativeDecoding: value,
-                    ...(value === 'draft' && !draftModels.some((m) => m.value === s.draftModel)
-                      ? { draftModel: draftModels[0]?.value ?? '' }
-                      : value === 'dflash' && !dflashModels.some((m) => m.value === s.draftModel)
-                        ? { draftModel: dflashModels[0]?.value ?? '' }
-                        : {})
-                  })
-                }
-                options={[
-                  { value: 'off', label: 'Off' },
-                  { value: 'ngram', label: 'N-gram' },
-                  {
-                    value: 'mtp',
-                    label: s.supportsMtp === false ? 'MTP · Not supported by this model' : 'MTP',
-                    disabled: s.supportsMtp === false
-                  },
-                  {
-                    value: 'draft',
-                    label: 'Draft model',
-                    disabled: draftModels.length === 0
-                  },
-                  { value: 'dflash', label: 'DFlash', disabled: dflashModels.length === 0 }
-                ]}
-              />
-            </Row>
-            {(s.speculativeDecoding === 'draft' || s.speculativeDecoding === 'dflash') && (
-              <Row
-                label="Draft model"
-                controlId="speculative-draft-model"
-                hint="Use a smaller GGUF that is tokenizer-compatible with the active model."
-              >
+              <p className="mb-5 text-[11px] leading-5 text-neutral-500">
+                16K is recommended for capture and chat. Capture needs at least 8K; smaller windows
+                can save memory but leave captured frames waiting for analysis.
+              </p>
+              {/* Order matters: the OUTER budget first, because each inner one is bounded by it.
+                thinking budget within max output within context window (rule in @offgrid/models). */}
+              <BackendPreferencesSection modalities={['llm']} />
+              <Row label="Context window" controlId="context-window" hint={contextWindowHint(s)}>
                 <SettingsSelect
-                  id="speculative-draft-model"
-                  label="Draft model"
-                  value={s.draftModel ?? ''}
-                  options={s.speculativeDecoding === 'dflash' ? dflashModels : draftModels}
-                  placeholder="No compatible model installed"
-                  searchable
-                  disabled={
-                    s.speculativeDecoding === 'dflash'
-                      ? dflashModels.length === 0
-                      : draftModels.length === 0
-                  }
-                  onValueChange={(value) => set({ draftModel: value })}
+                  id="context-window"
+                  label="Context window"
+                  value={String(s.ctxSize ?? DEFAULT_CTX_SIZE)}
+                  onValueChange={(value) => set(budgetChange(s, { ctxSize: Number(value) }))}
+                  options={contextWindowOptions(
+                    CTX_OPTIONS,
+                    s.modelMaxCtx,
+                    s.ctxSize ?? DEFAULT_CTX_SIZE
+                  ).map((value) => ({
+                    value: String(value),
+                    label: `${value >= 1024 ? `${value / 1024}K` : value} tokens${
+                      value === s.modelMaxCtx
+                        ? " (model's max)"
+                        : value === DEFAULT_CTX_SIZE
+                          ? ' (recommended)'
+                          : value < MIN_CAPTURE_CTX_SIZE
+                            ? ' (capture unavailable)'
+                            : ''
+                    }`
+                  }))}
                 />
               </Row>
-            )}
-            <Row
-              label="GPU layers"
-              value={String(s.gpuLayers ?? 99)}
-              hint={gpuLayersHint(s.gpuAccelerator ?? null)}
-            >
-              <input
-                type="range"
-                min={0}
-                max={99}
-                step={1}
-                value={s.gpuLayers ?? 99}
-                onChange={(e) =>
-                  setS((current) => ({ ...current, gpuLayers: Number(e.target.value) }))
+              <Row
+                label="Max output"
+                controlId="max-output"
+                hint={
+                  (s.maxTokens ?? MAX_OUTPUT_AUTO) === MAX_OUTPUT_AUTO
+                    ? 'Auto: the reply runs until the model stops or the context window fills - no fixed cap.'
+                    : 'Hard cap on the response length. Cannot exceed the context window.'
                 }
-                onBlur={(e) => set({ gpuLayers: Number(e.target.value) })}
-                className="w-full accent-green-500"
-              />
-            </Row>
-            <Row
-              label="CPU threads"
-              value={(s.threads ?? 0) === 0 ? 'auto' : String(s.threads)}
-              hint="0 = auto (let llama.cpp choose)."
-            >
-              <input
-                type="range"
-                min={0}
-                max={16}
-                step={1}
-                value={s.threads ?? 0}
-                onChange={(e) =>
-                  setS((current) => ({ ...current, threads: Number(e.target.value) }))
+              >
+                <SettingsSelect
+                  id="max-output"
+                  label="Max output"
+                  value={String(s.maxTokens ?? MAX_OUTPUT_AUTO)}
+                  onValueChange={(value) => set(budgetChange(s, { maxTokens: Number(value) }))}
+                  options={[
+                    { value: String(MAX_OUTPUT_AUTO), label: 'Auto (until the model stops)' },
+                    ...optionsWithinCeiling(MAX_OUTPUT_OPTIONS, s.ctxSize ?? DEFAULT_CTX_SIZE).map(
+                      (value) => ({ value: String(value), label: `${value / 1024}K tokens` })
+                    )
+                  ]}
+                />
+              </Row>
+              <Row
+                label="Thinking budget"
+                controlId="thinking-budget"
+                hint={
+                  (s.reasoningBudget ?? REASONING_BUDGET_AUTO) === REASONING_BUDGET_AUTO
+                    ? 'Auto: when Thinking is on, the model reasons for as long as it wants - it can spend the whole response reasoning and never answer.'
+                    : 'Cap on the tokens spent thinking. At the cap the model stops reasoning and answers. Cannot exceed Max output.'
                 }
-                onBlur={(e) => set({ threads: Number(e.target.value) })}
-                className="w-full accent-green-500"
-              />
-            </Row>
-            <Row
-              label="Batch size"
-              value={String(s.batchSize ?? 512)}
-              hint="Tokens processed per batch during prompt ingest."
+              >
+                <SettingsSelect
+                  id="thinking-budget"
+                  label="Thinking budget"
+                  value={String(s.reasoningBudget ?? REASONING_BUDGET_AUTO)}
+                  onValueChange={(value) =>
+                    set(budgetChange(s, { reasoningBudget: Number(value) }))
+                  }
+                  options={[
+                    REASONING_BUDGET_AUTO,
+                    ...optionsWithinCeiling(REASONING_BUDGET_OPTIONS, thinkingCeiling(s))
+                  ].map((value) => ({ value: String(value), label: reasoningBudgetLabel(value) }))}
+                />
+              </Row>
+            </SettingsSection>
+            <SettingsSection
+              id="text.answers"
+              title="Answers"
+              summary={`Temperature ${(s.temperature ?? 0.7).toFixed(2)} · up to ${s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS} tool calls`}
+              defaultOpen
             >
-              <input
-                type="range"
-                min={64}
-                max={2048}
-                step={64}
-                value={s.batchSize ?? 512}
-                onChange={(e) =>
-                  setS((current) => ({ ...current, batchSize: Number(e.target.value) }))
-                }
-                onBlur={(e) => set({ batchSize: Number(e.target.value) })}
-                className="w-full accent-green-500"
-              />
-            </Row>
+              <Row
+                label="Temperature"
+                value={(s.temperature ?? 0.7).toFixed(2)}
+                hint="Lower = focused, higher = creative."
+              >
+                <input
+                  type="range"
+                  min={0}
+                  max={1.5}
+                  step={0.05}
+                  value={s.temperature ?? 0.7}
+                  onChange={(e) =>
+                    setS((current) => ({ ...current, temperature: Number(e.target.value) }))
+                  }
+                  onBlur={(e) => set({ temperature: Number(e.target.value) })}
+                  className="w-full accent-green-500"
+                />
+              </Row>
+              <Row
+                label="Generation details"
+                controlId="generation-details-toggle"
+                value={showGenerationDetails ? 'Shown' : 'Hidden'}
+                hint="Show context use, speed, token count, and time under each answer."
+              >
+                <button
+                  id="generation-details-toggle"
+                  type="button"
+                  role="switch"
+                  aria-checked={showGenerationDetails}
+                  onClick={toggleGenerationDetails}
+                  className={`w-full border px-3 py-1.5 text-left text-xs transition-colors ${
+                    showGenerationDetails
+                      ? 'border-green-500/40 text-green-500'
+                      : 'border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                  }`}
+                >
+                  {showGenerationDetails ? 'Showing under each answer' : 'Hidden'}
+                </button>
+              </Row>
+              <Row
+                label="Reply sound"
+                controlId="reply-sound-toggle"
+                value={replySound ? 'On' : 'Off'}
+                hint="A soft ding when an answer arrives, here and in God. The same setting in both."
+              >
+                <button
+                  id="reply-sound-toggle"
+                  type="button"
+                  role="switch"
+                  aria-checked={replySound}
+                  onClick={() => setReplySound(!replySound)}
+                  className={`w-full border px-3 py-1.5 text-left text-xs transition-colors ${
+                    replySound
+                      ? 'border-green-500/40 text-green-500'
+                      : 'border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                  }`}
+                >
+                  {replySound ? 'Ding when an answer arrives' : 'Off'}
+                </button>
+              </Row>
+              <Row
+                label="Maximum tool calls"
+                controlId="maximum-tool-calls"
+                value={String(s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS)}
+                hint="Emergency limit for tool calls in one response."
+              >
+                <input
+                  id="maximum-tool-calls"
+                  type="range"
+                  min={MIN_MAX_TOOL_CALLS}
+                  max={MAX_MAX_TOOL_CALLS}
+                  step={1}
+                  value={s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS}
+                  onChange={(e) =>
+                    setS((current) => ({
+                      ...current,
+                      maxToolCalls: Math.round(Number(e.target.value))
+                    }))
+                  }
+                  onBlur={(e) => set({ maxToolCalls: Math.round(Number(e.target.value)) })}
+                  className="w-full accent-green-500"
+                />
+              </Row>
+              <Row
+                label="System prompt"
+                hint="Prepended to every chat as a system message. Leave blank for the default."
+              >
+                <textarea
+                  value={s.systemPrompt ?? ''}
+                  onChange={(e) =>
+                    setS((current) => ({ ...current, systemPrompt: e.target.value }))
+                  }
+                  onBlur={(e) => set({ systemPrompt: e.target.value })}
+                  rows={5}
+                  placeholder="e.g. You are a concise, technical assistant."
+                  className="w-full resize-none rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
+                />
+              </Row>
+            </SettingsSection>
+            <SettingsSection
+              id="text.sampling"
+              title="Sampling"
+              summary={`Top-P ${(s.topP ?? 0.95).toFixed(2)} · Top-K ${s.topK ?? 40} · repeat penalty ${(s.repeatPenalty ?? 1.1).toFixed(2)}`}
+            >
+              <Row
+                label="Top-P"
+                value={(s.topP ?? 0.95).toFixed(2)}
+                hint="Nucleus sampling cutoff."
+              >
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={s.topP ?? 0.95}
+                  onChange={(e) =>
+                    setS((current) => ({ ...current, topP: Number(e.target.value) }))
+                  }
+                  onBlur={(e) => set({ topP: Number(e.target.value) })}
+                  className="w-full accent-green-500"
+                />
+              </Row>
+              <Row
+                label="Top-K"
+                value={String(s.topK ?? 40)}
+                hint="0 disables. Limits candidate tokens."
+              >
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={s.topK ?? 40}
+                  onChange={(e) =>
+                    setS((current) => ({ ...current, topK: Number(e.target.value) }))
+                  }
+                  onBlur={(e) => set({ topK: Number(e.target.value) })}
+                  className="w-full accent-green-500"
+                />
+              </Row>
+              <Row
+                label="Min-P"
+                value={(s.minP ?? 0.05).toFixed(2)}
+                hint="Min probability relative to the top token."
+              >
+                <input
+                  type="range"
+                  min={0}
+                  max={0.5}
+                  step={0.01}
+                  value={s.minP ?? 0.05}
+                  onChange={(e) =>
+                    setS((current) => ({ ...current, minP: Number(e.target.value) }))
+                  }
+                  onBlur={(e) => set({ minP: Number(e.target.value) })}
+                  className="w-full accent-green-500"
+                />
+              </Row>
+              <Row
+                label="Repeat penalty"
+                value={(s.repeatPenalty ?? 1.1).toFixed(2)}
+                hint="Higher discourages repetition."
+              >
+                <input
+                  type="range"
+                  min={1}
+                  max={1.5}
+                  step={0.01}
+                  value={s.repeatPenalty ?? 1.1}
+                  onChange={(e) =>
+                    setS((current) => ({ ...current, repeatPenalty: Number(e.target.value) }))
+                  }
+                  onBlur={(e) => set({ repeatPenalty: Number(e.target.value) })}
+                  className="w-full accent-green-500"
+                />
+              </Row>
+            </SettingsSection>
+            <SettingsSection
+              id="text.performance"
+              title="Performance"
+              summary={
+                'KV cache, FlashAttention, GPU layers and threads. Changing any reloads the model.'
+              }
+            >
+              <Row
+                label="KV cache"
+                hint="Quantize the KV cache to cut memory and allow a larger context. q8_0 ≈ half, q4_0 ≈ quarter of f16. Auto-enables FlashAttention."
+              >
+                <div className="flex gap-1.5">
+                  {(['f16', 'q8_0', 'q4_0'] as const).map((t) => (
+                    <button
+                      key={t}
+                      onClick={() =>
+                        set({ kvCacheType: t, ...(t !== 'f16' ? { flashAttn: true } : {}) })
+                      }
+                      className={`flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors ${(s.kvCacheType ?? 'f16') === t ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </Row>
+              <Row
+                label="FlashAttention"
+                value={(s.flashAttn ?? false) ? 'On' : 'Off'}
+                hint="Faster, lower memory. Required for a quantized KV cache."
+              >
+                <button
+                  onClick={() => set({ flashAttn: !(s.flashAttn ?? false) })}
+                  disabled={(s.kvCacheType ?? 'f16') !== 'f16'}
+                  className={`w-full rounded-md border px-2 py-1.5 text-xs transition-colors disabled:opacity-50 ${s.flashAttn ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}
+                >
+                  {s.flashAttn ? 'Enabled' : 'Disabled'}
+                </button>
+              </Row>
+              <Row
+                label="Speculative decoding"
+                controlId="speculative-decoding"
+                hint="N-gram needs no second model. MTP uses prediction heads in a compatible main model. Draft and DFlash need a compatible installed draft GGUF."
+              >
+                <SettingsSelect
+                  id="speculative-decoding"
+                  label="Speculative decoding"
+                  value={s.speculativeDecoding ?? 'off'}
+                  onValueChange={(value) =>
+                    set({
+                      speculativeDecoding: value,
+                      ...(value === 'draft' && !draftModels.some((m) => m.value === s.draftModel)
+                        ? { draftModel: draftModels[0]?.value ?? '' }
+                        : value === 'dflash' && !dflashModels.some((m) => m.value === s.draftModel)
+                          ? { draftModel: dflashModels[0]?.value ?? '' }
+                          : {})
+                    })
+                  }
+                  options={[
+                    { value: 'off', label: 'Off' },
+                    { value: 'ngram', label: 'N-gram' },
+                    {
+                      value: 'mtp',
+                      label: s.supportsMtp === false ? 'MTP · Not supported by this model' : 'MTP',
+                      disabled: s.supportsMtp === false
+                    },
+                    {
+                      value: 'draft',
+                      label: 'Draft model',
+                      disabled: draftModels.length === 0
+                    },
+                    { value: 'dflash', label: 'DFlash', disabled: dflashModels.length === 0 }
+                  ]}
+                />
+              </Row>
+              {(s.speculativeDecoding === 'draft' || s.speculativeDecoding === 'dflash') && (
+                <Row
+                  label="Draft model"
+                  controlId="speculative-draft-model"
+                  hint="Use a smaller GGUF that is tokenizer-compatible with the active model."
+                >
+                  <SettingsSelect
+                    id="speculative-draft-model"
+                    label="Draft model"
+                    value={s.draftModel ?? ''}
+                    options={s.speculativeDecoding === 'dflash' ? dflashModels : draftModels}
+                    placeholder="No compatible model installed"
+                    searchable
+                    disabled={
+                      s.speculativeDecoding === 'dflash'
+                        ? dflashModels.length === 0
+                        : draftModels.length === 0
+                    }
+                    onValueChange={(value) => set({ draftModel: value })}
+                  />
+                </Row>
+              )}
+              <Row
+                label="GPU layers"
+                value={String(s.gpuLayers ?? 99)}
+                hint={gpuLayersHint(s.gpuAccelerator ?? null)}
+              >
+                <input
+                  type="range"
+                  min={0}
+                  max={99}
+                  step={1}
+                  value={s.gpuLayers ?? 99}
+                  onChange={(e) =>
+                    setS((current) => ({ ...current, gpuLayers: Number(e.target.value) }))
+                  }
+                  onBlur={(e) => set({ gpuLayers: Number(e.target.value) })}
+                  className="w-full accent-green-500"
+                />
+              </Row>
+              <Row
+                label="CPU threads"
+                value={(s.threads ?? 0) === 0 ? 'auto' : String(s.threads)}
+                hint="0 = auto (let llama.cpp choose)."
+              >
+                <input
+                  type="range"
+                  min={0}
+                  max={16}
+                  step={1}
+                  value={s.threads ?? 0}
+                  onChange={(e) =>
+                    setS((current) => ({ ...current, threads: Number(e.target.value) }))
+                  }
+                  onBlur={(e) => set({ threads: Number(e.target.value) })}
+                  className="w-full accent-green-500"
+                />
+              </Row>
+              <Row
+                label="Batch size"
+                value={String(s.batchSize ?? 512)}
+                hint="Tokens processed per batch during prompt ingest."
+              >
+                <input
+                  type="range"
+                  min={64}
+                  max={2048}
+                  step={64}
+                  value={s.batchSize ?? 512}
+                  onChange={(e) =>
+                    setS((current) => ({ ...current, batchSize: Number(e.target.value) }))
+                  }
+                  onBlur={(e) => set({ batchSize: Number(e.target.value) })}
+                  className="w-full accent-green-500"
+                />
+              </Row>
+            </SettingsSection>
 
             <button
               onClick={resetDefaults}
@@ -923,54 +967,66 @@ export function SettingsPanel({
 
         {tab === 'transcription' && (
           <>
-            <Row
-              label="Current model"
-              controlId="transcription-model"
-              hint="The model used for the next recording."
+            <SettingsSection
+              id="transcription.model"
+              title="Model and language"
+              summary={`${transcriptionInfo?.options.find((option) => option.active)?.name ?? 'Checking'} · ${transcriptionInfo?.languages.find((l) => l.code === (transcriptionInfo?.language ?? 'auto'))?.label ?? 'Auto-detect'}`}
+              defaultOpen
             >
-              <SettingsSelect
-                id="transcription-model"
-                label="Current transcription model"
-                value={
-                  transcriptionInfo?.options.find((option) => option.active)?.id ??
-                  DEFAULT_TRANSCRIPTION_MODEL
-                }
-                placeholder="Checking installed models..."
-                onValueChange={pickTranscriptionModel}
-                disabled={!transcriptionInfo || transcriptionInfo.options.length === 0}
-                options={(transcriptionInfo?.options ?? []).map((option) => ({
-                  value: option.id ?? DEFAULT_TRANSCRIPTION_MODEL,
-                  label: option.name
-                }))}
-              />
-              {transcriptionInfo ? (
-                <p className="mt-1 text-[10px] text-neutral-600">{transcriptionInfo.label}</p>
-              ) : null}
-            </Row>
-            <BackendPreferencesSection modalities={['stt']} />
-            <Row
-              label="Spoken language"
-              controlId="stt-language"
-              hint="Auto-detect is available for multilingual Whisper models. English-only models show English only."
-            >
-              <SettingsSelect
-                id="stt-language"
+              <Row
+                label="Current model"
+                controlId="transcription-model"
+                hint="The model used for the next recording."
+              >
+                <SettingsSelect
+                  id="transcription-model"
+                  label="Current transcription model"
+                  value={
+                    transcriptionInfo?.options.find((option) => option.active)?.id ??
+                    DEFAULT_TRANSCRIPTION_MODEL
+                  }
+                  placeholder="Checking installed models..."
+                  onValueChange={pickTranscriptionModel}
+                  disabled={!transcriptionInfo || transcriptionInfo.options.length === 0}
+                  options={(transcriptionInfo?.options ?? []).map((option) => ({
+                    value: option.id ?? DEFAULT_TRANSCRIPTION_MODEL,
+                    label: option.name
+                  }))}
+                />
+                {transcriptionInfo ? (
+                  <p className="mt-1 text-[10px] text-neutral-600">{transcriptionInfo.label}</p>
+                ) : null}
+              </Row>
+              <Row
                 label="Spoken language"
-                value={transcriptionInfo?.language ?? 'auto'}
-                onValueChange={pickTranscriptionLanguage}
-                disabled={!transcriptionInfo}
-                options={(transcriptionInfo?.languages ?? []).map((language) => ({
-                  value: language.code,
-                  label: language.label
-                }))}
-              />
-            </Row>
+                controlId="stt-language"
+                hint="Auto-detect is available for multilingual Whisper models. English-only models show English only."
+              >
+                <SettingsSelect
+                  id="stt-language"
+                  label="Spoken language"
+                  value={transcriptionInfo?.language ?? 'auto'}
+                  onValueChange={pickTranscriptionLanguage}
+                  disabled={!transcriptionInfo}
+                  options={(transcriptionInfo?.languages ?? []).map((language) => ({
+                    value: language.code,
+                    label: language.label
+                  }))}
+                />
+              </Row>
+            </SettingsSection>
+            <SettingsSection
+              id="transcription.performance"
+              title="Performance"
+              summary="Which processor runs transcription."
+            >
+              <BackendPreferencesSection modalities={['stt']} />
+            </SettingsSection>
           </>
         )}
 
         {tab === 'tools' && (
           <>
-            <BackendPreferencesSection modalities={['embeddings']} />
             <div className="mb-3 flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2">
               <div>
                 <div className="text-sm">Enable tools</div>
@@ -1130,6 +1186,13 @@ export function SettingsPanel({
                 })}
               </div>
             )}
+            <SettingsSection
+              id="tools.search"
+              title="Search performance"
+              summary="Which processor builds search embeddings."
+            >
+              <BackendPreferencesSection modalities={['embeddings']} />
+            </SettingsSection>
           </>
         )}
 
