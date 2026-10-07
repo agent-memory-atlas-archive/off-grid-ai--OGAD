@@ -1191,6 +1191,13 @@ export function getGatewayPort(): number {
 }
 let startingGateway = false
 
+/** A request from this machine. The gateway listens on every interface (phones reach the models),
+ *  so a route that changes settings checks this itself: nothing else stands in front of it. */
+function isLocalCaller(req: http.IncomingMessage): boolean {
+  const remote = req.socket.remoteAddress
+  return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
+}
+
 /** Start the unified local model gateway. Bound to loopback (local-only). Async because it scans
  *  for a free port when the preferred one is taken. */
 export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
@@ -1369,10 +1376,7 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
       // Mutating launch-time LLM args triggers a llama-server respawn. The listener is
       // on every interface so a phone can reach the models, which makes this check the
       // ONLY thing standing between the LAN and a respawn - not defense in depth.
-      const remote = req.socket.remoteAddress
-      const isLocalhost =
-        remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
-      if (!isLocalhost) {
+      if (!isLocalCaller(req)) {
         json(res, 403, errBody('Settings mutations are restricted to localhost.', 'forbidden'))
         return
       }
@@ -1430,8 +1434,19 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
             return json(res, 200, await getTaskRolesView())
           }
           if (url === '/v1/models/task-role' && method === 'POST') {
+            // A persistent settings change, on a gateway every interface can reach: this machine
+            // only, as /v1/settings. A paired browser changes roles over its sealed link instead.
+            if (!isLocalCaller(req)) {
+              return json(
+                res,
+                403,
+                errBody('Task role changes are restricted to localhost.', 'forbidden')
+              )
+            }
             const { setTaskRoleFromRequest } = await import('./task-role-models')
-            const result = setTaskRoleFromRequest((await readJson(req)) as Record<string, unknown>)
+            const result = await setTaskRoleFromRequest(
+              (await readJson(req)) as Record<string, unknown>
+            )
             return json(res, result.success ? 200 : 400, result)
           }
           if (url === '/v1/models/pull/status' && method === 'GET') {

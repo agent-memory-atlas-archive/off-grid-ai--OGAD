@@ -184,6 +184,7 @@ export const RPC_METHODS = [
   'tools.run',
   'tasks.latest',
   'tasks.stop',
+  'models.setTaskRole',
   'vault',
   'settings.get',
   'settings.set',

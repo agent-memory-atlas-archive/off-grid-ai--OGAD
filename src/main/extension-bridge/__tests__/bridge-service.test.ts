@@ -103,6 +103,11 @@ async function setup(opts: { approve?: boolean; features?: BridgeFeatures } = {}
             action: ''
           },
     stopTask: async (_browser, taskId) => taskId === 'task-1',
+    // The desktop's role setter answers; a model it cannot use is refused.
+    setTaskRole: async (request) =>
+      request.modelId === 'grounder-1'
+        ? { success: true }
+        : { success: false, error: 'That model cannot fill this role.' },
     readSettings: async (section) => settings.read(section),
     writeSettings: async (section, patch) => settings.write(section, patch),
     vault: async () => ({ type: 'status', state: 'unlocked' })
@@ -254,6 +259,25 @@ describe('sealed rpc', () => {
     }
   })
 
+  it('lets a paired browser give a model a task role, and refuses what the desktop refuses', async () => {
+    // Review finding: roles changed over the open gateway. A paired browser uses its sealed link.
+    const s = await setup()
+    await s.pair()
+    const ok = await s.call('device000001', 'models.setTaskRole', {
+      task: 'web_use',
+      role: 'grounding',
+      modelId: 'grounder-1'
+    })
+    expect(ok.body).toMatchObject({ ok: true, result: { success: true } })
+    const refused = await s.call('device000001', 'models.setTaskRole', {
+      task: 'web_use',
+      role: 'grounding',
+      modelId: 'made-up'
+    })
+    expect(refused.body).toMatchObject({ ok: false })
+    expect((await s.call('device999999', 'models.setTaskRole', {})).status).toBe(401)
+  })
+
   it('lists chats and tools, puts and deletes', async () => {
     const s = await setup()
     await s.pair()
@@ -328,7 +352,7 @@ describe('sealed rpc', () => {
     }
   })
 
-  it('tasks.latest reports this browser\'s latest task, for a run that started one', async () => {
+  it("tasks.latest reports this browser's latest task, for a run that started one", async () => {
     // web_use answers "started" at once; the browser asks here for the result it was waiting on.
     const pro = await setup({ features: PRO })
     await pro.pair()
@@ -344,9 +368,9 @@ describe('sealed rpc', () => {
         action: ''
       }
     })
-    expect((await pro.call('device000001', 'tasks.latest', { since: 3_000_000 })).body).toMatchObject(
-      { ok: true, result: null }
-    )
+    expect(
+      (await pro.call('device000001', 'tasks.latest', { since: 3_000_000 })).body
+    ).toMatchObject({ ok: true, result: null })
     // A chat asks for its own task by id, so a newer task from another chat never hides it.
     expect(
       (await pro.call('device000001', 'tasks.latest', { since: 1, taskId: 'task-2' })).body

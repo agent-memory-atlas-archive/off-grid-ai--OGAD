@@ -88,6 +88,12 @@ export interface BridgeData {
   ): Promise<BrowserTaskProgress | null>
   /** Stops a task this browser started (its journey is this browser's). False otherwise. */
   stopTask(browser: PairedBrowser, taskId: string): Promise<boolean>
+  /** Gives a model a Web Use or Computer Use role, through the desktop's one role setter. */
+  setTaskRole(request: {
+    task: unknown
+    role: unknown
+    modelId: unknown
+  }): Promise<{ success: boolean; error?: string }>
   vault(request: unknown, browser: PairedBrowser): Promise<unknown>
   /** One section of the desktop's settings (settings.ts), as its Settings screen shows it. */
   readSettings(section: SettingsSection): Promise<unknown>
@@ -215,6 +221,11 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
         throw new Error('invalid')
       }
       return deps.data.stopTask(browser, p.taskId)
+    },
+    'models.setTaskRole': async (p) => {
+      const result = await deps.data.setTaskRole({ task: p.task, role: p.role, modelId: p.modelId })
+      if (!result.success) throw new Error(result.error ?? 'invalid')
+      return result
     },
     vault: async (p, browser) => {
       requireFeature('vault')

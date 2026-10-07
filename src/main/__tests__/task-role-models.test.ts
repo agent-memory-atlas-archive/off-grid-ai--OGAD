@@ -9,6 +9,18 @@ vi.mock('../computer-use-settings', () => ({
   getComputerUseSettings: () => ({ ...store.computer }),
   setComputerUseSettings: (next: typeof store.computer) => void (store.computer = next)
 }))
+// The model inventory: one installed decision model and one installed grounding specialist.
+vi.mock('../models-manager', () => ({
+  getCatalog: async () => ({
+    kinds: [],
+    models: [
+      { id: 'jev', kind: 'computer_use', tags: ['Decision'] },
+      { id: 'ui-tars', kind: 'computer_use', tags: [] },
+      { id: 'not-installed', kind: 'computer_use', tags: [] }
+    ]
+  }),
+  listInstalled: async () => ['jev', 'ui-tars']
+}))
 vi.mock('../web-use-settings', () => ({
   getWebUseSettings: () => ({ ...store.web }),
   setWebUseSettings: (next: typeof store.web) => void (store.web = next)
@@ -39,17 +51,24 @@ describe('task model roles', () => {
     expect(store.web.decisionModelId).toBeNull()
   })
 
-  it('sets a role asked for over the gateway only when the request names one fully', () => {
-    expect(setTaskRoleFromRequest({ task: 'web_use', role: 'decision', modelId: 'jev' })).toEqual({
-      success: true
-    })
+  it('sets a role asked for only when the request is complete and the model can fill it', async () => {
+    expect(
+      await setTaskRoleFromRequest({ task: 'web_use', role: 'decision', modelId: 'jev' })
+    ).toEqual({ success: true })
     expect(store.web.decisionModelId).toBe('jev')
+    // Review finding: any id was accepted. Now an unknown, uninstalled or wrong-role model is not.
     for (const bad of [
-      { task: 'chat', role: 'decision', modelId: 'x' },
-      { task: 'web_use', role: 'reasoner', modelId: 'x' },
-      { task: 'web_use', role: 'decision', modelId: '' }
+      { task: 'chat', role: 'decision', modelId: 'jev' },
+      { task: 'web_use', role: 'reasoner', modelId: 'jev' },
+      { task: 'web_use', role: 'decision', modelId: '' },
+      { task: 'web_use', role: 'decision', modelId: 'ui-tars' },
+      { task: 'web_use', role: 'grounding', modelId: 'jev' },
+      { task: 'web_use', role: 'grounding', modelId: 'not-installed' },
+      { task: 'web_use', role: 'grounding', modelId: 'made-up' }
     ]) {
-      expect(setTaskRoleFromRequest(bad).success).toBe(false)
+      expect((await setTaskRoleFromRequest(bad)).success).toBe(false)
     }
+    expect(store.web.decisionModelId).toBe('jev')
+    expect(store.computer.groundingModelId).toBeNull()
   })
 })

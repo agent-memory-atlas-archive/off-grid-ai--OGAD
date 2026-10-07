@@ -345,6 +345,10 @@ const data: BridgeData = {
     if (route === 'before-start') stopVisionTaskBeforeStart(taskId)
     return route === 'before-start'
   },
+  setTaskRole: async (request) => {
+    const { setTaskRoleFromRequest } = await import('../task-role-models')
+    return setTaskRoleFromRequest(request)
+  },
   vault: async (request, browser) =>
     callHookAsync(HOOKS.extensionVaultRequest, request, {
       deviceName: browser.name,
