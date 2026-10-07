@@ -47,22 +47,52 @@ import { AssistantMessageActions, MessageTime, speechControlState } from './Assi
 import { ContextDisclosure, hasInlineMemorySources, UnifiedContextSection } from './MessageContext'
 import { useStreamViewMessage } from '../stream-view-store'
 
+/** The pause before the first reaction on a message just sent: a beat, as a person takes, between
+ *  one and three seconds. Fixed per message (from its id), so it never jumps on a re-render. */
+function firstReactionPauseMs(messageId: string): number {
+  let hash = 0
+  for (const char of messageId) hash = (hash * 31 + char.charCodeAt(0)) >>> 0
+  return 1_000 + (hash % 2_000)
+}
+
+/** One reaction. On a message just sent it waits its turn, then settles in; on an older one it is
+ *  simply there. The wait is set when it first shows, so later renders never move it. */
+function ReactionPill({
+  emoji,
+  dueAt
+}: Readonly<{ emoji: string; dueAt: number }>): React.JSX.Element {
+  const [delayMs] = useState(() => Math.max(0, dueAt - Date.now()))
+  return (
+    <span
+      role="img"
+      aria-label={`Reacted ${emoji}`}
+      title="Reacted"
+      style={delayMs > 0 ? { animationDelay: `${delayMs}ms` } : undefined}
+      className="og-reaction rounded-full border border-border bg-background px-1.5 py-0.5 text-sm leading-none shadow-sm"
+    >
+      {emoji}
+    </span>
+  )
+}
+
 /** God's reactions to your message, as tapbacks sit on a message in iMessage. They only add up:
  *  each new one settles in beside the last, and none is replaced. */
-function Reactions({ emojis }: Readonly<{ emojis?: readonly string[] }>): React.JSX.Element | null {
+function Reactions({
+  emojis,
+  messageId,
+  sentAt
+}: Readonly<{
+  emojis?: readonly string[]
+  messageId: string
+  sentAt?: number
+}>): React.JSX.Element | null {
   if (!emojis?.length) return null
+  const first = (sentAt ?? 0) + firstReactionPauseMs(messageId)
   return (
     <span className="-mt-2.5 mr-2 flex gap-1 self-end">
-      {emojis.map((emoji) => (
-        <span
-          key={emoji}
-          role="img"
-          aria-label={`Reacted ${emoji}`}
-          title="Reacted"
-          className="og-reaction rounded-full border border-border bg-background px-1.5 py-0.5 text-sm leading-none shadow-sm"
-        >
-          {emoji}
-        </span>
+      {emojis.map((emoji, index) => (
+        // Each one after the first a moment after the one before it.
+        <ReactionPill key={emoji} emoji={emoji} dueAt={first + index * 300} />
       ))}
     </span>
   )
@@ -325,7 +355,9 @@ function VoiceMessageRow({
   return (
     <div className={`my-2 flex flex-col gap-1.5 ${alignment}`}>
       {body}
-      {message.role === 'user' ? <Reactions emojis={message.reactions} /> : null}
+      {message.role === 'user' ? (
+        <Reactions emojis={message.reactions} messageId={message.id} sentAt={message.createdAt} />
+      ) : null}
       {continuation}
       {message.role === 'user' ? (
         <div className="flex items-center gap-2 pr-1">
@@ -537,7 +569,9 @@ function StandardMessageRow({
         className={`flex flex-col ${message.role === 'user' ? 'items-end' : 'items-start'} ${message.image || message.attachments?.length || state.editingId === message.id ? 'w-full max-w-2xl' : 'w-fit max-w-[85%]'}`}
       >
         <MessageBubble message={message} state={state} actions={actions} navigation={navigation} />
-        {message.role === 'user' ? <Reactions emojis={message.reactions} /> : null}
+        {message.role === 'user' ? (
+          <Reactions emojis={message.reactions} messageId={message.id} sentAt={message.createdAt} />
+        ) : null}
         {message.role === 'user' ? (
           <div className="mt-1.5 flex items-center justify-end gap-2 pr-1">
             <MessageTime message={message} />
