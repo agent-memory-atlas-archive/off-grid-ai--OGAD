@@ -5,7 +5,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@/bootstrap/slotRegistry', () => {
+vi.mock('@/bootstrap/slotRegistry', async (importOriginal) => {
   function ReadyGoogleClient({
     onReadyChange
   }: Readonly<{ onReadyChange: (ready: boolean) => void }>): React.ReactElement {
@@ -13,8 +13,9 @@ vi.mock('@/bootstrap/slotRegistry', () => {
     return <div>Your Google client</div>
   }
 
+  // The real registry, with every slot answering as the ready Google client.
   return {
-    SLOTS: { connectorSetup: 'connectors.setup' },
+    ...(await importOriginal<typeof import('@/bootstrap/slotRegistry')>()),
     getSlot: () => ReadyGoogleClient
   }
 })
