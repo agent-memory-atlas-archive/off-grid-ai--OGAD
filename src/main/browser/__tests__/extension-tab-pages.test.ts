@@ -82,19 +82,20 @@ describe('extension tab pages under the Playwright relay', () => {
   it('starts in the tab the browser offered, without opening a new one', async () => {
     const link = fakeLink()
     const provider = createExtensionPageProvider(link)
-    const tab = await provider.adopt(7)
+    const tab = await provider.adopt(7, 'task-1')
 
-    expect(link.calls).toEqual([{ op: 'tab.adopt', args: { tabId: 7 } }])
+    // The task id names whose offer this is, so a task queued for minutes still gets its tab.
+    expect(link.calls).toEqual([{ op: 'tab.adopt', args: { tabId: 7, taskId: 'task-1' } }])
     expect([tab.tabId, tab.getURL()]).toEqual([7, 'https://chat.example.test/'])
     expect(provider.active()).toBe(tab)
 
     // A task that names a page takes the tab there; a tab never offered is refused.
-    await provider.adopt(7, 'https://shop.example.test/')
+    await provider.adopt(7, 'task-1', 'https://shop.example.test/')
     expect(link.calls.at(-1)).toEqual({
       op: 'tab.adopt',
-      args: { tabId: 7, url: 'https://shop.example.test/' }
+      args: { tabId: 7, taskId: 'task-1', url: 'https://shop.example.test/' }
     })
-    await expect(provider.adopt(8)).rejects.toThrow(/not offered/)
+    await expect(provider.adopt(8, 'task-1')).rejects.toThrow(/not offered/)
     expect(link.calls.some((c) => c.op === 'tab.create')).toBe(false)
   })
 

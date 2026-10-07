@@ -186,7 +186,8 @@ export class ExtensionTabContents implements RelayContents {
 export function createExtensionPageProvider(link: BrowserLink): ElectronPlaywrightPageProvider & {
   open(url: string): Promise<ExtensionTabContents>
   /** Start in the offered tab instead of a new one, at `url` when the task names one. */
-  adopt(tabId: number, url?: string): Promise<ExtensionTabContents>
+  /** `taskId`: the task the browser offered this tab to; only that task's offer lets it in. */
+  adopt(tabId: number, taskId: string, url?: string): Promise<ExtensionTabContents>
   active(): ExtensionTabContents | undefined
   closeAll(): Promise<void>
 } {
@@ -200,9 +201,13 @@ export function createExtensionPageProvider(link: BrowserLink): ElectronPlaywrig
   }
   const open = async (url: string): Promise<ExtensionTabContents> =>
     track(await link.request('tab.create', { url }), 'The browser did not open a tab.')
-  const adopt = async (tabId: number, url?: string): Promise<ExtensionTabContents> =>
+  const adopt = async (
+    tabId: number,
+    taskId: string,
+    url?: string
+  ): Promise<ExtensionTabContents> =>
     track(
-      await link.request('tab.adopt', { tabId, ...(url === undefined ? {} : { url }) }),
+      await link.request('tab.adopt', { tabId, taskId, ...(url === undefined ? {} : { url }) }),
       'The browser did not hand over its tab.'
     )
   const asPage = (contents: ExtensionTabContents): RelayPage => ({ id: contents.tabId, contents })

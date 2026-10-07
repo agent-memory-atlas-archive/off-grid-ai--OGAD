@@ -162,7 +162,7 @@ async function runInBrowser(
       recordStep(`opened ${start} in ${link.browser.name}`)
     } else {
       // The user's own tab, left where it is unless the task names a page.
-      tab = await pages.adopt(startTabId, url)
+      tab = await pages.adopt(startTabId, taskId, url)
       recordStep(`working in your tab in ${link.browser.name}`)
     }
     const task = await openTaskSession(link, pages, tab)
