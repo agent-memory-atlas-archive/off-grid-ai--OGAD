@@ -1146,6 +1146,10 @@ export function setRagConversationsSurface(
   getDB().transaction(() => {
     for (const id of ids) statement.run(surface === 'god' ? 'god' : null, id)
   })()
+  // Paired devices learn the move too, or the conversation stays on the other screen there.
+  for (const id of ids) {
+    emitSyncMutation({ entity: CORE_SYNC_ENTITIES.conversation, entityId: id, kind: 'put' })
+  }
 }
 export type RagMessage = RagMessageContract
 
