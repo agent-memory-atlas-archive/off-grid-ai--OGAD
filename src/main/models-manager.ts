@@ -1306,6 +1306,20 @@ async function taskRoleModelIds(): Promise<string[]> {
  * transcription set that modality's default pick. Callers pass only the id and
  * never branch on kind. Adding a new modality needs zero caller changes.
  */
+/**
+ * "Use" on a task model, from any Models screen: a grounding specialist is shared by both tasks
+ * already; a decision model becomes the decision model of both Web Use and Computer Use. Tasks
+ * settings can still give each task its own.
+ */
+function useForTasks(role: 'decision' | 'grounding', modelId: string): void {
+  if (role === 'grounding') {
+    setTaskRoleModel('computer_use', 'grounding', modelId)
+    return
+  }
+  setTaskRoleModel('computer_use', 'decision', modelId)
+  setTaskRoleModel('web_use', 'decision', modelId)
+}
+
 export async function activateModel(
   modelId: string,
   requestedKind?: string
@@ -1324,7 +1338,7 @@ export async function activateModel(
       (candidate) => server?.roleModels?.[candidate] === remote.modelId
     )
     if (!modality && role) {
-      setTaskRoleModel('computer_use', role, modelId)
+      useForTasks(role, modelId)
       return { success: true }
     }
     const activated =
@@ -1365,7 +1379,7 @@ export async function activateModel(
       requestedKind === 'computer_use' &&
       catalogEntry?.tags?.some((tag) => tag.toLowerCase() === 'decision')
     ) {
-      setTaskRoleModel('computer_use', 'decision', modelId)
+      useForTasks('decision', modelId)
       return { success: true }
     }
   }
