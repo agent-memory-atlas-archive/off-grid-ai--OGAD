@@ -188,6 +188,12 @@ jobs:
           UI_TOKEN="$(printf '%s' "$UI_TOKEN" | tr -d '[:space:]')"
           if [ -n "$UI_TOKEN" ]; then
             git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
+            # actions/checkout saves this repo's own GitHub login as a header for all of github.com,
+            # and it overrides the token above. Clear it for wednesday-solutions only (the most specific
+            # address wins), so everything else keeps the checkout login.
+            if git rev-parse --git-dir >/dev/null 2>&1; then
+              git config --local http.https://github.com/wednesday-solutions/.extraheader ""
+            fi
           fi
           # npm skips an optional package it cannot read without saying so: say it here, plainly.
           if ! git ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/component-library-animations.git" HEAD >/dev/null 2>&1; then
@@ -352,6 +358,12 @@ jobs:
           UI_TOKEN="$(printf '%s' "$UI_TOKEN" | tr -d '[:space:]')"
           if [ -n "$UI_TOKEN" ]; then
             git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
+            # actions/checkout saves this repo's own GitHub login as a header for all of github.com,
+            # and it overrides the token above. Clear it for wednesday-solutions only (the most specific
+            # address wins), so everything else keeps the checkout login.
+            if git rev-parse --git-dir >/dev/null 2>&1; then
+              git config --local http.https://github.com/wednesday-solutions/.extraheader ""
+            fi
           fi
           # npm skips an optional package it cannot read without saying so: say it here, plainly.
           if ! git ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/component-library-animations.git" HEAD >/dev/null 2>&1; then
