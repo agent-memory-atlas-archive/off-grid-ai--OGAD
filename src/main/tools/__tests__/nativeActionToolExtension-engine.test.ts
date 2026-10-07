@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { TickOutcome } from '@offgrid/use'
 
 vi.mock('electron', () => ({ shell: { openExternal: vi.fn() } }))
+import { startTabFromActionArgs } from '../../browser/browser-start-tab'
 
 import { NativeActionToolExtension, type ActionsPort } from '../nativeActionToolExtension'
 import {
@@ -106,6 +107,34 @@ describe('the spec table', () => {
 })
 
 describe('the engine path', () => {
+  it("reports the accepted task's id, and carries only the bridge's tab for a web task", async () => {
+    // Review findings: the bridge searched history for the id, and one tab offer served a whole
+    // browser. Now the id comes back with the result and the tab travels inside the task.
+    const port = makePort()
+    const extension = new NativeActionToolExtension(
+      { run, taskUseEnabled: proEntitled, actions: port },
+      'darwin'
+    )
+    const result = await extension.execute(
+      'web_use',
+      // A start tab written by the model is never kept.
+      { goal: 'Check the order page', __offgridStartBrowserId: 'other', __offgridStartTabId: 5 },
+      { conversationId: 'browser:chrome-1', startTab: { browserId: 'chrome-1', tabId: 42 } }
+    )
+    expect(result).toMatchObject({ status: 'pending', taskId: 'act_1' })
+    expect(startTabFromActionArgs((port.proposed[0] as { args: unknown }).args)).toEqual({
+      browserId: 'chrome-1',
+      tabId: 42
+    })
+    const computer = await extension.execute(
+      'computer_use',
+      { goal: 'Open Notes' },
+      { conversationId: 'browser:chrome-1', startTab: { browserId: 'chrome-1', tabId: 42 } }
+    )
+    expect(computer).toMatchObject({ taskId: 'act_1' })
+    expect(startTabFromActionArgs((port.proposed[1] as { args: unknown }).args)).toBeNull()
+  })
+
   it('starts the exact Web Use brief selected by the Chat model without a second gate', async () => {
     const port = makePort()
     const extension = new NativeActionToolExtension(

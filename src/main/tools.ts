@@ -56,6 +56,9 @@ export interface ToolContext {
   actionSource?: 'chat' | 'routine'
   /** Authenticated Mobile launch identity. Only the MCP admission boundary sets it. */
   taskLaunch?: { launchId: string; requestingDeviceId: string }
+  /** The paired browser's tab a web task should run in: the tab of the chat that asked. Only
+   *  the extension bridge sets it; it travels with that one task (browser-start-tab.ts). */
+  startTab?: { browserId: string; tabId: number }
   /** The exact user message. Approval-gated tools use this instead of trusting model-made args. */
   userQuery?: string
   /** Bounded prior user/assistant turns. Intake tools combine these facts with
@@ -101,6 +104,9 @@ export interface ToolResult {
   sources?: UnifiedSource[]
   imageRequest?: { prompt: string; enhancePrompt?: boolean }
   imageRequests?: { prompt: string; enhancePrompt?: boolean }[]
+  /** For a task tool (web_use, computer_use): the accepted task's id. Its run, its progress and
+   *  Stop all use it, from the moment it is accepted, queued or waiting for approval. */
+  taskId?: string
 }
 
 type ToolDef = {

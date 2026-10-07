@@ -4,7 +4,12 @@ import {
   encodeTaskPhase,
   type TaskExecutionPlan
 } from '../../../shared/task-execution-plan'
-import { latestBrowserTask } from '../bridge-task-progress'
+import {
+  browserTaskById,
+  createAcceptedTasks,
+  latestBrowserTask,
+  stopRoute
+} from '../bridge-task-progress'
 
 const plan: TaskExecutionPlan = {
   version: 1,
@@ -75,5 +80,39 @@ describe("a browser's view of the web task it started", () => {
     ]
     expect(latestBrowserTask(runs, 'browser:a', 0, 'a-task')?.taskId).toBe('a-task')
     expect(latestBrowserTask(runs, 'browser:b', 0, 'a-task')).toBeNull()
+  })
+})
+
+describe('a browser task by its own id', () => {
+  const journey = 'browser:chrome-1'
+  it("shows a task given to this browser as queued until it starts, and nobody else's", () => {
+    // Review finding: with no history row yet the bridge returned nothing, and chats fell back to
+    // the newest task of the shared browser journey.
+    const accepted = createAcceptedTasks()
+    accepted.remember('act_a', journey)
+    expect(browserTaskById(null, accepted, journey, 0, 'act_a')).toMatchObject({
+      taskId: 'act_a',
+      status: 'queued'
+    })
+    expect(browserTaskById(null, accepted, 'browser:other', 0, 'act_a')).toBeNull()
+    expect(browserTaskById(null, accepted, journey, 0, 'act_b')).toBeNull()
+  })
+
+  it('stops a running task through its session, a queued one before it starts, and no other', () => {
+    const accepted = createAcceptedTasks()
+    accepted.remember('act_a', journey)
+    expect(stopRoute({ journeyId: journey }, accepted, journey, 'act_a')).toBe('running')
+    expect(stopRoute(null, accepted, journey, 'act_a')).toBe('before-start')
+    expect(stopRoute({ journeyId: 'browser:other' }, accepted, journey, 'act_a')).toBeNull()
+    expect(stopRoute(null, accepted, journey, 'act_unknown')).toBeNull()
+  })
+
+  it('remembers a bounded number of ids, forgetting the oldest', () => {
+    const accepted = createAcceptedTasks(2)
+    accepted.remember('one', journey)
+    accepted.remember('two', journey)
+    accepted.remember('three', journey)
+    expect(accepted.owns('one', journey)).toBe(false)
+    expect(accepted.owns('three', journey)).toBe(true)
   })
 })

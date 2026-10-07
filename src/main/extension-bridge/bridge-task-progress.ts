@@ -38,3 +38,66 @@ export function latestBrowserTask(
     .reduce<TaskRow | null>((a, b) => (a && a.startedAt >= b.startedAt ? a : b), null)
   return run ? browserTaskProgress(run) : null
 }
+
+/** A task this browser's chat was given an id for, that has not started yet: queued behind
+ *  another task, or waiting for approval. Its own id, so the chat follows and stops only it. */
+export function queuedBrowserTask(taskId: string): BrowserTaskProgress {
+  return {
+    taskId,
+    status: 'queued',
+    summary: '',
+    plan: [],
+    phase: -1,
+    steps: [],
+    action: 'Waiting to start'
+  }
+}
+
+/** The task ids each paired browser was given, by id: a chat follows and stops its own task by
+ *  that id before task history has a row for it. Bounded: the oldest are forgotten first. */
+export interface AcceptedTasks {
+  remember(taskId: string, journeyId: string): void
+  /** Whether `taskId` was given to this browser's journey. */
+  owns(taskId: string, journeyId: string): boolean
+}
+
+export function createAcceptedTasks(limit = 200): AcceptedTasks {
+  const byId = new Map<string, string>()
+  return {
+    remember(taskId, journeyId) {
+      byId.delete(taskId)
+      byId.set(taskId, journeyId)
+      while (byId.size > limit) {
+        const oldest = byId.keys().next().value
+        if (oldest === undefined) break
+        byId.delete(oldest)
+      }
+    },
+    owns: (taskId, journeyId) => byId.get(taskId) === journeyId
+  }
+}
+
+/** One browser task by its id: its history row when it has started, queued when it was given to
+ *  this browser and has not, and nothing for anyone else's task. */
+export function browserTaskById(
+  run: TaskRow | null,
+  accepted: AcceptedTasks,
+  journeyId: string,
+  since: number,
+  taskId: string
+): BrowserTaskProgress | null {
+  if (run) return latestBrowserTask([run], journeyId, since, taskId)
+  return accepted.owns(taskId, journeyId) ? queuedBrowserTask(taskId) : null
+}
+
+/** How Stop reaches a browser's task: through its running session, before it starts, or not at
+ *  all (another browser's task, or one this browser was never given). */
+export function stopRoute(
+  run: Pick<TaskRow, 'journeyId'> | null,
+  accepted: AcceptedTasks,
+  journeyId: string,
+  taskId: string
+): 'running' | 'before-start' | null {
+  if (run) return run.journeyId === journeyId ? 'running' : null
+  return accepted.owns(taskId, journeyId) ? 'before-start' : null
+}

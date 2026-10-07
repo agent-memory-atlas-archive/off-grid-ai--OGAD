@@ -6,9 +6,7 @@
 // are they registered. Nothing here grants a browser more than the desktop app itself has.
 
 import { getTaskRun, listTaskRuns } from '../tasks/task-history'
-import { controlVisionTask } from '../vision/vision-controller'
-import { startTabOffers } from '../browser/browser-start-tab'
-import { WEB_USE_TOOL_NAME } from '../tools/nativeActionToolExtension-logic'
+import { controlVisionTask, stopVisionTaskBeforeStart } from '../vision/vision-controller'
 import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
@@ -65,7 +63,12 @@ import {
   turnsToAppend
 } from './bridge-conversations'
 import { generateKeyPair } from './bridge-protocol'
-import { latestBrowserTask } from './bridge-task-progress'
+import {
+  browserTaskById,
+  createAcceptedTasks,
+  latestBrowserTask,
+  stopRoute
+} from './bridge-task-progress'
 import { createLinkRegistry, type BrowserLink } from './bridge-socket'
 
 const storePath = (): string => path.join(app.getPath('userData'), 'extension-bridge.json')
@@ -279,9 +282,8 @@ const settingsStore = createSettingsStore({
 /** The journey every task a browser starts belongs to: its chats' origin. */
 const journeyOf = (browser: PairedBrowser): string => `${BROWSER_ORIGIN_PREFIX}${browser.id}`
 
-/** The task a run just started for this journey, as task history recorded it at launch. */
-const newestTaskOf = (journeyId: string, since: number): { taskId: string } | null =>
-  latestBrowserTask(listTaskRuns(20), journeyId, since)
+/** The task ids each browser was given (bridge-task-progress.ts). */
+const acceptedTasks = createAcceptedTasks()
 
 const data: BridgeData = {
   features,
@@ -314,25 +316,35 @@ const data: BridgeData = {
   listTools,
   runTool: async (name, args, browser, tabId) => {
     const journeyId = journeyOf(browser)
-    const startedAfter = Date.now()
-    // A web task works in the tab the browser offered (its chat's), not a new one.
-    if (name === WEB_USE_TOOL_NAME) {
-      startTabOffers.offer(journeyId, tabId === undefined ? null : { browserId: browser.id, tabId })
-    }
-    const result = await runTool(name, args, { conversationId: journeyId }, getToolExtensions())
+    // A web task works in the tab its chat offered: the tab travels with that one task.
+    const result = await runTool(
+      name,
+      args,
+      {
+        conversationId: journeyId,
+        ...(tabId === undefined ? {} : { startTab: { browserId: browser.id, tabId } })
+      },
+      getToolExtensions()
+    )
     const ok = result.status !== 'failed'
-    if (name === WEB_USE_TOOL_NAME && !ok) startTabOffers.offer(journeyId, null)
-    const task = ok && name === WEB_USE_TOOL_NAME ? newestTaskOf(journeyId, startedAfter) : null
-    return { ok, output: result.text, ...(task ? { taskId: task.taskId } : {}) }
+    // The accepted task's own id (web_use and computer_use), from the moment it is accepted.
+    const taskId = ok ? result.taskId : undefined
+    if (taskId) acceptedTasks.remember(taskId, journeyId)
+    return { ok, output: result.text, ...(taskId ? { taskId } : {}) }
   },
   latestTask: async (browser, since, taskId) => {
-    if (taskId === undefined) return latestBrowserTask(listTaskRuns(20), journeyOf(browser), since)
-    // Its own task, however many have started since.
-    const run = getTaskRun(taskId)
-    return run ? latestBrowserTask([run], journeyOf(browser), since, taskId) : null
+    const journeyId = journeyOf(browser)
+    if (taskId === undefined) return latestBrowserTask(listTaskRuns(20), journeyId, since)
+    // Its own task, however many have started since; one not started yet shows as queued.
+    return browserTaskById(getTaskRun(taskId) ?? null, acceptedTasks, journeyId, since, taskId)
   },
-  stopTask: async (browser, taskId) =>
-    getTaskRun(taskId)?.journeyId === journeyOf(browser) && controlVisionTask('stop', taskId),
+  stopTask: async (browser, taskId) => {
+    const route = stopRoute(getTaskRun(taskId) ?? null, acceptedTasks, journeyOf(browser), taskId)
+    if (route === 'running') return controlVisionTask('stop', taskId)
+    // Accepted for this browser but not started (queued, awaiting approval): stopped as it starts.
+    if (route === 'before-start') stopVisionTaskBeforeStart(taskId)
+    return route === 'before-start'
+  },
   vault: async (request, browser) =>
     callHookAsync(HOOKS.extensionVaultRequest, request, {
       deviceName: browser.name,

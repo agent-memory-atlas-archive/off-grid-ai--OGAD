@@ -350,6 +350,12 @@ export function registerVisionSession(
   return controller.registerSession(taskId, guard, request, project, sessionLimitMs)
 }
 
+/** Stop a task that has been accepted but has not started (queued, or waiting for approval):
+ *  it is stopped the moment its run begins. */
+export function stopVisionTaskBeforeStart(taskId: string): void {
+  controller.markStoppedBeforeStart(taskId)
+}
+
 /** Continue is starting a new run of `taskId`: it must not inherit a Stop meant for an earlier one. */
 export function forgetVisionStopBeforeStart(taskId: string): void {
   controller.forgetStoppedBeforeStart(taskId)

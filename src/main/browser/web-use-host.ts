@@ -1,7 +1,7 @@
 // The one place web_use picks its browser for a task: the user's default browser through the
 // paired extension when Tasks > Web Use says so and it is connected, otherwise Off Grid AI's
 // own browser. A task a paired browser started in one of its tabs runs in that browser and that
-// tab, whatever the setting (browser-start-tab.ts). Wiring only; the choice is web-use-target.ts (tested).
+// tab, whatever the setting: the tab travels with its task (browser-start-tab.ts). Wiring only; the choice is web-use-target.ts (tested).
 
 import { defaultBrowserTarget } from '../accessibility/ax-host'
 import { getBrowserLinks } from '../extension-bridge/bridge-electron'
@@ -9,7 +9,6 @@ import { getWebUseSettings } from '../web-use-settings'
 import { DEFAULT_BROWSER_FALLBACK_NOTE } from '../../shared/web-use-settings'
 import { getBrowserRailHost } from './browser-host'
 import type { BrowserRailHost } from './browser-rail'
-import { startTabOffers } from './browser-start-tab'
 import { createExtensionBrowserHost } from './extension-browser-host'
 import { pickBrowserLink } from './web-use-target'
 
@@ -20,7 +19,7 @@ export function getWebUseRailHost(): BrowserRailHost {
       const links = getBrowserLinks()
       // A chat that offered its own tab is asking about that page, with its sign-ins: the offer
       // wins over the general setting, which decides only for tasks nobody pointed anywhere.
-      const offered = startTabOffers.take(request.journeyId)
+      const offered = request.startTab
       const offeredLink = offered
         ? links.find((l) => l.browser.id === offered.browserId)
         : undefined

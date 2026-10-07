@@ -1,29 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { START_TAB_TTL_MS, createStartTabOffers } from '../browser-start-tab'
+import { actionArgsWithStartTab, startTabFromActionArgs } from '../browser-start-tab'
 
-describe('the tab a browser offers for its web task', () => {
-  it('is taken once, only by that journey, within the TTL', () => {
-    let now = 1_000
-    const offers = createStartTabOffers(() => now)
-    offers.offer('browser:a', { browserId: 'a', tabId: 7 })
-
-    expect(offers.take('browser:b')).toBeNull()
-    expect(offers.take('browser:a')).toEqual({ browserId: 'a', tabId: 7 })
-    expect(offers.take('browser:a')).toBeNull()
-
-    offers.offer('browser:a', { browserId: 'a', tabId: 8 })
-    now += START_TAB_TTL_MS + 1
-    expect(offers.take('browser:a')).toBeNull()
+describe('a web task carries the tab its chat offered', () => {
+  it('travels inside that task: two chats in one browser keep their own tabs', () => {
+    // Review finding: one offer per browser let a second chat's task take the first's tab.
+    const first = actionArgsWithStartTab({ goal: 'a' }, { browserId: 'chrome-1', tabId: 11 })
+    const second = actionArgsWithStartTab({ goal: 'b' }, { browserId: 'chrome-1', tabId: 22 })
+    expect(startTabFromActionArgs(first)).toEqual({ browserId: 'chrome-1', tabId: 11 })
+    expect(startTabFromActionArgs(second)).toEqual({ browserId: 'chrome-1', tabId: 22 })
   })
 
-  it('a newer offer replaces the one waiting, and null withdraws it', () => {
-    const offers = createStartTabOffers(() => 0)
-    offers.offer('browser:a', { browserId: 'a', tabId: 7 })
-    offers.offer('browser:a', { browserId: 'a', tabId: 9 })
-    expect(offers.take('browser:a')).toEqual({ browserId: 'a', tabId: 9 })
-
-    offers.offer('browser:a', { browserId: 'a', tabId: 7 })
-    offers.offer('browser:a', null)
-    expect(offers.take('browser:a')).toBeNull()
+  it('never keeps a start tab written by the model, and reads nothing malformed', () => {
+    const forged = {
+      goal: 'x',
+      __offgridStartBrowserId: 'someone-else',
+      __offgridStartTabId: 99
+    }
+    expect(startTabFromActionArgs(actionArgsWithStartTab(forged))).toBeNull()
+    expect(
+      startTabFromActionArgs({ __offgridStartBrowserId: 'b', __offgridStartTabId: -1 })
+    ).toBeNull()
+    expect(startTabFromActionArgs(null)).toBeNull()
   })
 })
