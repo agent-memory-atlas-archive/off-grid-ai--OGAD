@@ -50,7 +50,8 @@ export interface RemoteVisionInventoryModel {
   org: string
   description: string
   files: []
-  tags: ['Remote']
+  /** 'Remote', plus 'Decision' for a server's decision model: the same tag local deciders carry. */
+  tags: readonly string[]
   remoteServerId: string
   remoteModelId: string
 }
@@ -86,7 +87,8 @@ export function remoteVisionInventoryModels(
     const entry = (
       modelId: string,
       kind: RemoteVisionInventoryModel['kind'],
-      catalogKind: RemoteVisionModality
+      catalogKind: RemoteVisionModality,
+      tags: readonly string[] = ['Remote']
     ): RemoteVisionInventoryModel => ({
       id: remoteVisionModelId(server.id, modelId),
       name:
@@ -96,7 +98,7 @@ export function remoteVisionInventoryModels(
       org: server.name,
       description: `Runs through ${server.name}.`,
       files: [] as [],
-      tags: ['Remote'] as ['Remote'],
+      tags,
       remoteServerId: server.id,
       remoteModelId: modelId
     })
@@ -120,7 +122,15 @@ export function remoteVisionInventoryModels(
       const id = remoteVisionModelId(server.id, modelId)
       if (listed.has(id)) return []
       listed.add(id)
-      return [entry(modelId, 'computer_use', 'text')]
+      // Tagged like local task models, so every list can tell a decider from a grounder.
+      return [
+        entry(
+          modelId,
+          'computer_use',
+          'text',
+          role === 'decision' ? ['Remote', 'Decision'] : ['Remote']
+        )
+      ]
     })
     return [...media, ...roles]
   })
