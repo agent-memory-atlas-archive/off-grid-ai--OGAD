@@ -492,7 +492,13 @@ export function SettingsPanel({
       <div className={embedded ? 'p-1 pt-4 text-sm' : 'min-h-0 flex-1 overflow-y-auto p-4 text-sm'}>
         {/* The registry returns a stable registered component, not a component factory. */}
         {/* eslint-disable-next-line react-hooks/static-components */}
-        {tab === 'tasks' && TaskSettings ? <TaskSettings /> : null}
+        {tab === 'tasks' && TaskSettings ? (
+          <>
+            <TaskSettings />
+            {/* The task models' own backends live with the task settings that choose them. */}
+            <BackendPreferencesSection modalities={['grounding', 'decision']} />
+          </>
+        ) : null}
         {tab === 'model' && (
           <>
             <div
@@ -941,7 +947,7 @@ export function SettingsPanel({
 
         {tab === 'tools' && (
           <>
-            <BackendPreferencesSection modalities={['grounding', 'decision', 'embeddings']} />
+            <BackendPreferencesSection modalities={['embeddings']} />
             <div className="mb-3 flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2">
               <div>
                 <div className="text-sm">Enable tools</div>
