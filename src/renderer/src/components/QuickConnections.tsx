@@ -10,7 +10,8 @@ import notionLogo from '@/assets/logos/notion.svg'
 import jiraLogo from '@/assets/logos/jira.svg'
 import confluenceLogo from '@/assets/logos/confluence.svg'
 import linearLogo from '@/assets/logos/linear.svg'
-import { getSlot, registerSlot, SLOTS } from '@renderer/bootstrap/slotRegistry'
+import { getSlot, SLOTS } from '@renderer/bootstrap/slotRegistry'
+import { loadProQuickConnections } from '@renderer/bootstrap/loadProFeaturesRenderer'
 import { CONNECTOR_CATALOG } from './connectorCatalog'
 import { useQuickConnection, type QuickConnectionEntry } from './useQuickConnection'
 
@@ -26,16 +27,10 @@ export function QuickConnections({
   useEffect(() => {
     let active = true
     if (!getSlot(SLOTS.quickConnectionProviders) && getRendererIsPro()) {
-      void import('@offgrid/pro/renderer')
-        .then((module) => {
-          if (!active || !getRendererIsPro()) return
-          const activate = (
-            module as {
-              activateQuickConnectionRenderer?: (api: { registerSlot: typeof registerSlot }) => void
-            }
-          ).activateQuickConnectionRenderer
-          activate?.({ registerSlot })
-          refreshProviders((value) => value + 1)
+      // Through the Pro loader seam: core screens never import the private package.
+      void loadProQuickConnections()
+        .then((loaded) => {
+          if (active && loaded) refreshProviders((value) => value + 1)
         })
         .catch(() => {
           // A Pro build whose account cards did not load: say so, rather than show nothing.
@@ -62,8 +57,8 @@ export function QuickConnections({
       <div>
         <h2 className="text-lg text-neutral-100">Connect your work</h2>
         <p className="mt-2 text-sm text-neutral-400">
-          Bring your accounts and tools into your private workspace. Accounts are read live when
-          you ask and nothing from them is copied into memory. Add as many as you use.
+          Bring your accounts and tools into your private workspace. Accounts are read live when you
+          ask and nothing from them is copied into memory. Add as many as you use.
         </p>
       </div>
       {providersFailed && (
@@ -148,6 +143,8 @@ export function QuickConnections({
           <section aria-label="Accounts and notes" className="min-w-0">
             <h3 className="connection-group-label">Accounts &amp; notes</h3>
             <ItemGroup role="list">
+              {/* The registry returns a stable registered component, not a component factory. */}
+              {/* eslint-disable-next-line react-hooks/static-components */}
               <Providers disabled={!!connection.busy} onBusyChange={setProviderBusy} />
             </ItemGroup>
           </section>
