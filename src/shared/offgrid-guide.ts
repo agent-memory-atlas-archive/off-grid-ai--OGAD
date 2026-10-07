@@ -227,7 +227,7 @@ export function parseSiteCards(html: string, base = OFFGRID_SITE): OffgridUpdate
 }
 
 /** The numbered steps on a page ("1. Install", "2. Prepare a model", ...), as plain text. */
-export function parsePageSteps(html: string, maxChars = 1_800): string {
+export function parsePageSteps(html: string, maxChars = 4_000): string {
   const sections = html.split(/<h2\b[^>]*>/i).slice(1)
   const steps = sections.flatMap((section) => {
     const end = section.search(/<\/h2>/i)
@@ -271,11 +271,51 @@ export function newestUpdates(updates: readonly OffgridUpdate[], limit = 12): Of
   return [...dated, ...unique.filter((u) => !u.date)].slice(0, limit)
 }
 
+/** How much of one page the guide reads in full. */
+export const PAGE_BODY_CHARS = 8_000
+/** How many matching pages the guide reads in full for a question. */
+export const PAGES_READ_IN_FULL = 3
+
+/**
+ * A page's own content, as the site's search indexes it (the article marked data-pagefind-body),
+ * as plain text that keeps its shape: headings as "## ", list items as "- ", table cells joined
+ * by " | ", links as "label (url)". Empty when the page has no such content.
+ */
+export function parsePageBody(html: string, maxChars = PAGE_BODY_CHARS): string {
+  const body = /<article\b[^>]*data-pagefind-body[^>]*>([\s\S]*?)<\/article>/i.exec(html)?.[1]
+  if (!body) return ''
+  const lines = body
+    .replace(/<(script|style|svg|nav|button|form)\b[\s\S]*?<\/\1>/gi, '')
+    // A link keeps where it goes, so an answer can hand over the exact page or download.
+    .replace(
+      /<a\b[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+      (_link, href: string, label: string) => `${label} (${href})`
+    )
+    .replace(/<h[1-6]\b[^>]*>/gi, '\n## ')
+    .replace(/<li\b[^>]*>/gi, '\n- ')
+    .replace(/<\/t[dh]>\s*<t[dh]\b[^>]*>/gi, ' | ')
+    .replace(/<(p|br|tr|div|section|blockquote|pre)\b[^>]*>/gi, '\n')
+    .split('\n')
+    .map((line) => pageText(line))
+    .filter((line) => line && line !== '##' && line !== '-')
+  const text = lines.join('\n')
+  return text.length > maxChars ? `${text.slice(0, maxChars - 3).trimEnd()}...` : text
+}
+
+/** The pages worth reading in full: those that answer the question, or what Off Grid AI stands for. */
+export function pagesToRead(pages: readonly OffgridUpdate[], query: string): OffgridUpdate[] {
+  return query.trim()
+    ? matchSitePages(pages, query, PAGES_READ_IN_FULL)
+    : pages.filter((page) => page.kind === 'about')
+}
+
 /** Everything the guide read from the site. */
 export interface OffgridSite {
   /** The quick start's numbered steps, or '' when that page could not be read. */
   readonly steps: string
   readonly pages: readonly OffgridUpdate[]
+  /** Pages read in full (pagesToRead): each page's url to its content (parsePageBody). */
+  readonly bodies?: Readonly<Record<string, string>>
 }
 
 const SITE_LIMITS = { guide: 20, article: 8, essay: 6 } as const
@@ -306,9 +346,12 @@ function siteSection(site: OffgridSite, query: string): string {
     const about = of('about')
     if (about.length) parts.push(`About Off Grid AI:\n${listItems(about, false)}`)
   }
+  const read = pagesToRead(site.pages, query).filter((page) => site.bodies?.[page.url])
+  for (const page of read) {
+    parts.push(`${page.title} (${page.url}), in full:\n${site.bodies![page.url]}`)
+  }
   const guides = of('guide').slice(0, SITE_LIMITS.guide)
-  if (guides.length)
-    parts.push(`Guides:\n${guides.map((g) => `- ${g.title}: ${g.url}`).join('\n')}`)
+  if (guides.length) parts.push(`Guides:\n${listItems(guides, false)}`)
   if (!query.trim()) {
     const articles = newestUpdates(of('article'), SITE_LIMITS.article)
     if (articles.length) parts.push(`Newest articles:\n${listItems(articles, false)}`)

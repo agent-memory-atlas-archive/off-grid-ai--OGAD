@@ -4,6 +4,8 @@ import {
   formatGuide,
   newestUpdates,
   matchSitePages,
+  pagesToRead,
+  parsePageBody,
   parsePageSteps,
   parseSiteCards,
   parseDevTo,
@@ -143,7 +145,7 @@ describe('Off Grid AI guide', () => {
     for (const part of [
       'Quick start (https://getoffgridai.co/quick-start/):\n1. Install: Get the app.',
       'About Off Grid AI:\n- Vision',
-      'Guides:\n- iOS Setup: https://getoffgridai.co/guides/ios-setup/',
+      'Guides:\n- iOS Setup\n   https://getoffgridai.co/guides/ios-setup/\n   Install on iPhone.',
       'Newest articles:\n- Sync attachments (2026-09-29)',
       'Perspectives:\n- The context gap'
     ]) {
@@ -156,6 +158,55 @@ describe('Off Grid AI guide', () => {
     expect(answer).not.toContain('Perspectives:')
     expect(formatGuide([], [], site, 'quantum')).toContain(
       'No page on getoffgridai.co matched "quantum".'
+    )
+  })
+
+  it("reads a page's own content in full, keeping its headings, lists, tables and links", () => {
+    const html = `<nav>Site menu</nav><article class="content" data-pagefind-body>
+      <h2>iOS Setup</h2><p>Run a model on your iPhone.</p>
+      <ul><li>iPhone 12 or newer</li><li>iOS 17 or later</li></ul>
+      <table><tr><td><a href="https://getoffgridai.co/desktop/">Get OGAD</a></td><td>Free</td></tr></table>
+      <script>track()</script><p>Works offline &amp; private .</p></article><footer>Footer</footer>`
+    expect(parsePageBody(html)).toBe(
+      [
+        '## iOS Setup',
+        'Run a model on your iPhone.',
+        '- iPhone 12 or newer',
+        '- iOS 17 or later',
+        'Get OGAD (https://getoffgridai.co/desktop/) | Free',
+        'Works offline & private.'
+      ].join('\n')
+    )
+    expect(parsePageBody('<main>No indexed article here</main>')).toBe('')
+    expect(parsePageBody(html, 20)).toBe('## iOS Setup\nRun...')
+  })
+
+  it('reads in full the pages that answer the question, or Mission and Vision without one', () => {
+    const pages = parseSiteCards(
+      [
+        card('/articles/a/', 'Sync attachments', 'Phone to computer.'),
+        card('/articles/b/', 'Sync history', 'Across devices.'),
+        card('/articles/c/', 'Sync settings', 'Choose what syncs.'),
+        card('/articles/d/', 'Sync projects', 'Knowledge bases.'),
+        card('/mission/', 'Mission', 'Personal AI.')
+      ].join('')
+    )
+    expect(pagesToRead(pages, 'sync')).toHaveLength(3)
+    expect(pagesToRead(pages, '').map((p) => p.title)).toEqual(['Mission'])
+    const text = formatGuide(
+      [],
+      [],
+      {
+        steps: '',
+        pages,
+        bodies: {
+          'https://getoffgridai.co/articles/a/': '## Attachments\nThey sync after pairing.'
+        }
+      },
+      'sync attachments'
+    )
+    expect(text).toContain(
+      'Sync attachments (https://getoffgridai.co/articles/a/), in full:\n## Attachments\nThey sync after pairing.'
     )
   })
 
