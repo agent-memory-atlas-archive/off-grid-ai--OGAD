@@ -1,3 +1,4 @@
+import type React from 'react'
 import type { DemoPreset } from '../explore/presetCatalog'
 import type { ChatVoicePhase } from '../use-chat-voice-turns'
 
@@ -33,6 +34,11 @@ export interface GodChatOptions {
   readonly voiceMode: boolean
   readonly request: GodChatRequest
   readonly onStateChange?: (state: GodChatState) => void
+  /**
+   * What an empty conversation shows instead of the plain hero: what this assistant can do and
+   * things to ask. `ask` sends a prompt as if typed.
+   */
+  readonly welcome?: (ask: (prompt: string) => void) => React.ReactNode
   /** How its turns are shown (God shows reactions on your messages). */
   readonly presentMessages?: <
     T extends {

@@ -3804,6 +3804,8 @@ export function MemoryChat({
                                 void sendMessage(prompt, { asUserInput: true, assistantEnabled: true })
                               }}
                             />
+                          ) : god?.welcome ? (
+                            god.welcome((prompt) => void sendMessage(prompt))
                           ) : (
                             <>
                               <div className="mx-auto flex max-w-2xl flex-col items-center">
