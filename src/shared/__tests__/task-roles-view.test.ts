@@ -5,7 +5,12 @@ const model = (
   role: 'reasoner' | 'decision' | 'grounding_specialist',
   modelId: string,
   remote = false
-) => ({
+): {
+  role: 'reasoner' | 'decision' | 'grounding_specialist'
+  modelId: string
+  modelName: string
+  remote: boolean
+} => ({
   role,
   modelId,
   modelName: modelId,
