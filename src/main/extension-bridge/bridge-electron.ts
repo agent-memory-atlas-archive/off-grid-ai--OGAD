@@ -357,7 +357,7 @@ const data: BridgeData = {
     return route === 'before-start'
   },
   setTaskRole: async (request) => {
-    const { setTaskRoleFromRequest } = await import('../task-role-models')
+    const { setTaskRoleFromRequest } = await import('../task-role-requests')
     return setTaskRoleFromRequest(request)
   },
   vault: async (request, browser) =>

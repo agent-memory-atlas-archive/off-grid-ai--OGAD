@@ -1784,7 +1784,7 @@ export function setupIPC(): void {
     import('./vision/vision-task-model-strategy').then((m) => m.getTaskRolesView())
   )
   ipcMain.handle('models:set-task-role', (_, task: unknown, role: unknown, modelId: unknown) =>
-    import('./task-role-models').then((m) => m.setTaskRoleFromRequest({ task, role, modelId }))
+    import('./task-role-requests').then((m) => m.setTaskRoleFromRequest({ task, role, modelId }))
   )
 
   // Storage + download manager

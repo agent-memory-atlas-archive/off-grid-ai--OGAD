@@ -26,7 +26,8 @@ vi.mock('../web-use-settings', () => ({
   setWebUseSettings: (next: typeof store.web) => void (store.web = next)
 }))
 
-import { clearTaskRolesFor, setTaskRoleFromRequest, setTaskRoleModel } from '../task-role-models'
+import { clearTaskRolesFor, setTaskRoleModel } from '../task-role-models'
+import { setTaskRoleFromRequest } from '../task-role-requests'
 
 beforeEach(() => {
   store.computer = { groundingModelId: null, decisionModelId: null }

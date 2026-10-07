@@ -1443,7 +1443,7 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
                 errBody('Task role changes are restricted to localhost.', 'forbidden')
               )
             }
-            const { setTaskRoleFromRequest } = await import('./task-role-models')
+            const { setTaskRoleFromRequest } = await import('./task-role-requests')
             const result = await setTaskRoleFromRequest(
               (await readJson(req)) as Record<string, unknown>
             )
