@@ -39,6 +39,7 @@ import { SettingsSelect } from './SettingsSelect'
 import { BackendPreferencesSection } from './ProcessingControls'
 import { useReplySound } from '../lib/reply-sound'
 import { SettingsSection } from './SettingsSection'
+import { groupConnectors } from '../../../shared/connector-groups'
 import type { SpeechLanguage } from '@offgrid/speech'
 import { CaretRight, X } from '@phosphor-icons/react'
 import { getSlot, SLOTS } from '@renderer/bootstrap/slotRegistry'
@@ -970,7 +971,7 @@ export function SettingsPanel({
             <SettingsSection
               id="transcription.model"
               title="Model and language"
-              summary={`${transcriptionInfo?.options.find((option) => option.active)?.name ?? 'Checking'} · ${transcriptionInfo?.languages.find((l) => l.code === (transcriptionInfo?.language ?? 'auto'))?.label ?? 'Auto-detect'}`}
+              summary={`${transcriptionInfo?.options.find((option) => option.active)?.name ?? 'Checking'} · ${transcriptionInfo?.languages.find((l) => l.code === transcriptionInfo.language)?.label ?? 'Auto-detect'}`}
               defaultOpen
             >
               <Row
@@ -1226,42 +1227,56 @@ export function SettingsPanel({
             {connectors.length === 0 ? (
               <p className="text-xs text-neutral-600">No connectors yet.</p>
             ) : (
-              <div className="flex flex-col gap-2">
-                {connectors.map((c) => (
-                  <div
-                    key={c.id}
-                    className="flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2"
+              // By service: several accounts and servers of one service sit together.
+              <div className="flex flex-col">
+                {groupConnectors(connectors).map((group) => (
+                  <SettingsSection
+                    key={group.key}
+                    id={`connectors.${group.key}`}
+                    title={group.label}
+                    summary={`${group.connectors.length} connected · ${
+                      group.connectors.filter((c) => c.enabled).length
+                    } on`}
                   >
-                    <div className="min-w-0">
-                      <div className="truncate text-sm text-neutral-200">{c.name}</div>
-                      {c.url ? (
-                        <div className="truncate text-[10px] text-neutral-600">{c.url}</div>
-                      ) : null}
+                    <div className="flex flex-col gap-2 pb-2">
+                      {group.connectors.map((c) => (
+                        <div
+                          key={c.id}
+                          className="flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-sm text-neutral-200">{c.name}</div>
+                            {c.url ? (
+                              <div className="truncate text-[10px] text-neutral-600">{c.url}</div>
+                            ) : null}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={async () => {
+                                await (window.api as Partial<typeof window.api>).mcpSetEnabled?.(
+                                  c.id,
+                                  !c.enabled
+                                )
+                                refreshConnectors()
+                              }}
+                              className={`rounded px-2 py-1 text-[11px] ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
+                            >
+                              {c.enabled ? 'On' : 'Off'}
+                            </button>
+                            <button
+                              onClick={async () => {
+                                await (window.api as Partial<typeof window.api>).mcpRemove?.(c.id)
+                                refreshConnectors()
+                              }}
+                              className="rounded px-2 py-1 text-[11px] text-red-400 hover:bg-red-500/10"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={async () => {
-                          await (window.api as Partial<typeof window.api>).mcpSetEnabled?.(
-                            c.id,
-                            !c.enabled
-                          )
-                          refreshConnectors()
-                        }}
-                        className={`rounded px-2 py-1 text-[11px] ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
-                      >
-                        {c.enabled ? 'On' : 'Off'}
-                      </button>
-                      <button
-                        onClick={async () => {
-                          await (window.api as Partial<typeof window.api>).mcpRemove?.(c.id)
-                          refreshConnectors()
-                        }}
-                        className="rounded px-2 py-1 text-[11px] text-red-400 hover:bg-red-500/10"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </div>
+                  </SettingsSection>
                 ))}
               </div>
             )}
