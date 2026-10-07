@@ -32,3 +32,22 @@ export function clearTaskRolesFor(modelId: string): void {
   const web = getWebUseSettings()
   if (web.decisionModelId === modelId) setWebUseSettings({ ...web, decisionModelId: null })
 }
+
+/** A role change asked for over IPC or the gateway: checked, then set. */
+export function setTaskRoleFromRequest(request: {
+  task?: unknown
+  role?: unknown
+  modelId?: unknown
+}): { success: boolean; error?: string } {
+  const { task, role, modelId } = request
+  if (
+    (task !== 'computer_use' && task !== 'web_use') ||
+    (role !== 'decision' && role !== 'grounding') ||
+    typeof modelId !== 'string' ||
+    !modelId
+  ) {
+    return { success: false, error: 'Choose a task, a role and a model.' }
+  }
+  setTaskRoleModel(task, role, modelId)
+  return { success: true }
+}

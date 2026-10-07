@@ -1423,6 +1423,17 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
           // answer): a kind can hold more than one, as Computer Use's specialist and decider do.
           if (url === '/v1/models/active-ids' && method === 'GET')
             return json(res, 200, { ids: await mm.getActiveModelIds() })
+          // The task models' lineups and roles, as the desktop's Models screen shows them, and the
+          // one way to give a model a role. Additive: no existing route changes.
+          if (url === '/v1/models/task-roles' && method === 'GET') {
+            const { getTaskRolesView } = await import('./vision/vision-task-model-strategy')
+            return json(res, 200, await getTaskRolesView())
+          }
+          if (url === '/v1/models/task-role' && method === 'POST') {
+            const { setTaskRoleFromRequest } = await import('./task-role-models')
+            const result = setTaskRoleFromRequest((await readJson(req)) as Record<string, unknown>)
+            return json(res, result.success ? 200 : 400, result)
+          }
           if (url === '/v1/models/pull/status' && method === 'GET') {
             const id = (req.url || '').split('?')[1]?.match(/(?:^|&)id=([^&]+)/)?.[1]
             return json(

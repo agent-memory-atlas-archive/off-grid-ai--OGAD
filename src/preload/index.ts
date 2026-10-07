@@ -45,7 +45,6 @@ function unsubscribe(channel: string, listener: IpcListener): () => void {
   }
 }
 
-
 const offGridApi = {
   // Open-core: is the pro tier active in this build/session? The main process
   // owns the decision (pro code bundled AND a valid Keygen license / env override)
@@ -541,6 +540,12 @@ const offGridApi = {
   getActiveModalities: () => ipcRenderer.invoke('models:active-modalities'),
   getComputerUseActiveModels: () => ipcRenderer.invoke('models:computer-use-active'),
   getWebUseActiveModels: () => ipcRenderer.invoke('models:web-use-active'),
+  getTaskRoles: () => ipcRenderer.invoke('models:task-roles'),
+  setTaskRole: (
+    task: 'computer_use' | 'web_use',
+    role: 'decision' | 'grounding',
+    modelId: string
+  ) => ipcRenderer.invoke('models:set-task-role', task, role, modelId),
   onModelProgress: (
     callback: (data: {
       modelId: string

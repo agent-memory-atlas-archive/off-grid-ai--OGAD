@@ -14,7 +14,7 @@ vi.mock('../web-use-settings', () => ({
   setWebUseSettings: (next: typeof store.web) => void (store.web = next)
 }))
 
-import { clearTaskRolesFor, setTaskRoleModel } from '../task-role-models'
+import { clearTaskRolesFor, setTaskRoleFromRequest, setTaskRoleModel } from '../task-role-models'
 
 beforeEach(() => {
   store.computer = { groundingModelId: null, decisionModelId: null }
@@ -37,5 +37,19 @@ describe('task model roles', () => {
     clearTaskRolesFor('jev')
     expect(store.computer).toEqual({ groundingModelId: 'ui-tars', decisionModelId: null })
     expect(store.web.decisionModelId).toBeNull()
+  })
+
+  it('sets a role asked for over the gateway only when the request names one fully', () => {
+    expect(setTaskRoleFromRequest({ task: 'web_use', role: 'decision', modelId: 'jev' })).toEqual({
+      success: true
+    })
+    expect(store.web.decisionModelId).toBe('jev')
+    for (const bad of [
+      { task: 'chat', role: 'decision', modelId: 'x' },
+      { task: 'web_use', role: 'reasoner', modelId: 'x' },
+      { task: 'web_use', role: 'decision', modelId: '' }
+    ]) {
+      expect(setTaskRoleFromRequest(bad).success).toBe(false)
+    }
   })
 })

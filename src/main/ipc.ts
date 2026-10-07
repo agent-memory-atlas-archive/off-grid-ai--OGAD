@@ -1779,6 +1779,13 @@ export function setupIPC(): void {
   ipcMain.handle('models:web-use-active', () =>
     import('./vision/vision-task-model-strategy').then((m) => m.getWebUseActiveModelProjection())
   )
+  // Every Models screen's view of the task models, and the one way to give a model a role.
+  ipcMain.handle('models:task-roles', () =>
+    import('./vision/vision-task-model-strategy').then((m) => m.getTaskRolesView())
+  )
+  ipcMain.handle('models:set-task-role', (_, task: unknown, role: unknown, modelId: unknown) =>
+    import('./task-role-models').then((m) => m.setTaskRoleFromRequest({ task, role, modelId }))
+  )
 
   // Storage + download manager
   ipcMain.handle('models:storage', () => import('./models-manager').then((m) => m.getStorageInfo()))
