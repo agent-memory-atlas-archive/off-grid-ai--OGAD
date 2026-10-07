@@ -5,7 +5,7 @@
 //   POST /v1/extension/rpc    every other call, sealed end to end
 //
 // Defence in layers, none of them the only one:
-//   loopback only       the gateway binds to loopback; these routes check the peer again
+//   private peers       loopback, LAN and Tailscale routes admitted by Shared Sync
 //   no web pages        a request carrying an http(s) Origin is refused outright, and pairing
 //                       requires an extension origin, so a site you visit cannot start one
 //   sealed traffic      rpc bodies are AES-GCM under a key only a paired browser holds
@@ -18,12 +18,19 @@ import { addBrowserLink, getBridgeService } from './bridge-electron'
 import type { BridgeReply } from './bridge-service'
 import { acceptBrowserSocket } from './bridge-socket'
 import { SOCKET_PATH } from './bridge-socket-protocol'
+import { validatePairingQrRoute } from '@offgrid/sync'
+import { GATEWAY_PORT } from '../../shared/ports'
 
 const MAX_BODY = 4 * 1024 * 1024
 
-function isLoopback(req: http.IncomingMessage): boolean {
+function isPrivatePeer(req: http.IncomingMessage): boolean {
   const remote = req.socket.remoteAddress
-  return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
+  if (remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1') return true
+  const host = remote?.replace(/^::ffff:/, '')
+  // The same route policy that Sync uses: LAN and Tailscale peers, never public IPs.
+  return ['lan', 'tailscale'].some(
+    (kind) => validatePairingQrRoute({ kind, host, port: GATEWAY_PORT }) !== undefined
+  )
 }
 
 function send(res: http.ServerResponse, origin: string | undefined, reply: BridgeReply): void {
@@ -66,7 +73,7 @@ export async function handleExtensionBridge(
   method: string
 ): Promise<void> {
   const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined
-  if (!isLoopback(req) || (origin && /^https?:/i.test(origin))) {
+  if (!isPrivatePeer(req) || (origin && /^https?:/i.test(origin))) {
     return send(res, origin, { status: 403, body: { error: 'forbidden' } })
   }
   try {
@@ -94,7 +101,7 @@ const sockets = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 10
 const DEVICE_ID = /^[A-Za-z0-9_-]{8,64}$/
 
 /**
- * The live socket at /v1/extension/socket?d=<deviceId>. Same gates as pairing: loopback peer
+ * The live socket at /v1/extension/socket?d=<deviceId>. Same gates as pairing: private peer
  * and a browser-extension Origin. The sealed hello then proves the browser holds its key.
  * Returns false for any other upgrade so the gateway can decide what to do with it.
  */
@@ -107,7 +114,7 @@ export function handleExtensionUpgrade(
   if (url.pathname !== SOCKET_PATH) return false
   const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined
   const deviceId = url.searchParams.get('d') ?? ''
-  if (!isLoopback(req) || !isExtensionOrigin(origin) || !DEVICE_ID.test(deviceId)) {
+  if (!isPrivatePeer(req) || !isExtensionOrigin(origin) || !DEVICE_ID.test(deviceId)) {
     socket.destroy()
     return true
   }
