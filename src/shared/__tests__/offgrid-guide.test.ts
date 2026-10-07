@@ -3,7 +3,9 @@ import {
   OFFGRID_FEATURES,
   formatGuide,
   newestUpdates,
-  parseArticleIndex,
+  matchSitePages,
+  parsePageSteps,
+  parseSiteCards,
   parseDevTo,
   parseGithubReleases,
   parseOrgRepos,
@@ -52,7 +54,9 @@ describe('Off Grid AI guide', () => {
     const posts = parseReddit({
       data: {
         children: [
-          { data: { title: 'v41 is out', permalink: '/r/off_grid_ai/comments/1/', created_utc: 1 } },
+          {
+            data: { title: 'v41 is out', permalink: '/r/off_grid_ai/comments/1/', created_utc: 1 }
+          },
           { data: { title: 'no link', permalink: 'https://evil.example' } }
         ]
       }
@@ -61,28 +65,98 @@ describe('Off Grid AI guide', () => {
     expect(posts[0]!.url).toBe('https://www.reddit.com/r/off_grid_ai/comments/1/')
   })
 
-  it('finds article links on the site once each, on the site only', () => {
-    const html = `<a href="/articles/private-ai">Private <b>AI</b> &amp; you</a>
-      <a href="/articles/private-ai">dup</a>
-      <a href="https://elsewhere.example/articles/x">off site</a>
-      <a href="https://getoffgridai.co.example.com/articles/lookalike">look-alike host</a>
-      <a href="/articles/quotes">Say &amp;quot;hi&amp;quot;</a>
-      <a href="/pro">Pro</a>`
-    expect(parseArticleIndex(html)).toEqual([
+  // The site's card, as every getoffgridai.co page renders it.
+  const card = (href: string, title: string, desc: string, date = ''): string =>
+    `<a class="guide-card article-result" href="${href}" data-topic="Sync" data-date="${date}">
+      <span class="article-result-meta">Sync &amp; sharing · Phone</span>
+      <span class="guide-card-title">${title}</span>
+      <span class="guide-card-desc">${desc}</span></a>`
+
+  it('reads guide, article, essay and about cards from any site page, once each, on the site only', () => {
+    const html = [
+      card('/guides/ios-setup/', 'iOS Setup', 'Install on <b>iPhone</b>.'),
+      card('/articles/sync/', 'Sync &amp; share', 'Phone to computer.', '2026-09-29T08:30:06.548Z'),
+      card('/articles/sync/', 'Duplicate', 'Seen on every page.'),
+      card('/writing/context-gap/', 'Say &amp;quot;hi&amp;quot;', 'An essay.'),
+      card('/mission/', 'Mission', 'Personal AI.'),
+      card('https://getoffgridai.co.example.com/guides/x/', 'Look-alike host', 'No.'),
+      '<a href="/guides/plain/">Not a card</a>'
+    ].join('\n')
+    expect(parseSiteCards(html)).toEqual([
+      {
+        kind: 'guide',
+        title: 'iOS Setup',
+        url: 'https://getoffgridai.co/guides/ios-setup/',
+        date: undefined,
+        source: 'getoffgridai.co',
+        summary: 'Install on iPhone.'
+      },
       {
         kind: 'article',
-        title: 'Private AI & you',
-        url: 'https://getoffgridai.co/articles/private-ai',
-        source: 'getoffgridai.co'
+        title: 'Sync & share',
+        url: 'https://getoffgridai.co/articles/sync/',
+        date: '2026-09-29T08:30:06.548Z',
+        source: 'getoffgridai.co',
+        summary: 'Phone to computer.'
       },
       // Decoded once: the page's text says &quot; literally, so the title does too.
-      {
-        kind: 'article',
-        title: 'Say &quot;hi&quot;',
-        url: 'https://getoffgridai.co/articles/quotes',
-        source: 'getoffgridai.co'
-      }
+      expect.objectContaining({ kind: 'essay', title: 'Say &quot;hi&quot;' }),
+      expect.objectContaining({ kind: 'about', title: 'Mission' })
     ])
+  })
+
+  it("reads the quick start's numbered steps, and nothing after them", () => {
+    const html = `<h1>Quick Start</h1><h2>1. Install</h2><p>Get the <a href="/download/">app</a> .</p>
+      <h2>2. Prepare a model</h2><p>Open <b>Models</b>.</p><h2>Next</h2><p>More guides.</p>`
+    expect(parsePageSteps(html)).toBe('1. Install: Get the app.\n2. Prepare a model: Open Models.')
+    expect(parsePageSteps('<h2>About</h2><p>No steps.</p>')).toBe('')
+  })
+
+  it('finds the pages about a task, title words first, newest on a tie', () => {
+    const pages = parseSiteCards(
+      [
+        card('/articles/a/', 'Pair your phone', 'Sync chats.', '2026-01-01T00:00:00Z'),
+        card('/articles/b/', 'Sync attachments', 'Phone to computer.', '2026-02-01T00:00:00Z'),
+        card('/articles/c/', 'Sync history', 'Across devices.', '2026-03-01T00:00:00Z'),
+        card('/guides/d/', 'Image generation', 'Make pictures.')
+      ].join('')
+    )
+    expect(matchSitePages(pages, 'sync attachments').map((p) => p.title)).toEqual([
+      'Sync attachments',
+      'Sync history',
+      'Pair your phone'
+    ])
+    expect(matchSitePages(pages, 'a')).toEqual([])
+  })
+
+  it('gives the quick start, an overview of the library, or the pages that match the question', () => {
+    const pages = parseSiteCards(
+      [
+        card('/guides/ios-setup/', 'iOS Setup', 'Install on iPhone.'),
+        card('/articles/sync/', 'Sync attachments', 'Phone to computer.', '2026-09-29T00:00:00Z'),
+        card('/writing/context-gap/', 'The context gap', 'An essay.'),
+        card('/vision/', 'Vision', 'Your digital twin.')
+      ].join('')
+    )
+    const site = { steps: '1. Install: Get the app.', pages }
+    const overview = formatGuide([], [], site)
+    for (const part of [
+      'Quick start (https://getoffgridai.co/quick-start/):\n1. Install: Get the app.',
+      'About Off Grid AI:\n- Vision',
+      'Guides:\n- iOS Setup: https://getoffgridai.co/guides/ios-setup/',
+      'Newest articles:\n- Sync attachments (2026-09-29)',
+      'Perspectives:\n- The context gap'
+    ]) {
+      expect(overview).toContain(part)
+    }
+    const answer = formatGuide([], [], site, 'sync attachments')
+    expect(answer).toContain(
+      'Pages on getoffgridai.co about "sync attachments":\n- Sync attachments'
+    )
+    expect(answer).not.toContain('Perspectives:')
+    expect(formatGuide([], [], site, 'quantum')).toContain(
+      'No page on getoffgridai.co matched "quantum".'
+    )
   })
 
   it('orders news newest first, undated last, once each, and says what it could not reach', () => {
