@@ -17,11 +17,11 @@ function options(
   models: readonly TaskModelChoice[],
   installed: readonly string[]
 ): { value: string; label: string }[] {
+  // Local and remote alike, by role: a remote server's decision model carries the Decision tag.
   const fits = (m: TaskModelChoice): boolean =>
     m.availability !== 'coming_soon' &&
-    ((Boolean(m.remoteServerId) && m.kind === 'computer_use') ||
-      (installed.includes(m.id) &&
-        (slot.role === 'decision' ? isDecisionModel(m) : isGroundingSpecialist(m))))
+    installed.includes(m.id) &&
+    (slot.role === 'decision' ? isDecisionModel(m) : isGroundingSpecialist(m))
   const list = models.filter(fits).map((m) => ({ value: m.id, label: m.name }))
   return list.some((o) => o.value === slot.modelId)
     ? list

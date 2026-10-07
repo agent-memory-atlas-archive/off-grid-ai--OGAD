@@ -1,6 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { TaskLineups } from './TaskLineups'
-import { useTaskRoles } from '../lib/task-roles'
+import { isDecisionModel, useTaskRoles } from '../lib/task-roles'
 import { AnimatePresence } from 'motion/react'
 import {
   IconDownload,
@@ -1280,76 +1279,72 @@ export function ModelsScreen({
                     </p>
                   )
                 }
-                const installedModels = displayedCatalog.filter(
-                  (m) => installed.includes(m.id) && m.availability !== 'coming_soon'
-                )
-                const availableModels = displayedCatalog.filter(
-                  (m) => !installed.includes(m.id) && m.availability !== 'coming_soon'
-                )
-                const comingSoonModels = displayedCatalog.filter(
-                  (m) => m.availability === 'coming_soon'
-                )
-                // A saved remote server's models are not on this device: listed apart, by name.
-                const localModels = installedModels.filter((m) => !m.remoteServerId)
-                const remoteModels = installedModels.filter((m) => m.remoteServerId)
+                // One group of cards, the same rows on every tab: on this device, remote (a saved
+                // server's models), available to download, coming soon. `group` names the lists
+                // when a tab shows more than one group.
+                const cardRows = (models: ModelEntry[], group?: string): React.ReactNode => {
+                  const installedModels = models.filter(
+                    (m) => installed.includes(m.id) && m.availability !== 'coming_soon'
+                  )
+                  const localModels = installedModels.filter((m) => !m.remoteServerId)
+                  const remoteModels = installedModels.filter((m) => m.remoteServerId)
+                  const availableModels = models.filter(
+                    (m) => !installed.includes(m.id) && m.availability !== 'coming_soon'
+                  )
+                  const comingSoonModels = models.filter((m) => m.availability === 'coming_soon')
+                  const rows: Array<[string, string, ModelEntry[]]> = [
+                    [
+                      'On this device',
+                      group ? `${group} on this device` : 'Models on this device',
+                      localModels
+                    ],
+                    [
+                      'Remote',
+                      group ? `Remote ${group.toLowerCase()}` : 'Remote models',
+                      remoteModels
+                    ],
+                    [
+                      'Available to download',
+                      group ? `${group} available to download` : 'Models available to download',
+                      availableModels
+                    ],
+                    [
+                      'Coming soon',
+                      group ? `${group} coming soon` : 'Computer Use models coming soon',
+                      comingSoonModels
+                    ]
+                  ]
+                  return rows.map(([heading, label, list]) =>
+                    list.length > 0 ? (
+                      <div key={label}>
+                        <div className="px-6 pt-3 text-[9px] uppercase tracking-widest text-neutral-600">
+                          {heading}
+                        </div>
+                        <div role="list" aria-label={label} className={GRID}>
+                          {list.map((m) => renderCard(m))}
+                        </div>
+                      </div>
+                    ) : null
+                  )
+                }
+                if (activeKind !== 'computer_use') return <>{cardRows(displayedCatalog)}</>
+                // Tasks: grounding specialists and decision models are different jobs, run side by
+                // side, so they are listed apart.
+                const groups: Array<[string, ModelEntry[]]> = [
+                  ['Grounding specialists', displayedCatalog.filter((m) => !isDecisionModel(m))],
+                  ['Decision models', displayedCatalog.filter((m) => isDecisionModel(m))]
+                ]
                 return (
                   <>
-                    {activeKind === 'computer_use' && (
-                      <div className="px-6 pt-3">
-                        <div className="mb-2 text-[9px] uppercase tracking-widest text-neutral-600">
-                          Working together now
-                        </div>
-                        <TaskLineups
-                          view={taskRoles}
-                          models={list}
-                          installed={installed}
-                          onChanged={refreshActive}
-                        />
-                      </div>
-                    )}
-                    {localModels.length > 0 && (
-                      <>
-                        <div className="px-6 pt-3 text-[9px] uppercase tracking-widest text-neutral-600">
-                          On this device
-                        </div>
-                        <div role="list" aria-label="Models on this device" className={GRID}>
-                          {localModels.map((m) => renderCard(m))}
-                        </div>
-                      </>
-                    )}
-                    {remoteModels.length > 0 && (
-                      <>
-                        <div className="px-6 pt-3 text-[9px] uppercase tracking-widest text-neutral-600">
-                          Remote
-                        </div>
-                        <div role="list" aria-label="Remote models" className={GRID}>
-                          {remoteModels.map((m) => renderCard(m))}
-                        </div>
-                      </>
-                    )}
-                    {availableModels.length > 0 && (
-                      <>
-                        <div className="px-6 pt-2 text-[9px] uppercase tracking-widest text-neutral-600">
-                          Available to download
-                        </div>
-                        <div role="list" aria-label="Models available to download" className={GRID}>
-                          {availableModels.map((m) => renderCard(m))}
-                        </div>
-                      </>
-                    )}
-                    {comingSoonModels.length > 0 && (
-                      <>
-                        <div className="px-6 pt-2 text-[9px] uppercase tracking-widest text-neutral-600">
-                          Coming soon
-                        </div>
-                        <div
-                          role="list"
-                          aria-label="Computer Use models coming soon"
-                          className={GRID}
-                        >
-                          {comingSoonModels.map((m) => renderCard(m))}
-                        </div>
-                      </>
+                    {groups.map(([group, models]) =>
+                      models.length > 0 ? (
+                        <section key={group} aria-label={group} className="pt-2">
+                          <h3 className="px-6 pt-3 text-xs font-medium text-neutral-200">
+                            {group}
+                          </h3>
+                          {cardRows(models, group)}
+                        </section>
+                      ) : null
                     )}
                   </>
                 )

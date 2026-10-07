@@ -93,14 +93,18 @@ describe('<ModelsScreen/> Computer Use catalog journey', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Tasks' }))
 
-    const installed = await screen.findByRole('list', { name: 'Models on this device' })
-    const available = screen.getByRole('list', { name: 'Models available to download' })
+    const installed = await screen.findByRole('list', {
+      name: 'Grounding specialists on this device'
+    })
+    const available = screen.getByRole('list', {
+      name: 'Grounding specialists available to download'
+    })
     expect(within(installed).getByText('UI-Mate-9B')).toBeTruthy()
     expect(within(available).getByText('UI-TARS-1.5-7B')).toBeTruthy()
     expect(within(available).getByText('GUI-Owl-1.5-8B-Instruct')).toBeTruthy()
     expect(within(available).getByText('UI-Mate-27B')).toBeTruthy()
     expect(within(available).getByText('Holo3.1-4B')).toBeTruthy()
-    expect(screen.queryByRole('list', { name: 'Computer Use models coming soon' })).toBeNull()
+    expect(screen.queryByRole('list', { name: 'Grounding specialists coming soon' })).toBeNull()
     expect(screen.getByText(`${computerUseModels.length} models`)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'All sources' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Any size' })).toBeTruthy()
@@ -114,7 +118,9 @@ describe('<ModelsScreen/> Computer Use catalog journey', () => {
 
     await user.click(screen.getByRole('button', { name: 'Clear' }))
     // The card, not the lineup above the cards, which names it too.
-    const onDevice = await screen.findByRole('list', { name: 'Models on this device' })
+    const onDevice = await screen.findByRole('list', {
+      name: 'Grounding specialists on this device'
+    })
     expect(within(onDevice).getByText('UI-Mate-9B')).toBeTruthy()
     expect(screen.getByText('UI-TARS-1.5-7B')).toBeTruthy()
     expect(screen.getByText(`${computerUseModels.length} models`)).toBeTruthy()
@@ -150,22 +156,42 @@ describe('<ModelsScreen/> Computer Use catalog journey', () => {
     expect(screen.queryByText('Qwen 3.8 9B Distill')).toBeNull()
   })
 
-  it('shows the models each task runs together, and the role each card plays', async () => {
+  it('lists grounding specialists and decision models apart, each card saying its role', async () => {
     activeIds = [uiMate.id]
+    // The desktop adds its decision models to the shared catalog; one stands in for them here.
+    const bridge = (globalThis as unknown as { window: { api: Record<string, unknown> } }).window.api
+    const catalog = bridge.getModelCatalog
+    bridge.getModelCatalog = async () => ({
+      kinds: MODEL_KINDS,
+      models: [
+        ...CATALOG,
+        {
+          id: 'synthetic/decider-2b',
+          name: 'Decider 2B',
+          kind: 'computer_use',
+          tags: ['Decision'],
+          files: [{ name: 'decider.gguf', role: 'primary', size: 1 }]
+        }
+      ]
+    })
     const user = userEvent.setup()
     render(<ModelsScreen />)
     await user.click(await screen.findByRole('button', { name: 'Tasks' }))
 
-    expect(await screen.findByText('Working together now')).toBeTruthy()
-    const computerUse = screen.getByRole('region', { name: 'Computer Use' })
-    expect(computerUse.textContent).toContain('3 models work together')
-    for (const role of ['Decision model', 'Reasoner', 'Grounding specialist']) {
-      expect(within(computerUse).getByText(role)).toBeTruthy()
-    }
+    const grounding = await screen.findByRole('region', { name: 'Grounding specialists' })
+    const decision = screen.getByRole('region', { name: 'Decision models' })
+    expect(within(grounding).queryByText('Decider 2B')).toBeNull()
+    expect(within(decision).getByText('Decider 2B')).toBeTruthy()
+    expect(within(decision).queryByText('UI-Mate-9B')).toBeNull()
+    // No lineup block here: the Tasks tab is cards, as the Text tab is.
+    expect(screen.queryByText('Working together now')).toBeNull()
     // One model, two tasks: its card says so.
-    const installed = screen.getByRole('list', { name: 'Models on this device' })
+    const installed = within(grounding).getByRole('list', {
+      name: 'Grounding specialists on this device'
+    })
     expect(
       within(installed).getByText(/Grounding specialist · Web Use and Computer Use/)
     ).toBeTruthy()
+    bridge.getModelCatalog = catalog
   })
 })
