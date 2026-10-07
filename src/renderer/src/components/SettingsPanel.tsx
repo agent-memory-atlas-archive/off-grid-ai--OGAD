@@ -490,10 +490,10 @@ export function SettingsPanel({
       </div>
 
       <div className={embedded ? 'p-1 pt-4 text-sm' : 'min-h-0 flex-1 overflow-y-auto p-4 text-sm'}>
-        {/* The registry returns a stable registered component, not a component factory. */}
-        {/* eslint-disable-next-line react-hooks/static-components */}
         {tab === 'tasks' && TaskSettings ? (
           <>
+            {/* The registry returns a stable registered component, not a component factory. */}
+            {/* eslint-disable-next-line react-hooks/static-components */}
             <TaskSettings />
             {/* The task models' own backends live with the task settings that choose them. */}
             <BackendPreferencesSection modalities={['grounding', 'decision']} />
