@@ -177,6 +177,16 @@ jobs:
           npm --prefix ../shared/packages/speech run build
           npm --prefix ../shared/packages/ui run build
 
+      - name: Let npm read the private UI package (Pro)
+        # @offgrid/operator-ui is a private Wednesday package that only Pro uses. Core lists it as an
+        # optional dependency, so without access npm skips it and core still installs; Pro needs it.
+        shell: bash
+        env:
+          UI_TOKEN: ${{ secrets.OPERATOR_UI_TOKEN || secrets.CI_CROSS_REPO_TOKEN }}
+        run: |
+          if [ -n "$UI_TOKEN" ]; then
+            git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
+          fi
       - name: Install dependencies
         run: npm ci
 
@@ -324,6 +334,16 @@ jobs:
           rm -rf ../executorch-speech
           mv _executorch_speech ../executorch-speech
 
+      - name: Let npm read the private UI package (Pro)
+        # @offgrid/operator-ui is a private Wednesday package that only Pro uses. Core lists it as an
+        # optional dependency, so without access npm skips it and core still installs; Pro needs it.
+        shell: bash
+        env:
+          UI_TOKEN: ${{ secrets.OPERATOR_UI_TOKEN || secrets.CI_CROSS_REPO_TOKEN }}
+        run: |
+          if [ -n "$UI_TOKEN" ]; then
+            git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
+          fi
       - name: Install dependencies
         run: npm ci
 

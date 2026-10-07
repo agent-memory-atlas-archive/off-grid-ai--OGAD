@@ -148,6 +148,16 @@ jobs:
           # Keep the checkout credential only until the selective LFS pull in
           # the next step. That step removes it before any project code runs.
           persist-credentials: true
+      - name: Let npm read the private UI package (Pro)
+        # @offgrid/operator-ui is a private Wednesday package that only Pro uses. Core lists it as an
+        # optional dependency, so without access npm skips it and core still installs; Pro needs it.
+        shell: bash
+        env:
+          UI_TOKEN: ${{ secrets.OPERATOR_UI_TOKEN || secrets.CI_CROSS_REPO_TOKEN }}
+        run: |
+          if [ -n "$UI_TOKEN" ]; then
+            git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
+          fi
       - name: Put the speech runtime beside this checkout
         if: ${{ !cancelled() }}
         run: |
@@ -432,6 +442,16 @@ jobs:
         if: runner.os == 'Windows'
         with:
           python-version: '3.12'
+      - name: Let npm read the private UI package (Pro)
+        # @offgrid/operator-ui is a private Wednesday package that only Pro uses. Core lists it as an
+        # optional dependency, so without access npm skips it and core still installs; Pro needs it.
+        shell: bash
+        env:
+          UI_TOKEN: ${{ secrets.OPERATOR_UI_TOKEN || secrets.CI_CROSS_REPO_TOKEN }}
+        run: |
+          if [ -n "$UI_TOKEN" ]; then
+            git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
+          fi
       - name: Install workspace dependencies
         run: |
           mv _shared ../shared

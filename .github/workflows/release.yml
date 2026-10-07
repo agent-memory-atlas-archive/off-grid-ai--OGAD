@@ -292,6 +292,16 @@ jobs:
           fi
           rm -rf ../executorch-speech
           mv _executorch_speech ../executorch-speech
+      - name: Let npm read the private UI package (Pro)
+        # @offgrid/operator-ui is a private Wednesday package that only Pro uses. Core lists it as an
+        # optional dependency, so without access npm skips it and core still installs; Pro needs it.
+        shell: bash
+        env:
+          UI_TOKEN: ${{ secrets.OPERATOR_UI_TOKEN || secrets.CI_CROSS_REPO_TOKEN }}
+        run: |
+          if [ -n "$UI_TOKEN" ]; then
+            git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
+          fi
       - name: Install dependencies
         run: npm ci
       # Stamp the resolved version into package.json so electron-builder picks the
@@ -594,6 +604,16 @@ jobs:
           fi
           rm -rf ../executorch-speech
           mv _executorch_speech ../executorch-speech
+      - name: Let npm read the private UI package (Pro)
+        # @offgrid/operator-ui is a private Wednesday package that only Pro uses. Core lists it as an
+        # optional dependency, so without access npm skips it and core still installs; Pro needs it.
+        shell: bash
+        env:
+          UI_TOKEN: ${{ secrets.OPERATOR_UI_TOKEN || secrets.CI_CROSS_REPO_TOKEN }}
+        run: |
+          if [ -n "$UI_TOKEN" ]; then
+            git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
+          fi
       - name: Install dependencies
         run: npm ci
       - name: Fetch Windows native binaries (llama/whisper/sd/ffmpeg)
@@ -803,6 +823,16 @@ jobs:
           install -Dm644 resources/bin/kev-local-server.py build/linux-bin/kev-local-server.py
           install -Dm755 build/linux-bin/executorch-speech \
             ../executorch-speech/native/bin/executorch-speech
+      - name: Let npm read the private UI package (Pro)
+        # @offgrid/operator-ui is a private Wednesday package that only Pro uses. Core lists it as an
+        # optional dependency, so without access npm skips it and core still installs; Pro needs it.
+        shell: bash
+        env:
+          UI_TOKEN: ${{ secrets.OPERATOR_UI_TOKEN || secrets.CI_CROSS_REPO_TOKEN }}
+        run: |
+          if [ -n "$UI_TOKEN" ]; then
+            git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
+          fi
       - name: Install dependencies
         run: npm ci
       - name: Install Linux GPU runtime dependencies
