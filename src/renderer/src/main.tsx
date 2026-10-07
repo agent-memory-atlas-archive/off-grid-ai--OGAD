@@ -2,12 +2,16 @@ import './assets/main.css'
 import './assets/onboarding.css'
 import { applyTheme } from './theme'
 import { initFocusModality } from './lib/focus-modality'
+import { initScrollActivity } from './lib/scroll-activity'
 
 // Apply the saved/system theme (dark default) before first paint.
 applyTheme()
 
 // Show the keyboard focus ring only for keyboard navigation, not on mouse click.
 initFocusModality()
+
+// Scroll bars appear only while something scrolls (main.css paints them on data-scrolling).
+initScrollActivity()
 
 import { StrictMode, type FC } from 'react'
 import { createRoot } from 'react-dom/client'

@@ -247,6 +247,31 @@ code {
   flex-shrink: 0;
 }
 
+/* Scroll bars: thin, on a clear track, and drawn only while their area is scrolling
+   (lib/scroll-activity.ts marks it with data-scrolling). On macOS with a mouse attached the
+   system bars are always shown and white; these replace them in every theme. */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background-clip: content-box;
+}
+[data-scrolling]::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--color-muted-foreground) 55%, transparent);
+}
+[data-scrolling]::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-muted-foreground);
+}
+
 /* Keep the collapsed rail scrollable without a full scrollbar over its icons. */
 .sidebar-nav-scroll-collapsed {
   scrollbar-width: none;
