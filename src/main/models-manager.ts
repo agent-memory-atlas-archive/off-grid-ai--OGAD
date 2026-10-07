@@ -67,6 +67,8 @@ import {
   getRemoteVisionServerSettings
 } from './vision/remote-vision-server'
 import { getComputerUseSettings, setComputerUseSettings } from './computer-use-settings'
+import { getWebUseSettings, setWebUseSettings } from './web-use-settings'
+import { strategyTaskRoles } from '../shared/computer-use-settings'
 import { binRoots } from './runtime-env'
 
 // Desktop ships the Prism llama.cpp engine required by these packed weights.
@@ -1099,7 +1101,23 @@ export async function deleteModel(modelId: string): Promise<DeleteModelResult> {
   ;(Object.keys(modals) as Modality[]).forEach((k) => {
     if (modalSelectionMatches(modals[k], modelId, primaryFile)) setModal(k, null)
   })
+  clearTaskRolesFor(modelId)
   return { success: true, freedFiles: freed }
+}
+
+/** A deleted model leaves every Computer Use and Web Use role it held: Tasks falls back to its
+ *  default for that role instead of naming a model that is gone. */
+function clearTaskRolesFor(modelId: string): void {
+  const computer = getComputerUseSettings()
+  if (computer.groundingModelId === modelId || computer.decisionModelId === modelId) {
+    setComputerUseSettings({
+      ...computer,
+      groundingModelId: computer.groundingModelId === modelId ? null : computer.groundingModelId,
+      decisionModelId: computer.decisionModelId === modelId ? null : computer.decisionModelId
+    })
+  }
+  const web = getWebUseSettings()
+  if (web.decisionModelId === modelId) setWebUseSettings({ ...web, decisionModelId: null })
 }
 
 type LlamaModelKindGate = (kind: string) => boolean
@@ -1251,37 +1269,49 @@ export async function getActiveModelIds(): Promise<string[]> {
   const settings = getRemoteVisionServerSettings()
   const remote = settings.servers.find((server) => server.id === settings.activeServerId)
   const activeChatId = getActiveModel()
+  // Computer Use models are active by the role Tasks gives them (below), not by a pick of their
+  // own: the Models screens then show exactly what Tasks > Computer Use and Web Use will run.
   const localIds = info.models
     .filter(
       (model) =>
-        model.active && (!remote || !remoteModelSelected('text') || model.id !== activeChatId)
+        model.active &&
+        model.kind !== 'computer_use' &&
+        (!remote || !remoteModelSelected('text') || model.id !== activeChatId)
     )
     .map((model) => model.id)
-  const computerUseSettings = getComputerUseSettings()
-  const decisionModelId =
-    computerUseSettings.decisionModelId ??
-    (computerUseSettings.modelStrategy === 'decision_plus_specialist' ||
-    computerUseSettings.modelStrategy === 'decision_plus_reasoning'
-      ? DECIDER_2B.id
-      : null)
-  const withDecision =
-    decisionModelId &&
-    (info.models.some((model) => model.id === decisionModelId) ||
-      (decisionModelId === KEV_4B_ID && Boolean(resolveKevRuntimeArtifact())))
-      ? [...new Set([...localIds, decisionModelId])]
-      : localIds
-  return remote && remote.enabled !== false
-    ? [
-        ...withDecision,
-        ...remoteVisionInventoryModels([remote])
-          .filter((model) =>
-            remoteModelSelected(
-              model.kind === 'vision' ? 'text' : model.kind === 'speech' ? 'voice' : model.kind
-            )
+  const remoteIds =
+    remote && remote.enabled !== false
+      ? remoteVisionInventoryModels([remote])
+          .filter(
+            (model) =>
+              model.kind !== 'computer_use' &&
+              remoteModelSelected(
+                model.kind === 'vision' ? 'text' : model.kind === 'speech' ? 'voice' : model.kind
+              )
           )
           .map((model) => model.id)
-      ]
-    : withDecision
+      : []
+  return [...new Set([...localIds, ...remoteIds, ...(await taskRoleModelIds())])]
+}
+
+/**
+ * The models Computer Use and Web Use run besides Chat: each one's decision model and grounding
+ * specialist, local or remote, by the roles its strategy uses (strategyTaskRoles, the same map
+ * the task projection reads). The reasoner is the Chat model, already active as text.
+ */
+async function taskRoleModelIds(): Promise<string[]> {
+  const { selectedGrounderModelId } = await import('./vision/grounder-selection')
+  const computer = getComputerUseSettings()
+  const web = getWebUseSettings()
+  const tasks = [
+    { strategy: computer.modelStrategy, decision: computer.decisionModelId },
+    { strategy: web.modelStrategy, decision: web.decisionModelId }
+  ]
+  return tasks.flatMap(({ strategy, decision }) =>
+    strategyTaskRoles(strategy).map((role) =>
+      role === 'grounding' ? selectedGrounderModelId() : (decision ?? DECIDER_2B.id)
+    )
+  )
 }
 
 /**
@@ -1303,6 +1333,19 @@ export async function activateModel(
     const modality = (['text', 'image', 'transcription', 'voice'] as const).find(
       (kind) => selected[kind] === remote.modelId
     )
+    // A server's Computer Use role model is activated as that role, as Tasks sets it.
+    const role = (['grounding', 'decision'] as const).find(
+      (candidate) => server?.roleModels?.[candidate] === remote.modelId
+    )
+    if (!modality && role) {
+      const settings = getComputerUseSettings()
+      setComputerUseSettings(
+        role === 'grounding'
+          ? { ...settings, groundingModelId: modelId }
+          : { ...settings, decisionModelId: modelId }
+      )
+      return { success: true }
+    }
     const activated =
       modality === 'text'
         ? activateRemoteVisionModel(remote.serverId, remote.modelId)
@@ -1347,6 +1390,11 @@ export async function activateModel(
   }
   const modal = requestedModal ?? modalityForModel(kind)
   const result = modal ? await setActiveModalChoice(modal, modelId) : await setActiveModel(modelId)
+  // A Computer Use model is the grounding specialist Web Use and Computer Use share: activating it
+  // here sets it there, so the Models screen and Tasks never disagree.
+  if (result.success && modal === 'computer_use') {
+    setComputerUseSettings({ ...getComputerUseSettings(), groundingModelId: modelId })
+  }
   return result
 }
 

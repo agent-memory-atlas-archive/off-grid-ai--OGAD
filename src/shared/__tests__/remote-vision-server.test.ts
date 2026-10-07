@@ -80,4 +80,24 @@ describe('remote model inventory ids', () => {
       })
     ])
   })
+
+  it("lists a server's Computer Use roles as its Computer Use models, once each", () => {
+    const models = remoteVisionInventoryModels([
+      {
+        id: 'router',
+        name: 'OpenRouter',
+        provider: 'custom',
+        endpoint: 'https://models.example/v1',
+        model: 'google/gemini-flash',
+        roleModels: { grounding: 'bytedance/ui-tars-7b', decision: 'google/gemini-flash' },
+        hasApiKey: true,
+        screenFramesAllowed: true
+      }
+    ])
+    expect(models.map((m) => [m.remoteModelId, m.kind])).toEqual([
+      ['google/gemini-flash', 'vision'],
+      // The decision model is the text model too: it is listed once, as text.
+      ['bytedance/ui-tars-7b', 'computer_use']
+    ])
+  })
 })
