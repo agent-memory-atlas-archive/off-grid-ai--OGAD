@@ -2435,6 +2435,8 @@ export function MemoryChat({
   }, [])
 
   const voiceTurns = useChatVoiceTurns({
+    // A turn belongs to the chat it was recorded in (a new chat before it has an id).
+    ownerId: activeConversationId ?? NEW_CHAT,
     voiceMode,
     mode: voiceMode ? voiceTurnMode : 'tap',
     silenceAfterSpeechMs: voiceSilenceAfterSpeechMs,

@@ -8,6 +8,8 @@ import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatBoundary, installBoundary, renderChat } from './harness/chat-boundary'
+import { MemoryChat } from '../MemoryChat'
+import { TooltipProvider } from '../ui/tooltip'
 
 class RecorderBoundary {
   static instances: RecorderBoundary[] = []
@@ -155,6 +157,43 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     cleanup()
     vi.useRealTimers()
     vi.unstubAllGlobals()
+  })
+
+  it('never delivers a voice turn into a chat opened while it was being transcribed', async () => {
+    // Review finding: the turn kept no chat, so A's transcript landed in B after a switch.
+    installMicrophone()
+    let resolveTranscript!: (text: string) => void
+    const boundary = new ChatBoundary()
+    const transcribeAudio = vi.fn(
+      () => new Promise<string>((resolve) => (resolveTranscript = resolve))
+    )
+    Object.assign(boundary.api, {
+      transcribeAudio,
+      cancelTranscription: vi.fn(async () => true),
+      getTranscriptionInfo: vi.fn(transcriptionInfo)
+    })
+    installBoundary(boundary)
+    const user = userEvent.setup()
+    const view = renderChat({ conversationId: 'conversation-a' })
+
+    await user.click(await screen.findByRole('button', { name: 'Record voice' }))
+    await user.click(await screen.findByRole('button', { name: 'Stop recording' }))
+    await waitFor(() => expect(transcribeAudio).toHaveBeenCalledOnce())
+
+    // Open chat B while A's recording is still being transcribed.
+    view.rerender(
+      <TooltipProvider>
+        <MemoryChat openTarget={{ conversationId: 'conversation-b' }} />
+      </TooltipProvider>
+    )
+    resolveTranscript('Something said in chat A')
+    expect(
+      await screen.findByText(
+        'That voice note was recorded in another chat, so it was not sent here.'
+      )
+    ).toBeTruthy()
+    expect((screen.getByPlaceholderText(/^ask /i) as HTMLTextAreaElement).value).toBe('')
+    expect(boundary.calls).toHaveLength(0)
   })
 
   it('uses the active transcription model for text dictation and lets the user cancel', async () => {
