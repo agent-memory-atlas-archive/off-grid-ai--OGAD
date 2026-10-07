@@ -3,8 +3,28 @@ import { ipcMain } from 'electron'
 import { initializeTaskHistory, listTaskRuns, removeTaskRuns } from './task-history'
 import { registerTaskRetryIpc } from './task-retry-ipc'
 import { registerTaskGuideIpc } from './task-guide-ipc'
-import { configureTaskRetryRunner } from './task-retry'
+import { configureTaskRetryRunner, type TaskRetryRunResult } from './task-retry'
+import { runInRemoteScreenGate } from '../actions/remote-screen-gate'
+import { withTaskModelMemory } from '../model-memory'
+import type { ScreenTaskKind } from '../../shared/remote-screen-privacy'
 import { forgetVisionStopBeforeStart, hasActiveVisionSession } from '../vision/vision-controller'
+
+/** A retry runs in the same task context as a new run of its kind: the privacy gate, that task
+ *  kind's own model settings and the task's model memory. */
+function runRetryInTaskContext(
+  taskKind: ScreenTaskKind,
+  taskId: string,
+  goal: string,
+  run: () => Promise<TaskRetryRunResult>
+): Promise<TaskRetryRunResult> {
+  return runInRemoteScreenGate(taskKind, { id: taskId, goal }, () => withTaskModelMemory(run), {
+    outcome: (result) =>
+      result.ok
+        ? { ok: true, detail: result.summary, effectId: taskId }
+        : { ok: false, detail: result.summary },
+    refused: (detail) => ({ ok: false, summary: detail ?? '' })
+  })
+}
 
 export function registerTaskHistoryIpc(): void {
   initializeTaskHistory()
@@ -15,13 +35,15 @@ export function registerTaskHistoryIpc(): void {
       forgetVisionStopBeforeStart(taskId)
       // The same choice as a new task: Tasks > Web Use decides which browser a retry runs in.
       const { getWebUseRailHost } = await import('../browser/web-use-host')
-      return getWebUseRailHost().runTask({
-        goal: task.title,
-        url: task.lastUrl,
-        taskId,
-        journeyId: task.journeyId,
-        checkpoint
-      })
+      return runRetryInTaskContext('web_use', taskId, task.title, () =>
+        getWebUseRailHost().runTask({
+          goal: task.title,
+          url: task.lastUrl,
+          taskId,
+          journeyId: task.journeyId,
+          checkpoint
+        })
+      )
     },
     async computer(task, taskId, checkpoint) {
       forgetVisionStopBeforeStart(taskId)
@@ -44,27 +66,29 @@ export function registerTaskHistoryIpc(): void {
           targetLabel
         )
       }
-      const axHost = getAxRailHost()
-      const routing = await axHost.routingSnapshot(task.title)
-      if (routing && axRailViable(routing.snapshot)) {
-        return axHost.runTask(task.title, taskId, routing.app, routing.snapshot, {
-          journeyId: task.journeyId,
-          checkpoint,
-          recoverWithVision: async (recoveryCheckpoint, continuation) => {
-            const result = await runVision(recoveryCheckpoint, continuation, routing.app)
-            return result.ok
-              ? {
-                  ok: true,
-                  effectId: taskId,
-                  ...(result.performedActions?.length
-                    ? { performedActions: result.performedActions }
-                    : {})
-                }
-              : { ok: false, detail: result.summary }
-          }
-        })
-      }
-      return runVision()
+      return runRetryInTaskContext('computer_use', taskId, task.title, async () => {
+        const axHost = getAxRailHost()
+        const routing = await axHost.routingSnapshot(task.title)
+        if (routing && axRailViable(routing.snapshot)) {
+          return axHost.runTask(task.title, taskId, routing.app, routing.snapshot, {
+            journeyId: task.journeyId,
+            checkpoint,
+            recoverWithVision: async (recoveryCheckpoint, continuation) => {
+              const result = await runVision(recoveryCheckpoint, continuation, routing.app)
+              return result.ok
+                ? {
+                    ok: true,
+                    effectId: taskId,
+                    ...(result.performedActions?.length
+                      ? { performedActions: result.performedActions }
+                      : {})
+                  }
+                : { ok: false, detail: result.summary }
+            }
+          })
+        }
+        return runVision()
+      })
     }
   })
   ipcMain.handle('tasks:list', (_event, limit: unknown) =>
