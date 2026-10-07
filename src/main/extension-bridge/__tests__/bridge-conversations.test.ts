@@ -6,6 +6,9 @@ import {
   sqlTime,
   toBridgeConversation,
   turnsToAppend,
+  historyConflicts,
+  newerBrowserTitle,
+  type BridgeConversation,
   type BridgeTurn
 } from '../bridge-conversations'
 
@@ -121,5 +124,49 @@ describe('turnsToAppend', () => {
     expect(
       turnsToAppend([u('ok'), a('done'), u('ok'), a('done')], [u('ok'), a('done'), u('next')])
     ).toEqual([u('next')])
+  })
+})
+
+describe('historyConflicts', () => {
+  const u = (content: string): BridgeTurn => ({ role: 'user', content })
+  const a = (content: string): BridgeTurn => ({ role: 'assistant', content })
+
+  it('flags an edited or regenerated turn the desktop cannot apply', () => {
+    const stored = [u('q'), a('r'), u('q2'), a('r2')]
+    expect(historyConflicts(stored, [u('q'), a('r'), u('q2 edited'), a('r3')])).toBe(true)
+    expect(historyConflicts(stored, [u('q'), a('r'), u('q2'), a('regenerated')])).toBe(true)
+  })
+
+  it('accepts a continuation, an older window and a new chat', () => {
+    const stored = [u('q'), a('r'), u('q2'), a('r2')]
+    expect(historyConflicts(stored, [...stored, u('q3')])).toBe(false)
+    expect(historyConflicts(stored, [u('q'), a('r')])).toBe(false)
+    expect(historyConflicts(stored, [a('r'), u('q2')])).toBe(false)
+    expect(historyConflicts([], [u('q')])).toBe(false)
+  })
+})
+
+describe('newerBrowserTitle', () => {
+  const row = { id: 'conv-12345678', title: 'Trip', updated_at: '2026-10-02 11:00:00' }
+  const pushed = (title: string, updatedAt: number): BridgeConversation => ({
+    id: row.id,
+    title,
+    createdAt: 0,
+    updatedAt,
+    origin: 'browser',
+    turns: []
+  })
+
+  it('takes a rename made after the desktop copy changed', () => {
+    expect(newerBrowserTitle(row, pushed('Trip to Goa', Date.parse('2026-10-02T12:00:00Z')))).toBe(
+      'Trip to Goa'
+    )
+  })
+
+  it('keeps the desktop title against an older or unchanged one', () => {
+    expect(
+      newerBrowserTitle(row, pushed('Old name', Date.parse('2026-10-02T10:00:00Z')))
+    ).toBeNull()
+    expect(newerBrowserTitle(row, pushed('Trip', Date.parse('2026-10-03T10:00:00Z')))).toBeNull()
   })
 })

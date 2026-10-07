@@ -17,6 +17,7 @@ import {
   deleteRagConversation,
   getDB,
   getRagConversation,
+  updateRagConversationTitle,
   getRagConversations,
   getRagMessages,
   getSettings,
@@ -60,7 +61,10 @@ import {
   MAX_LISTED,
   parseBridgeConversation,
   toBridgeConversation,
-  turnsToAppend
+  turnsToAppend,
+  historyConflicts,
+  newerBrowserTitle,
+  HISTORY_CONFLICT
 } from './bridge-conversations'
 import { generateKeyPair } from './bridge-protocol'
 import {
@@ -295,15 +299,22 @@ const data: BridgeData = {
   putConversation: async (raw, browser) => {
     const conversation = parseBridgeConversation(raw)
     if (!conversation) throw new Error('invalid')
-    if (!getRagConversation(conversation.id)) {
+    const existing = getRagConversation(conversation.id)
+    const stored = getRagMessages(conversation.id)
+    // An edit the desktop cannot apply is refused, never reported as synced.
+    if (existing && historyConflicts(stored, conversation.turns)) throw new Error(HISTORY_CONFLICT)
+    if (!existing) {
       createRagConversation(conversation.id, conversation.title)
       getDB()
         .prepare(
           'UPDATE rag_conversations SET origin_device_id = ?, origin_device_name = ? WHERE id = ?'
         )
         .run(journeyOf(browser), browser.name, conversation.id)
+    } else {
+      const title = newerBrowserTitle(existing, conversation)
+      if (title) updateRagConversationTitle(conversation.id, title)
     }
-    for (const turn of turnsToAppend(getRagMessages(conversation.id), conversation.turns)) {
+    for (const turn of turnsToAppend(stored, conversation.turns)) {
       addRagMessage(conversation.id, turn.role, turn.content)
     }
     // The chat list reloads now, as it does for a phone's chats, not on the next restart.

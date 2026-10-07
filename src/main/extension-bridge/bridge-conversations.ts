@@ -119,3 +119,37 @@ export function turnsToAppend(
   }
   return []
 }
+
+/**
+ * Whether a browser's history contradicts the desktop's: it neither continues the stored turns
+ * (turnsToAppend) nor is an older window of them. An edited or regenerated turn reads this way.
+ * The desktop has no record of what the browser saw last, so it cannot tell an edit from turns
+ * added here since, and refuses rather than overwrite either one.
+ */
+export function historyConflicts(
+  stored: readonly MessageRow[],
+  incoming: readonly BridgeTurn[]
+): boolean {
+  const have = stored.filter((m) => m.role === 'user' || m.role === 'assistant')
+  if (!have.length || !incoming.length || turnsToAppend(stored, incoming).length) return false
+  const same = (m: MessageRow, turn: BridgeTurn): boolean =>
+    m.role === turn.role && m.content.slice(0, MAX_TURN_CHARS) === turn.content
+  for (let start = 0; start + incoming.length <= have.length; start++) {
+    if (incoming.every((turn, i) => same(have[start + i]!, turn))) return false
+  }
+  return true
+}
+
+/** The title a browser renamed its chat to, when that rename is newer than the desktop's copy. */
+export function newerBrowserTitle(
+  row: ConversationRow,
+  conversation: BridgeConversation
+): string | null {
+  const title = conversation.title.trim()
+  if (!title || title === (row.title ?? '')) return null
+  return conversation.updatedAt > sqlTime(row.updated_at) ? title : null
+}
+
+/** What a refused browser edit says: the extension keeps an edit whose refusal names a conflict. */
+export const HISTORY_CONFLICT =
+  'conflict: this chat changed differently on the desktop, so the edit was kept in the browser'
