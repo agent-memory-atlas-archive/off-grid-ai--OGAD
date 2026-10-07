@@ -2,7 +2,6 @@
 @layer theme, base, components, utilities;
 
 @import './base.css';
-@import '@offgrid/operator-ui/styles.css';
 @import 'tailwindcss';
 
 /* Tailwind v4 auto-detects content but SKIPS .gitignored paths — and the pro/

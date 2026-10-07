@@ -77,7 +77,6 @@
     "@offgrid/clipboard": "file:./packages/clipboard",
     "@offgrid/design": "file:./packages/design",
     "@offgrid/models": "file:../shared/packages/models",
-    "@offgrid/operator-ui": "github:wednesday-solutions/component-library-animations#ca35d2f9004b212ea034b73109fcd2819a08816b",
     "@offgrid/rag": "file:./packages/rag",
     "@offgrid/speech": "file:../shared/packages/speech",
     "@offgrid/sync": "file:../shared/packages/sync",
@@ -128,6 +127,7 @@
     "ws": "^8.18.3"
   },
   "optionalDependencies": {
+    "@offgrid/operator-ui": "github:wednesday-solutions/component-library-animations#ca35d2f9004b212ea034b73109fcd2819a08816b",
     "@nut-tree-fork/nut-js": "^4.2.6"
   },
   "devDependencies": {
