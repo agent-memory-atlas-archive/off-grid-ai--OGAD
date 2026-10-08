@@ -826,6 +826,16 @@ export function MemoryChat({
   const generatingRef = useRef<Set<string>>(new Set())
   const [generatingConvs, setGeneratingConvs] = useState<Set<string>>(new Set())
   const restTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Closing the chat mid-rest settles the assistant now, rather than from a timer that outlives it.
+  useEffect(
+    () => () => {
+      if (!restTimerRef.current) return
+      clearTimeout(restTimerRef.current)
+      restTimerRef.current = null
+      announceAssistantActivity('idle')
+    },
+    []
+  )
   const [replySound] = useReplySound()
   const replySoundRef = useRef(replySound)
   replySoundRef.current = replySound
