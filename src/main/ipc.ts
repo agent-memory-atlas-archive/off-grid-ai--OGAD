@@ -1381,8 +1381,13 @@ export function setupIPC(): void {
   // Browsers paired through the extension bridge, and which are connected (Tasks > Web Use).
   ipcMain.handle('extension-bridge:browsers', () => listBridgeBrowsers())
 
-  // App version (for the Settings footer — so users know what build they're on).
-  ipcMain.handle('app:version', () => app.getVersion())
+  // App version (for the Settings footer — so users know what build they're on). A packaged app
+  // reads its own; an unpackaged launch of a script reports Electron's, so it uses the build's.
+  ipcMain.handle('app:version', () =>
+    !app.isPackaged && typeof __OFFGRID_APP_VERSION__ === 'string'
+      ? __OFFGRID_APP_VERSION__
+      : app.getVersion()
+  )
 
   ipcMain.handle('settings:save', (_, key: string, value: unknown) => {
     if (key === COMPUTER_USE_SETTINGS_KEY) setComputerUseSettings(value)

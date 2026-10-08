@@ -26,6 +26,7 @@ import { companionDownloadLabel } from '@renderer/lib/download-label'
 import { formatTransferSpeed } from '@offgrid/sync'
 import { projectProgress } from '@offgrid/ui'
 import { downloadTimeRemaining } from '@renderer/lib/download-progress'
+import { formatParams } from '@renderer/lib/model-summary'
 import {
   modelSettingsTabForKind,
   openModelSettingsPanel,
@@ -757,7 +758,7 @@ export function ModelsScreen({
     const dflashMissing = isInstalled && !!vs?.supportsDflash && !vs.dflashInstalled
     const bytes = totalBytes(m)
     const size = formatSize(bytes) || null
-    const meta = [m.org, m.params ? `${m.params}B` : null, size, fmtReleaseDate(m.releaseDate)]
+    const meta = [m.org, m.params ? formatParams(m.params) : null, size, fmtReleaseDate(m.releaseDate)]
       .filter(Boolean)
       .join(' · ')
     const tier: FitTier = isHf ? 'easy' : ramTier(m)
@@ -1372,7 +1373,7 @@ export function ModelsScreen({
             const downloadProgress = prog ? projectProgress(prog) : null
             const rows: [string, string | null][] = [
               ['Source', m.org || (isLocal ? 'Imported' : '—')],
-              ['Parameters', m.params ? `${m.params}B` : null],
+              ['Parameters', m.params ? formatParams(m.params) : null],
               ['Quantization', m.quant || null],
               ['Download', formatSize(bytes) || null],
               ['Released', fmtReleaseDate(m.releaseDate) || null],

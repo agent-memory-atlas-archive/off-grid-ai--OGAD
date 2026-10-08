@@ -31,13 +31,15 @@ export function registerTaskHistoryIpc(): void {
   configureTaskRetryRunner({
     isActive: hasActiveVisionSession,
     async web(task, taskId, checkpoint) {
+      // A retry runs with the model-facing goal; the title is only the name a person reads.
+      const goal = task.goal ?? task.title
       // Continue is a new run: a Stop sent to an earlier, never-started one does not apply.
       forgetVisionStopBeforeStart(taskId)
       // The same choice as a new task: Tasks > Web Use decides which browser a retry runs in.
       const { getWebUseRailHost } = await import('../browser/web-use-host')
-      return runRetryInTaskContext('web_use', taskId, task.title, () =>
+      return runRetryInTaskContext('web_use', taskId, goal, () =>
         getWebUseRailHost().runTask({
-          goal: task.title,
+          goal,
           url: task.lastUrl,
           taskId,
           journeyId: task.journeyId,
@@ -46,6 +48,7 @@ export function registerTaskHistoryIpc(): void {
       )
     },
     async computer(task, taskId, checkpoint) {
+      const goal = task.goal ?? task.title
       forgetVisionStopBeforeStart(taskId)
       const [{ getVisionRailHost }, { getAxRailHost }, { axRailViable }] = await Promise.all([
         import('../vision/vision-host'),
@@ -58,7 +61,7 @@ export function registerTaskHistoryIpc(): void {
         targetLabel?: string
       ): Promise<import('../vision/vision-agent').VisionTaskResult> => {
         return getVisionRailHost().runTask(
-          task.title,
+          goal,
           taskId,
           task.journeyId,
           recoveryCheckpoint,
@@ -66,11 +69,11 @@ export function registerTaskHistoryIpc(): void {
           targetLabel
         )
       }
-      return runRetryInTaskContext('computer_use', taskId, task.title, async () => {
+      return runRetryInTaskContext('computer_use', taskId, goal, async () => {
         const axHost = getAxRailHost()
-        const routing = await axHost.routingSnapshot(task.title)
+        const routing = await axHost.routingSnapshot(goal)
         if (routing && axRailViable(routing.snapshot)) {
-          return axHost.runTask(task.title, taskId, routing.app, routing.snapshot, {
+          return axHost.runTask(goal, taskId, routing.app, routing.snapshot, {
             journeyId: task.journeyId,
             checkpoint,
             recoverWithVision: async (recoveryCheckpoint, continuation) => {

@@ -1,8 +1,9 @@
-import { GATEWAY_HOST, GATEWAY_PORT, MEDIA_PORT } from './ports'
+import { GATEWAY_HOST, GATEWAY_PORT, mediaOrigins } from './ports'
 
 export function createRendererContentSecurityPolicy(styleNonce: string): string {
   const gatewayOrigin = `http://${GATEWAY_HOST}:${GATEWAY_PORT}`
-  const mediaOrigin = `http://127.0.0.1:${MEDIA_PORT}`
+  // The media server falls back up the port window when another instance holds its port.
+  const mediaOrigin = mediaOrigins().join(' ')
   return [
     "default-src 'self'",
     `script-src 'self' 'nonce-${styleNonce}'`,

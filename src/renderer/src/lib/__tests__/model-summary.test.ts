@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { formatContextWindow, resolveActiveTextModel, resolveModelName } from '../model-summary'
+import {
+  formatContextWindow,
+  formatParams,
+  modelNameForFile,
+  resolveActiveTextModel,
+  resolveModelName
+} from '../model-summary'
 
 describe('formatContextWindow', () => {
   it('formats power-of-two token windows as compact K labels', () => {
@@ -65,5 +71,29 @@ describe('resolveActiveTextModel', () => {
       name: 'Gemma 4 E4B',
       remote: false
     })
+  })
+})
+
+describe('modelNameForFile', () => {
+  it('names a catalogued image model file by its catalog name', () => {
+    expect(modelNameForFile('dreamshaper-xl-v2-turbo-Q8_0.gguf')).toBe(
+      'DreamShaper XL v2 Turbo (versatile)'
+    )
+    expect(modelNameForFile('/Users/a/models/image/dreamshaper-xl-v2-turbo-Q8_0.gguf')).toBe(
+      'DreamShaper XL v2 Turbo (versatile)'
+    )
+  })
+
+  it('keeps the file name of a model the catalog does not know', () => {
+    expect(modelNameForFile('my-own-merge.gguf')).toBe('my-own-merge.gguf')
+    expect(modelNameForFile('')).toBeNull()
+  })
+})
+
+describe('formatParams', () => {
+  it('reads a sub-billion model in millions and larger ones in billions', () => {
+    expect(formatParams(0.082)).toBe('82M')
+    expect(formatParams(7)).toBe('7B')
+    expect(formatParams(1.5)).toBe('1.5B')
   })
 })

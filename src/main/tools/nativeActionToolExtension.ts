@@ -33,6 +33,11 @@ import { getWebUseSettings } from '../web-use-settings'
 import { getBrowserLinks } from '../extension-bridge/bridge-electron'
 import { actionArgsWithTaskLaunch } from '../tasks/task-launch-identity'
 import { actionArgsWithStartTab } from '../browser/browser-start-tab'
+import {
+  TASK_GOAL_PREREQUISITES_LABEL,
+  TASK_GOAL_REQUEST_LABEL,
+  TASK_GOAL_SUMMARY_LABEL
+} from '../../shared/task-display-title'
 
 /** The engine port the extension needs - implemented by the actions runtime,
  *  faked in tests. Optional: absent means the legacy path only. */
@@ -61,12 +66,12 @@ function taskGoalWithConversation(goal: unknown, context: ToolContext | undefine
   const currentRequest = context?.userQuery?.trim() ?? ''
   const completedPrerequisites = context?.completedPrerequisites?.filter(Boolean) ?? []
   const sections = [
-    currentRequest ? `Current user request (authoritative):\n${currentRequest}` : '',
+    currentRequest ? `${TASK_GOAL_REQUEST_LABEL}\n${currentRequest}` : '',
     completedPrerequisites.length
-      ? `Completed prerequisites (already done; continue from this state):\n${completedPrerequisites.map((item) => `- ${item}`).join('\n')}`
+      ? `${TASK_GOAL_PREREQUISITES_LABEL}\n${completedPrerequisites.map((item) => `- ${item}`).join('\n')}`
       : '',
     summary && summary.toLowerCase() !== 'placeholder' && summary !== currentRequest
-      ? `Structured task summary:\n${summary}`
+      ? `${TASK_GOAL_SUMMARY_LABEL}\n${summary}`
       : ''
   ].filter(Boolean)
   return sections.join('\n\n') || summary

@@ -3969,7 +3969,8 @@ export function MemoryChat({
                                   incomingFiles: incomingFilesFor(message.id),
                                   // God shows the answer and its actions, not how it was made.
                                   showGenerationDetails: god ? false : showGenerationDetails,
-                                  showToolsSent: !god,
+                                  // The tool list is request detail, shown with the other generation details.
+                                  showToolsSent: !god && showGenerationDetails,
                                   regenerationDisabled:
                                     !!activeConversationId && generatingConvs.has(activeConversationId)
                                 }}

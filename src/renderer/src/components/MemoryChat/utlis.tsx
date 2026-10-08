@@ -123,6 +123,11 @@ export function selectedMessageContent(message: ChatMessage): string {
   return message.variants[message.variantIndex] ?? message.content
 }
 
+/** The reply's prose once its artifact code moved into the artifact card. */
+export function withoutArtifactFences(content: string): string {
+  return content.replace(ARTIFACT_FENCE, '').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 export function renderedMessageContent(message: ChatMessage): string {
   const selected = selectedMessageContent(message)
   if (message.role !== 'assistant') return preprocessChatMarkdown(selected)

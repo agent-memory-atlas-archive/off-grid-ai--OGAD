@@ -205,11 +205,15 @@ button:disabled,
   outline: none;
 }
 
-code {
+/* The inline-code box is for code in running text. Inside a code block it would box every line. */
+:not(pre) > code {
   font-weight: 600;
   padding: 3px 5px;
   border-radius: 2px;
   background-color: var(--color-background-mute);
+}
+
+code {
   font-family:
     ui-monospace,
     SFMono-Regular,

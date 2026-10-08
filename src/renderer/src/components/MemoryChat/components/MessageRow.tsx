@@ -466,8 +466,8 @@ function MessageBubble({
           onCancel={actions.cancelEdit}
           onSave={actions.saveEdit}
         />
-      ) : artifact ? null : (
-        <MessageMarkdown message={message} navigation={navigation} />
+      ) : (
+        <MessageMarkdown message={message} navigation={navigation} withoutArtifact={!!artifact} />
       )}
       <ResponseCutoffNotice cutoff={message.cutoff} />
       {message.imageMemoryRetry ? (

@@ -644,7 +644,7 @@ export function SettingsPanel({
                 label="Generation details"
                 controlId="generation-details-toggle"
                 value={showGenerationDetails ? 'Shown' : 'Hidden'}
-                hint="Show context use, speed, token count, and time under each answer."
+                hint="Show context use, speed, token count, time, and the tools sent with the request under each answer."
               >
                 <button
                   id="generation-details-toggle"

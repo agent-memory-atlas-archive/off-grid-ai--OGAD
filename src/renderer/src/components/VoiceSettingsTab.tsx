@@ -31,6 +31,8 @@ import { projectProgress } from '@offgrid/ui'
 import { formatStorageBytes } from './setup/storage-format'
 
 type AssetsState = 'loading' | 'checking' | 'downloading' | 'ready' | 'error'
+/** A download that reports nothing for this long has stopped; offer Retry instead of waiting. */
+const VOICE_DOWNLOAD_STALL_MS = 30_000
 type TestState = 'idle' | 'generating' | 'playing' | 'error'
 interface VoiceAssetProgress {
   percentage: number | null
@@ -166,6 +168,17 @@ export function VoiceSettingsTab(): React.JSX.Element {
         if (requestedVoiceRef.current === voice) setAssetsState('error')
       })
   }, [remoteVoice, settingsLoaded, voice, voices])
+
+  // Every progress report restarts the clock, so only a download that has gone quiet times out,
+  // for example one that sits at 100% with 0 MB of 0 MB.
+  useEffect(() => {
+    if (assetsState !== 'downloading') return
+    const timer = window.setTimeout(() => {
+      setVoiceLoadError('The voice download stopped. Retry to download it again.')
+      setAssetsState('error')
+    }, VOICE_DOWNLOAD_STALL_MS)
+    return () => window.clearTimeout(timer)
+  }, [assetsState, progress])
 
   useEffect(() => {
     if (!settingsLoaded || !voices.length || voices.some(({ id }) => id === voice)) return
@@ -441,7 +454,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
             <LoadingDots />
             Downloading {runtimeVoiceLanguage({ id: voice })?.label ?? language} audio
             {assetProgress.determinate ? ` - ${Math.round(assetProgress.percentage ?? 0)}%` : '...'}
-            {assetProgress.totalBytes !== undefined
+            {assetProgress.totalBytes
               ? ` · ${formatStorageBytes(assetProgress.currentBytes)} / ${formatStorageBytes(assetProgress.totalBytes)}`
               : ''}
             {assetProgress.bytesPerSecond !== undefined

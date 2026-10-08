@@ -378,7 +378,9 @@ function AppContent(): React.JSX.Element {
   const navigateTo = useCallback((destination: ViewMode, prepare?: () => void): void => {
     setNavigationSubroute(null)
     prepare?.()
-    commitViewMode(destination)
+    // God's screen is the explore view. Any route that names it "god" lands on the same screen
+    // and the same entitlement check as the sidebar, never on a generic upgrade page.
+    commitViewMode((destination as string) === 'god' ? 'explore' : destination)
   }, [])
   // God (Pro) mounts through slots: its screen, an always-on root, and its nav item's dot.
   const GodScreen = proReady && isPro ? getSlot(SLOTS.godScreen) : undefined
@@ -493,6 +495,7 @@ function AppContent(): React.JSX.Element {
     const viewMap: Record<string, ViewMode> = {
       '/': 'day',
       '/explore': 'explore',
+      '/god': 'explore',
       '/day': 'day',
       '/replay': 'replay',
       '/reflect': 'reflect',

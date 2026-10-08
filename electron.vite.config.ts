@@ -28,6 +28,10 @@ const proRenderer = proExists ? resolve('pro/renderer/index.tsx') : stub
 // Baked into every bundle so runtime code can tell a pro build from a free build
 // without relying on an env var default (which can't distinguish "unset" from "pro").
 const proDefine = { __OFFGRID_PRO__: JSON.stringify(proExists) }
+// The app's own version. An unpackaged launch that points Electron at a script rather than this
+// package (the e2e capture fixtures) gets Electron's version from app.getVersion().
+const appVersion = (JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as { version: string })
+  .version
 // App registrations for Connect with Off Grid AI (scripts/oauth-build-config.mjs). Only a Desktop
 // Google registration is accepted: a Web application's confidential secret must not enter an
 // installed app. A release build (OFFGRID_REQUIRE_OAUTH=1) fails rather than ship without them.
@@ -58,6 +62,7 @@ export default defineConfig({
   main: {
     define: {
       ...proDefine,
+      __OFFGRID_APP_VERSION__: JSON.stringify(appVersion),
       __OFFGRID_MICROSOFT_CLIENT_ID__: JSON.stringify(microsoftClientId),
       __OFFGRID_GOOGLE_CLIENT_ID__: JSON.stringify(googleClientId),
       __OFFGRID_GOOGLE_CLIENT_SECRET__: JSON.stringify(googleClientSecret)

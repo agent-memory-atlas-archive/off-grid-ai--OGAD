@@ -241,6 +241,24 @@ describe('<App/> locked Pro navigation integration', () => {
     }
   }, 30_000)
 
+  it('opens God for an entitled user when a route names it "god", as the sidebar does', async () => {
+    installAppBoundary({ isPro: true })
+    registerProView((view: string) => <h1>Paid {view}</h1>)
+    registerSlot(SLOTS.godScreen, () => <h1>Paid God</h1>)
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>
+    )
+    await screen.findByRole('navigation', { name: 'Primary navigation' })
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('og:navigate', { detail: 'god' }))
+    })
+    expect(await screen.findByRole('heading', { name: 'Paid God' })).toBeTruthy()
+    expect(screen.queryByText('Off Grid AI Pro is here')).toBeNull()
+  }, 30_000)
+
   it('does not mark all Pro Settings cards as coming soon on Linux', async () => {
     window.history.replaceState(null, '', '/settings')
     installAppBoundary({ platform: 'linux', isPro: false })

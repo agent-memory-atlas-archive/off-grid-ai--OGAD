@@ -23,9 +23,13 @@ function options(
     installed.includes(m.id) &&
     (slot.role === 'decision' ? isDecisionModel(m) : isGroundingSpecialist(m))
   const list = models.filter(fits).map((m) => ({ value: m.id, label: m.name }))
-  return list.some((o) => o.value === slot.modelId)
-    ? list
-    : [...list, { value: slot.modelId, label: slot.modelName }]
+  if (list.some((o) => o.value === slot.modelId)) return list
+  // A role can still point at a model that is no longer on this device; say so.
+  const missing = !slot.remote && !installed.includes(slot.modelId)
+  return [
+    ...list,
+    { value: slot.modelId, label: missing ? `${slot.modelName} (not downloaded)` : slot.modelName }
+  ]
 }
 
 export function TaskLineups(props: {
