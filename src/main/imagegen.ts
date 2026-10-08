@@ -546,7 +546,8 @@ export function cancelImageGen(): boolean {
  */
 export async function generateImage(
   params: ImageGenParams,
-  onUpdate?: (update: ImageGenerationPipelineUpdateContract) => void
+  onUpdate?: (update: ImageGenerationPipelineUpdateContract) => void,
+  signal?: AbortSignal
 ): Promise<ImageGenOutput> {
   return recordAIRequest(
     {
@@ -557,6 +558,7 @@ export async function generateImage(
       isCancelled: (error) => error instanceof Error && error.message === IMAGE_CANCELLED_MESSAGE
     },
     async (log) => {
+      if (signal?.aborted) throw new Error(IMAGE_CANCELLED_MESSAGE)
       // Prompt enhancement runs FIRST, while the chat model is still resident — the
       // image job below evicts the LLM, so the text pass must precede it. Gated by a
       // setting; failure/timeout silently keeps the original prompt.
@@ -566,6 +568,7 @@ export async function generateImage(
         params.enhancePrompt,
         params.initImage ? [params.initImage] : []
       )
+      if (signal?.aborted) throw new Error(IMAGE_CANCELLED_MESSAGE)
       const remote = getActiveRemoteVisionServerForModality('image')
       const remoteId = remote ? remoteVisionModelId(remote.id, remote.selectedModel) : null
       if (
@@ -580,6 +583,8 @@ export async function generateImage(
         if (remoteAbort)
           throw new Error('An image is already generating — please wait for it to finish.')
         const controller = new AbortController()
+        const abort = (): void => controller.abort()
+        signal?.addEventListener('abort', abort, { once: true })
         remoteAbort = controller
         onUpdate?.({ stage: 'preparing', enhancedPrompt: enhanced })
         try {
@@ -591,6 +596,7 @@ export async function generateImage(
             params.allowUnsafeMemoryOverride === true,
             controller.signal
           )
+          if (signal?.aborted) throw new Error(IMAGE_CANCELLED_MESSAGE)
           const extension =
             result.mime === 'image/jpeg' ? 'jpg' : result.mime === 'image/webp' ? 'webp' : 'png'
           const directory = path.join(dataDir(), 'generated-images')
@@ -612,6 +618,7 @@ export async function generateImage(
             computeBackend: 'Remote'
           }
         } finally {
+          signal?.removeEventListener('abort', abort)
           remoteAbort = null
         }
       }
@@ -644,7 +651,7 @@ export async function generateImage(
       // The queue evicts 'llm' before this runs AND re-warms it (mode-aware) when the
       // job finishes — so the image path no longer touches llm.pause/resume itself.
       const output = await modalityQueue.run(IMAGE_JOB, () =>
-        runImageGen(effective, progressObserver)
+        runImageGen(effective, progressObserver, signal)
       )
       return {
         ...output,
@@ -702,12 +709,19 @@ async function maybeEnhancePrompt(
 
 async function runImageGen(
   params: ImageGenParams,
-  onProgress?: (p: ImageGenProgress & { preview?: string }) => void
+  onProgress?: (p: ImageGenProgress & { preview?: string }) => void,
+  signal?: AbortSignal
 ): Promise<NativeImageGenOutput> {
+  if (signal?.aborted) throw new Error(IMAGE_CANCELLED_MESSAGE)
   if (generationLifecycle.isRunning()) {
     throw new Error('An image is already generating — please wait for it to finish.')
   }
   if (!params.prompt.trim()) throw new Error('A prompt is required.')
+  const cancelRuntime = (): void => {
+    cancelMflux()
+    void sdServer.cancelCurrent()
+    currentChild?.kill('SIGKILL')
+  }
 
   // --- MLX / mflux runtime branch (FLUX / Z-Image with native LoRA) ----------
   // Self-contained: reuses the single-flight guard; the LLM is already evicted by the
@@ -723,7 +737,7 @@ async function runImageGen(
     const outDir = path.join(dataDir(), 'generated-images')
     fs.mkdirSync(outDir, { recursive: true })
     const outPath = path.join(outDir, `img-${String(Date.now())}.png`)
-    generationLifecycle.start()
+    generationLifecycle.start(signal, cancelRuntime)
     // Give the OS a moment to reclaim the freed LLM pages before the image load spike.
     try {
       await generationLifecycle.waitForMemoryReclaim()
@@ -896,7 +910,7 @@ async function runImageGen(
     const { defaultSize, defaultSteps, defaultCfg, sampler, scheduler } =
       standardModelDefaults(base)
     const taesd = params.fastVae ? resolveTaesd(base) : undefined
-    generationLifecycle.start()
+    generationLifecycle.start(signal, cancelRuntime)
     try {
       await sdServer.ensureUp({
         modelPath: model,
@@ -1092,7 +1106,7 @@ async function runImageGen(
     args.push('--lora-model-dir', loraDir())
   }
 
-  generationLifecycle.start()
+  generationLifecycle.start(signal, cancelRuntime)
   // CRITICAL on Apple Silicon (unified memory): the LLM (gemma) and the image
   // model can't both be resident — together they overflow RAM and the whole
   // system swaps/hangs. The ModalityQueue has already evicted the LLM (evicts:

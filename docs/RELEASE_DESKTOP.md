@@ -13,6 +13,9 @@ Scope: [OGAD #176](https://github.com/off-grid-ai/OGAD/pull/176),
 [Shared #46](https://github.com/off-grid-ai/shared/pull/46).
 Other open PRs are outside this preparation scope.
 
+Support contact: `support@getoffgridai.co`. Author and package-maintainer metadata
+are separate from the support address.
+
 Merge Shared #46 first, then Desktop Pro #90, then OGAD #176. Pro uses the new lazy
 sync payload option from Shared. Release builds from `main` use Shared `main`.
 OGAD pins Pro commit `86a14b9528781120b3762497a3404ee3f44d035e`; Shared #46 is at
@@ -27,6 +30,13 @@ Current release gates:
   It verifies a real TCP connection to that port after paid features close.
   All four service activation tests pass against a temporary SQLite profile.
 - All eleven guide tests pass, including a regression for nested markup removal.
+- Four image gateway journeys pass using real HTTP, SQLite, and a synthetic native
+  runtime. Image requests support `DELETE /v1/requests/{request_id}`. Cancelling a
+  queued request does not stop another running request. Mobile Stop must use this
+  endpoint, so record the paired Mobile and Desktop source commits together.
+- Synchronous image work stops on HTTP disconnect, which matches the browser's
+  existing Stop behavior. Desktop detaches CDP before releasing a browser tab and
+  waits for detach during task cleanup. Retained result tabs keep their chat mapping.
 - CodeQL alert 25 flags incomplete element removal in `parsePageBody`. The local
   fix repeats removal until the content stops changing. CodeQL must confirm closure
   after the fix is pushed; local lint does not prove that the alert is closed.

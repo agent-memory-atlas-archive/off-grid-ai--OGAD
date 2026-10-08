@@ -215,15 +215,18 @@ export function createExtensionPageProvider(link: BrowserLink): ElectronPlaywrig
     pages: () => [...pages.values()].filter((p) => !p.isDestroyed()).map(asPage),
     create: async (url) => asPage(await open(url)),
     close: async (id) => {
-      pages.delete(id)
+      const page = pages.get(id)
+      if (!page) return
+      await link.request('cdp.detach', { tabId: id })
       await link.request('tab.close', { tabId: id })
+      page.destroy()
     },
     open,
     adopt,
     active: () => [...pages.values()].filter((p) => !p.isDestroyed()).at(-1),
     async closeAll() {
       for (const p of [...pages.values()]) {
-        p.debugger.detach()
+        await link.request('cdp.detach', { tabId: p.tabId }).catch(() => undefined)
         p.destroy()
       }
       pages.clear()

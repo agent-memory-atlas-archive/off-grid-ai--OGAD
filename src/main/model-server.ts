@@ -64,6 +64,7 @@ import { tagLlmEntries, modelEntry, ollamaMirror } from './model-server/models-l
 import { buildGatewayModalities, type GatewayModalities } from './model-server/health'
 import { safeProxyResponse } from './model-server/proxy-response'
 import { writeDiagnosticLog } from './diagnostics-log'
+import { IMAGE_CANCELLED_MESSAGE } from './imagegen/generation-lifecycle'
 import { parseRemoteVisionModelId, remoteVisionModelId } from '../shared/remote-vision-server'
 import {
   getActiveRemoteVisionServer,
@@ -134,6 +135,7 @@ interface ApiRequest {
   result?: unknown
   error?: { message: string; type: string }
   progress?: { step: number; total: number }
+  controller?: AbortController
 }
 
 const requests = new Map<string, ApiRequest>()
@@ -146,6 +148,7 @@ function createRequest(id: string, kind: string, collection: string): ApiRequest
   }
   const now = Date.now()
   const r: ApiRequest = { id, kind, collection, status: 'queued', created_at: now, updated_at: now }
+  if (kind === 'image') r.controller = new AbortController()
   requests.set(id, r)
   return r
 }
@@ -156,6 +159,7 @@ function settle<T>(r: ApiRequest, work: Promise<T>): Promise<T> {
   r.updated_at = Date.now()
   return work.then(
     (result) => {
+      if (r.controller?.signal.aborted) throw new Error(IMAGE_CANCELLED_MESSAGE)
       r.status = 'completed'
       r.result = result
       r.updated_at = Date.now()
@@ -164,11 +168,28 @@ function settle<T>(r: ApiRequest, work: Promise<T>): Promise<T> {
     (e) => {
       const { type, message } = errMeta(e)
       r.status = 'failed'
-      r.error = { message, type }
+      r.error = r.controller?.signal.aborted
+        ? { message: IMAGE_CANCELLED_MESSAGE, type: 'cancelled' }
+        : { message, type }
       r.updated_at = Date.now()
       throw e
     }
   )
+}
+
+/** Cancel only the named image request. Completed and previously cancelled requests are safe to repeat. */
+function handleCancel(res: http.ServerResponse, id: string): void {
+  const r = requests.get(id)
+  if (!r) return json(res, 404, errBody(`No request with id '${id}'.`, 'not_found'))
+  if (!r.controller)
+    return json(res, 409, errBody('This request cannot be cancelled.', 'not_cancellable'))
+  if (r.status === 'queued' || r.status === 'running') {
+    r.status = 'failed'
+    r.error = { message: IMAGE_CANCELLED_MESSAGE, type: 'cancelled' }
+    r.updated_at = Date.now()
+    r.controller.abort()
+  }
+  json(res, 200, { request_id: r.id, status: r.status, cancelled: r.error?.type === 'cancelled' })
 }
 
 /** 202 Accepted with the request resource + Location for polling. */
@@ -499,21 +520,27 @@ async function serve(
   kind: string,
   collection: string,
   asyncFlag: boolean,
-  run: () => Promise<unknown>,
+  run: (signal?: AbortSignal) => Promise<unknown>,
   syncRespond: (result: unknown) => void
 ): Promise<void> {
   const r = createRequest(rid, kind, collection)
   if (asyncFlag) {
-    settle(r, run()).catch(() => {}) // errors captured on the request resource
+    settle(r, run(r.controller?.signal)).catch(() => {}) // errors captured on the request resource
     dispatchAsync(res, r)
     return
   }
+  const cancelDisconnectedImage = (): void => {
+    if (!res.writableEnded) r.controller?.abort()
+  }
+  if (r.controller) res.once('close', cancelDisconnectedImage)
   try {
-    const result = await settle(r, run())
+    const result = await settle(r, run(r.controller?.signal))
     syncRespond(result)
   } catch (e) {
     const { status, type, message } = errMeta(e)
     json(res, status, errBody(message, type))
+  } finally {
+    res.off('close', cancelDisconnectedImage)
   }
 }
 
@@ -957,7 +984,8 @@ async function executeImage(
   params: ImageGenParams,
   responseFormat: string,
   cleanup?: () => void,
-  onProgress?: (progress: { step: number; total: number }) => void
+  onProgress?: (progress: { step: number; total: number }) => void,
+  signal?: AbortSignal
 ): Promise<unknown> {
   try {
     const status = imageGenStatus()
@@ -968,11 +996,15 @@ async function executeImage(
       err.status = 501
       throw err
     }
-    const out = await generateImage(params, (update) => {
-      if (update.stage === 'generating' && update.progress) {
-        onProgress?.({ step: update.progress.step, total: update.progress.total })
-      }
-    })
+    const out = await generateImage(
+      params,
+      (update) => {
+        if (update.stage === 'generating' && update.progress) {
+          onProgress?.({ step: update.progress.step, total: update.progress.total })
+        }
+      },
+      signal
+    )
     const b64 = out.dataUrl.slice(out.dataUrl.indexOf(',') + 1)
     const datum =
       responseFormat === 'url'
@@ -1030,14 +1062,20 @@ async function handleImageGeneration(
     'image',
     '/v1/images/generations',
     isAsync(req, payload),
-    () =>
-      executeImage(params, fmt, undefined, (progress) => {
-        const request = requests.get(rid)
-        if (request) {
-          request.progress = progress
-          request.updated_at = Date.now()
-        }
-      }),
+    (signal) =>
+      executeImage(
+        params,
+        fmt,
+        undefined,
+        (progress) => {
+          const request = requests.get(rid)
+          if (request) {
+            request.progress = progress
+            request.updated_at = Date.now()
+          }
+        },
+        signal
+      ),
     (r) => jsonWithId(res, rid, r)
   )
 }
@@ -1111,7 +1149,7 @@ async function handleImagesUnified(
     'image',
     '/v1/images',
     isAsync(req, payload),
-    () => executeImage(params, fmt, cleanup),
+    (signal) => executeImage(params, fmt, cleanup, undefined, signal),
     (r) => jsonWithId(res, rid, r)
   )
 }
@@ -1177,7 +1215,7 @@ async function handleImageEdit(
     'image',
     '/v1/images/edits',
     isAsync(req, undefined, fields),
-    () => executeImage(params, fmt, cleanup),
+    (signal) => executeImage(params, fmt, cleanup, undefined, signal),
     (r) => jsonWithId(res, rid, r)
   )
 }
@@ -1217,7 +1255,7 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
   server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*')
     res.setHeader('Access-Control-Allow-Headers', '*')
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
     res.setHeader('Access-Control-Allow-Private-Network', 'true')
     if (req.method === 'OPTIONS') {
       res.writeHead(204)
@@ -1264,6 +1302,10 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
       const { id, isPollCollection } = matchPollRoute(url)
       if (url.startsWith('/v1/requests/') && id) return handlePoll(res, id)
       if (id && isPollCollection && requests.has(id)) return handlePoll(res, id)
+    }
+    if (method === 'DELETE' && url.startsWith('/v1/requests/')) {
+      const { prefix, id } = matchPollRoute(url)
+      if (prefix === '/v1/requests' && id) return handleCancel(res, id)
     }
 
     if (url === '/' || url === '/health') {
