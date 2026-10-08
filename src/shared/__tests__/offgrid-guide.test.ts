@@ -181,6 +181,11 @@ describe('Off Grid AI guide', () => {
     expect(parsePageBody(html, 20)).toBe('## iOS Setup\nRun...')
   })
 
+  it('removes excluded elements that appear when nested markup is removed', () => {
+    const html = `<article data-pagefind-body><scr<script>nested()</script>ipt>hidden()</script><p>Visible content.</p></article>`
+    expect(parsePageBody(html)).toBe('Visible content.')
+  })
+
   it('reads in full the pages that answer the question, or Mission and Vision without one', () => {
     const pages = parseSiteCards(
       [

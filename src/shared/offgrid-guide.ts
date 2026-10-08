@@ -284,8 +284,14 @@ export const PAGES_READ_IN_FULL = 3
 export function parsePageBody(html: string, maxChars = PAGE_BODY_CHARS): string {
   const body = /<article\b[^>]*data-pagefind-body[^>]*>([\s\S]*?)<\/article>/i.exec(html)?.[1]
   if (!body) return ''
-  const lines = body
-    .replace(/<(script|style|svg|nav|button|form)\b[\s\S]*?<\/\1>/gi, '')
+  // Repeat removal so joining the remaining text cannot create another excluded element.
+  let content = body
+  let previous: string
+  do {
+    previous = content
+    content = content.replace(/<(script|style|svg|nav|button|form)\b[\s\S]*?<\/\1>/gi, '')
+  } while (content !== previous)
+  const lines = content
     // A link keeps where it goes, so an answer can hand over the exact page or download.
     .replace(
       /<a\b[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,

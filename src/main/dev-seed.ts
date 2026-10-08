@@ -255,8 +255,8 @@ export async function seedDemo(live = false): Promise<void> {
     const screenshotPath = taskScreenshotPath(taskId, '4')
     fs.copyFileSync(frame, screenshotPath)
     const metadata = await sharp(frame).metadata()
-    const width = metadata.width ?? 1
-    const height = metadata.height ?? 1
+    const width = metadata.width
+    const height = metadata.height
     const phases = [
       'Open Reminders',
       'Create the rollout reminder',
