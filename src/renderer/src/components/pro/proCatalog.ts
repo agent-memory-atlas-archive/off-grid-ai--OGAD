@@ -25,7 +25,7 @@ import { PRO_PURCHASE_URL } from '@offgrid/core/shared/product-links'
 // pro/ submodule is present and activated, the real screens (registered via
 // screenRegistry/navRegistry) take over these same routes.
 
-/** Buy Pro — live now, $49/year or $69 once, one license across up to 5 devices. */
+/** Buy Pro — live now, $119 once or $7.99/month, one license across up to 5 devices. */
 export const PRO_PAY_URL = PRO_PURCHASE_URL
 
 export interface ProFeature {
