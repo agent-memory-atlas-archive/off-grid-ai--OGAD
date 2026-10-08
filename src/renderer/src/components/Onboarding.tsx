@@ -350,7 +350,7 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
                 transition={{ delay: 1 }}
                 className="mt-8 text-center text-xs text-neutral-600"
               >
-                Pro is live now. $69 once or $4.99/month - one license across up to 5 devices.
+                Pro is live now. $119 once or $7.99/month - one license across up to 5 devices.
               </motion.p>
             </div>
           </motion.div>
