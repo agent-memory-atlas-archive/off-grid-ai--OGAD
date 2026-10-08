@@ -84,8 +84,14 @@ function makeLink(
     socket.close(1008, 'invalid frame')
     closed()
   }
+  // Frames are opened one at a time, in the order they arrived: decryption is asynchronous, and a
+  // reply must not overtake the event the browser sent before it.
+  let inbound: Promise<unknown> = Promise.resolve()
   const receive = (data: unknown): void => {
-    void channel.open(text(data)).then((raw) => {
+    inbound = inbound.then(() => handle(data)).catch(() => drop())
+  }
+  const handle = (data: unknown): Promise<void> =>
+    channel.open(text(data)).then((raw) => {
       const message = raw === null ? null : parseUpstream(raw)
       if (!message) return drop()
       if ('event' in message) {
@@ -97,7 +103,6 @@ function makeLink(
       if (message.ok) waiter?.resolve(message.result)
       else waiter?.reject(new Error(message.error))
     })
-  }
 
   const link: BrowserLink = {
     browser,
