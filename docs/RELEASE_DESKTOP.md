@@ -37,15 +37,23 @@ Current release gates:
 - Synchronous image work stops on HTTP disconnect, which matches the browser's
   existing Stop behavior. Desktop detaches CDP before releasing a browser tab and
   waits for detach during task cleanup. Retained result tabs keep their chat mapping.
-- CodeQL alert 25 flags incomplete element removal in `parsePageBody`. The local
-  fix repeats removal until the content stops changing. CodeQL must confirm closure
-  after the fix is pushed; local lint does not prove that the alert is closed.
-- The existing CI E2E step was skipped after the DB failure. It is not evidence of
-  a passing UI run. Wait for the new CI results before approving the release.
+- CodeQL alert 25 is closed after the iterative element-removal fix. SonarCloud
+  passes on cancellation source `f315a6ea1`. Check the final dependency-patch source
+  again before release.
+- CI run `37774358922` passes fast coverage, real SQLite DB journeys, and both
+  native recording jobs. Heavy integration and UI checks are still running.
+- Compatible dependency patches include `tar` 7.5.22, `proxy-addr` 2.0.8,
+  Electron 39.8.10, the MCP SDK, image libraries, and build tools. Two local native
+  archive install checks, a real HTTP proxy-address check, and native PNG
+  encode/decode pass. The built app starts with a fresh synthetic profile.
+- The candidate production audit has zero critical, three high, and fourteen
+  moderate findings. The remaining high paths include Electron, `extract-zip`,
+  and `@xmldom/xmldom`. Major-version or forced downgrade fixes need compatibility
+  evidence. These findings remain open; a green CI result does not resolve them.
 - `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` secret names are present in OGAD.
   Their values and provider consent remain unverified in the release artifact.
 
-After manual verification and approved checks pass, use **Build and Release** on
+After manual verification and required checks pass, use **Build and Release** on
 the selected source with `channel=beta`, empty `pro_ref`, and `artifact_only=true`
 for a signed macOS candidate without publishing or sending the Slack announcement.
 Verify the installed candidate with a fresh synthetic profile. Check launch, chat,

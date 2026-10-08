@@ -61,7 +61,8 @@
     "kokoro-js": {
       "@huggingface/transformers": "$@huggingface/transformers"
     },
-    "sharp": "^0.35.2"
+    "sharp": "^0.35.2",
+    "tar": "^7.5.22"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
