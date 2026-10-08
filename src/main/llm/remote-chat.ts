@@ -252,6 +252,15 @@ function completionRequestBody(
     request.reasoningBudget ?? REASONING_BUDGET_AUTO,
     capability
   )
+  // Alibaba rejects forced tool choice while Qwen is thinking. Keep reasoning and let the
+  // model select a tool; the visual policy caller still validates exactly one transition.
+  const toolChoice =
+    remote.provider === 'openrouter' &&
+    remote.model.startsWith('qwen/') &&
+    request.thinking === true &&
+    request.toolChoice === 'required'
+      ? 'auto'
+      : (request.toolChoice ?? 'auto')
   return JSON.stringify({
     model: remote.model,
     messages: request.messages,
@@ -266,7 +275,7 @@ function completionRequestBody(
       : { repeat_penalty: request.repeatPenalty, repetition_penalty: request.repeatPenalty }),
     ...(request.responseFormat ? { response_format: request.responseFormat } : {}),
     ...(request.tools?.length
-      ? { tools: request.tools, tool_choice: request.toolChoice ?? 'auto' }
+      ? { tools: request.tools, tool_choice: toolChoice }
       : {}),
     ...reasoning,
     stream: true
