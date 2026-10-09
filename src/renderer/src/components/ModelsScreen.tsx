@@ -328,6 +328,8 @@ export function ModelsScreen({
         supportsVision: boolean
         projectorInstalled: boolean
         supportsDflash?: boolean
+        supportsMtp?: boolean
+        mtpInstalled?: boolean
         dflashInstalled?: boolean
       }
     >
@@ -756,6 +758,7 @@ export function ModelsScreen({
     const vs = visionSt[m.id]
     const projectorMissing = isInstalled && !!vs?.supportsVision && !vs.projectorInstalled
     const dflashMissing = isInstalled && !!vs?.supportsDflash && !vs.dflashInstalled
+    const mtpMissing = isInstalled && !!vs?.supportsMtp && !vs.mtpInstalled
     const bytes = totalBytes(m)
     const size = formatSize(bytes) || null
     const meta = [m.org, m.params ? formatParams(m.params) : null, size, fmtReleaseDate(m.releaseDate)]
@@ -1015,7 +1018,7 @@ export function ModelsScreen({
 
         {/* Vision-capable but projector not downloaded — offer to add it. Hidden while a
             download is in flight (the progress UI covers that). */}
-        {!comingSoon && projectorMissing && !dflashMissing && !downloading && (
+        {!comingSoon && projectorMissing && !dflashMissing && !mtpMissing && !downloading && (
           <button
             onClick={() => download(m.id)}
             title="Download the vision projector so this model can read images"
@@ -1024,10 +1027,14 @@ export function ModelsScreen({
             <IconEye className="h-3 w-3" /> Add vision support
           </button>
         )}
-        {!comingSoon && dflashMissing && !downloading && (
+        {!comingSoon && (dflashMissing || mtpMissing) && !downloading && (
           <button
             onClick={() => download(m.id)}
-            title="Download the missing DFlash model for speculative decoding"
+            title={
+              mtpMissing
+                ? 'Download the missing MTP file for speculative decoding'
+                : 'Download the missing DFlash model for speculative decoding'
+            }
             className="flex items-center gap-1 rounded border border-amber-400/50 px-2 py-1 text-[10px] text-amber-300 transition-all duration-150 hover:border-amber-400 hover:bg-amber-400/10 active:scale-95"
           >
             <IconDownload className="h-3 w-3" /> Repair

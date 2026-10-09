@@ -35,7 +35,12 @@ import { detectThinkingDialect, type ThinkingDialect } from './llm/thinking-dial
 import { isValidGgufFile } from './models/gguf'
 import { CATALOG, isGrounderModel } from '@offgrid/models'
 import { readGgufContextLength, readGgufMtpSupport } from './models/gguf-metadata'
-import { dflashFileName, primaryFileName, type CatalogEntry } from './models/catalog-logic'
+import {
+  MTP_COMPANIONS,
+  dflashFileName,
+  primaryFileName,
+  type CatalogEntry
+} from './models/catalog-logic'
 import { pickFreePort, isPortFree } from './free-port'
 import { postCompletionOnce } from './llm/http-post'
 import { engineSpawnEnv } from './llm/spawn-env'
@@ -430,7 +435,20 @@ export class LLMService {
   }
 
   private supportsMtp(): boolean {
-    return !!this.modelPath && readGgufMtpSupport(this.modelPath, fs)
+    return (
+      !!this.modelPath &&
+      isValidGgufFile(this.modelPath, fs) &&
+      (readGgufMtpSupport(this.modelPath, fs) || !!this.mtpModelPath())
+    )
+  }
+
+  private mtpModelPath(): string | undefined {
+    // Match only the published base model, never a different size or fine-tune.
+    const selected = path.basename(this.modelPath)
+    if (!/^Qwen3\.8-27B-(?:UD-)?(?:Q|IQ)[A-Z0-9_]+\.gguf$/i.test(selected)) return undefined
+    const companion = MTP_COMPANIONS['unsloth/Qwen3.8-27B-GGUF']
+    const candidate = path.join(getModelsDir(), companion.name)
+    return readGgufMtpSupport(candidate, fs, undefined, companion.sizeBytes) ? candidate : undefined
   }
 
   private speculativeModelCapabilities(): {
@@ -545,7 +563,9 @@ export class LLMService {
 
   /** Build argv for the selected context and a GPU-layer count. */
   private launchArgsFor(effectiveCtxSize: number, gpuLayers: number): string[] {
-    const useSelectedModelSpeculation = this.runtimeModelOverride === null
+    const useSelectedModelSpeculation =
+      this.runtimeModelOverride === null &&
+      this.speculativeModeSupported(this.speculativeDecoding, this.draftModel)
     return buildLaunchArgs({
       modelPath: this.modelPath,
       mmProjPath: this.mmProjPath,
@@ -564,6 +584,9 @@ export class LLMService {
   }
 
   private draftModelPath(): string | undefined {
+    if (this.speculativeDecoding === 'mtp') {
+      return this.mtpModelPath()
+    }
     if (!this.speculativeModeSupported(this.speculativeDecoding, this.draftModel)) return undefined
     if (!this.draftModel || path.basename(this.draftModel) !== this.draftModel) return undefined
     const candidate = path.join(getModelsDir(), this.draftModel)
@@ -875,6 +898,7 @@ export class LLMService {
 
   /** Load a Computer Use specialist without changing the saved Text model. */
   useRuntimeModel(model: { id: string; primary: string; mmproj: string | null }): void {
+    this.ensureLoaded()
     this.runtimeModelOverride = { ...model }
     this.reloadModel()
   }

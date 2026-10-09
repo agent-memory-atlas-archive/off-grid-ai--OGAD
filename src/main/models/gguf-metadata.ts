@@ -245,10 +245,12 @@ export function readGgufContextLength(
 export function readGgufMtpSupport(
   p: string,
   fs: GgufFs,
-  maxBytes = GGUF_METADATA_PREFIX_BYTES
+  maxBytes = GGUF_METADATA_PREFIX_BYTES,
+  expectedSize?: number
 ): boolean {
   try {
     const size = fs.statSync(p).size
+    if (expectedSize !== undefined && size !== expectedSize) return false
     const toRead = Math.min(size, maxBytes)
     if (toRead <= 0) return false
     const fd = fs.openSync(p, 'r')

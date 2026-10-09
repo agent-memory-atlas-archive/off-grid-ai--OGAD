@@ -6,6 +6,7 @@ import fs from 'fs'
 import path from 'path'
 import { llm } from './llm'
 import { isValidGgufFile } from './models/gguf'
+import { readGgufMtpSupport } from './models/gguf-metadata'
 import { pumpToFile } from './models/download-pump'
 import { downloadIntegrityError, sha256IntegrityError } from './models/download-verify'
 import { downloadFailureMessage, isStorageCapacityError } from './models/download-error'
@@ -32,6 +33,7 @@ import {
   type DownloadedModel
 } from './downloaded-models'
 import {
+  MTP_COMPANIONS,
   mergeCatalog,
   installedIds,
   buildDiskEntry,
@@ -319,9 +321,18 @@ export function resolveKevRuntimeArtifact(): KevRuntimeArtifact | null {
 
 export async function desktopCatalog(): Promise<ModelEntry[]> {
   const { CATALOG } = await import('@offgrid/models')
-  const catalog = CATALOG.map((model) =>
-    model.grounder ? { ...model, tags: [...new Set(['Specialist', ...(model.tags ?? [])])] } : model
-  )
+  const catalog = CATALOG.map((model) => {
+    const companion = Object.entries(MTP_COMPANIONS).find(([id]) => id === model.id)?.[1]
+    const files =
+      companion && !model.files.some((file) => file.name === companion.name)
+        ? [...model.files, companion]
+        : model.files
+    return {
+      ...model,
+      files,
+      ...(model.grounder ? { tags: [...new Set(['Specialist', ...(model.tags ?? [])])] } : {})
+    }
+  })
   return [BONSAI_2, DECIDER_2B, DECIDER_2B_VISION, KEV_4B, ...catalog]
 }
 
@@ -493,7 +504,12 @@ export async function resolveModelIdentity(modelId: string): Promise<ModelIdenti
 export async function getVisionStatuses(): Promise<Record<string, VisionStatus>> {
   const CATALOG = await desktopCatalog()
   const dir = llm.getModelsDir()
-  const present = (name: string): boolean => fileSizeOf(dir, name) > 0
+  const present = (name: string): boolean => {
+    const mtp = Object.values(MTP_COMPANIONS).find((file) => file.name === name)
+    return mtp
+      ? readGgufMtpSupport(path.join(dir, name), fs, undefined, mtp.sizeBytes)
+      : fileSizeOf(dir, name) > 0
+  }
   const downloaded = reconcileDownloadedModelRegistry(dir, CATALOG as unknown as CatalogEntry[])
   const merged = mergeCatalog({
     locals: getLocalModels(),
@@ -505,7 +521,7 @@ export async function getVisionStatuses(): Promise<Record<string, VisionStatus>>
   const out: Record<string, VisionStatus> = {}
   for (const m of merged) {
     const st = visionStatus(m, present)
-    if (st.supportsVision || st.supportsDflash) {
+    if (st.supportsVision || st.supportsDflash || st.supportsMtp) {
       out[m.id] = st
     }
   }
@@ -750,7 +766,10 @@ export async function downloadModel(
         // is the set of files this run must actually fetch (a file already on disk is not work),
         // and one percent measures the whole of it.
         const pending = entry.files.filter((file) => {
-          const present = fileSizeOf(dir, file.name) > 0
+          const mtp = Object.values(MTP_COMPANIONS).find((companion) => companion.name === file.name)
+          const present = mtp
+            ? readGgufMtpSupport(path.join(dir, file.name), fs, undefined, mtp.sizeBytes)
+            : fileSizeOf(dir, file.name) > 0
           if (present) {
             writeDiagnosticLog('models.download', 'file.skipped', {
               modelId,

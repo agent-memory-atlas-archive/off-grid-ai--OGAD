@@ -4,8 +4,8 @@
   "desktopName": "off-grid-ai.desktop",
   "version": "0.0.54",
   "offgrid": {
-    "llamaRef": "b11056",
-    "prismLlamaRef": "prism-b10709-9a9394a"
+    "llamaRef": "b11532",
+    "prismLlamaRef": "prism-b10754-2459f68"
   },
   "description": "Off Grid AI — a private, local-first AI that runs open models (text, vision, image, voice) entirely on your device. No cloud, no accounts.",
   "license": "AGPL-3.0-only",

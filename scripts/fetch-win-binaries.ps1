@@ -102,10 +102,10 @@ $PackageJson = Join-Path (Split-Path $PSScriptRoot -Parent) 'package.json'
 $DefaultLlamaRef = (Get-Content $PackageJson -Raw | ConvertFrom-Json).offgrid.llamaRef
 $LlamaRef = if ($env:LLAMA_REF) { $env:LLAMA_REF } else { $DefaultLlamaRef }
 $LlamaHashes = @{
-  cuda = 'cb6e838cad17e9920b99ab8496ca9aa7cdc3d3c218128957179bb1fbe0772c4c'
+  cuda = '520261241eacec1a3cc3b0ba2d9d731f969b7ab37891c80db8acf79559af8655'
   cudart = '8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6'
-  vulkan = 'b7b5ef4a1f47542635a3a5e3e471cbfcbaee057aa0c962f9573329ddd9168c5a'
-  cpu = 'a2668a200ca7271e66af0a54fd4376aaf8ae0b2a562cf7a63c41d8fd2a8245fa'
+  vulkan = '33c3aed08c51abe576f741383796c012fb9cf06af40899ef2f5894d24463f18c'
+  cpu = 'db18cfa250eb692158eaf8fedb1dc5be0a9d280e87144b67465c774b664c5438'
 }
 if ($LlamaRef -ne $DefaultLlamaRef) {
   $overrideHashes = @{
@@ -139,12 +139,12 @@ Copy-Runtime $x 'llama-cpu' | Out-Null
 $PrismLlamaRef = (Get-Content $PackageJson -Raw | ConvertFrom-Json).offgrid.prismLlamaRef
 Write-Host "== Prism llama.cpp (pinned $PrismLlamaRef): CUDA + Vulkan + CPU =="
 if ($IncludeCuda) {
-  $x = Expand-Asset 'PrismML-Eng/llama.cpp' '^llama-.+-bin-win-cuda-12\.4-x64\.zip$' $PrismLlamaRef 'f565c8428c1f108311f65ed97f02425188b3aa3c745c2bc597521bbd24bcbbc9'
+  $x = Expand-Asset 'PrismML-Eng/llama.cpp' '^llama-.+-bin-win-cuda-12\.4-x64\.zip$' $PrismLlamaRef '200842b4c689fe092a8a1684ef1e185d8d025a0bfae6908737607a0f29560b96'
   Copy-Runtime $x 'llama-prism-cuda' | Out-Null
 }
-$x = Expand-Asset 'PrismML-Eng/llama.cpp' 'bin-win-vulkan-x64\.zip$' $PrismLlamaRef 'fabef609b588cbbed85b5f10b45809c46088f0a63caca7976054034e24b40836'
+$x = Expand-Asset 'PrismML-Eng/llama.cpp' 'bin-win-vulkan-x64\.zip$' $PrismLlamaRef '790c979ca73f8b57c5a89ae782e952d8641e64280df4a11664198245f81e9df7'
 Copy-Runtime $x 'llama-prism' | Out-Null
-$x = Expand-Asset 'PrismML-Eng/llama.cpp' 'bin-win-cpu-x64\.zip$' $PrismLlamaRef '92cd4d1cee11107593ff87d77eb57b02d804c86dd4b13224e18ba963a4271ad8'
+$x = Expand-Asset 'PrismML-Eng/llama.cpp' 'bin-win-cpu-x64\.zip$' $PrismLlamaRef '509f3829371570dfd4a651a3583532515629fc835c4d050f14740df4ac4c7df2'
 Copy-Runtime $x 'llama-prism-cpu' | Out-Null
 
 # --- whisper.cpp (whisper-cli.exe + DLLs): CUDA GPU + CPU fallback -----------

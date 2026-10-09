@@ -840,7 +840,7 @@ export function SettingsPanel({
               <Row
                 label="Speculative decoding"
                 controlId="speculative-decoding"
-                hint="N-gram needs no second model. MTP uses prediction heads in a compatible main model. Draft and DFlash need a compatible installed draft GGUF."
+                hint="N-gram needs no second model. MTP uses prediction heads in the main model or its matching installed MTP file. Draft and DFlash need a compatible installed draft GGUF."
               >
                 <SettingsSelect
                   id="speculative-decoding"

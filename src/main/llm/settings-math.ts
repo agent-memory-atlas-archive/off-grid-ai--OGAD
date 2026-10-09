@@ -156,7 +156,10 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
   if (i.speculativeDecoding === 'ngram') {
     args.push('--spec-type', 'ngram-cache')
   } else if (i.speculativeDecoding === 'mtp') {
-    args.push('--spec-type', 'draft-mtp')
+    args.push('--spec-type', 'draft-mtp', '--spec-draft-n-max', '2')
+    if (i.draftModelPath) {
+      args.push('--spec-draft-model', i.draftModelPath, '--spec-draft-ngl', String(i.gpuLayers))
+    }
   } else if (
     i.draftModelPath &&
     (i.speculativeDecoding === 'draft' || i.speculativeDecoding === 'dflash')
