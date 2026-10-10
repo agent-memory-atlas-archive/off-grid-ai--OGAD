@@ -39,6 +39,13 @@ export interface CatalogEntry {
 // Desktop MTP companions use the existing aux-file download contract. Keep the
 // pinned file identity shared by catalog installation and engine launch.
 export const MTP_COMPANIONS = {
+  'bartowski/tencent_UI-Mate-9B-GGUF+MTP': {
+    name: 'Qwen3.5-9B-MTP-ONLY-Q4_K_M.gguf',
+    url: 'https://huggingface.co/a4lg/Qwen3.5-9B-MTP-ONLY-GGUF/resolve/b609b41c40921b0d1912f0d42347e53e28d22731/Qwen3.5-9B-MTP-ONLY-Q4_K_M.gguf',
+    sizeBytes: 1576551712,
+    sha256: '82f356f754e70172f474e70229153bb0fe7137f3a181af5bc5e6fe43d56876fa',
+    role: 'aux' as const
+  },
   'unsloth/Qwen3.8-27B-GGUF': {
     name: 'mtp-Qwen3.8-27B-Q4_0.gguf',
     url: 'https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/MTP/mtp-Qwen3.8-27B-Q4_0.gguf',

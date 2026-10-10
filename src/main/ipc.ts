@@ -1735,7 +1735,7 @@ export function setupIPC(): void {
     import('./models-manager').then((m) => m.searchModels(query, kind))
   )
   ipcMain.handle('models:files', (_, modelId: string) =>
-    import('@offgrid/models').then((m) => m.getModelFiles(modelId))
+    import('./models-manager').then((m) => m.getModelFiles(modelId))
   )
 
   ipcMain.handle('models:download', async (_, modelId: string, fileName?: string) => {

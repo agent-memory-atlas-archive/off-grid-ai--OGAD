@@ -333,7 +333,23 @@ export async function desktopCatalog(): Promise<ModelEntry[]> {
       ...(model.grounder ? { tags: [...new Set(['Specialist', ...(model.tags ?? [])])] } : {})
     }
   })
-  return [BONSAI_2, DECIDER_2B, DECIDER_2B_VISION, KEV_4B, ...catalog]
+  const uiMate = catalog.find((model) => model.id === 'bartowski/tencent_UI-Mate-9B-GGUF')
+  const uiMateMtp = uiMate
+    ? [
+        {
+          ...uiMate,
+          id: `${uiMate.id}+MTP`,
+          name: `${uiMate.name} MTP`,
+          availability: 'coming_soon' as const,
+          availabilityNote:
+            'The separate UI-Mate MTP download is not yet verified. Installed models with built-in MTP heads remain supported.',
+          description:
+            'UI-Mate trained weights with a matching Qwen3.5 9B MTP draft. Includes the main model, vision projector, and prediction weights.',
+          files: [...uiMate.files, MTP_COMPANIONS['bartowski/tencent_UI-Mate-9B-GGUF+MTP']]
+        }
+      ]
+    : []
+  return [BONSAI_2, DECIDER_2B, DECIDER_2B_VISION, KEV_4B, ...catalog, ...uiMateMtp]
 }
 
 export interface DownloadProgress {
@@ -521,6 +537,10 @@ export async function getVisionStatuses(): Promise<Record<string, VisionStatus>>
   const out: Record<string, VisionStatus> = {}
   for (const m of merged) {
     const st = visionStatus(m, present)
+    if (readGgufMtpSupport(path.join(dir, primaryFileName(m) ?? ''), fs)) {
+      st.supportsMtp = true
+      st.mtpInstalled = true
+    }
     if (st.supportsVision || st.supportsDflash || st.supportsMtp) {
       out[m.id] = st
     }
@@ -603,6 +623,14 @@ export async function searchModels(query: string, kind?: string): Promise<unknow
   }
 }
 
+export async function getModelFiles(modelId: string): Promise<import('@offgrid/models').ModelFileVariant[]> {
+  const { getModelFiles: listFiles } = await import('@offgrid/models')
+  const repo = modelId === 'bartowski/tencent_UI-Mate-9B-GGUF+MTP' ? modelId.slice(0, -4) : modelId
+  return (await listFiles(repo)).filter(
+    (file) => !/^(?:mtp[-_.])|[-_.]mtp[-_.]only[-_.]/i.test(file.fileName)
+  )
+}
+
 export function downloadStatus(modelId: string): DownloadProgress | null {
   return lastProgress.get(modelId) ?? null
 }
@@ -643,7 +671,7 @@ export async function downloadModel(
     })
     return publishRefusal(modelId, DOWNLOAD_INTERRUPTED_ERROR, onProgress)
   }
-  const { getModelFiles, resolveHuggingFaceModel } = await import('@offgrid/models')
+  const { resolveHuggingFaceModel } = await import('@offgrid/models')
   const CATALOG = await desktopCatalog()
   const inCatalog = CATALOG.find((m) => m.id === modelId)
   let entry = inCatalog ?? (await resolveHuggingFaceModel(modelId))
@@ -677,6 +705,18 @@ export async function downloadModel(
         ...projectorFiles,
         ...catalogAuxFiles
       ]
+    }
+  }
+  // Full MTP exports often reuse the standard export's filename. Keep their
+  // weights distinct and record the actual local filename in the existing registry.
+  if (entry && /-MTP-GGUF$/i.test(modelId)) {
+    entry = {
+      ...entry,
+      files: entry.files.map((file) =>
+        file.role === 'primary'
+          ? { ...file, name: file.name.replace(/\.gguf$/i, '+MTP.gguf') }
+          : file
+      )
     }
   }
   if (!entry) {
@@ -766,9 +806,15 @@ export async function downloadModel(
         // is the set of files this run must actually fetch (a file already on disk is not work),
         // and one percent measures the whole of it.
         const pending = entry.files.filter((file) => {
-          const mtp = Object.values(MTP_COMPANIONS).find((companion) => companion.name === file.name)
+          const mtp = Object.values(MTP_COMPANIONS).find(
+            (companion) => companion.name === file.name
+          )
+          const nativeUiMate =
+            modelId === 'bartowski/tencent_UI-Mate-9B-GGUF+MTP' &&
+            readGgufMtpSupport(path.join(dir, primaryFileName(entry) ?? ''), fs)
           const present = mtp
-            ? readGgufMtpSupport(path.join(dir, file.name), fs, undefined, mtp.sizeBytes)
+            ? nativeUiMate ||
+              readGgufMtpSupport(path.join(dir, file.name), fs, undefined, mtp.sizeBytes)
             : fileSizeOf(dir, file.name) > 0
           if (present) {
             writeDiagnosticLog('models.download', 'file.skipped', {

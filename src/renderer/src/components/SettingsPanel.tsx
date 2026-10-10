@@ -36,6 +36,7 @@ import { VoiceSettingsTab } from './VoiceSettingsTab'
 import { RemoteVisionSettingsTab } from './RemoteVisionSettingsTab'
 import { SettingsRow as Row } from './SettingsRow'
 import { SettingsSelect } from './SettingsSelect'
+import { NativeSelect } from '@offgrid/operator-ui/operator/forms'
 import { BackendPreferencesSection } from './ProcessingControls'
 import { useReplySound } from '../lib/reply-sound'
 import { SettingsSection } from './SettingsSection'
@@ -105,6 +106,7 @@ type LlmSettings = {
   threads?: number
   batchSize?: number
   speculativeDecoding?: SpeculativeDecodingMode
+  speculativeDraftMax?: number
   draftModel?: string
   supportsMtp?: boolean
   compatibleDraftModels?: string[]
@@ -873,6 +875,25 @@ export function SettingsPanel({
                   ]}
                 />
               </Row>
+              {['mtp', 'draft', 'dflash'].includes(s.speculativeDecoding ?? 'off') && (
+                <Row
+                  label="Draft token limit"
+                  controlId="speculative-draft-max"
+                  hint="Maximum tokens proposed per step. More is not always faster. Auto uses six for Qwen3.5 9B on standard llama.cpp Metal, two for other MTP engines, and the engine default for Draft and DFlash."
+                >
+                  <NativeSelect
+                    id="speculative-draft-max"
+                    aria-label="Draft token limit"
+                    value={s.speculativeDraftMax ?? 0}
+                    onChange={(event) => set({ speculativeDraftMax: Number(event.target.value) })}
+                  >
+                    <option value={0}>Auto</option>
+                    {Array.from({ length: 16 }, (_, index) => index + 1).map((limit) => (
+                      <option key={limit} value={limit}>{limit} tokens</option>
+                    ))}
+                  </NativeSelect>
+                </Row>
+              )}
               {(s.speculativeDecoding === 'draft' || s.speculativeDecoding === 'dflash') && (
                 <Row
                   label="Draft model"

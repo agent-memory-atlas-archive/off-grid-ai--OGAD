@@ -4,13 +4,14 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { LLMService, SpeculativeDecodingMode } from '../../llm'
 import { MTP_COMPANIONS, catalogEntryInstalled, visionStatus } from '../../models/catalog-logic'
+import { readGgufMtpSupport } from '../../models/gguf-metadata'
 
 const companion = MTP_COMPANIONS['unsloth/Qwen3.8-27B-GGUF']
 const primary = 'Qwen3.8-27B-UD-Q4_K_M.gguf'
 
 // A small GGUF metadata fixture on real disk. The sidecar is sparse, so its
 // expected file size is faithful without allocating or reading model weights.
-function gguf(file: string, embeddedMtp: boolean, size = 1024): void {
+function gguf(file: string, embeddedMtp: boolean, size = 1024, metadataPadding = 0): void {
   const u32 = (value: number): Buffer => {
     const buffer = Buffer.alloc(4)
     buffer.writeUInt32LE(value)
@@ -24,6 +25,7 @@ function gguf(file: string, embeddedMtp: boolean, size = 1024): void {
   const str = (value: string): Buffer =>
     Buffer.concat([u64(Buffer.byteLength(value)), Buffer.from(value)])
   const values = [Buffer.concat([str('general.architecture'), u32(8), str('qwen35')])]
+  if (metadataPadding) values.push(Buffer.concat([str('tokenizer.chat_template'), u32(8), str('x'.repeat(metadataPadding))]))
   if (embeddedMtp) values.push(Buffer.concat([str('qwen35.nextn_predict_layers'), u32(4), u32(1)]))
   fs.writeFileSync(
     file,
@@ -95,6 +97,32 @@ describe('MTP installation and persisted launch contract', () => {
     expect(service.getSettings().supportsMtp).toBe(true)
     expect(service.launchArgs()).toContain('draft-mtp')
     expect(service.launchArgs()).not.toContain('--spec-draft-model')
+  })
+
+  it('recognizes prediction heads after large tokenizer metadata', () => {
+    const model = path.join(profile, 'models', 'late-mtp.gguf')
+    gguf(model, true, 5 * 1024 * 1024, 4 * 1024 * 1024)
+    expect(readGgufMtpSupport(model, fs)).toBe(true)
+  })
+
+  it('keeps the user draft token limit after restart and can return to Auto', async () => {
+    const service = await load('Qwen3.5-9B-Q4_K_M.gguf', true)
+    await service.pause()
+    await service.setSettings({ speculativeDraftMax: 6 }, { emitSync: false })
+    const { LLMService } = await import('../../llm')
+    const restarted = new LLMService()
+    expect(restarted.getSettings().speculativeDraftMax).toBe(6)
+    await restarted.pause()
+    await restarted.setSettings({ speculativeDraftMax: 0 }, { emitSync: false })
+    expect(new LLMService().getSettings().speculativeDraftMax).toBe(0)
+  })
+
+  it.each([-1, 17, 2.5, NaN])('rejects an invalid draft token limit (%s)', async (limit) => {
+    const service = await load(primary, true)
+    await service.pause()
+    await expect(service.setSettings({ speculativeDraftMax: limit }, { emitSync: false }))
+      .rejects.toThrow('Draft token limit')
+    expect(service.getSettings().speculativeDraftMax).toBe(0)
   })
 
   it('uses the installed MTP companion even when the target also declares native heads', async () => {

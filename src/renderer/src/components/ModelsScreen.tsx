@@ -1,6 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { isDecisionModel, useTaskRoles } from '../lib/task-roles'
 import { AnimatePresence } from 'motion/react'
+import { Button } from '@offgrid/operator-ui/operator/button'
 import {
   IconDownload,
   IconCircleCheck,
@@ -124,6 +125,17 @@ function Sel({
         </div>
       )}
     </div>
+  )
+}
+
+// Published full-model MTP exports. Do not redirect a fine-tune to its base model.
+const MTP_DOWNLOAD_REPOS: Readonly<Record<string, string>> = {
+  'bartowski/tencent_UI-Mate-9B-GGUF': 'bartowski/tencent_UI-Mate-9B-GGUF+MTP',
+  ...Object.fromEntries(
+    ['0.8B', '2B', '4B', '9B', '27B', '35B-A3B', '122B-A10B', '397B-A17B'].map((size) => [
+      `unsloth/Qwen3.5-${size}-GGUF`,
+      `unsloth/Qwen3.5-${size}-MTP-GGUF`
+    ])
   )
 }
 
@@ -385,6 +397,7 @@ export function ModelsScreen({
   const [detail, setDetail] = useState<ModelEntry | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [mtpDownloads, setMtpDownloads] = useState(false)
   const [hfResults, setHfResults] = useState<
     {
       id: string
@@ -430,6 +443,17 @@ export function ModelsScreen({
       setDetailFilesLoading(false)
       return
     }
+    if (
+      mtpDownloads &&
+      !/-MTP-GGUF$/i.test(detail.id) &&
+      !detail.id.endsWith('+MTP') &&
+      !visionSt[detail.id]?.supportsMtp
+    ) {
+      setDetailFiles([])
+      setDetailFilesError('MTP files are not available for this model.')
+      setDetailFilesLoading(false)
+      return
+    }
     let cancelled = false
     setDetailFiles([])
     setDetailFilesError(null)
@@ -450,7 +474,7 @@ export function ModelsScreen({
     return () => {
       cancelled = true
     }
-  }, [detail])
+  }, [detail, mtpDownloads, visionSt])
 
   const importModel = async (): Promise<void> => {
     if (importing) return
@@ -640,8 +664,11 @@ export function ModelsScreen({
     () =>
       models.filter(
         (model) =>
-          modelSupportsKind(model, activeKind as Parameters<typeof modelSupportsKind>[1]) ||
-          (activeKind === 'text' && modelSupportsKind(model, 'vision'))
+          (!model.id.endsWith('+MTP') &&
+            modelSupportsKind(model, activeKind as Parameters<typeof modelSupportsKind>[1])) ||
+          (activeKind === 'text' &&
+            !model.id.endsWith('+MTP') &&
+            modelSupportsKind(model, 'vision'))
       ),
     [models, activeKind]
   )
@@ -745,7 +772,28 @@ export function ModelsScreen({
     m: ModelEntry & { credibility?: string; params?: number; org?: string },
     isHf = false
   ): React.JSX.Element => {
-    const isInstalled = installed.includes(m.id)
+    const useMtpDownloads = mtpDownloads && ['text', 'vision', 'computer_use'].includes(activeKind)
+    const mtpRepository = MTP_DOWNLOAD_REPOS[m.id]
+    if (useMtpDownloads && !visionSt[m.id]?.mtpInstalled && mtpRepository) {
+      const mtpEntry = models.find((model) => model.id === mtpRepository)
+      m = {
+        ...m,
+        id: mtpRepository,
+        name: `${m.name} MTP`,
+        files: mtpEntry?.files ?? [],
+        availability: mtpEntry?.availability ?? m.availability,
+        availabilityNote: mtpEntry?.availabilityNote ?? m.availabilityNote
+      }
+    }
+    const isInstalled =
+      installed.includes(m.id) &&
+      (!useMtpDownloads || !m.id.endsWith('+MTP') || !!visionSt[m.id]?.mtpInstalled)
+    const mtpUnavailable =
+      useMtpDownloads &&
+      !isInstalled &&
+      !/-MTP-GGUF$/i.test(m.id) &&
+      !m.id.endsWith('+MTP') &&
+      !visionSt[m.id]?.supportsMtp
     const isRemote = Boolean(m.remoteServerId)
     const active = isActive(m.id)
     const prog = progress[m.id]
@@ -761,7 +809,12 @@ export function ModelsScreen({
     const mtpMissing = isInstalled && !!vs?.supportsMtp && !vs.mtpInstalled
     const bytes = totalBytes(m)
     const size = formatSize(bytes) || null
-    const meta = [m.org, m.params ? formatParams(m.params) : null, size, fmtReleaseDate(m.releaseDate)]
+    const meta = [
+      m.org,
+      m.params ? formatParams(m.params) : null,
+      size,
+      fmtReleaseDate(m.releaseDate)
+    ]
       .filter(Boolean)
       .join(' · ')
     const tier: FitTier = isHf ? 'easy' : ramTier(m)
@@ -980,10 +1033,11 @@ export function ModelsScreen({
             </>
           ) : (
             <button
-              onClick={() => (isHf ? void chooseVariant(m) : download(m.id))}
-              className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
+              onClick={() => (isHf || useMtpDownloads ? void chooseVariant(m) : download(m.id))}
+              disabled={mtpUnavailable}
+              className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <IconDownload className="h-3 w-3" /> Download
+              <IconDownload className="h-3 w-3" /> {mtpUnavailable ? 'MTP unavailable' : 'Download'}
             </button>
           )}
           {isInstalled && (
@@ -1152,6 +1206,21 @@ export function ModelsScreen({
                 {searching && <IconLoader2 className="h-3 w-3 animate-spin text-neutral-600" />}
               </div>
             )}
+            {['text', 'vision', 'computer_use'].includes(activeKind) && (
+              <Button
+                size="sm"
+                variant={mtpDownloads ? 'secondary' : 'outline'}
+                aria-pressed={mtpDownloads}
+                onClick={() => {
+                  setMtpDownloads((enabled) => !enabled)
+                  setVariantModel(null)
+                  setDetail(null)
+                }}
+                title="Choose full models with Multi-Token Prediction weights"
+              >
+                MTP downloads: {mtpDownloads ? 'On' : 'Off'}
+              </Button>
+            )}
             <Sel
               value={filterState.source}
               onChange={(v) =>
@@ -1262,20 +1331,30 @@ export function ModelsScreen({
                   </p>
                 )}
                 <div role="list" aria-label="Model search results" className={GRID}>
-                  {displayed.map((r) =>
-                    renderCard(
-                      {
-                        id: r.id,
-                        name: r.name,
-                        kind: activeKind as ModelKind,
-                        org: r.org,
-                        files: [],
-                        params: r.params ?? undefined,
-                        credibility: r.credibility
-                      },
-                      true
+                  {displayed
+                    .filter(
+                      (result, index, results) =>
+                        !mtpDownloads ||
+                        results.findIndex(
+                          (other) =>
+                            (MTP_DOWNLOAD_REPOS[other.id] ?? other.id) ===
+                            (MTP_DOWNLOAD_REPOS[result.id] ?? result.id)
+                        ) === index
                     )
-                  )}
+                    .map((r) =>
+                      renderCard(
+                        {
+                          id: r.id,
+                          name: r.name,
+                          kind: activeKind as ModelKind,
+                          org: r.org,
+                          files: [],
+                          params: r.params ?? undefined,
+                          credibility: r.credibility
+                        },
+                        true
+                      )
+                    )}
                 </div>
               </>
             ) : (
@@ -1532,7 +1611,7 @@ export function ModelsScreen({
                               </div>
                               <button
                                 onClick={() => download(m.id, file.fileName)}
-                                disabled={comingSoon || !!downloading}
+                                disabled={comingSoon || !!downloading || !!detailFilesError}
                                 aria-label={`Download ${file.fileName}`}
                                 className="shrink-0 rounded border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 hover:border-green-500 hover:text-green-500 disabled:cursor-not-allowed disabled:opacity-40"
                               >
@@ -1620,6 +1699,7 @@ export function ModelsScreen({
               <div>
                 <h2 className="text-sm font-medium text-white">Choose a model file</h2>
                 <p className="mt-1 text-[10px] text-neutral-500">{variantModel.name}</p>
+                <p className="mt-1 break-all text-[10px] text-neutral-500">{variantModel.id}</p>
               </div>
               <button
                 onClick={() => setVariantModel(null)}

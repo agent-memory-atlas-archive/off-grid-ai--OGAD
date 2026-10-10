@@ -92,6 +92,7 @@ export interface LlmSettings {
   threads?: number // CPU threads for inference
   batchSize?: number // -b: prompt batch size
   speculativeDecoding?: SpeculativeDecodingMode
+  speculativeDraftMax?: number // 0 = Auto, otherwise 1-16 draft tokens
   draftModel?: string // filename of an installed GGUF in the app's model directory
   supportsMtp?: boolean // read-only capability of the selected GGUF
   compatibleDraftModels?: string[] // read-only filenames with the same tokenizer/vocabulary
@@ -288,6 +289,7 @@ export class LLMService {
   private threads: number | undefined
   private batchSize: number | undefined
   private speculativeDecoding: SpeculativeDecodingMode = 'off'
+  private speculativeDraftMax = 0
   private draftModel = ''
   // Crash recovery: distinguish an intentional kill (stop/reload/settings respawn)
   // from an unexpected crash so we only auto-restart on real crashes.
@@ -373,6 +375,8 @@ export class LLMService {
       )
         this.speculativeDecoding = s.speculativeDecoding
       if (typeof s.draftModel === 'string') this.draftModel = path.basename(s.draftModel)
+      if (Number.isInteger(s.speculativeDraftMax) && s.speculativeDraftMax >= 0 && s.speculativeDraftMax <= 16)
+        this.speculativeDraftMax = s.speculativeDraftMax
       if (
         s.performanceMode === 'conservative' ||
         s.performanceMode === 'balanced' ||
@@ -443,10 +447,13 @@ export class LLMService {
   }
 
   private mtpModelPath(): string | undefined {
-    // Match only the published base model, never a different size or fine-tune.
     const selected = path.basename(this.modelPath)
-    if (!/^Qwen3\.8-27B-(?:UD-)?(?:Q|IQ)[A-Z0-9_]+\.gguf$/i.test(selected)) return undefined
-    const companion = MTP_COMPANIONS['unsloth/Qwen3.8-27B-GGUF']
+    const companion = /^Qwen3\.8-27B-(?:UD-)?(?:Q|IQ)[A-Z0-9_]+\.gguf$/i.test(selected)
+      ? MTP_COMPANIONS['unsloth/Qwen3.8-27B-GGUF']
+      : /^tencent_UI-Mate-9B-(?:Q|IQ)[A-Z0-9_]+(?:\+MTP)?\.gguf$/i.test(selected)
+        ? MTP_COMPANIONS['bartowski/tencent_UI-Mate-9B-GGUF+MTP']
+        : undefined
+    if (!companion) return undefined
     const candidate = path.join(getModelsDir(), companion.name)
     return readGgufMtpSupport(candidate, fs, undefined, companion.sizeBytes) ? candidate : undefined
   }
@@ -537,6 +544,7 @@ export class LLMService {
       threads: this.threads,
       batchSize: this.batchSize,
       speculativeDecoding: this.speculativeDecoding,
+      speculativeDraftMax: this.speculativeDraftMax,
       draftModel: this.draftModel,
       supportsMtp: this.supportsMtp(),
       ...speculativeCapabilities,
@@ -566,6 +574,8 @@ export class LLMService {
     const useSelectedModelSpeculation =
       this.runtimeModelOverride === null &&
       this.speculativeModeSupported(this.speculativeDecoding, this.draftModel)
+    const useRuntimeMtp =
+      this.runtimeModelOverride !== null && this.speculativeDecoding === 'mtp' && this.supportsMtp()
     return buildLaunchArgs({
       modelPath: this.modelPath,
       mmProjPath: this.mmProjPath,
@@ -576,8 +586,17 @@ export class LLMService {
       kvCacheType: this.kvCacheType,
       threads: this.threads,
       batchSize: this.batchSize,
-      speculativeDecoding: useSelectedModelSpeculation ? this.speculativeDecoding : 'off',
-      draftModelPath: useSelectedModelSpeculation ? this.draftModelPath() : undefined,
+      speculativeDraftMax: this.speculativeDraftMax,
+      speculativeDecoding: useSelectedModelSpeculation
+        ? this.speculativeDecoding
+        : useRuntimeMtp
+          ? 'mtp'
+          : 'off',
+      draftModelPath: useSelectedModelSpeculation
+        ? this.draftModelPath()
+        : useRuntimeMtp
+          ? this.mtpModelPath()
+          : undefined,
       imageMinTokens: this.imageMinTokensForModel(),
       reportModelPlacement: true
     })
@@ -639,6 +658,10 @@ export class LLMService {
   /** Update inference settings; respawns the server if any launch-time arg changed
    *  (context, KV-cache type, flash-attn, GPU layers, threads, batch). */
   async setSettings(s: LlmSettings, options: LlmSettingsUpdateOptions = {}): Promise<void> {
+    if (s.speculativeDraftMax !== undefined &&
+      (!Number.isInteger(s.speculativeDraftMax) || s.speculativeDraftMax < 0 || s.speculativeDraftMax > 16)) {
+      throw new Error('Draft token limit must be Auto (0) or a whole number from 1 to 16.')
+    }
     this.ensureLoaded()
     this.resolveModel()
     const requestedMode = s.speculativeDecoding ?? this.speculativeDecoding
@@ -693,6 +716,7 @@ export class LLMService {
         threads: this.threads,
         batchSize: this.batchSize,
         speculativeDecoding: this.speculativeDecoding,
+        speculativeDraftMax: this.speculativeDraftMax,
         draftModel: this.draftModel
       },
       modeChanged
@@ -736,6 +760,8 @@ export class LLMService {
       this.speculativeDecoding = compatibleSettings.speculativeDecoding
     if (typeof compatibleSettings.draftModel === 'string')
       this.draftModel = path.basename(compatibleSettings.draftModel)
+    if (typeof compatibleSettings.speculativeDraftMax === 'number')
+      this.speculativeDraftMax = compatibleSettings.speculativeDraftMax
     // Quantized KV cache requires FlashAttention — auto-enable it so the pair is valid.
     if (this.kvCacheType !== 'f16' && !this.flashAttn) this.flashAttn = true
     const restorePrior = (
@@ -763,6 +789,7 @@ export class LLMService {
       this.threads = priorSettings.threads
       this.batchSize = priorSettings.batchSize
       this.speculativeDecoding = priorSettings.speculativeDecoding ?? this.speculativeDecoding
+      this.speculativeDraftMax = priorSettings.speculativeDraftMax ?? 0
       this.draftModel = priorSettings.draftModel ?? this.draftModel
       this.userExplicit.clear()
       priorExplicit.forEach((field) => this.userExplicit.add(field))
@@ -1206,6 +1233,13 @@ export class LLMService {
           console.warn(`[LLMService] out of memory — retrying load at ${at.reason}`)
         }
         const args = this.launchArgsFor(at.ctxSize, at.gpuLayers)
+        // The six-token Qwen3.5 9B gain was measured with stock llama.cpp on
+        // Metal. Preserve the existing limit for other engines and backends.
+        const draftMaxIndex = args.indexOf('--spec-draft-n-max')
+        if (draftMaxIndex >= 0 && this.speculativeDecoding === 'mtp' && this.speculativeDraftMax === 0 &&
+          (engineDir !== 'llama' || cpuOnly || process.platform !== 'darwin')) {
+          args[draftMaxIndex + 1] = '2'
+        }
         // Captured in the same step as the arguments: a save can land during init's earlier awaits,
         // so only this matches what actually ran. A successful spawn makes it the working launch.
         const launchedWith = { settings: this.getSettings(), explicit: new Set(this.userExplicit) }
