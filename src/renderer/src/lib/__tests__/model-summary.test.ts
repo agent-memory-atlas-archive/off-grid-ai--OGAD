@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { formatContextWindow, resolveActiveTextModel, resolveModelName } from '../model-summary'
+import {
+  formatContextWindow,
+  formatParams,
+  modelNameForFile,
+  resolveActiveTextModel,
+  resolveModelName
+} from '../model-summary'
 
 describe('formatContextWindow', () => {
   it('formats power-of-two token windows as compact K labels', () => {
@@ -65,5 +71,55 @@ describe('resolveActiveTextModel', () => {
       name: 'Gemma 4 E4B',
       remote: false
     })
+  })
+
+  it('keeps the local text selection when remote media and task models are active', () => {
+    const otherModels = ['voice', 'speech', 'image', 'transcription', 'computer_use'].map(
+      (kind) => ({ id: `remote:${kind}`, name: `Remote ${kind}`, kind, remoteServerId: 'server' })
+    )
+    expect(
+      resolveActiveTextModel(
+        [{ id: 'qwen', name: 'Qwen 3.5 9B', kind: 'text' }, ...otherModels],
+        'qwen',
+        new Set(['qwen', ...otherModels.map((model) => model.id)])
+      )
+    ).toEqual({ name: 'Qwen 3.5 9B', remote: false })
+  })
+
+  it.each(['text', 'vision'])('selects remote %s rather than an active voice model', (kind) => {
+    expect(
+      resolveActiveTextModel(
+        [
+          { id: 'tts', name: 'Qwen Audio TTS', kind: 'voice', remoteServerId: 'server' },
+          { id: 'chat', name: 'Remote chat', kind, remoteServerId: 'server' }
+        ],
+        'qwen',
+        new Set(['tts', 'chat'])
+      )
+    ).toEqual({ name: 'Remote chat', remote: true })
+  })
+})
+
+describe('modelNameForFile', () => {
+  it('names a catalogued image model file by its catalog name', () => {
+    expect(modelNameForFile('dreamshaper-xl-v2-turbo-Q8_0.gguf')).toBe(
+      'DreamShaper XL v2 Turbo (versatile)'
+    )
+    expect(modelNameForFile('/Users/a/models/image/dreamshaper-xl-v2-turbo-Q8_0.gguf')).toBe(
+      'DreamShaper XL v2 Turbo (versatile)'
+    )
+  })
+
+  it('keeps the file name of a model the catalog does not know', () => {
+    expect(modelNameForFile('my-own-merge.gguf')).toBe('my-own-merge.gguf')
+    expect(modelNameForFile('')).toBeNull()
+  })
+})
+
+describe('formatParams', () => {
+  it('reads a sub-billion model in millions and larger ones in billions', () => {
+    expect(formatParams(0.082)).toBe('82M')
+    expect(formatParams(7)).toBe('7B')
+    expect(formatParams(1.5)).toBe('1.5B')
   })
 })

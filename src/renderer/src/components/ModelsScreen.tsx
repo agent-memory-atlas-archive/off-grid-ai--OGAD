@@ -1,5 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { isDecisionModel, useTaskRoles } from '../lib/task-roles'
 import { AnimatePresence } from 'motion/react'
+import { Button } from '@offgrid/operator-ui/operator/button'
 import {
   IconDownload,
   IconCircleCheck,
@@ -25,6 +27,7 @@ import { companionDownloadLabel } from '@renderer/lib/download-label'
 import { formatTransferSpeed } from '@offgrid/sync'
 import { projectProgress } from '@offgrid/ui'
 import { downloadTimeRemaining } from '@renderer/lib/download-progress'
+import { formatParams } from '@renderer/lib/model-summary'
 import {
   modelSettingsTabForKind,
   openModelSettingsPanel,
@@ -122,6 +125,17 @@ function Sel({
         </div>
       )}
     </div>
+  )
+}
+
+// Published full-model MTP exports. Do not redirect a fine-tune to its base model.
+const MTP_DOWNLOAD_REPOS: Readonly<Record<string, string>> = {
+  'bartowski/tencent_UI-Mate-9B-GGUF': 'bartowski/tencent_UI-Mate-9B-GGUF+MTP',
+  ...Object.fromEntries(
+    ['0.8B', '2B', '4B', '9B', '27B', '35B-A3B', '122B-A10B', '397B-A17B'].map((size) => [
+      `unsloth/Qwen3.5-${size}-GGUF`,
+      `unsloth/Qwen3.5-${size}-MTP-GGUF`
+    ])
   )
 }
 
@@ -326,6 +340,8 @@ export function ModelsScreen({
         supportsVision: boolean
         projectorInstalled: boolean
         supportsDflash?: boolean
+        supportsMtp?: boolean
+        mtpInstalled?: boolean
         dflashInstalled?: boolean
       }
     >
@@ -361,8 +377,11 @@ export function ModelsScreen({
   // one truth from the backend; the UI never re-derives "active" per kind.
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set())
   const isActive = (id: string): boolean => activeIds.has(id)
+  // The task models' lineups and each model's roles (Tasks tab), from the same view main builds.
+  const [taskRoles, reloadTaskRoles] = useTaskRoles()
   const refreshActive = (): void => {
     void api.getActiveModelIds?.().then((ids: string[]) => setActiveIds(new Set(ids)))
+    void reloadTaskRoles()
   }
   const [switching, setSwitching] = useState<string | null>(null)
   const [switchError, setSwitchError] = useState<string | null>(null)
@@ -378,6 +397,7 @@ export function ModelsScreen({
   const [detail, setDetail] = useState<ModelEntry | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [mtpDownloads, setMtpDownloads] = useState(false)
   const [hfResults, setHfResults] = useState<
     {
       id: string
@@ -423,6 +443,17 @@ export function ModelsScreen({
       setDetailFilesLoading(false)
       return
     }
+    if (
+      mtpDownloads &&
+      !/-MTP-GGUF$/i.test(detail.id) &&
+      !detail.id.endsWith('+MTP') &&
+      !visionSt[detail.id]?.supportsMtp
+    ) {
+      setDetailFiles([])
+      setDetailFilesError('MTP files are not available for this model.')
+      setDetailFilesLoading(false)
+      return
+    }
     let cancelled = false
     setDetailFiles([])
     setDetailFilesError(null)
@@ -432,13 +463,18 @@ export function ModelsScreen({
         if (!cancelled) setDetailFiles(files ?? [])
       })
       .catch((error: unknown) => {
-        if (!cancelled) setDetailFilesError(error instanceof Error ? error.message : 'Could not load model files.')
+        if (!cancelled)
+          setDetailFilesError(
+            error instanceof Error ? error.message : 'Could not load model files.'
+          )
       })
       .finally(() => {
         if (!cancelled) setDetailFilesLoading(false)
       })
-    return () => { cancelled = true }
-  }, [detail])
+    return () => {
+      cancelled = true
+    }
+  }, [detail, mtpDownloads, visionSt])
 
   const importModel = async (): Promise<void> => {
     if (importing) return
@@ -628,18 +664,18 @@ export function ModelsScreen({
     () =>
       models.filter(
         (model) =>
-          modelSupportsKind(model, activeKind as Parameters<typeof modelSupportsKind>[1]) ||
-          (activeKind === 'text' && modelSupportsKind(model, 'vision'))
+          (!model.id.endsWith('+MTP') &&
+            modelSupportsKind(model, activeKind as Parameters<typeof modelSupportsKind>[1])) ||
+          (activeKind === 'text' &&
+            !model.id.endsWith('+MTP') &&
+            modelSupportsKind(model, 'vision'))
       ),
     [models, activeKind]
   )
 
   // The image model recommended for this machine's RAM (Light Q4 on <=16GB, full
   // Q8 above) — one pure rule, reused for both the badge and the top-of-list sort.
-  const recommendedImageId = useMemo(
-    () => recommendedImageModelId(models, ramGb),
-    [models, ramGb]
-  )
+  const recommendedImageId = useMemo(() => recommendedImageModelId(models, ramGb), [models, ramGb])
   const bonsaiFits = (m: ModelEntry): boolean =>
     (m.sourceModelId ?? m.id) === BONSAI_2_ID &&
     ramGb !== null &&
@@ -736,7 +772,28 @@ export function ModelsScreen({
     m: ModelEntry & { credibility?: string; params?: number; org?: string },
     isHf = false
   ): React.JSX.Element => {
-    const isInstalled = installed.includes(m.id)
+    const useMtpDownloads = mtpDownloads && ['text', 'vision', 'computer_use'].includes(activeKind)
+    const mtpRepository = MTP_DOWNLOAD_REPOS[m.id]
+    if (useMtpDownloads && !visionSt[m.id]?.mtpInstalled && mtpRepository) {
+      const mtpEntry = models.find((model) => model.id === mtpRepository)
+      m = {
+        ...m,
+        id: mtpRepository,
+        name: `${m.name} MTP`,
+        files: mtpEntry?.files ?? [],
+        availability: mtpEntry?.availability ?? m.availability,
+        availabilityNote: mtpEntry?.availabilityNote ?? m.availabilityNote
+      }
+    }
+    const isInstalled =
+      installed.includes(m.id) &&
+      (!useMtpDownloads || !m.id.endsWith('+MTP') || !!visionSt[m.id]?.mtpInstalled)
+    const mtpUnavailable =
+      useMtpDownloads &&
+      !isInstalled &&
+      !/-MTP-GGUF$/i.test(m.id) &&
+      !m.id.endsWith('+MTP') &&
+      !visionSt[m.id]?.supportsMtp
     const isRemote = Boolean(m.remoteServerId)
     const active = isActive(m.id)
     const prog = progress[m.id]
@@ -749,18 +806,26 @@ export function ModelsScreen({
     const vs = visionSt[m.id]
     const projectorMissing = isInstalled && !!vs?.supportsVision && !vs.projectorInstalled
     const dflashMissing = isInstalled && !!vs?.supportsDflash && !vs.dflashInstalled
+    const mtpMissing = isInstalled && !!vs?.supportsMtp && !vs.mtpInstalled
     const bytes = totalBytes(m)
     const size = formatSize(bytes) || null
-    const meta = [m.org, m.params ? `${m.params}B` : null, size, fmtReleaseDate(m.releaseDate)]
+    const meta = [
+      m.org,
+      m.params ? formatParams(m.params) : null,
+      size,
+      fmtReleaseDate(m.releaseDate)
+    ]
       .filter(Boolean)
       .join(' · ')
     const tier: FitTier = isHf ? 'easy' : ramTier(m)
     const tags = (m.tags ?? []).filter((t) => !/tight|risky|fit/i.test(t))
     const comingSoon = m.availability === 'coming_soon'
-    const worksBest = bonsaiFits(m) || /(?:^|[\s/_-])UI[\s_-]?Mate(?:[\s/_-]|$)/i.test(`${m.id} ${m.name}`)
+    const worksBest =
+      bonsaiFits(m) || /(?:^|[\s/_-])UI[\s_-]?Mate(?:[\s/_-]|$)/i.test(`${m.id} ${m.name}`)
     // The single image pick best-suited to THIS machine's RAM (Light on <=16GB,
     // full above) — a prominent filled-emerald badge, distinct from the outlined tags.
-    const recommended = !isHf && (bonsaiFits(m) || (!!recommendedImageId && m.id === recommendedImageId))
+    const recommended =
+      !isHf && (bonsaiFits(m) || (!!recommendedImageId && m.id === recommendedImageId))
 
     return (
       <div
@@ -878,7 +943,9 @@ export function ModelsScreen({
             </span>
           ) : active ? (
             <span className="flex items-center gap-1 text-[11px] text-green-500">
-              <IconCircleCheck className="h-3.5 w-3.5" /> Active
+              <IconCircleCheck className="h-3.5 w-3.5 shrink-0" />{' '}
+              {/* A task model says the role it plays, and where: several are active at once. */}
+              {(m.kind === 'computer_use' && taskRoles?.badges[m.id]) || 'Active'}
             </span>
           ) : isInstalled ? (
             // Every installed model is activatable for its type — no kind branch.
@@ -966,10 +1033,11 @@ export function ModelsScreen({
             </>
           ) : (
             <button
-              onClick={() => isHf ? void chooseVariant(m) : download(m.id)}
-              className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
+              onClick={() => (isHf || useMtpDownloads ? void chooseVariant(m) : download(m.id))}
+              disabled={mtpUnavailable}
+              className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <IconDownload className="h-3 w-3" /> Download
+              <IconDownload className="h-3 w-3" /> {mtpUnavailable ? 'MTP unavailable' : 'Download'}
             </button>
           )}
           {isInstalled && (
@@ -1004,7 +1072,7 @@ export function ModelsScreen({
 
         {/* Vision-capable but projector not downloaded — offer to add it. Hidden while a
             download is in flight (the progress UI covers that). */}
-        {!comingSoon && projectorMissing && !dflashMissing && !downloading && (
+        {!comingSoon && projectorMissing && !dflashMissing && !mtpMissing && !downloading && (
           <button
             onClick={() => download(m.id)}
             title="Download the vision projector so this model can read images"
@@ -1013,10 +1081,14 @@ export function ModelsScreen({
             <IconEye className="h-3 w-3" /> Add vision support
           </button>
         )}
-        {!comingSoon && dflashMissing && !downloading && (
+        {!comingSoon && (dflashMissing || mtpMissing) && !downloading && (
           <button
             onClick={() => download(m.id)}
-            title="Download the missing DFlash model for speculative decoding"
+            title={
+              mtpMissing
+                ? 'Download the missing MTP file for speculative decoding'
+                : 'Download the missing DFlash model for speculative decoding'
+            }
             className="flex items-center gap-1 rounded border border-amber-400/50 px-2 py-1 text-[10px] text-amber-300 transition-all duration-150 hover:border-amber-400 hover:bg-amber-400/10 active:scale-95"
           >
             <IconDownload className="h-3 w-3" /> Repair
@@ -1134,6 +1206,21 @@ export function ModelsScreen({
                 {searching && <IconLoader2 className="h-3 w-3 animate-spin text-neutral-600" />}
               </div>
             )}
+            {['text', 'vision', 'computer_use'].includes(activeKind) && (
+              <Button
+                size="sm"
+                variant={mtpDownloads ? 'secondary' : 'outline'}
+                aria-pressed={mtpDownloads}
+                onClick={() => {
+                  setMtpDownloads((enabled) => !enabled)
+                  setVariantModel(null)
+                  setDetail(null)
+                }}
+                title="Choose full models with Multi-Token Prediction weights"
+              >
+                MTP downloads: {mtpDownloads ? 'On' : 'Off'}
+              </Button>
+            )}
             <Sel
               value={filterState.source}
               onChange={(v) =>
@@ -1244,20 +1331,30 @@ export function ModelsScreen({
                   </p>
                 )}
                 <div role="list" aria-label="Model search results" className={GRID}>
-                  {displayed.map((r) =>
-                    renderCard(
-                      {
-                        id: r.id,
-                        name: r.name,
-                        kind: activeKind as ModelKind,
-                        org: r.org,
-                        files: [],
-                        params: r.params ?? undefined,
-                        credibility: r.credibility
-                      },
-                      true
+                  {displayed
+                    .filter(
+                      (result, index, results) =>
+                        !mtpDownloads ||
+                        results.findIndex(
+                          (other) =>
+                            (MTP_DOWNLOAD_REPOS[other.id] ?? other.id) ===
+                            (MTP_DOWNLOAD_REPOS[result.id] ?? result.id)
+                        ) === index
                     )
-                  )}
+                    .map((r) =>
+                      renderCard(
+                        {
+                          id: r.id,
+                          name: r.name,
+                          kind: activeKind as ModelKind,
+                          org: r.org,
+                          files: [],
+                          params: r.params ?? undefined,
+                          credibility: r.credibility
+                        },
+                        true
+                      )
+                    )}
                 </div>
               </>
             ) : (
@@ -1269,50 +1366,72 @@ export function ModelsScreen({
                     </p>
                   )
                 }
-                const installedModels = displayedCatalog.filter(
-                  (m) => installed.includes(m.id) && m.availability !== 'coming_soon'
-                )
-                const availableModels = displayedCatalog.filter(
-                  (m) => !installed.includes(m.id) && m.availability !== 'coming_soon'
-                )
-                const comingSoonModels = displayedCatalog.filter(
-                  (m) => m.availability === 'coming_soon'
-                )
+                // One group of cards, the same rows on every tab: on this device, remote (a saved
+                // server's models), available to download, coming soon. `group` names the lists
+                // when a tab shows more than one group.
+                const cardRows = (models: ModelEntry[], group?: string): React.ReactNode => {
+                  const installedModels = models.filter(
+                    (m) => installed.includes(m.id) && m.availability !== 'coming_soon'
+                  )
+                  const localModels = installedModels.filter((m) => !m.remoteServerId)
+                  const remoteModels = installedModels.filter((m) => m.remoteServerId)
+                  const availableModels = models.filter(
+                    (m) => !installed.includes(m.id) && m.availability !== 'coming_soon'
+                  )
+                  const comingSoonModels = models.filter((m) => m.availability === 'coming_soon')
+                  const rows: Array<[string, string, ModelEntry[]]> = [
+                    [
+                      'On this device',
+                      group ? `${group} on this device` : 'Models on this device',
+                      localModels
+                    ],
+                    [
+                      'Remote',
+                      group ? `Remote ${group.toLowerCase()}` : 'Remote models',
+                      remoteModels
+                    ],
+                    [
+                      'Available to download',
+                      group ? `${group} available to download` : 'Models available to download',
+                      availableModels
+                    ],
+                    [
+                      'Coming soon',
+                      group ? `${group} coming soon` : 'Computer Use models coming soon',
+                      comingSoonModels
+                    ]
+                  ]
+                  return rows.map(([heading, label, list]) =>
+                    list.length > 0 ? (
+                      <div key={label}>
+                        <div className="px-6 pt-3 text-[9px] uppercase tracking-widest text-neutral-600">
+                          {heading}
+                        </div>
+                        <div role="list" aria-label={label} className={GRID}>
+                          {list.map((m) => renderCard(m))}
+                        </div>
+                      </div>
+                    ) : null
+                  )
+                }
+                if (activeKind !== 'computer_use') return <>{cardRows(displayedCatalog)}</>
+                // Tasks: grounding specialists and decision models are different jobs, run side by
+                // side, so they are listed apart.
+                const groups: Array<[string, ModelEntry[]]> = [
+                  ['Grounding specialists', displayedCatalog.filter((m) => !isDecisionModel(m))],
+                  ['Decision models', displayedCatalog.filter((m) => isDecisionModel(m))]
+                ]
                 return (
                   <>
-                    {installedModels.length > 0 && (
-                      <>
-                        <div className="px-6 pt-3 text-[9px] uppercase tracking-widest text-neutral-600">
-                          On this device
-                        </div>
-                        <div role="list" aria-label="Models on this device" className={GRID}>
-                          {installedModels.map((m) => renderCard(m))}
-                        </div>
-                      </>
-                    )}
-                    {availableModels.length > 0 && (
-                      <>
-                        <div className="px-6 pt-2 text-[9px] uppercase tracking-widest text-neutral-600">
-                          Available to download
-                        </div>
-                        <div role="list" aria-label="Models available to download" className={GRID}>
-                          {availableModels.map((m) => renderCard(m))}
-                        </div>
-                      </>
-                    )}
-                    {comingSoonModels.length > 0 && (
-                      <>
-                        <div className="px-6 pt-2 text-[9px] uppercase tracking-widest text-neutral-600">
-                          Coming soon
-                        </div>
-                        <div
-                          role="list"
-                          aria-label="Computer Use models coming soon"
-                          className={GRID}
-                        >
-                          {comingSoonModels.map((m) => renderCard(m))}
-                        </div>
-                      </>
+                    {groups.map(([group, models]) =>
+                      models.length > 0 ? (
+                        <section key={group} aria-label={group} className="pt-2">
+                          <h3 className="px-6 pt-3 text-xs font-medium text-neutral-200">
+                            {group}
+                          </h3>
+                          {cardRows(models, group)}
+                        </section>
+                      ) : null
                     )}
                   </>
                 )
@@ -1340,7 +1459,7 @@ export function ModelsScreen({
             const downloadProgress = prog ? projectProgress(prog) : null
             const rows: [string, string | null][] = [
               ['Source', m.org || (isLocal ? 'Imported' : '—')],
-              ['Parameters', m.params ? `${m.params}B` : null],
+              ['Parameters', m.params ? formatParams(m.params) : null],
               ['Quantization', m.quant || null],
               ['Download', formatSize(bytes) || null],
               ['Released', fmtReleaseDate(m.releaseDate) || null],
@@ -1492,7 +1611,7 @@ export function ModelsScreen({
                               </div>
                               <button
                                 onClick={() => download(m.id, file.fileName)}
-                                disabled={comingSoon || !!downloading}
+                                disabled={comingSoon || !!downloading || !!detailFilesError}
                                 aria-label={`Download ${file.fileName}`}
                                 className="shrink-0 rounded border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 hover:border-green-500 hover:text-green-500 disabled:cursor-not-allowed disabled:opacity-40"
                               >
@@ -1580,26 +1699,50 @@ export function ModelsScreen({
               <div>
                 <h2 className="text-sm font-medium text-white">Choose a model file</h2>
                 <p className="mt-1 text-[10px] text-neutral-500">{variantModel.name}</p>
+                <p className="mt-1 break-all text-[10px] text-neutral-500">{variantModel.id}</p>
               </div>
-              <button onClick={() => setVariantModel(null)} aria-label="Close file picker" className="text-neutral-500 hover:text-white"><IconX className="h-4 w-4" /></button>
+              <button
+                onClick={() => setVariantModel(null)}
+                aria-label="Close file picker"
+                className="text-neutral-500 hover:text-white"
+              >
+                <IconX className="h-4 w-4" />
+              </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-              {variantLoading && <p className="text-xs text-neutral-400">Loading available files…</p>}
-              {variantError && <p className="text-xs text-red-400" role="alert">{variantError}</p>}
+              {variantLoading && (
+                <p className="text-xs text-neutral-400">Loading available files…</p>
+              )}
+              {variantError && (
+                <p className="text-xs text-red-400" role="alert">
+                  {variantError}
+                </p>
+              )}
               <div className="space-y-2">
                 {variants.map((variant) => (
                   <button
                     key={variant.fileName}
                     onClick={() => {
-                      setChosenVariants((current) => ({ ...current, [variantModel.id]: variant.fileName }))
+                      setChosenVariants((current) => ({
+                        ...current,
+                        [variantModel.id]: variant.fileName
+                      }))
                       download(variantModel.id, variant.fileName)
                       setVariantModel(null)
                     }}
                     className="flex w-full flex-col gap-1 rounded border border-neutral-800 px-3 py-2 text-left transition-colors hover:border-green-500 hover:bg-green-500/5"
                   >
-                    <span className="break-all text-[11px] text-neutral-200">{variant.fileName}</span>
-                    <span className="text-[10px] text-neutral-400">{formatSize(variant.sizeBytes)}</span>
-                    {variant.mmproj && <span className="break-all text-[9px] text-neutral-500">Includes {variant.mmproj.fileName}</span>}
+                    <span className="break-all text-[11px] text-neutral-200">
+                      {variant.fileName}
+                    </span>
+                    <span className="text-[10px] text-neutral-400">
+                      {formatSize(variant.sizeBytes)}
+                    </span>
+                    {variant.mmproj && (
+                      <span className="break-all text-[9px] text-neutral-500">
+                        Includes {variant.mmproj.fileName}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>

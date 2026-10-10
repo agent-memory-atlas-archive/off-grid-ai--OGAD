@@ -129,7 +129,7 @@ async function runSemanticStep(
   input.signal?.throwIfAborted()
   await input.guard.waitUntilRunnable(input.signal)
   if (input.guard.isHalted) input.signal?.throwIfAborted()
-  input.onProgress(step, 'thinking', 'Choosing the next semantic action')
+  input.onProgress(step, 'thinking', 'Deciding the next step')
   const modelLease = input.guard.currentActionLease()
   let decision: SemanticDecision
   try {
@@ -295,7 +295,9 @@ async function performSemanticAction(
     state.observation = await observeWithCurrentLease(input)
     return undefined
   }
-  input.onStep(`${actionLabel(decision)}: ${result.isError ? 'not completed' : 'completed'}`)
+  // The model writes its summary as a sentence; drop its full stop before the status joins it.
+  const label = actionLabel(decision).replace(/[.!]+$/, '')
+  input.onStep(`${label}: ${result.isError ? 'not completed' : 'completed'}`)
   if (result.isError) return recoverActionError(input, state, result)
 
   const before = fingerprint(state.observation.text)

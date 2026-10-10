@@ -6,6 +6,7 @@ import fs from 'fs'
 import path from 'path'
 import { llm } from './llm'
 import { isValidGgufFile } from './models/gguf'
+import { readGgufMtpSupport } from './models/gguf-metadata'
 import { pumpToFile } from './models/download-pump'
 import { downloadIntegrityError, sha256IntegrityError } from './models/download-verify'
 import { downloadFailureMessage, isStorageCapacityError } from './models/download-error'
@@ -32,6 +33,7 @@ import {
   type DownloadedModel
 } from './downloaded-models'
 import {
+  MTP_COMPANIONS,
   mergeCatalog,
   installedIds,
   buildDiskEntry,
@@ -66,7 +68,10 @@ import {
   deactivateRemoteVisionMediaModel,
   getRemoteVisionServerSettings
 } from './vision/remote-vision-server'
-import { getComputerUseSettings, setComputerUseSettings } from './computer-use-settings'
+import { getComputerUseSettings } from './computer-use-settings'
+import { getWebUseSettings } from './web-use-settings'
+import { clearTaskRolesFor, setTaskRoleModel } from './task-role-models'
+import { strategyTaskRoles } from '../shared/computer-use-settings'
 import { binRoots } from './runtime-env'
 
 // Desktop ships the Prism llama.cpp engine required by these packed weights.
@@ -316,10 +321,35 @@ export function resolveKevRuntimeArtifact(): KevRuntimeArtifact | null {
 
 export async function desktopCatalog(): Promise<ModelEntry[]> {
   const { CATALOG } = await import('@offgrid/models')
-  const catalog = CATALOG.map((model) =>
-    model.grounder ? { ...model, tags: [...new Set(['Specialist', ...(model.tags ?? [])])] } : model
-  )
-  return [BONSAI_2, DECIDER_2B, DECIDER_2B_VISION, KEV_4B, ...catalog]
+  const catalog = CATALOG.map((model) => {
+    const companion = Object.entries(MTP_COMPANIONS).find(([id]) => id === model.id)?.[1]
+    const files =
+      companion && !model.files.some((file) => file.name === companion.name)
+        ? [...model.files, companion]
+        : model.files
+    return {
+      ...model,
+      files,
+      ...(model.grounder ? { tags: [...new Set(['Specialist', ...(model.tags ?? [])])] } : {})
+    }
+  })
+  const uiMate = catalog.find((model) => model.id === 'bartowski/tencent_UI-Mate-9B-GGUF')
+  const uiMateMtp = uiMate
+    ? [
+        {
+          ...uiMate,
+          id: `${uiMate.id}+MTP`,
+          name: `${uiMate.name} MTP`,
+          availability: 'coming_soon' as const,
+          availabilityNote:
+            'The separate UI-Mate MTP download is not yet verified. Installed models with built-in MTP heads remain supported.',
+          description:
+            'UI-Mate trained weights with a matching Qwen3.5 9B MTP draft. Includes the main model, vision projector, and prediction weights.',
+          files: [...uiMate.files, MTP_COMPANIONS['bartowski/tencent_UI-Mate-9B-GGUF+MTP']]
+        }
+      ]
+    : []
+  return [BONSAI_2, DECIDER_2B, DECIDER_2B_VISION, KEV_4B, ...catalog, ...uiMateMtp]
 }
 
 export interface DownloadProgress {
@@ -490,7 +520,12 @@ export async function resolveModelIdentity(modelId: string): Promise<ModelIdenti
 export async function getVisionStatuses(): Promise<Record<string, VisionStatus>> {
   const CATALOG = await desktopCatalog()
   const dir = llm.getModelsDir()
-  const present = (name: string): boolean => fileSizeOf(dir, name) > 0
+  const present = (name: string): boolean => {
+    const mtp = Object.values(MTP_COMPANIONS).find((file) => file.name === name)
+    return mtp
+      ? readGgufMtpSupport(path.join(dir, name), fs, undefined, mtp.sizeBytes)
+      : fileSizeOf(dir, name) > 0
+  }
   const downloaded = reconcileDownloadedModelRegistry(dir, CATALOG as unknown as CatalogEntry[])
   const merged = mergeCatalog({
     locals: getLocalModels(),
@@ -502,7 +537,11 @@ export async function getVisionStatuses(): Promise<Record<string, VisionStatus>>
   const out: Record<string, VisionStatus> = {}
   for (const m of merged) {
     const st = visionStatus(m, present)
-    if (st.supportsVision || st.supportsDflash) {
+    if (readGgufMtpSupport(path.join(dir, primaryFileName(m) ?? ''), fs)) {
+      st.supportsMtp = true
+      st.mtpInstalled = true
+    }
+    if (st.supportsVision || st.supportsDflash || st.supportsMtp) {
       out[m.id] = st
     }
   }
@@ -584,6 +623,14 @@ export async function searchModels(query: string, kind?: string): Promise<unknow
   }
 }
 
+export async function getModelFiles(modelId: string): Promise<import('@offgrid/models').ModelFileVariant[]> {
+  const { getModelFiles: listFiles } = await import('@offgrid/models')
+  const repo = modelId === 'bartowski/tencent_UI-Mate-9B-GGUF+MTP' ? modelId.slice(0, -4) : modelId
+  return (await listFiles(repo)).filter(
+    (file) => !/^(?:mtp[-_.])|[-_.]mtp[-_.]only[-_.]/i.test(file.fileName)
+  )
+}
+
 export function downloadStatus(modelId: string): DownloadProgress | null {
   return lastProgress.get(modelId) ?? null
 }
@@ -624,7 +671,7 @@ export async function downloadModel(
     })
     return publishRefusal(modelId, DOWNLOAD_INTERRUPTED_ERROR, onProgress)
   }
-  const { getModelFiles, resolveHuggingFaceModel } = await import('@offgrid/models')
+  const { resolveHuggingFaceModel } = await import('@offgrid/models')
   const CATALOG = await desktopCatalog()
   const inCatalog = CATALOG.find((m) => m.id === modelId)
   let entry = inCatalog ?? (await resolveHuggingFaceModel(modelId))
@@ -658,6 +705,18 @@ export async function downloadModel(
         ...projectorFiles,
         ...catalogAuxFiles
       ]
+    }
+  }
+  // Full MTP exports often reuse the standard export's filename. Keep their
+  // weights distinct and record the actual local filename in the existing registry.
+  if (entry && /-MTP-GGUF$/i.test(modelId)) {
+    entry = {
+      ...entry,
+      files: entry.files.map((file) =>
+        file.role === 'primary'
+          ? { ...file, name: file.name.replace(/\.gguf$/i, '+MTP.gguf') }
+          : file
+      )
     }
   }
   if (!entry) {
@@ -747,7 +806,16 @@ export async function downloadModel(
         // is the set of files this run must actually fetch (a file already on disk is not work),
         // and one percent measures the whole of it.
         const pending = entry.files.filter((file) => {
-          const present = fileSizeOf(dir, file.name) > 0
+          const mtp = Object.values(MTP_COMPANIONS).find(
+            (companion) => companion.name === file.name
+          )
+          const nativeUiMate =
+            modelId === 'bartowski/tencent_UI-Mate-9B-GGUF+MTP' &&
+            readGgufMtpSupport(path.join(dir, primaryFileName(entry) ?? ''), fs)
+          const present = mtp
+            ? nativeUiMate ||
+              readGgufMtpSupport(path.join(dir, file.name), fs, undefined, mtp.sizeBytes)
+            : fileSizeOf(dir, file.name) > 0
           if (present) {
             writeDiagnosticLog('models.download', 'file.skipped', {
               modelId,
@@ -1099,6 +1167,7 @@ export async function deleteModel(modelId: string): Promise<DeleteModelResult> {
   ;(Object.keys(modals) as Modality[]).forEach((k) => {
     if (modalSelectionMatches(modals[k], modelId, primaryFile)) setModal(k, null)
   })
+  clearTaskRolesFor(modelId)
   return { success: true, freedFiles: freed }
 }
 
@@ -1251,37 +1320,49 @@ export async function getActiveModelIds(): Promise<string[]> {
   const settings = getRemoteVisionServerSettings()
   const remote = settings.servers.find((server) => server.id === settings.activeServerId)
   const activeChatId = getActiveModel()
+  // Computer Use models are active by the role Tasks gives them (below), not by a pick of their
+  // own: the Models screens then show exactly what Tasks > Computer Use and Web Use will run.
   const localIds = info.models
     .filter(
       (model) =>
-        model.active && (!remote || !remoteModelSelected('text') || model.id !== activeChatId)
+        model.active &&
+        model.kind !== 'computer_use' &&
+        (!remote || !remoteModelSelected('text') || model.id !== activeChatId)
     )
     .map((model) => model.id)
-  const computerUseSettings = getComputerUseSettings()
-  const decisionModelId =
-    computerUseSettings.decisionModelId ??
-    (computerUseSettings.modelStrategy === 'decision_plus_specialist' ||
-    computerUseSettings.modelStrategy === 'decision_plus_reasoning'
-      ? DECIDER_2B.id
-      : null)
-  const withDecision =
-    decisionModelId &&
-    (info.models.some((model) => model.id === decisionModelId) ||
-      (decisionModelId === KEV_4B_ID && Boolean(resolveKevRuntimeArtifact())))
-      ? [...new Set([...localIds, decisionModelId])]
-      : localIds
-  return remote && remote.enabled !== false
-    ? [
-        ...withDecision,
-        ...remoteVisionInventoryModels([remote])
-          .filter((model) =>
-            remoteModelSelected(
-              model.kind === 'vision' ? 'text' : model.kind === 'speech' ? 'voice' : model.kind
-            )
+  const remoteIds =
+    remote && remote.enabled !== false
+      ? remoteVisionInventoryModels([remote])
+          .filter(
+            (model) =>
+              model.kind !== 'computer_use' &&
+              remoteModelSelected(
+                model.kind === 'vision' ? 'text' : model.kind === 'speech' ? 'voice' : model.kind
+              )
           )
           .map((model) => model.id)
-      ]
-    : withDecision
+      : []
+  return [...new Set([...localIds, ...remoteIds, ...(await taskRoleModelIds())])]
+}
+
+/**
+ * The models Computer Use and Web Use run besides Chat: each one's decision model and grounding
+ * specialist, local or remote, by the roles its strategy uses (strategyTaskRoles, the same map
+ * the task projection reads). The reasoner is the Chat model, already active as text.
+ */
+async function taskRoleModelIds(): Promise<string[]> {
+  const { selectedGrounderModelId } = await import('./vision/grounder-selection')
+  const computer = getComputerUseSettings()
+  const web = getWebUseSettings()
+  const tasks = [
+    { strategy: computer.modelStrategy, decision: computer.decisionModelId },
+    { strategy: web.modelStrategy, decision: web.decisionModelId }
+  ]
+  return tasks.flatMap(({ strategy, decision }) =>
+    strategyTaskRoles(strategy).map((role) =>
+      role === 'grounding' ? selectedGrounderModelId() : (decision ?? DECIDER_2B.id)
+    )
+  )
 }
 
 /**
@@ -1290,6 +1371,20 @@ export async function getActiveModelIds(): Promise<string[]> {
  * transcription set that modality's default pick. Callers pass only the id and
  * never branch on kind. Adding a new modality needs zero caller changes.
  */
+/**
+ * "Use" on a task model, from any Models screen: a grounding specialist is shared by both tasks
+ * already; a decision model becomes the decision model of both Web Use and Computer Use. Tasks
+ * settings can still give each task its own.
+ */
+function useForTasks(role: 'decision' | 'grounding', modelId: string): void {
+  if (role === 'grounding') {
+    setTaskRoleModel('computer_use', 'grounding', modelId)
+    return
+  }
+  setTaskRoleModel('computer_use', 'decision', modelId)
+  setTaskRoleModel('web_use', 'decision', modelId)
+}
+
 export async function activateModel(
   modelId: string,
   requestedKind?: string
@@ -1303,12 +1398,25 @@ export async function activateModel(
     const modality = (['text', 'image', 'transcription', 'voice'] as const).find(
       (kind) => selected[kind] === remote.modelId
     )
+    // A server's Computer Use role model is activated as that role, as Tasks sets it.
+    const role = (['grounding', 'decision'] as const).find(
+      (candidate) => server?.roleModels?.[candidate] === remote.modelId
+    )
+    if (!modality && role) {
+      useForTasks(role, modelId)
+      return { success: true }
+    }
     const activated =
       modality === 'text'
         ? activateRemoteVisionModel(remote.serverId, remote.modelId)
         : modality
           ? activateRemoteVisionMediaModel(remote.serverId, modality, remote.modelId)
           : false
+    // Chat now runs remotely: the local chat engine lets go of its memory. Chat starts it again
+    // on demand if the user switches back to a local model.
+    if (activated && modality === 'text') {
+      void llm.unload().catch((error) => console.error('[models] local chat unload failed', error))
+    }
     return activated
       ? { success: true }
       : { success: false, error: 'Remote model is no longer available.' }
@@ -1336,7 +1444,7 @@ export async function activateModel(
       requestedKind === 'computer_use' &&
       catalogEntry?.tags?.some((tag) => tag.toLowerCase() === 'decision')
     ) {
-      setComputerUseSettings({ ...getComputerUseSettings(), decisionModelId: modelId })
+      useForTasks('decision', modelId)
       return { success: true }
     }
   }
@@ -1369,6 +1477,8 @@ export async function setActiveModalChoice(
       }
     }
     setModal(modal, stored)
+    // A Computer Use pick, from any screen, is the grounding specialist both tasks share.
+    if (modal === 'computer_use' && modelId) setTaskRoleModel('computer_use', 'grounding', modelId)
     if (modal === 'image') deactivateRemoteVisionMediaModel('image')
     if (modal === 'speech') deactivateRemoteVisionMediaModel('voice')
     if (modal === 'transcription') deactivateRemoteVisionMediaModel('transcription')

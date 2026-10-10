@@ -5,14 +5,11 @@
 // tool schemas; we parse its tool_calls, run them, feed results back, and loop
 // until it answers. Built-in tools and selected connector extensions share it.
 
+import { offgridGuideTool } from './tools/offgrid-guide-tool'
 import { llm } from './llm'
 import type { GenerationMetrics } from '../shared/generation-metrics'
 import type { ResponseCutoffContract } from '../shared/ipc-contracts'
-import {
-  SEARCH_KB_TOOL,
-  makeSearchKnowledgeBaseHandler,
-  sanitizePromptExcerpt
-} from '@offgrid/rag'
+import { SEARCH_KB_TOOL, makeSearchKnowledgeBaseHandler, sanitizePromptExcerpt } from '@offgrid/rag'
 import { stripChatControlTokens } from '@offgrid/sync'
 import { isMemoryToolAllowed } from './tools/memory-scope'
 import { parseToolCallsFromText, stripQwenToolCallMarkup } from './tools/tool-call-parse'
@@ -33,6 +30,7 @@ import {
   toolResultCharBudget
 } from '@offgrid/models'
 import { toolPromptChars } from './tools/prompt-budget'
+import { ANSWER_NOW_INSTRUCTION, emptyAnswerReason } from '../shared/empty-answer'
 
 // Per-tool enable/disable, persisted as a list of disabled tool names.
 function disabledSet(): Set<string> {
@@ -54,8 +52,13 @@ export function setToolEnabled(name: string, enabled: boolean): void {
 // excludes the current conversation so it can't cite itself).
 export interface ToolContext {
   conversationId?: string
+  /** Who asked: a person in a chat, or a routine nobody is watching (its actions always wait for approval). */
+  actionSource?: 'chat' | 'routine'
   /** Authenticated Mobile launch identity. Only the MCP admission boundary sets it. */
   taskLaunch?: { launchId: string; requestingDeviceId: string }
+  /** The paired browser's tab a web task should run in: the tab of the chat that asked. Only
+   *  the extension bridge sets it; it travels with that one task (browser-start-tab.ts). */
+  startTab?: { browserId: string; tabId: number }
   /** The exact user message. Approval-gated tools use this instead of trusting model-made args. */
   userQuery?: string
   /** Bounded prior user/assistant turns. Intake tools combine these facts with
@@ -101,6 +104,9 @@ export interface ToolResult {
   sources?: UnifiedSource[]
   imageRequest?: { prompt: string; enhancePrompt?: boolean }
   imageRequests?: { prompt: string; enhancePrompt?: boolean }[]
+  /** For a task tool (web_use, computer_use): the accepted task's id. Its run, its progress and
+   *  Stop all use it, from the moment it is accepted, queued or waiting for approval. */
+  taskId?: string
 }
 
 type ToolDef = {
@@ -175,6 +181,7 @@ export async function readUrlText(url: string): Promise<string> {
 
 // --- Built-in tools --------------------------------------------------------
 const TOOLS: ToolDef[] = [
+  offgridGuideTool,
   {
     name: 'web_search',
     description:
@@ -448,9 +455,10 @@ const TOOLS: ToolDef[] = [
 // otherwise; every other built-in obeys only the disabled-set.
 function schemas(
   imageAvailable: boolean,
-  scope: { projectActive: boolean; allMemory: boolean }
+  scope: { projectActive: boolean; allMemory: boolean },
+  allTools = false
 ): unknown[] {
-  const off = disabledSet()
+  const off = allTools ? new Set<string>() : disabledSet()
   return (
     TOOLS.filter((t) => !off.has(t.name))
       .filter((t) => t.name !== 'generate_image' || imageAvailable)
@@ -461,6 +469,25 @@ function schemas(
         function: { name: t.name, description: t.description, parameters: t.parameters }
       }))
   )
+}
+
+/** The tools a paired browser's agent is offered: the same built-ins and extensions this chat
+ *  uses, minus what Settings turned off. generate_image is left out; its image lands in chat. */
+export async function enabledToolSchemas(
+  exts: ToolExtension[]
+): Promise<{ schema: unknown; extension?: ToolExtension }[]> {
+  const off = disabledSet()
+  const builtins = schemas(false, { projectActive: false, allMemory: true }).map((schema) => ({
+    schema
+  }))
+  const extended = await Promise.all(
+    exts.map(async (extension) =>
+      (await extension.schemas())
+        .filter((s) => !off.has((s as { function?: { name?: string } }).function?.name ?? ''))
+        .map((schema) => ({ schema, extension }))
+    )
+  )
+  return [...builtins, ...extended.flat()]
 }
 
 /** Normalize a tool's return (bare string or structured) to a ToolResult. */
@@ -561,6 +588,12 @@ export async function toolChat(
   opts: {
     /** Assistant is selected for this turn; always include its browser and desktop tools. */
     assistantOnly?: boolean
+    /** God: every tool is on, whatever the Tools switch and per-tool settings say. */
+    allTools?: boolean
+    /** A routine runs this turn: what it tries to do waits for approval (god-routines.ts). */
+    actionSource?: 'chat' | 'routine'
+    /** What the user is doing now (God's context): added to the system prompt, bounded. */
+    context?: string
     connectors?: boolean
     conversationId?: string
     /** Active project — offers search_knowledge_base + scopes it to this project. */
@@ -610,6 +643,7 @@ export async function toolChat(
   const onDelta = opts.onDelta ?? ((): void => {})
   const toolContext: ToolContext = {
     conversationId: opts.conversationId,
+    ...(opts.actionSource ? { actionSource: opts.actionSource } : {}),
     projectId: opts.projectId,
     userQuery: query,
     history: boundedToolHistory(history),
@@ -619,7 +653,7 @@ export async function toolChat(
   // Offer generate_image only when an image model is available. The renderer passes
   // this; fall back to the main-process check so a caller that omits it still gates
   // correctly (single source of truth for "can we make an image right now").
-  const toolsEnabled = getSetting<boolean>('toolsEnabled', true) !== false
+  const toolsEnabled = opts.allTools || getSetting<boolean>('toolsEnabled', true) !== false
   let imageAvailable = opts.imageAvailable ?? false
   if ((!opts.assistantOnly || toolsEnabled) && opts.imageAvailable === undefined) {
     try {
@@ -641,7 +675,7 @@ export async function toolChat(
   const extSchemas: unknown[] = []
   const hints: string[] = []
   const extensionHints: { names: Set<string>; text: string }[] = []
-  const disabled = disabledSet()
+  const disabled = opts.allTools ? new Set<string>() : disabledSet()
   for (const e of exts) {
     try {
       const s = await e.schemas()
@@ -669,10 +703,11 @@ export async function toolChat(
     }
   }
   const builtins = toolsEnabled
-    ? schemas(imageAvailable, {
-        projectActive: !!opts.projectId,
-        allMemory: !!opts.allMemory
-      })
+    ? schemas(
+        imageAvailable,
+        { projectActive: !!opts.projectId, allMemory: !!opts.allMemory },
+        opts.allTools
+      )
     : []
   const assistantRequiredTools = opts.assistantOnly
     ? extSchemas.filter((schema) => {
@@ -745,6 +780,13 @@ export async function toolChat(
       ...relevantTools.filter((schema) => !explicitNames.has(schema))
     ]
   }
+  // Acting is offered whenever the assistant may act, and the model decides from the prompt
+  // (answer questions; act when asked to do something on a website or in an app). Routing by the
+  // words of the message must not hide it: "can you check this site?" shares no words with it.
+  if (assistantRequiredTools.length) {
+    const acting = new Set(assistantRequiredTools)
+    relevantTools = [...assistantRequiredTools, ...relevantTools.filter((t) => !acting.has(t))]
+  }
   if (!/\bbrave\b/i.test(query)) {
     const hasPrimarySearch = relevantTools.some(
       (schema) => (schema as { function?: { name?: unknown } }).function?.name === 'web_search'
@@ -766,7 +808,9 @@ export async function toolChat(
       .filter((hint) => [...hint.names].some((name) => relevantNames.has(name)))
       .map((hint) => hint.text)
   )
-  const protectedToolCount = explicitlyNamedTools.length
+  const protectedToolCount =
+    explicitlyNamedTools.length +
+    assistantRequiredTools.filter((t) => !explicitlyNamedTools.includes(t)).length
   const { budgetTools } = await import('./tools/tool-budget')
   const ctx = llm.effectiveContextSize()
   // Cap tool tokens in ABSOLUTE terms too, not just as a fraction of context:
@@ -805,7 +849,7 @@ export async function toolChat(
         ?.systemPrompt.trim()
     : undefined
   const sys =
-    'You are Off Grid AI, a private on-device assistant. Answer general questions using your knowledge. Use the provided tools when they help answer precisely. Before calling web_use, use the full conversation and ask the user one concise set of questions only when a material fact is missing. If the task is actionable, call web_use immediately. Keep answers concise.' +
+    'You are Off Grid AI, a private on-device assistant. Answer general questions using your knowledge. Use the provided tools when they help answer precisely. Before calling web_use, use the full conversation and ask the user one concise set of questions only when a material fact is missing. Answer questions directly. Call web_use only when the user asks you to do something on a website. Keep answers concise.' +
     (opts.allMemory
       ? ' Use search_memory when the user asks about their memories, past conversations, people, or captured activity. Do not invent personal facts or claim to have searched when you have not. Cite retrieved sources accurately.'
       : '') +
@@ -814,9 +858,12 @@ export async function toolChat(
       : '') +
     (projectPrompt ? `\n\nProject instructions:\n${projectPrompt}` : '') +
     (opts.assistantOnly
-      ? ' web_use and computer_use are available for website and desktop tasks.'
+      ? ' web_use and computer_use are available when the user asks you to do something on a website or in a desktop app.'
       : '') +
-    (hints.length ? ' ' + hints.join(' ') : '')
+    (hints.length ? ' ' + hints.join(' ') : '') +
+    (typeof opts.context === 'string' && opts.context.trim()
+      ? `\n\nWhat you know about the user right now:\n${opts.context.trim().slice(0, 2000)}`
+      : '')
 
   // Attached images ride on the current user turn so the vision model can read
   // them even in tools/connectors mode (otherwise they were silently dropped).
@@ -1119,6 +1166,24 @@ export async function toolChat(
       continue // let the model use the results
     }
     // No tool calls this round: `content` is the final answer (already streamed via onDelta).
+    if (!answerFrom(content).trim() && !opts.signal?.aborted) {
+      // Finished with nothing to say (often reasoning used the whole allowance): ask once more
+      // for an answer from what is already here, then say why if there is still none.
+      const retry = await llm.streamChat(
+        [...messages, { role: 'system', content: ANSWER_NOW_INSTRUCTION }],
+        onDelta,
+        { temperature: 0.3, maxTokens: roundMaxTokens, thinking: false, signal: opts.signal }
+      )
+      const retried = answerFrom(retry.content)
+      return resultWithImages({
+        answer: retried.trim()
+          ? retried
+          : emptyAnswerReason(retry.finishReason ?? finishReason, roundMaxTokens),
+        toolCalls,
+        unified,
+        metrics: retry.metrics ?? metrics
+      })
+    }
     return resultWithImages({
       answer: answerFrom(content),
       toolCalls,

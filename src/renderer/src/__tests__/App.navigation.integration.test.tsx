@@ -245,7 +245,7 @@ describe('<App/> desktop navigation integration', () => {
     )
     expect(sectionIndexes).toEqual([...sectionIndexes].sort((a, b) => a - b))
     expect(screen.getByRole('button', { name: /Model server:/i })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Theme: System' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Theme: Dark' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Settings' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Mobile app' })).toBeTruthy()
 
@@ -569,7 +569,7 @@ describe('<App/> desktop navigation integration', () => {
       routes: [
         ['Text', '/models'],
         ['Image', '/models/image'],
-        ['Computer Use', '/models/computer-use'],
+        ['Tasks', '/models/computer-use'],
         ['Voice', '/models/voice'],
         ['Transcription', '/models/transcription']
       ] as const

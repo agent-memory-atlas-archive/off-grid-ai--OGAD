@@ -29,3 +29,8 @@ export function normalizeWebUseSettings(value: unknown): WebUseSettings {
     browserTarget: target === 'default_browser' ? 'default_browser' : 'in_app'
   }
 }
+
+/** Said on a task that ran in the Off Grid AI browser although Tasks > Web Use chose the default
+ *  browser, because no browser with the extension was connected. */
+export const DEFAULT_BROWSER_FALLBACK_NOTE =
+  'Ran in the Off Grid AI browser: your browser was not connected.'

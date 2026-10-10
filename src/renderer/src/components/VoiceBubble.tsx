@@ -479,7 +479,7 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
       </div>
 
       {showTranscript && transcript ? (
-        <div className="max-h-40 overflow-y-auto whitespace-pre-wrap border-t border-neutral-800 pt-2 text-xs leading-relaxed text-neutral-300">
+        <div className="whitespace-pre-wrap break-words border-t border-neutral-800 pt-2 text-xs leading-relaxed text-neutral-300">
           {transcript}
         </div>
       ) : null}

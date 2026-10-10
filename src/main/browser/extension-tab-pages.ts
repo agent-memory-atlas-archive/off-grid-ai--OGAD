@@ -179,36 +179,54 @@ export class ExtensionTabContents implements RelayContents {
 }
 
 /**
- * The tabs one task owns in the user's browser. It starts with the tab it opens and grows
- * with any tab the page opens through Playwright. It never sees the user's other tabs.
+ * The tabs one task owns in the user's browser. It starts with the tab it opens, or the tab the
+ * browser offered for it (browser-start-tab.ts), and grows with any tab the page opens through
+ * Playwright. It never sees the user's other tabs.
  */
 export function createExtensionPageProvider(link: BrowserLink): ElectronPlaywrightPageProvider & {
   open(url: string): Promise<ExtensionTabContents>
+  /** Start in the offered tab instead of a new one, at `url` when the task names one. */
+  /** `taskId`: the task the browser offered this tab to; only that task's offer lets it in. */
+  adopt(tabId: number, taskId: string, url?: string): Promise<ExtensionTabContents>
   active(): ExtensionTabContents | undefined
   closeAll(): Promise<void>
 } {
   const pages = new Map<number, ExtensionTabContents>()
-  const open = async (url: string): Promise<ExtensionTabContents> => {
-    const info = await link.request('tab.create', { url })
-    if (!isTabInfo(info)) throw new Error('The browser did not open a tab.')
+  const track = (info: unknown, refusal: string): ExtensionTabContents => {
+    if (!isTabInfo(info)) throw new Error(refusal)
     const contents = new ExtensionTabContents(link, info)
     pages.set(info.tabId, contents)
     contents.once('destroyed', () => pages.delete(info.tabId))
     return contents
   }
+  const open = async (url: string): Promise<ExtensionTabContents> =>
+    track(await link.request('tab.create', { url }), 'The browser did not open a tab.')
+  const adopt = async (
+    tabId: number,
+    taskId: string,
+    url?: string
+  ): Promise<ExtensionTabContents> =>
+    track(
+      await link.request('tab.adopt', { tabId, taskId, ...(url === undefined ? {} : { url }) }),
+      'The browser did not hand over its tab.'
+    )
   const asPage = (contents: ExtensionTabContents): RelayPage => ({ id: contents.tabId, contents })
   return {
     pages: () => [...pages.values()].filter((p) => !p.isDestroyed()).map(asPage),
     create: async (url) => asPage(await open(url)),
     close: async (id) => {
-      pages.delete(id)
+      const page = pages.get(id)
+      if (!page) return
+      await link.request('cdp.detach', { tabId: id })
       await link.request('tab.close', { tabId: id })
+      page.destroy()
     },
     open,
+    adopt,
     active: () => [...pages.values()].filter((p) => !p.isDestroyed()).at(-1),
     async closeAll() {
       for (const p of [...pages.values()]) {
-        p.debugger.detach()
+        await link.request('cdp.detach', { tabId: p.tabId }).catch(() => undefined)
         p.destroy()
       }
       pages.clear()

@@ -51,6 +51,19 @@ export interface BridgeFeatures {
   readonly browserTasks?: boolean
 }
 
+/** What a paired browser sees of a web task it started (desktop task-progress.ts). */
+export interface BrowserTaskProgress {
+  readonly taskId: string
+  readonly status: string
+  readonly summary: string
+  /** Phase titles in order; empty before the plan is made. */
+  readonly plan: readonly string[]
+  /** Index into `plan` of the phase in progress, or -1 with no plan. */
+  readonly phase: number
+  readonly steps: readonly string[]
+  readonly action: string
+}
+
 export interface BridgeData {
   features(): BridgeFeatures
   desktopName(): string
@@ -58,14 +71,30 @@ export interface BridgeData {
   putConversation(conversation: unknown, browser: PairedBrowser): Promise<void>
   deleteConversation(id: string): Promise<void>
   listTools(): Promise<unknown[]>
-  runTool(name: string, args: Record<string, unknown>, browser: PairedBrowser): Promise<unknown>
-  vault(request: unknown, browser: PairedBrowser): Promise<unknown>
+  /** `tabId`: the browser's tab a web task should start in (browser-start-tab.ts). */
+  runTool(
+    name: string,
+    args: Record<string, unknown>,
+    browser: PairedBrowser,
+    tabId?: number
+  ): Promise<unknown>
   /** This browser's latest task started at or after `since` (ms): web_use answers "started" at
-   *  once, so a browser waiting on the result asks here. Null when none has started yet. */
+   *  once, so a browser waiting on the result asks here. Null when none has started yet. With
+   *  `taskId`, that task only (when it is this browser's), so two chats never read each other's. */
   latestTask(
     browser: PairedBrowser,
-    since: number
-  ): Promise<{ status: string; summary: string } | null>
+    since: number,
+    taskId?: string
+  ): Promise<BrowserTaskProgress | null>
+  /** Stops a task this browser started (its journey is this browser's). False otherwise. */
+  stopTask(browser: PairedBrowser, taskId: string): Promise<boolean>
+  /** Gives a model a Web Use or Computer Use role, through the desktop's one role setter. */
+  setTaskRole(request: {
+    task: unknown
+    role: unknown
+    modelId: unknown
+  }): Promise<{ success: boolean; error?: string }>
+  vault(request: unknown, browser: PairedBrowser): Promise<unknown>
   /** One section of the desktop's settings (settings.ts), as its Settings screen shows it. */
   readSettings(section: SettingsSection): Promise<unknown>
   /** Apply an already-validated patch through the desktop's own setters. */
@@ -85,6 +114,9 @@ export interface BridgeDeps {
 export type BridgeReply = { status: number; body: unknown }
 
 const UNAUTHORIZED: BridgeReply = { status: 401, body: { error: 'unauthorized' } }
+
+const isTaskId = (value: unknown): value is string =>
+  typeof value === 'string' && /^[\w-]{1,128}$/.test(value)
 
 type Handler = (params: Record<string, unknown>, browser: PairedBrowser) => Promise<unknown>
 
@@ -149,18 +181,51 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
     },
     'tools.list': async () => deps.data.listTools(),
     'tools.run': async (p, browser) => {
-      requireFeature('tools')
       if (typeof p.name !== 'string' || typeof p.args !== 'object' || p.args === null) {
         throw new Error('invalid')
       }
-      return deps.data.runTool(p.name, p.args as Record<string, unknown>, browser)
+      const tabId = p.tabId
+      if (tabId !== undefined && !(Number.isSafeInteger(tabId) && Number(tabId) >= 0)) {
+        throw new Error('invalid')
+      }
+      // What tools.list offers, this runs: a free desktop's connector tools included. Anything
+      // else (a tool turned off since the browser listed it) never runs.
+      const name = p.name
+      const listed = (await deps.data.listTools()).some(
+        (tool) => (tool as { name?: unknown }).name === name
+      )
+      if (!listed) {
+        requireFeature('tools')
+        throw new Error('tool_unavailable')
+      }
+      return deps.data.runTool(
+        p.name,
+        p.args as Record<string, unknown>,
+        browser,
+        tabId === undefined ? undefined : Number(tabId)
+      )
     },
     'tasks.latest': async (p, browser) => {
       requireFeature('tools')
       if (typeof p.since !== 'number' || !Number.isFinite(p.since)) {
         throw new Error('invalid')
       }
-      return deps.data.latestTask(browser, p.since)
+      if (p.taskId !== undefined && !isTaskId(p.taskId)) {
+        throw new Error('invalid')
+      }
+      return deps.data.latestTask(browser, p.since, p.taskId)
+    },
+    'tasks.stop': async (p, browser) => {
+      requireFeature('tools')
+      if (!isTaskId(p.taskId)) {
+        throw new Error('invalid')
+      }
+      return deps.data.stopTask(browser, p.taskId)
+    },
+    'models.setTaskRole': async (p) => {
+      const result = await deps.data.setTaskRole({ task: p.task, role: p.role, modelId: p.modelId })
+      if (!result.success) throw new Error(result.error ?? 'invalid')
+      return result
     },
     vault: async (p, browser) => {
       requireFeature('vault')

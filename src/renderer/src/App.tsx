@@ -1,9 +1,9 @@
+import { appLocationPath, replaceAppLocation } from './lib/app-location'
 import { ChatDetail } from './components/ChatDetail'
 import { CommandPalette } from './components/CommandPalette'
 import logo from './assets/logo.png'
 import { useMeetingRecorder } from './useMeetingRecorder'
 import { MemoryChat } from './components/MemoryChat'
-import { ExploreScreen } from './components/explore/ExploreScreen'
 import type { DemoPreset } from './components/explore/presetCatalog'
 import { Settings, SETTINGS_DESTINATIONS } from './components/Settings'
 import { SettingsPanel } from './components/SettingsPanel'
@@ -378,8 +378,15 @@ function AppContent(): React.JSX.Element {
   const navigateTo = useCallback((destination: ViewMode, prepare?: () => void): void => {
     setNavigationSubroute(null)
     prepare?.()
-    commitViewMode(destination)
+    // God's screen is the explore view. Any route that names it "god" lands on the same screen
+    // and the same entitlement check as the sidebar, never on a generic upgrade page.
+    commitViewMode((destination as string) === 'god' ? 'explore' : destination)
   }, [])
+  // God (Pro) mounts through slots: its screen, an always-on root, and its nav item's dot.
+  const GodScreen = proReady && isPro ? getSlot(SLOTS.godScreen) : undefined
+  const GodRoot = proReady && isPro ? getSlot(SLOTS.godRoot) : undefined
+  const GodBadge = proReady && isPro ? getSlot(SLOTS.godBadge) : undefined
+  const openGod = useCallback((): void => navigateTo('explore'), [navigateTo])
   const [sidebarHovered, setSidebarHovered] = useState(false)
   const [sidebarPinned, setSidebarPinned] = useState(() => readSidebarPinned())
   const sidebarOpen = sidebarPinned || sidebarHovered
@@ -484,10 +491,11 @@ function AppContent(): React.JSX.Element {
 
   // Handle browser URL changes
   useEffect(() => {
-    const path = window.location.pathname
+    const path = appLocationPath()
     const viewMap: Record<string, ViewMode> = {
       '/': 'day',
       '/explore': 'explore',
+      '/god': 'explore',
       '/day': 'day',
       '/replay': 'replay',
       '/reflect': 'reflect',
@@ -631,8 +639,8 @@ function AppContent(): React.JSX.Element {
     } else if (isInternalTabView(viewMode)) {
       newPath = internalTabPath(viewMode, navigationSubroute)
     }
-    if (window.location.pathname !== newPath) {
-      window.history.replaceState(null, '', newPath)
+    if (appLocationPath() !== newPath) {
+      replaceAppLocation(newPath)
     }
     // Publish the view for anything that needs to reason about the current screen. replaceState
     // fires no event, so the URL alone is not observable.
@@ -1054,6 +1062,9 @@ function AppContent(): React.JSX.Element {
         )}
         {item.icon}
         {sidebarOpen && <span className="flex-1 text-left whitespace-pre">{item.label}</span>}
+        {item.view === 'explore' && GodBadge && (
+          <GodBadge open={viewMode === 'explore'} compact={!sidebarOpen} />
+        )}
         {notificationCount > 0 && (
           <span
             aria-label={`${notificationCount} unread notifications`}
@@ -1333,10 +1344,27 @@ function AppContent(): React.JSX.Element {
                     {proFeatureComingSoon(viewMode, currentPlatform(), true) ? (
                       <UpgradeScreen variant="coming-soon" feature={getProFeature(viewMode)} />
                     ) : viewMode === 'explore' ? (
+                      // God is Pro: a free build shows what it does and how to get it.
                       isPro ? (
-                        <ExploreScreen onRunPreset={handleRunPreset} />
+                        GodScreen ? (
+                          <GodScreen
+                            onRunPreset={handleRunPreset}
+                            chat={{
+                              onNavigateToMemory: handleSelectMemory,
+                              onNavigateToChat: handleSelectChat,
+                              onNavigateToMeeting: (meetingId) =>
+                                handleProNavigate({ view: 'meetings', meetingId }),
+                              onNavigateToEntity: handleSelectEntity,
+                              onSeekReplay: (ts) =>
+                                navigateTo('replay', () => setReplayTarget(ts || Date.now())),
+                              onOpenSkillPreset: handleOpenSkillPreset,
+                              onOpenConnectors: () => navigateTo('connectors'),
+                              onTaskDetailModeChange: setTaskDetailSidebarMode
+                            }}
+                          />
+                        ) : null
                       ) : (
-                        <UpgradeScreen feature={getProFeature(viewMode)} />
+                        <UpgradeScreen feature={getProFeature('explore')} />
                       )
                     ) : viewMode === 'memory-chat' ? (
                       <MemoryChat
@@ -1447,6 +1475,7 @@ function AppContent(): React.JSX.Element {
         )}
       </AnimatePresence>
       {TaskFloatingView ? <TaskFloatingView /> : null}
+      {GodRoot ? <GodRoot isOpen={viewMode === 'explore'} open={openGod} /> : null}
     </div>
   )
 }
@@ -1493,7 +1522,9 @@ function writeSidebarPinned(pinned: boolean): void {
 function App(): React.JSX.Element | null {
   // Onboarding runs FIRST — before the model/permission gate — so a new user sees
   // the intro, then goes straight to model selection (handled by PermissionGate).
-  const [onboarded, setOnboarded] = useState(() => localStorage.getItem('onboarding_completed') === 'true')
+  const [onboarded, setOnboarded] = useState(
+    () => localStorage.getItem('onboarding_completed') === 'true'
+  )
   if (!onboarded) return <Onboarding onComplete={() => setOnboarded(true)} />
 
   return (

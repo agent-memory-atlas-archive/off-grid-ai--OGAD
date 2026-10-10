@@ -22,6 +22,9 @@ import {
 } from './connectorCatalog'
 import slackLogo from '@/assets/logos/slack.svg'
 import { getSlot, SLOTS } from '@/bootstrap/slotRegistry'
+import { QuickConnections } from './QuickConnections'
+import { QUICK_CONNECTION_IDS } from './quickConnectionCatalog'
+import { CONNECTIONS_CHANGED_EVENT } from './useQuickConnection'
 
 // Brands Simple Icons dropped (trademark) → bundled local logos, keyed by catalog id.
 const LOGO_OVERRIDE: Record<string, string> = { slack: slackLogo }
@@ -56,6 +59,8 @@ interface Connector {
   enabled: number
   status: string
   status_detail: string | null
+  /** Read live when asked; never synced into memory. */
+  liveOnly?: boolean
   tools: string | null
   last_synced: number | null
   synced_count: number | null
@@ -218,9 +223,8 @@ async function persistConnectorSecrets(
   secretValues: Record<string, string>
 ): Promise<void> {
   if (id == null) return
-  for (const [key, value] of Object.entries(secretValues)) {
-    if (value) await api.secretsSet?.(`connector:${id}:${key}`, value)
-  }
+  // Saved and recorded as what the connector receives, in one place (main/mcp.ts).
+  await api.mcpSetSecrets?.(id, secretValues)
 }
 
 interface ConnectionOutcome {
@@ -264,6 +268,13 @@ export function ConnectorsScreen(): ReactElement {
   // setup slot). Connect stays gated until it's true — no OAuth without a client.
   const [byoReady, setByoReady] = useState<Record<string, boolean>>({})
 
+  // edit + remove in the detail view
+  const [editing, setEditing] = useState(false)
+  const [edit, setEdit] = useState({ name: '', url: '', command: '', args: '' })
+  const [editError, setEditError] = useState('')
+  const [changingToken, setChangingToken] = useState(false)
+  const [confirmRemove, setConfirmRemove] = useState(false)
+
   // custom form
   const [name, setName] = useState('')
   const [transport, setTransport] = useState<'stdio' | 'http'>('http')
@@ -281,13 +292,25 @@ export function ConnectorsScreen(): ReactElement {
   }, [])
   useEffect(() => {
     void load()
+    const changed = (): void => {
+      void load()
+    }
+    window.addEventListener(CONNECTIONS_CHANGED_EVENT, changed)
+    return () => window.removeEventListener(CONNECTIONS_CHANGED_EVENT, changed)
   }, [load])
 
-  // The gallery is every ready catalog connector that is not installed. It changes only when the
-  // installed list changes, so it is not rebuilt on every keystroke or sync tick.
+  // The gallery is every ready catalog connector that is not installed and not offered as a
+  // direct account connection. It changes only when the installed list changes.
   const gallery = useMemo(() => {
     const installed = new Set(items.map((i) => i.name.toLowerCase()))
-    return CONNECTOR_CATALOG.filter((e) => e.ready && !installed.has(e.name.toLowerCase()))
+    const direct = Boolean(getSlot(SLOTS.quickConnectionProviders))
+    return CONNECTOR_CATALOG.filter(
+      (e) =>
+        e.ready &&
+        !QUICK_CONNECTION_IDS.includes(e.id) &&
+        !(direct && ['gmail', 'google-calendar'].includes(e.id)) &&
+        !installed.has(e.name.toLowerCase())
+    )
   }, [items])
 
   const doConnect = async (
@@ -399,6 +422,49 @@ export function ConnectorsScreen(): ReactElement {
     await api.mcpRemove?.(id)
     load()
   }
+  const startEdit = (c: Connector): void => {
+    setEdit({
+      name: c.name,
+      url: c.url ?? '',
+      command: c.command ?? '',
+      args: c.args ? (JSON.parse(c.args) as string[]).join(' ') : ''
+    })
+    setEditError('')
+    setChangingToken(false)
+    setConfirmRemove(false)
+    setEditing(true)
+  }
+  const saveEdit = async (c: Connector): Promise<void> => {
+    setEditError('')
+    try {
+      await api.mcpUpdate?.(
+        c.id,
+        c.transport === 'http'
+          ? { name: edit.name, url: edit.url }
+          : {
+              name: edit.name,
+              command: edit.command,
+              args: edit.args.trim() ? edit.args.trim().split(/\s+/) : []
+            }
+      )
+      setEditing(false)
+      window.dispatchEvent(new Event(CONNECTIONS_CHANGED_EVENT))
+      load()
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : 'Could not save the changes.')
+    }
+  }
+  const changeToken = async (id: number, values: Record<string, string>): Promise<void> => {
+    setTestingId(id)
+    try {
+      await persistConnectorSecrets(id, values)
+      await api.mcpTest?.(id)
+      setChangingToken(false)
+    } finally {
+      setTestingId(null)
+      load()
+    }
+  }
   const sync = async (id: number, query?: string): Promise<void> => {
     setSyncingId(id)
     setSyncMsg('')
@@ -466,11 +532,19 @@ export function ConnectorsScreen(): ReactElement {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        {detailId == null && tab !== 'connected' && (
+          <div className="mb-6">
+            <QuickConnections />
+          </div>
+        )}
         {(() => {
           const detail = detailId != null ? items.find((c) => c.id === detailId) : null
           if (detail) {
             const dcat = CONNECTOR_CATALOG.find((x) => x.name === detail.name)
-            const dNotReady = dcat != null && !dcat.ready // preview/unverified — don't expose Test/Sync
+            const dNotReady =
+              dcat != null &&
+              !dcat.ready &&
+              !(detail.tools && detail.tools !== '[]' && detail.url?.startsWith('offgrid-')) // preview/unverified — don't expose Test/Sync
             const dtools = detail.tools
               ? (JSON.parse(detail.tools) as { name: string; description?: string }[])
               : []
@@ -479,6 +553,9 @@ export function ConnectorsScreen(): ReactElement {
                 <button
                   onClick={() => {
                     setDetailId(null)
+                    setEditing(false)
+                    setChangingToken(false)
+                    setConfirmRemove(false)
                     load()
                   }}
                   className="flex items-center gap-1 text-xs text-neutral-400 hover:text-white"
@@ -536,9 +613,16 @@ export function ConnectorsScreen(): ReactElement {
                       </>
                     )}
                     <button
-                      onClick={async () => {
-                        await remove(detail.id)
-                        setDetailId(null)
+                      onClick={() => startEdit(detail)}
+                      className="rounded-md px-2.5 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      aria-label={`Remove ${detail.name}`}
+                      onClick={() => {
+                        setEditing(false)
+                        setConfirmRemove(true)
                       }}
                       className="rounded-md p-1 text-neutral-600 hover:text-red-400"
                     >
@@ -546,6 +630,124 @@ export function ConnectorsScreen(): ReactElement {
                     </button>
                   </div>
                 </div>
+                {confirmRemove && (
+                  <div
+                    role="alertdialog"
+                    aria-label={`Remove ${detail.name}?`}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-neutral-800 p-3"
+                  >
+                    <p className="text-[11px] leading-4 text-neutral-400">
+                      Remove {detail.name}? Off Grid AI forgets its settings and sign-in. Items
+                      already saved to memory stay.
+                    </p>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => setConfirmRemove(false)}
+                        className="rounded-md px-2.5 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                      >
+                        Keep
+                      </button>
+                      <button
+                        onClick={async () => {
+                          setConfirmRemove(false)
+                          await remove(detail.id)
+                          setDetailId(null)
+                        }}
+                        className="rounded-md bg-red-500/90 px-2.5 py-1 text-xs text-neutral-950 hover:bg-red-400"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {editing && (
+                  <form
+                    aria-label={`Edit ${detail.name}`}
+                    className="space-y-3 rounded-md border border-neutral-800 bg-neutral-900/40 p-4"
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      void saveEdit(detail)
+                    }}
+                  >
+                    <label className="block space-y-1 text-[11px] text-neutral-500">
+                      Name
+                      <input
+                        value={edit.name}
+                        onChange={(e) => setEdit((p) => ({ ...p, name: e.target.value }))}
+                        className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 outline-none focus:border-neutral-600"
+                      />
+                    </label>
+                    {detail.transport === 'http' ? (
+                      <label className="block space-y-1 text-[11px] text-neutral-500">
+                        Server address
+                        <input
+                          value={edit.url}
+                          onChange={(e) => setEdit((p) => ({ ...p, url: e.target.value }))}
+                          className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 outline-none focus:border-neutral-600"
+                        />
+                      </label>
+                    ) : (
+                      <>
+                        <label className="block space-y-1 text-[11px] text-neutral-500">
+                          Command
+                          <input
+                            value={edit.command}
+                            onChange={(e) => setEdit((p) => ({ ...p, command: e.target.value }))}
+                            className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 outline-none focus:border-neutral-600"
+                          />
+                        </label>
+                        <label className="block space-y-1 text-[11px] text-neutral-500">
+                          Arguments
+                          <input
+                            value={edit.args}
+                            onChange={(e) => setEdit((p) => ({ ...p, args: e.target.value }))}
+                            className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 outline-none focus:border-neutral-600"
+                          />
+                        </label>
+                      </>
+                    )}
+                    <p className="text-[11px] leading-4 text-neutral-500">
+                      A new address or command signs out of the old server. Test the connection
+                      after saving.
+                    </p>
+                    {editError && <p className="text-[11px] text-red-400/80">{editError}</p>}
+                    <div className="flex gap-2">
+                      <button
+                        type="submit"
+                        className="rounded-md bg-green-500 px-3 py-1.5 text-xs text-neutral-950 hover:bg-green-400"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditing(false)}
+                        className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                )}
+                {editing && dcat?.auth === 'token' && dcat.secrets?.length ? (
+                  <div className="space-y-2">
+                    {changingToken ? (
+                      <ConnectorSecretsForm
+                        secrets={dcat.secrets}
+                        connecting={testingId === detail.id}
+                        onConnect={(values) => void changeToken(detail.id, values)}
+                        onCancel={() => setChangingToken(false)}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setChangingToken(true)}
+                        className="text-xs text-green-500 hover:underline"
+                      >
+                        Change token
+                      </button>
+                    )}
+                  </div>
+                ) : null}
                 {dNotReady && (
                   <p className="text-[11px] text-neutral-500">
                     This integration isn&apos;t verified yet — connect/test/sync are disabled. You
@@ -556,7 +758,12 @@ export function ConnectorsScreen(): ReactElement {
                   <p className="text-[11px] text-red-400/80">{cleanError(detail.status_detail)}</p>
                 )}
 
-                {!dNotReady && detail.status === 'ok' && (
+                {!dNotReady && detail.status === 'ok' && detail.liveOnly && (
+                  <p className="text-[11px] leading-relaxed text-neutral-500">
+                    Read live when you ask. Nothing from this account is saved to memory.
+                  </p>
+                )}
+                {!dNotReady && detail.status === 'ok' && !detail.liveOnly && (
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => sync(detail.id)}
@@ -801,10 +1008,12 @@ export function ConnectorsScreen(): ReactElement {
                     <div className="space-y-2">
                       {items.map((c) => {
                         const cat = CONNECTOR_CATALOG.find((x) => x.name === c.name)
-                        // A connector whose catalog entry is not `ready` is a preview/unverified
-                        // integration (e.g. Gmail, Google Calendar) — never present it as working
-                        // "connected", even if a stale row exists. Show it as disabled.
-                        const notReady = cat != null && !cat.ready
+                        // Preview catalog entries stay disabled. A verified internal local provider
+                        // can supply working tools without that catalog's third-party server.
+                        const notReady =
+                          cat != null &&
+                          !cat.ready &&
+                          !(c.tools && c.tools !== '[]' && c.url?.startsWith('offgrid-'))
                         return (
                           <button
                             key={c.id}

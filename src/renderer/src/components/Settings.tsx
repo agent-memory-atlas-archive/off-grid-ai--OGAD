@@ -7,6 +7,7 @@ import { StoragePanel } from './setup/StoragePanel'
 import { DataPrivacyPanel } from './setup/DataPrivacyPanel'
 import { getRegisteredSettingsSections } from '../bootstrap/sectionRegistry'
 import { useRendererEntitlement } from '../bootstrap/useRendererEntitlement'
+import { getSlot, SLOTS } from '../bootstrap/slotRegistry'
 import { PRO_SETTINGS_SLOTS } from './pro/proSettingsCatalog'
 // Shared card chrome, in its own light module so the pro package can reuse it without
 // importing this whole god-file (which pulls SetupPanel/etc. + their window.api types).
@@ -30,6 +31,7 @@ const SETTINGS_SECTION_TITLES: Record<string, string> = {
   'computer-use': 'Computer use',
   remote: 'Remote model server',
   'ai-activity': 'AI activity',
+  'god-twin': 'God',
   sync: 'Device sync',
   identity: 'You',
   secretary: 'What Off Grid AI has learned',
@@ -75,6 +77,8 @@ export function Settings({
   const registeredSections = getRegisteredSettingsSections()
   const captureSection = registeredSections.find((section) => section.id === 'capture')
   const CaptureContribution = captureSection?.component
+  // God is Pro: its settings card comes from Pro through a slot, looked up once per opening.
+  const [GodSettings] = useState(() => getSlot(SLOTS.godSettings))
   const [appVersion, setAppVersion] = useState('')
 
   useEffect(() => {
@@ -212,6 +216,17 @@ export function Settings({
             >
               <RemoteVisionSettingsTab />
             </SettingsCard>
+
+            {/* God is Pro: its settings show only where God does. */}
+            {isPro && GodSettings && (
+              <SettingsCard
+                title="God"
+                summary="Your assistant's name, rules, wake word and Ares on the desktop."
+                delay={0.17}
+              >
+                <GodSettings />
+              </SettingsCard>
+            )}
 
             {/* Remaining Pro Settings sections (You / What Off Grid AI has learned /
               Your Pro plan). The pro package registers the real section

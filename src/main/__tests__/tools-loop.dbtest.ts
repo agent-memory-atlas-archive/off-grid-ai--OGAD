@@ -14,6 +14,9 @@ import type { TickOutcome } from '@offgrid/use'
 import { startFakeLlamaServer, type FakeLlamaServer } from './harness/fake-llama-server'
 
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-tools-it-'))
+// These cases test the tool loop, not embeddings: route by words at once instead of downloading
+// the embedding model into this fresh folder on every run.
+process.env.OFFGRID_EMBEDDINGS_OFFLINE = '1'
 vi.mock('electron', () => ({
   app: { getPath: () => TMP_DIR, isPackaged: false, getAppPath: () => process.cwd() },
   safeStorage: {
@@ -105,6 +108,24 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
         .join('')
     ).toBe('Hi there')
     expect(steps).toEqual([]) // no tool call -> no step
+  })
+
+  it('asks once more when a turn ends with no answer, and says why if there is still none', async () => {
+    // Reported: God showed "No response returned." after its searches, with no reason given.
+    enqueueReactiveAfterEmptyPlan(
+      { content: '', finishReason: 'length' },
+      { content: 'Here is what I found.' }
+    )
+    expect((await toolChat('what did Morgan send me?', [])).answer).toBe('Here is what I found.')
+    expect(fake.requests).toHaveLength(2)
+
+    fake.reset()
+    enqueueReactiveAfterEmptyPlan(
+      { content: '', finishReason: 'length' },
+      { content: '', finishReason: 'length' }
+    )
+    const { answer } = await toolChat('and yesterday?', [])
+    expect(answer).toMatch(/whole output allowance \(\d+ tokens\)/)
   })
 
   it('sends the user Max-output setting to the model, not the old hardcoded 1024 cap (essay cut-off)', async () => {
@@ -420,6 +441,41 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
     }
   })
 
+  it('in assistant mode, acting is always offered and the model is told when to use it', async () => {
+    // God's tools do not depend on the words of the message: the model decides from the prompt.
+    const extension = new NativeActionToolExtension(
+      { run: async () => ({ ok: true, result: undefined }), taskUseEnabled: () => true },
+      'darwin'
+    )
+    registerToolExtension(extension)
+    const first = (): {
+      tools?: { function?: { name?: string } }[]
+      messages?: { content?: unknown }[]
+    } => fake.requests[0] as never
+    const offered = (): string[] => (first().tools ?? []).map((t) => t.function?.name ?? '')
+    try {
+      fake.enqueue({ content: 'Pick one with good reviews.' })
+      const question = await toolChat('what is a good cooking video on youtube?', [], {
+        assistantOnly: true
+      })
+      expect(question.toolCalls).toEqual([])
+      expect(offered()).toContain('web_use')
+      expect(String(first().messages?.[0]?.content)).toContain(
+        'Answer questions directly. Call web_use only when the user asks you to do something on a website.'
+      )
+
+      // A request that shares no words with the tool still has it.
+      fake.reset()
+      fake.enqueue({ content: 'ok' })
+      await toolChat('can you do a sanity check of this entire website?', [], {
+        assistantOnly: true
+      })
+      expect(offered()).toContain('web_use')
+    } finally {
+      unregisterToolExtension(extension.id, extension)
+    }
+  })
+
   it('passes the tool schemas + tool_choice to the model on the first round', async () => {
     enqueueReactiveAfterEmptyPlan({ content: 'ok' })
     await toolChat('get_datetime: what time is it', [])
@@ -564,6 +620,7 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
   it('does not save successful tool output as the answer when the final model turn is empty', async () => {
     enqueueReactiveAfterEmptyPlan(
       { toolCalls: [{ name: 'calculator', args: { expression: '2+2' } }] },
+      { content: '' },
       { content: '' }
     )
     const deltas: string[] = []
@@ -574,7 +631,9 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
       }
     })
 
-    expect(result.answer).toBe('')
+    // Never the tool's raw output: an empty turn is asked once more, then explained.
+    expect(result.answer).not.toContain('4')
+    expect(result.answer).toMatch(/without an answer/)
     expect(deltas.join('')).toBe('')
   })
 

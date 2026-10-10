@@ -18,26 +18,26 @@ describe('<MemoryChat/> assistant preset runs', () => {
     vi.unstubAllGlobals()
   })
 
-  it('selects Assistant when an example is picked inside a fresh chat', async () => {
+  it('turns God on when an example is picked inside a fresh chat', async () => {
     installBoundary(new ChatBoundary())
     const user = userEvent.setup()
     renderChat({ projectId: 'project-alpha' })
 
     await user.click(await screen.findByTestId('explore-preset-price-compare'))
     await screen.findByTestId('preset-intake-price-compare')
-    expect(screen.getByRole('button', { name: 'Assistant' }).getAttribute('aria-pressed')).toBe(
+    expect(screen.getByRole('button', { name: 'God' }).getAttribute('aria-pressed')).toBe(
       'true'
     )
   })
 
-  it('starts Train My Feed as an Assistant run with the approved bounds', async () => {
+  it('starts Train My Feed as a God run with the approved bounds', async () => {
     const boundary = new ChatBoundary()
     installBoundary(boundary)
     const user = userEvent.setup()
     renderChat({ presetId: 'train-my-feed' })
 
     await screen.findByTestId('preset-intake-train-my-feed')
-    expect(screen.getByRole('button', { name: 'Assistant' }).getAttribute('aria-pressed')).toBe(
+    expect(screen.getByRole('button', { name: 'God' }).getAttribute('aria-pressed')).toBe(
       'true'
     )
     expect((screen.getByLabelText(/Social platform/) as HTMLSelectElement).value).toBe('Instagram')
@@ -78,7 +78,7 @@ describe('<MemoryChat/> assistant preset runs', () => {
 
     await waitFor(() => expect(boundary.api.createRagConversation).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(boundary.toolQueries).toHaveLength(1))
-    expect(screen.getByRole('button', { name: 'Assistant' }).getAttribute('aria-pressed')).toBe(
+    expect(screen.getByRole('button', { name: 'God' }).getAttribute('aria-pressed')).toBe(
       'true'
     )
     expect(boundary.toolQueries[0]?.query).toContain('A: Local AI models')

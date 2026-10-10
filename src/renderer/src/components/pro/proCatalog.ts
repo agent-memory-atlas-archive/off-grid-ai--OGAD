@@ -8,13 +8,13 @@ import {
   MagnifyingGlass,
   Broadcast,
   ClipboardText,
-  Robot,
   ListChecks,
   Waveform,
   ShieldCheck,
   Devices as DevicesIcon
 } from '@phosphor-icons/react'
 import type { ComponentType } from 'react'
+import { GodIcon } from '../GodIcon'
 import { deviceNoun, primaryModifier } from '@renderer/lib/device'
 import { isMac, type DevicePlatform } from '@offgrid/core/shared/device'
 import { PRO_PURCHASE_URL } from '@offgrid/core/shared/product-links'
@@ -25,7 +25,7 @@ import { PRO_PURCHASE_URL } from '@offgrid/core/shared/product-links'
 // pro/ submodule is present and activated, the real screens (registered via
 // screenRegistry/navRegistry) take over these same routes.
 
-/** Buy Pro — live now, $49/year or $69 once, one license across up to 5 devices. */
+/** Buy Pro — live now, $119 once or $7.99/month, one license across up to 5 devices. */
 export const PRO_PAY_URL = PRO_PURCHASE_URL
 
 export interface ProFeature {
@@ -55,12 +55,16 @@ export interface ProFeature {
 export const PRO_FEATURES: ProFeature[] = [
   {
     route: 'explore',
-    label: 'Assistant',
-    icon: Robot,
-    tagline: 'Start a prepared run.',
+    label: 'God',
+    icon: GodIcon,
+    tagline: 'Your assistant. It knows your day and asks before it acts.',
     description:
-      'Choose a workflow, add its details, and start it in Chat. The work stays on your device.',
-    highlights: ['Prepared workflows', 'One intake before the run', 'Starts in your local Chat'],
+      'Chat or talk with Ares. It answers from your memory, accounts and tools, raises what needs you, acts on websites and apps with your approval, and keeps you up to date on what is new in Off Grid AI. Wake-word audio is checked on your device and never saved.',
+    highlights: [
+      'Chat or voice, wake word "Ares"',
+      'Approvals and what needs you',
+      'Acts with Web Use and Computer Use'
+    ],
     platforms: ['darwin', 'win32', 'linux']
   },
   {

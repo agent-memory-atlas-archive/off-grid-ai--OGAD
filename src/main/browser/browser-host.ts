@@ -827,6 +827,7 @@ class BrowserHost implements BrowserRailHost {
       } satisfies BrowserTaskState)
       broadcast('browser:step', { sessionId: record.sessionId, taskId, journeyId, note })
     }
+    if (request.notice) recordStep(request.notice)
     releaseSession = registerVisionSession(
       taskId,
       guard,

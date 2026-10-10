@@ -79,7 +79,14 @@ export async function openTaskSession(
   }
 }
 
-export function createExtensionBrowserHost(link: () => BrowserLink | null): BrowserRailHost {
+/**
+ * `startTabId`: the tab the browser offered for this task (browser-start-tab.ts). The task
+ * starts there instead of in a new tab; without it, a new tab opens as before.
+ */
+export function createExtensionBrowserHost(
+  link: () => BrowserLink | null,
+  startTabId?: number
+): BrowserRailHost {
   return {
     async runTask(request: BrowserTaskRequest): Promise<WebTaskResult> {
       const browser = link()
@@ -92,14 +99,15 @@ export function createExtensionBrowserHost(link: () => BrowserLink | null): Brow
           finalUrl: ''
         }
       }
-      return runInBrowser(browser, request)
+      return runInBrowser(browser, request, startTabId)
     }
   }
 }
 
 async function runInBrowser(
   link: BrowserLink,
-  request: BrowserTaskRequest
+  request: BrowserTaskRequest,
+  startTabId: number | undefined
 ): Promise<WebTaskResult> {
   const { goal, url, taskId, journeyId, checkpoint } = request
   const guard = new VisionGuard({ taskId, kind: 'web_use' })
@@ -141,15 +149,22 @@ async function runInBrowser(
 
   try {
     setState('running', `Working in ${link.browser.name}`)
-    const start = url ?? START_URL
     const plan =
       checkpoint?.plan ??
       (await prepareTaskExecutionPlan(
         { goal: retryPlanningGoal(goal, checkpoint), surface: 'web', signal: controller.signal },
         recordStep
       ))
-    const tab = await pages.open(start)
-    recordStep(`opened ${start} in ${link.browser.name}`)
+    let tab: ExtensionTabContents
+    if (startTabId === undefined) {
+      const start = url ?? START_URL
+      tab = await pages.open(start)
+      recordStep(`opened ${start} in ${link.browser.name}`)
+    } else {
+      // The user's own tab, left where it is unless the task names a page.
+      tab = await pages.adopt(startTabId, taskId, url)
+      recordStep(`working in your tab in ${link.browser.name}`)
+    }
     const task = await openTaskSession(link, pages, tab)
     const semantic = await runBrowserPlaywrightTask({
       goal,

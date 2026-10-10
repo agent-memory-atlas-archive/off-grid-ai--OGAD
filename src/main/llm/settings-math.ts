@@ -89,6 +89,7 @@ export interface LaunchState {
   threads: number | undefined
   batchSize: number | undefined
   speculativeDecoding?: SpeculativeDecodingMode
+  speculativeDraftMax?: number
   draftModel?: string
 }
 
@@ -107,6 +108,7 @@ export interface LaunchArgsInput {
   threads: number | undefined
   batchSize: number | undefined
   speculativeDecoding?: SpeculativeDecodingMode
+  speculativeDraftMax?: number
   draftModelPath?: string
   // Floor on image tokens. GUI-grounding (Qwen-VL / UI-TARS) models need >=1024
   // or they ground inaccurately (llama.cpp warns); undefined = engine default.
@@ -156,7 +158,13 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
   if (i.speculativeDecoding === 'ngram') {
     args.push('--spec-type', 'ngram-cache')
   } else if (i.speculativeDecoding === 'mtp') {
-    args.push('--spec-type', 'draft-mtp')
+    // A short draft limits rejected work on normal chat prompts. Larger
+    // user-selected limits remain available for more predictable output.
+    const draftMax = i.speculativeDraftMax ? String(i.speculativeDraftMax) : '2'
+    args.push('--spec-type', 'draft-mtp', '--spec-draft-n-max', draftMax)
+    if (i.draftModelPath) {
+      args.push('--spec-draft-model', i.draftModelPath, '--spec-draft-ngl', String(i.gpuLayers))
+    }
   } else if (
     i.draftModelPath &&
     (i.speculativeDecoding === 'draft' || i.speculativeDecoding === 'dflash')
@@ -167,6 +175,7 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
       '--spec-draft-model',
       i.draftModelPath
     )
+    if (i.speculativeDraftMax) args.push('--spec-draft-n-max', String(i.speculativeDraftMax))
   }
   // Grounding models (UI-TARS / Qwen-VL) need a minimum image-token budget or
   // clicks land in the wrong place; only set when a projector is present.
@@ -189,6 +198,7 @@ export function launchArgsChanged(
     threads?: number
     batchSize?: number
     speculativeDecoding?: SpeculativeDecodingMode
+    speculativeDraftMax?: number
     draftModel?: string
   },
   current: LaunchState,
@@ -204,6 +214,8 @@ export function launchArgsChanged(
     (typeof patch.batchSize === 'number' && patch.batchSize !== current.batchSize) ||
     (patch.speculativeDecoding !== undefined &&
       patch.speculativeDecoding !== current.speculativeDecoding) ||
+    (typeof patch.speculativeDraftMax === 'number' &&
+      patch.speculativeDraftMax !== (current.speculativeDraftMax ?? 0)) ||
     (typeof patch.draftModel === 'string' && patch.draftModel !== current.draftModel)
   )
 }

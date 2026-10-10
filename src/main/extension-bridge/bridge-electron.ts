@@ -5,7 +5,8 @@
 // core; the native action tools and the vault exist only when Pro is active, because only then
 // are they registered. Nothing here grants a browser more than the desktop app itself has.
 
-import { listTaskRuns } from '../tasks/task-history'
+import { getTaskRun, listTaskRuns } from '../tasks/task-history'
+import { controlVisionTask, stopVisionTaskBeforeStart } from '../vision/vision-controller'
 import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
@@ -16,14 +17,16 @@ import {
   deleteRagConversation,
   getDB,
   getRagConversation,
+  updateRagConversationTitle,
   getRagConversations,
   getRagMessages,
   getSettings,
   saveSetting
 } from '../database'
-import { getToolExtensions, runTool } from '../tools'
+import { enabledToolSchemas, getToolExtensions, runTool } from '../tools'
 import { notifyRagConversationChanged } from '../rag-conversation-events'
-import { callHookAsync, hasHook, HOOKS } from '../bootstrap/hookRegistry'
+import { callHook, callHookAsync, hasHook, HOOKS } from '../bootstrap/hookRegistry'
+import { getSecret } from '../secrets'
 import { proEnabled } from '../bootstrap/loadProFeaturesMain'
 import { getWebUseSettings, setWebUseSettings } from '../web-use-settings'
 import { getComputerUseSettings, setComputerUseSettings } from '../computer-use-settings'
@@ -58,9 +61,18 @@ import {
   MAX_LISTED,
   parseBridgeConversation,
   toBridgeConversation,
-  turnsToAppend
+  turnsToAppend,
+  historyConflicts,
+  newerBrowserTitle,
+  HISTORY_CONFLICT
 } from './bridge-conversations'
 import { generateKeyPair } from './bridge-protocol'
+import {
+  browserTaskById,
+  createAcceptedTasks,
+  latestBrowserTask,
+  stopRoute
+} from './bridge-task-progress'
 import { createLinkRegistry, type BrowserLink } from './bridge-socket'
 
 const storePath = (): string => path.join(app.getPath('userData'), 'extension-bridge.json')
@@ -190,21 +202,19 @@ function features(): BridgeFeatures {
 
 async function listTools(): Promise<unknown[]> {
   const out: unknown[] = []
-  for (const ext of getToolExtensions()) {
-    const source = ext.category === 'tool' ? 'native' : 'connector'
-    for (const schema of await ext.schemas()) {
-      const fn = (
-        schema as { function?: { name?: unknown; description?: unknown; parameters?: unknown } }
-      ).function
-      if (typeof fn?.name === 'string') {
-        out.push({
-          name: fn.name,
-          description: typeof fn.description === 'string' ? fn.description : '',
-          parameters: fn.parameters ?? { type: 'object', properties: {} },
-          source,
-          ...(source === 'connector' ? { connector: ext.id } : {})
-        })
-      }
+  for (const { schema, extension } of await enabledToolSchemas(getToolExtensions())) {
+    const fn = (
+      schema as { function?: { name?: unknown; description?: unknown; parameters?: unknown } }
+    ).function
+    if (typeof fn?.name === 'string') {
+      const source = !extension || extension.category === 'tool' ? 'native' : 'connector'
+      out.push({
+        name: fn.name,
+        description: typeof fn.description === 'string' ? fn.description : '',
+        parameters: fn.parameters ?? { type: 'object', properties: {} },
+        source,
+        ...(source === 'connector' && extension ? { connector: extension.id } : {})
+      })
     }
   }
   return out
@@ -246,6 +256,14 @@ const settingsStore = createSettingsStore({
   listTools: listDesktopTools,
   setToolEnabled,
   listConnectors,
+  // Accounts are live-only connectors; Pro names what each can read.
+  accountAccess: (id) =>
+    getSecret(`connector:${id}:live-only`) === 'true'
+      ? (callHook<{ services: string[]; missing: string[] }>(HOOKS.accountAccess, id) ?? {
+          services: [],
+          missing: []
+        })
+      : null,
   addConnector: (c) => void addConnector(c),
   setConnectorEnabled,
   removeConnector,
@@ -265,6 +283,12 @@ const settingsStore = createSettingsStore({
   transcription: readTranscriptionInfo
 })
 
+/** The journey every task a browser starts belongs to: its chats' origin. */
+const journeyOf = (browser: PairedBrowser): string => `${BROWSER_ORIGIN_PREFIX}${browser.id}`
+
+/** The task ids each browser was given (bridge-task-progress.ts). */
+const acceptedTasks = createAcceptedTasks()
+
 const data: BridgeData = {
   features,
   desktopName: () => 'Off Grid AI Desktop',
@@ -275,15 +299,22 @@ const data: BridgeData = {
   putConversation: async (raw, browser) => {
     const conversation = parseBridgeConversation(raw)
     if (!conversation) throw new Error('invalid')
-    if (!getRagConversation(conversation.id)) {
+    const existing = getRagConversation(conversation.id)
+    const stored = getRagMessages(conversation.id)
+    // An edit the desktop cannot apply is refused, never reported as synced.
+    if (existing && historyConflicts(stored, conversation.turns)) throw new Error(HISTORY_CONFLICT)
+    if (!existing) {
       createRagConversation(conversation.id, conversation.title)
       getDB()
         .prepare(
           'UPDATE rag_conversations SET origin_device_id = ?, origin_device_name = ? WHERE id = ?'
         )
-        .run(`${BROWSER_ORIGIN_PREFIX}${browser.id}`, browser.name, conversation.id)
+        .run(journeyOf(browser), browser.name, conversation.id)
+    } else {
+      const title = newerBrowserTitle(existing, conversation)
+      if (title) updateRagConversationTitle(conversation.id, title)
     }
-    for (const turn of turnsToAppend(getRagMessages(conversation.id), conversation.turns)) {
+    for (const turn of turnsToAppend(stored, conversation.turns)) {
       addRagMessage(conversation.id, turn.role, turn.content)
     }
     // The chat list reloads now, as it does for a phone's chats, not on the next restart.
@@ -294,21 +325,40 @@ const data: BridgeData = {
     notifyRagConversationChanged({ conversationId: id })
   },
   listTools,
-  runTool: async (name, args, browser) => {
+  runTool: async (name, args, browser, tabId) => {
+    const journeyId = journeyOf(browser)
+    // A web task works in the tab its chat offered: the tab travels with that one task.
     const result = await runTool(
       name,
       args,
-      { conversationId: `${BROWSER_ORIGIN_PREFIX}${browser.id}` },
+      {
+        conversationId: journeyId,
+        ...(tabId === undefined ? {} : { startTab: { browserId: browser.id, tabId } })
+      },
       getToolExtensions()
     )
-    return { ok: result.status !== 'failed', output: result.text }
+    const ok = result.status !== 'failed'
+    // The accepted task's own id (web_use and computer_use), from the moment it is accepted.
+    const taskId = ok ? result.taskId : undefined
+    if (taskId) acceptedTasks.remember(taskId, journeyId)
+    return { ok, output: result.text, ...(taskId ? { taskId } : {}) }
   },
-  latestTask: async (browser, since) => {
-    const run = listTaskRuns(20).find(
-      (task) =>
-        task.journeyId === `${BROWSER_ORIGIN_PREFIX}${browser.id}` && task.startedAt >= since
-    )
-    return run ? { status: run.status, summary: run.summary ?? '' } : null
+  latestTask: async (browser, since, taskId) => {
+    const journeyId = journeyOf(browser)
+    if (taskId === undefined) return latestBrowserTask(listTaskRuns(20), journeyId, since)
+    // Its own task, however many have started since; one not started yet shows as queued.
+    return browserTaskById(getTaskRun(taskId) ?? null, acceptedTasks, journeyId, since, taskId)
+  },
+  stopTask: async (browser, taskId) => {
+    const route = stopRoute(getTaskRun(taskId) ?? null, acceptedTasks, journeyOf(browser), taskId)
+    if (route === 'running') return controlVisionTask('stop', taskId)
+    // Accepted for this browser but not started (queued, awaiting approval): stopped as it starts.
+    if (route === 'before-start') stopVisionTaskBeforeStart(taskId)
+    return route === 'before-start'
+  },
+  setTaskRole: async (request) => {
+    const { setTaskRoleFromRequest } = await import('../task-role-requests')
+    return setTaskRoleFromRequest(request)
   },
   vault: async (request, browser) =>
     callHookAsync(HOOKS.extensionVaultRequest, request, {

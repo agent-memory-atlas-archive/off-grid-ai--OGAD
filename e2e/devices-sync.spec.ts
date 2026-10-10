@@ -517,7 +517,7 @@ test.describe('Devices surface — pro tier', () => {
     await page.getByRole('button', { name: 'Rescan network' }).click()
     await expect(page.getByRole('button', { name: 'Rescan network' })).toBeEnabled()
     await expect(page.getByText('Synthetic Android').first()).toBeVisible()
-    await expect(page.getByText('Scanning WiFi and Nearby routes.')).toHaveCount(0)
+    await expect(page.getByText('Scanning Wi-Fi and Nearby routes.')).toHaveCount(0)
     await expect(page.getByRole('alert')).toHaveCount(0)
 
     const timestamp = new Date().toISOString()

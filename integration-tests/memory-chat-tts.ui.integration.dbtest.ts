@@ -379,6 +379,8 @@ describe('assistant reply speech integration (#105)', () => {
 
     const boundary = new ChatBoundary()
     installProductionVoiceBridge(boundary)
+    // This journey is the Manual turn: tap to record, tap to stop. Auto is the default now.
+    saveSetting('composerVoiceTurnMode', 'tap')
     const user = userEvent.setup()
     const view = renderChat({ conversationId })
 

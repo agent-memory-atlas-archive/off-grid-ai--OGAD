@@ -81,10 +81,33 @@ async function setup(opts: { approve?: boolean; features?: BridgeFeatures } = {}
     deleteConversation: async (id) => {
       calls.push(`delete:${id}`)
     },
-    listTools: async () => [{ name: 'notion_search' }],
-    runTool: async (name) => ({ ok: true, output: `ran ${name}` }),
-    latestTask: async (browser, since) =>
-      since > 2_000_000 ? null : { status: 'done', summary: `for ${browser.name}` },
+    // As the desktop lists them: connector tools always, its own tools only when it has them.
+    listTools: async () =>
+      (opts.features ?? FREE).tools
+        ? [{ name: 'notion_search' }, { name: 'mail_send' }, { name: 'web_use' }]
+        : [{ name: 'notion_search' }],
+    runTool: async (name, _args, _browser, tabId) => ({
+      ok: true,
+      output: `ran ${name}${tabId === undefined ? '' : ` in tab ${tabId}`}`
+    }),
+    latestTask: async (browser, since, taskId) =>
+      since > 2_000_000 || (taskId !== undefined && taskId !== 'task-1')
+        ? null
+        : {
+            taskId: 'task-1',
+            status: 'done',
+            summary: `for ${browser.name}`,
+            plan: ['Open the shop'],
+            phase: 0,
+            steps: ['opened the shop'],
+            action: ''
+          },
+    stopTask: async (_browser, taskId) => taskId === 'task-1',
+    // The desktop's role setter answers; a model it cannot use is refused.
+    setTaskRole: async (request) =>
+      request.modelId === 'grounder-1'
+        ? { success: true }
+        : { success: false, error: 'That model cannot fill this role.' },
     readSettings: async (section) => settings.read(section),
     writeSettings: async (section, patch) => settings.write(section, patch),
     vault: async () => ({ type: 'status', state: 'unlocked' })
@@ -236,6 +259,25 @@ describe('sealed rpc', () => {
     }
   })
 
+  it('lets a paired browser give a model a task role, and refuses what the desktop refuses', async () => {
+    // Review finding: roles changed over the open gateway. A paired browser uses its sealed link.
+    const s = await setup()
+    await s.pair()
+    const ok = await s.call('device000001', 'models.setTaskRole', {
+      task: 'web_use',
+      role: 'grounding',
+      modelId: 'grounder-1'
+    })
+    expect(ok.body).toMatchObject({ ok: true, result: { success: true } })
+    const refused = await s.call('device000001', 'models.setTaskRole', {
+      task: 'web_use',
+      role: 'grounding',
+      modelId: 'made-up'
+    })
+    expect(refused.body).toMatchObject({ ok: false })
+    expect((await s.call('device999999', 'models.setTaskRole', {})).status).toBe(401)
+  })
+
   it('lists chats and tools, puts and deletes', async () => {
     const s = await setup()
     await s.pair()
@@ -265,6 +307,12 @@ describe('sealed rpc', () => {
       (await free.call('device000001', 'tools.run', { name: 'mail_send', args: {} })).body
     ).toMatchObject({ ok: false, error: 'pro_required' })
 
+    // A connector tool the desktop lists runs on a free desktop too (review finding: it was
+    // listed, then refused as Pro-only).
+    expect(
+      (await free.call('device000001', 'tools.run', { name: 'notion_search', args: {} })).body
+    ).toMatchObject({ ok: true, result: { output: 'ran notion_search' } })
+
     // Pro, but this desktop cannot answer for the vault or tools yet: never "upgrade".
     const stale = await setup({ features: { ...PRO, vault: false, tools: false } })
     await stale.pair()
@@ -289,19 +337,50 @@ describe('sealed rpc', () => {
       ok: false,
       error: 'invalid'
     })
+    // Review finding: a tool turned off since the browser listed it must not run, Pro or not.
+    expect(
+      (await pro.call('device000001', 'tools.run', { name: 'calendar_delete', args: {} })).body
+    ).toMatchObject({ ok: false, error: 'tool_unavailable' })
+    // A web task can name the chat's tab to start in; anything but a tab id is refused.
+    expect(
+      (await pro.call('device000001', 'tools.run', { name: 'web_use', args: {}, tabId: 42 })).body
+    ).toMatchObject({ ok: true, result: { output: 'ran web_use in tab 42' } })
+    for (const tabId of [-1, 1.5, '42', null]) {
+      expect(
+        (await pro.call('device000001', 'tools.run', { name: 'web_use', args: {}, tabId })).body
+      ).toMatchObject({ ok: false, error: 'invalid' })
+    }
   })
 
-  it('tasks.latest reports this browser\'s latest task, for a run that started one', async () => {
+  it("tasks.latest reports this browser's latest task, for a run that started one", async () => {
     // web_use answers "started" at once; the browser asks here for the result it was waiting on.
     const pro = await setup({ features: PRO })
     await pro.pair()
     expect((await pro.call('device000001', 'tasks.latest', { since: 1 })).body).toMatchObject({
       ok: true,
-      result: { status: 'done', summary: 'for Chrome on this Mac' }
+      result: {
+        taskId: 'task-1',
+        status: 'done',
+        summary: 'for Chrome on this Mac',
+        plan: ['Open the shop'],
+        phase: 0,
+        steps: ['opened the shop'],
+        action: ''
+      }
     })
-    expect((await pro.call('device000001', 'tasks.latest', { since: 3_000_000 })).body).toMatchObject(
-      { ok: true, result: null }
-    )
+    expect(
+      (await pro.call('device000001', 'tasks.latest', { since: 3_000_000 })).body
+    ).toMatchObject({ ok: true, result: null })
+    // A chat asks for its own task by id, so a newer task from another chat never hides it.
+    expect(
+      (await pro.call('device000001', 'tasks.latest', { since: 1, taskId: 'task-2' })).body
+    ).toMatchObject({ ok: true, result: null })
+    expect(
+      (await pro.call('device000001', 'tasks.latest', { since: 1, taskId: 'task-1' })).body
+    ).toMatchObject({ ok: true, result: { taskId: 'task-1' } })
+    expect(
+      (await pro.call('device000001', 'tasks.latest', { since: 1, taskId: 'a b' })).body
+    ).toMatchObject({ ok: false, error: 'invalid' })
     expect((await pro.call('device000001', 'tasks.latest', { since: 'x' })).body).toMatchObject({
       ok: false,
       error: 'invalid'
@@ -312,6 +391,28 @@ describe('sealed rpc', () => {
       ok: false,
       error: 'pro_required'
     })
+  })
+
+  it('tasks.stop stops the task this browser names, and refuses anything but a task id', async () => {
+    const pro = await setup({ features: PRO })
+    await pro.pair()
+    expect((await pro.call('device000001', 'tasks.stop', { taskId: 'task-1' })).body).toMatchObject(
+      { ok: true, result: true }
+    )
+    expect((await pro.call('device000001', 'tasks.stop', { taskId: 'task-2' })).body).toMatchObject(
+      { ok: true, result: false }
+    )
+    for (const taskId of [3, '', 'a b', 'x'.repeat(200)]) {
+      expect((await pro.call('device000001', 'tasks.stop', { taskId })).body).toMatchObject({
+        ok: false,
+        error: 'invalid'
+      })
+    }
+    const free = await setup()
+    await free.pair()
+    expect(
+      (await free.call('device000001', 'tasks.stop', { taskId: 'task-1' })).body
+    ).toMatchObject({ ok: false, error: 'pro_required' })
   })
 
   it('unpair removes the browser; its key stops working', async () => {

@@ -48,7 +48,7 @@ const productionBoundary: McpConnectorToolBoundary = {
 
 function formatChatConnectorExecution(
   execution: ChatConnectorExecution,
-  meta: { tool: string; connector: string }
+  meta: { tool: string; connector: string; unattended?: boolean }
 ): string {
   switch (execution.kind) {
     case 'unavailable':
@@ -58,6 +58,10 @@ function formatChatConnectorExecution(
     case 'deduped':
       return `That exact connector action is already in flight — not starting a duplicate. Action reference: ${execution.actionId}.`
     case 'parked':
+      // A routine's change waits for a person; in Chat nothing should have parked.
+      if (meta.unattended) {
+        return `"${meta.tool}" on ${meta.connector}: Waiting for the user's approval in Action Approval; it runs once they approve. Tell the user it is waiting for them. Action reference: ${execution.actionId}.`
+      }
       return `Error: the action engine held this Chat connector action instead of starting it. No approval was created. Action reference: ${execution.actionId}.`
     case 'running':
       return `"${meta.tool}" on ${meta.connector} is running now. It does NOT need approval. Action reference: ${execution.actionId}.`
@@ -143,9 +147,13 @@ export class McpConnectorToolExtension implements ToolExtension {
         connector: meta.connector,
         tool: meta.tool,
         args,
-        sourceRef: context?.conversationId
+        sourceRef: context?.conversationId,
+        ...(context?.actionSource ? { source: context.actionSource } : {})
       })
-      return formatChatConnectorExecution(execution, meta)
+      return formatChatConnectorExecution(execution, {
+        ...meta,
+        unattended: context?.actionSource === 'routine'
+      })
     }
     try {
       const r = await this.boundary.callTool(meta.id, meta.tool, args)

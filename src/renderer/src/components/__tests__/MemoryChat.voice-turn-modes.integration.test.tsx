@@ -8,6 +8,8 @@ import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatBoundary, installBoundary, renderChat } from './harness/chat-boundary'
+import { MemoryChat } from '../MemoryChat'
+import { TooltipProvider } from '../ui/tooltip'
 
 class RecorderBoundary {
   static instances: RecorderBoundary[] = []
@@ -157,6 +159,43 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     vi.unstubAllGlobals()
   })
 
+  it('never delivers a voice turn into a chat opened while it was being transcribed', async () => {
+    // Review finding: the turn kept no chat, so A's transcript landed in B after a switch.
+    installMicrophone()
+    let resolveTranscript!: (text: string) => void
+    const boundary = new ChatBoundary()
+    const transcribeAudio = vi.fn(
+      () => new Promise<string>((resolve) => (resolveTranscript = resolve))
+    )
+    Object.assign(boundary.api, {
+      transcribeAudio,
+      cancelTranscription: vi.fn(async () => true),
+      getTranscriptionInfo: vi.fn(transcriptionInfo)
+    })
+    installBoundary(boundary)
+    const user = userEvent.setup()
+    const view = renderChat({ conversationId: 'conversation-a' })
+
+    await user.click(await screen.findByRole('button', { name: 'Record voice' }))
+    await user.click(await screen.findByRole('button', { name: 'Stop recording' }))
+    await waitFor(() => expect(transcribeAudio).toHaveBeenCalledOnce())
+
+    // Open chat B while A's recording is still being transcribed.
+    view.rerender(
+      <TooltipProvider>
+        <MemoryChat openTarget={{ conversationId: 'conversation-b' }} />
+      </TooltipProvider>
+    )
+    resolveTranscript('Something said in chat A')
+    expect(
+      await screen.findByText(
+        'That voice note was recorded in another chat, so it was not sent here.'
+      )
+    ).toBeTruthy()
+    expect((screen.getByPlaceholderText(/^ask /i) as HTMLTextAreaElement).value).toBe('')
+    expect(boundary.calls).toHaveLength(0)
+  })
+
   it('uses the active transcription model for text dictation and lets the user cancel', async () => {
     installMicrophone()
     let resolveTranscript!: (text: string) => void
@@ -202,7 +241,7 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     expect(transcribeAudio).toHaveBeenCalledTimes(2)
   })
 
-  it('keeps the voice composer compact and Auto sends after speech ends in silence', async () => {
+  it('starts in Auto, changed in the voice box, and Auto sends after speech ends in silence', async () => {
     const { getUserMedia } = installMicrophone()
     const boundary = new ChatBoundary()
     const transcribeAudio = vi.fn(async () => 'Schedule the planning review')
@@ -215,17 +254,12 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     renderChat({ conversationId: 'conversation-a' })
 
     expect(await screen.findByRole('group', { name: 'Voice mode' })).toBeTruthy()
-    expect(screen.getByText('Manual')).toBeTruthy()
-    expect(screen.getByText('Click the microphone to record')).toBeTruthy()
+    // Auto by default, and changed right in the voice box: one picker, the same choice as
+    // Settings > Voice, for Chat and God alike.
+    expect(screen.getByRole('button', { name: 'Voice turns: Auto' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Voice options' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Manual' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Voice settings' }))
-    expect(await screen.findByRole('button', { name: 'Auto' })).toBeTruthy()
 
     vi.useFakeTimers()
-    fireEvent.click(screen.getByRole('button', { name: 'Auto' }))
-    await flush()
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     fireEvent.click(screen.getByRole('button', { name: 'Start voice recording' }))
     await flush()
     expect(getUserMedia).toHaveBeenCalledOnce()

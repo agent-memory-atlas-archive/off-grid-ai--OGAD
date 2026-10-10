@@ -35,14 +35,19 @@ import { detectThinkingDialect, type ThinkingDialect } from './llm/thinking-dial
 import { isValidGgufFile } from './models/gguf'
 import { CATALOG, isGrounderModel } from '@offgrid/models'
 import { readGgufContextLength, readGgufMtpSupport } from './models/gguf-metadata'
-import { dflashFileName, primaryFileName, type CatalogEntry } from './models/catalog-logic'
+import {
+  MTP_COMPANIONS,
+  dflashFileName,
+  primaryFileName,
+  type CatalogEntry
+} from './models/catalog-logic'
 import { pickFreePort, isPortFree } from './free-port'
 import { postCompletionOnce } from './llm/http-post'
 import { engineSpawnEnv } from './llm/spawn-env'
 import { gpuDeviceAvailable } from './llm/gpu-device-probe'
 import { shouldAutoRecover } from './llm/crash-policy'
 import { enginePriority } from './llm/engine-priority'
-import { modelStartupTimeout } from './llm/startup-timeout'
+import { modelStartupQuietLimit, startupStalled } from './llm/startup-timeout'
 import { getBackendPreference } from './backend-preferences'
 import { prioritizeBackend, type BackendPreference } from '../shared/backend-preferences'
 import { streamCompletion, type StreamResult } from './llm/stream'
@@ -87,6 +92,7 @@ export interface LlmSettings {
   threads?: number // CPU threads for inference
   batchSize?: number // -b: prompt batch size
   speculativeDecoding?: SpeculativeDecodingMode
+  speculativeDraftMax?: number // 0 = Auto, otherwise 1-16 draft tokens
   draftModel?: string // filename of an installed GGUF in the app's model directory
   supportsMtp?: boolean // read-only capability of the selected GGUF
   compatibleDraftModels?: string[] // read-only filenames with the same tokenizer/vocabulary
@@ -283,6 +289,7 @@ export class LLMService {
   private threads: number | undefined
   private batchSize: number | undefined
   private speculativeDecoding: SpeculativeDecodingMode = 'off'
+  private speculativeDraftMax = 0
   private draftModel = ''
   // Crash recovery: distinguish an intentional kill (stop/reload/settings respawn)
   // from an unexpected crash so we only auto-restart on real crashes.
@@ -308,6 +315,8 @@ export class LLMService {
   // Last ~50 stderr lines from llama-server, so we can explain WHY it died on
   // load (unknown arch / OOM / OS-too-old) instead of a blank "Down".
   private stderrTail: string[] = []
+  // When the starting llama-server last wrote anything; waitForReady gives up only on silence.
+  private lastServerOutputAt = 0
   // Human, actionable reason the server failed to come up (null when healthy).
   private lastErrorMsg: string | null = null
   private get settingsFile(): string {
@@ -366,6 +375,8 @@ export class LLMService {
       )
         this.speculativeDecoding = s.speculativeDecoding
       if (typeof s.draftModel === 'string') this.draftModel = path.basename(s.draftModel)
+      if (Number.isInteger(s.speculativeDraftMax) && s.speculativeDraftMax >= 0 && s.speculativeDraftMax <= 16)
+        this.speculativeDraftMax = s.speculativeDraftMax
       if (
         s.performanceMode === 'conservative' ||
         s.performanceMode === 'balanced' ||
@@ -428,7 +439,23 @@ export class LLMService {
   }
 
   private supportsMtp(): boolean {
-    return !!this.modelPath && readGgufMtpSupport(this.modelPath, fs)
+    return (
+      !!this.modelPath &&
+      isValidGgufFile(this.modelPath, fs) &&
+      (readGgufMtpSupport(this.modelPath, fs) || !!this.mtpModelPath())
+    )
+  }
+
+  private mtpModelPath(): string | undefined {
+    const selected = path.basename(this.modelPath)
+    const companion = /^Qwen3\.8-27B-(?:UD-)?(?:Q|IQ)[A-Z0-9_]+\.gguf$/i.test(selected)
+      ? MTP_COMPANIONS['unsloth/Qwen3.8-27B-GGUF']
+      : /^tencent_UI-Mate-9B-(?:Q|IQ)[A-Z0-9_]+(?:\+MTP)?\.gguf$/i.test(selected)
+        ? MTP_COMPANIONS['bartowski/tencent_UI-Mate-9B-GGUF+MTP']
+        : undefined
+    if (!companion) return undefined
+    const candidate = path.join(getModelsDir(), companion.name)
+    return readGgufMtpSupport(candidate, fs, undefined, companion.sizeBytes) ? candidate : undefined
   }
 
   private speculativeModelCapabilities(): {
@@ -517,6 +544,7 @@ export class LLMService {
       threads: this.threads,
       batchSize: this.batchSize,
       speculativeDecoding: this.speculativeDecoding,
+      speculativeDraftMax: this.speculativeDraftMax,
       draftModel: this.draftModel,
       supportsMtp: this.supportsMtp(),
       ...speculativeCapabilities,
@@ -543,7 +571,11 @@ export class LLMService {
 
   /** Build argv for the selected context and a GPU-layer count. */
   private launchArgsFor(effectiveCtxSize: number, gpuLayers: number): string[] {
-    const useSelectedModelSpeculation = this.runtimeModelOverride === null
+    const useSelectedModelSpeculation =
+      this.runtimeModelOverride === null &&
+      this.speculativeModeSupported(this.speculativeDecoding, this.draftModel)
+    const useRuntimeMtp =
+      this.runtimeModelOverride !== null && this.speculativeDecoding === 'mtp' && this.supportsMtp()
     return buildLaunchArgs({
       modelPath: this.modelPath,
       mmProjPath: this.mmProjPath,
@@ -554,14 +586,26 @@ export class LLMService {
       kvCacheType: this.kvCacheType,
       threads: this.threads,
       batchSize: this.batchSize,
-      speculativeDecoding: useSelectedModelSpeculation ? this.speculativeDecoding : 'off',
-      draftModelPath: useSelectedModelSpeculation ? this.draftModelPath() : undefined,
+      speculativeDraftMax: this.speculativeDraftMax,
+      speculativeDecoding: useSelectedModelSpeculation
+        ? this.speculativeDecoding
+        : useRuntimeMtp
+          ? 'mtp'
+          : 'off',
+      draftModelPath: useSelectedModelSpeculation
+        ? this.draftModelPath()
+        : useRuntimeMtp
+          ? this.mtpModelPath()
+          : undefined,
       imageMinTokens: this.imageMinTokensForModel(),
       reportModelPlacement: true
     })
   }
 
   private draftModelPath(): string | undefined {
+    if (this.speculativeDecoding === 'mtp') {
+      return this.mtpModelPath()
+    }
     if (!this.speculativeModeSupported(this.speculativeDecoding, this.draftModel)) return undefined
     if (!this.draftModel || path.basename(this.draftModel) !== this.draftModel) return undefined
     const candidate = path.join(getModelsDir(), this.draftModel)
@@ -614,6 +658,10 @@ export class LLMService {
   /** Update inference settings; respawns the server if any launch-time arg changed
    *  (context, KV-cache type, flash-attn, GPU layers, threads, batch). */
   async setSettings(s: LlmSettings, options: LlmSettingsUpdateOptions = {}): Promise<void> {
+    if (s.speculativeDraftMax !== undefined &&
+      (!Number.isInteger(s.speculativeDraftMax) || s.speculativeDraftMax < 0 || s.speculativeDraftMax > 16)) {
+      throw new Error('Draft token limit must be Auto (0) or a whole number from 1 to 16.')
+    }
     this.ensureLoaded()
     this.resolveModel()
     const requestedMode = s.speculativeDecoding ?? this.speculativeDecoding
@@ -668,6 +716,7 @@ export class LLMService {
         threads: this.threads,
         batchSize: this.batchSize,
         speculativeDecoding: this.speculativeDecoding,
+        speculativeDraftMax: this.speculativeDraftMax,
         draftModel: this.draftModel
       },
       modeChanged
@@ -711,6 +760,8 @@ export class LLMService {
       this.speculativeDecoding = compatibleSettings.speculativeDecoding
     if (typeof compatibleSettings.draftModel === 'string')
       this.draftModel = path.basename(compatibleSettings.draftModel)
+    if (typeof compatibleSettings.speculativeDraftMax === 'number')
+      this.speculativeDraftMax = compatibleSettings.speculativeDraftMax
     // Quantized KV cache requires FlashAttention — auto-enable it so the pair is valid.
     if (this.kvCacheType !== 'f16' && !this.flashAttn) this.flashAttn = true
     const restorePrior = (
@@ -738,6 +789,7 @@ export class LLMService {
       this.threads = priorSettings.threads
       this.batchSize = priorSettings.batchSize
       this.speculativeDecoding = priorSettings.speculativeDecoding ?? this.speculativeDecoding
+      this.speculativeDraftMax = priorSettings.speculativeDraftMax ?? 0
       this.draftModel = priorSettings.draftModel ?? this.draftModel
       this.userExplicit.clear()
       priorExplicit.forEach((field) => this.userExplicit.add(field))
@@ -873,6 +925,7 @@ export class LLMService {
 
   /** Load a Computer Use specialist without changing the saved Text model. */
   useRuntimeModel(model: { id: string; primary: string; mmproj: string | null }): void {
+    this.ensureLoaded()
     this.runtimeModelOverride = { ...model }
     this.reloadModel()
   }
@@ -1180,6 +1233,13 @@ export class LLMService {
           console.warn(`[LLMService] out of memory — retrying load at ${at.reason}`)
         }
         const args = this.launchArgsFor(at.ctxSize, at.gpuLayers)
+        // The six-token Qwen3.5 9B gain was measured with stock llama.cpp on
+        // Metal. Preserve the existing limit for other engines and backends.
+        const draftMaxIndex = args.indexOf('--spec-draft-n-max')
+        if (draftMaxIndex >= 0 && this.speculativeDecoding === 'mtp' && this.speculativeDraftMax === 0 &&
+          (engineDir !== 'llama' || cpuOnly || process.platform !== 'darwin')) {
+          args[draftMaxIndex + 1] = '2'
+        }
         // Captured in the same step as the arguments: a save can land during init's earlier awaits,
         // so only this matches what actually ran. A successful spawn makes it the working launch.
         const launchedWith = { settings: this.getSettings(), explicit: new Set(this.userExplicit) }
@@ -1270,6 +1330,7 @@ export class LLMService {
     this.backendModelPath = this.modelPath
     this.backendPlacement = undefined
     this.stderrTail = []
+    this.lastServerOutputAt = Date.now()
     this.invalidateHealth()
     let abandoned = false // set when we give up on this proc so its close handler is inert
     // True until waitForReady() confirms THIS engine. A close while probing is a failed
@@ -1284,7 +1345,11 @@ export class LLMService {
       console.error(`[LLMService] llama-server process error:`, e)
     })
 
+    proc.stdout?.on('data', () => {
+      this.lastServerOutputAt = Date.now()
+    })
     proc.stderr?.on('data', (data) => {
+      this.lastServerOutputAt = Date.now()
       const text = String(data)
       // Verbosity 4 also emits request traces. Read and log it only during model
       // load so user prompts cannot enter the app log or its diagnostic tail.
@@ -1329,10 +1394,9 @@ export class LLMService {
     })
 
     try {
-      // A cold CUDA load can spend over a minute on model weights and CLIP
-      // initialization while the server is still healthy. Do not kill it and
-      // fall back to CPU at the normal one-minute deadline.
-      await this.waitForReady(modelStartupTimeout(path.basename(binDir)))
+      // No total deadline: a large model loads for as long as llama-server keeps
+      // printing progress. Only a crash or a silent, stuck server moves to the next engine.
+      await this.waitForReady(modelStartupQuietLimit(path.basename(binDir)))
       if (this.server !== proc) throw new Error('Model load was cancelled')
       // Confirmed healthy: from here a close IS a crash worth recovering from.
       probing = false
@@ -1486,10 +1550,9 @@ export class LLMService {
     }
   }
 
-  private async waitForReady(timeout = 60000): Promise<void> {
-    const start = Date.now()
+  private async waitForReady(quietLimit = 60000): Promise<void> {
     let healthOk = false
-    while (Date.now() - start < timeout) {
+    while (!startupStalled(Date.now(), this.lastServerOutputAt, quietLimit)) {
       // The server died during startup (e.g. model load failure) — stop waiting.
       if (!this.server) throw new Error('llama-server exited during startup — model failed to load')
       try {
@@ -1512,7 +1575,7 @@ export class LLMService {
       }
       await new Promise((r) => setTimeout(r, 500)) // NOSONAR: wait between sequential startup probes.
     }
-    throw new Error('Server started but no model was loaded within the timeout')
+    throw new Error('Server stopped responding while loading the model')
   }
 
   // Use Node http module instead of fetch to avoid undici's headersTimeout (300s)

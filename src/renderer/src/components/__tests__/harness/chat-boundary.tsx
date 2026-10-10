@@ -73,6 +73,8 @@ type Conversation = {
   id: string
   title: string
   project_id: string | null
+  /** 'god' for a God conversation; null for Chat (main's rag_conversations.surface). */
+  surface?: string | null
   created_at: string
   updated_at: string
   message_count: number
@@ -212,7 +214,15 @@ export class ChatBoundary {
       }
     }),
     getActiveRagStreams: vi.fn(async () => this.activeRagStreams.map((stream) => ({ ...stream }))),
-    getRagConversations: vi.fn(async () => this.conversations.map((item) => ({ ...item }))),
+    // As main filters it: 'god' lists God's conversations only, 'chat' leaves them out.
+    getRagConversations: vi.fn(
+      async (_projectId?: string | null, _page?: unknown, surface?: 'chat' | 'god') =>
+        this.conversations
+          .filter((item) =>
+            surface === 'god' ? item.surface === 'god' : surface === 'chat' ? item.surface !== 'god' : true
+          )
+          .map((item) => ({ ...item }))
+    ),
     getRagConversation: vi.fn(async (id: string) => {
       const found = this.conversations.find((item) => item.id === id)
       return found ? { ...found } : null
@@ -229,8 +239,16 @@ export class ChatBoundary {
       )
     }),
     createRagConversation: vi.fn(
-      async (id: string, title = 'Untitled', projectId: string | null = null) => {
-        this.conversations.unshift(this.conversation(id, title, projectId))
+      async (
+        id: string,
+        title = 'Untitled',
+        projectId: string | null = null,
+        surface?: 'chat' | 'god'
+      ) => {
+        this.conversations.unshift({
+          ...this.conversation(id, title, projectId),
+          surface: surface === 'god' ? 'god' : null
+        })
         this.messages[id] = []
         return id
       }

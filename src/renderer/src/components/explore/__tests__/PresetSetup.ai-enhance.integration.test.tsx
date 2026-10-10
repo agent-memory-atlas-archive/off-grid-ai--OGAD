@@ -36,7 +36,7 @@ describe('<PresetSetup/> AI enhancement', () => {
     expect(screen.queryByRole('status', { name: 'AI enhancement in progress' })).toBeNull()
   })
 
-  it('enhances open-ended fields in the nearby-search Assistant flow', async () => {
+  it('enhances open-ended fields in the nearby-search God flow', async () => {
     const requests: string[] = []
     const submissions: string[] = []
     window.api = {
@@ -133,7 +133,7 @@ describe('<PresetSetup/> AI enhancement', () => {
     )
     expect(requests).toHaveLength(1)
     expect(requests[0]).toContain('Create a useful surprise answer for this empty form field.')
-    expect(requests[0]).toContain('Assistant action: Create a comic book')
+    expect(requests[0]).toContain('God action: Create a comic book')
     expect(requests[0]).toContain('Form purpose: Plan the comic book')
     expect(requests[0]).toContain('Invent plausible, concrete details')
   })

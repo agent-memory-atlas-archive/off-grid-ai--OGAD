@@ -42,6 +42,7 @@ import { serveArtifactPreview } from './artifact-preview'
 import { ipcMain } from 'electron'
 import { loadProEntitlementProvider, loadProFeaturesMain } from './bootstrap/loadProFeaturesMain'
 import { resolveWindowPresentation } from './bootstrap/window-presentation'
+import { callHook, HOOKS } from './bootstrap/hookRegistry'
 import { mayUseIsolatedEvidenceInstance } from './bootstrap/isolated-evidence-instance'
 
 /**
@@ -585,6 +586,9 @@ app.whenReady().then(async () => {
   // imports and local-model startup begin competing for CPU and memory.
   await new Promise<void>((resolve) => setImmediate(resolve))
 
+  // Features that show something beside the main window (Pro's desktop companion) start now.
+  if (windowPresentation.showWindow) callHook(HOOKS.mainWindowShown)
+
   // Network checks, model work, and optional services now run beside the visible shell.
   void runIndependentStartupStages([
     {
@@ -655,7 +659,10 @@ app.whenReady().then(async () => {
         const { llm } = await import('./llm')
         registerRuntime(llm.runtime)
         applyQueueConfig(modalityQueue, readQueueConfig(getSetting))
-        if (llm.modelsExist()) await llm.init()
+        // A remote chat model needs no local engine: loading one anyway holds gigabytes of
+        // memory for nothing. Chat starts it on demand if the user switches back.
+        const { getActiveRemoteVisionServer } = await import('./vision/remote-vision-server')
+        if (llm.modelsExist() && !getActiveRemoteVisionServer()) await llm.init()
       }
     })
   })()

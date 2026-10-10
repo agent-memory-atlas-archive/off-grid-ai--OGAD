@@ -54,6 +54,9 @@ resources/bin/location.node
 # Local env (telemetry/keys) — never commit
 .env
 .env.local
+.env.*.local
+# App registration credentials (scripts/oauth-build-config.mjs)
+.env.keygen
 test-results/
 outputs/video-verification/
 

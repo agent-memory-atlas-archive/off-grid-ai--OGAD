@@ -990,7 +990,7 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
     })
     renderChat()
 
-    const assistant = screen.getByRole('button', { name: 'Assistant' })
+    const assistant = screen.getByRole('button', { name: 'God' })
     await user.click(assistant)
     expect(assistant.getAttribute('aria-pressed')).toBe('true')
     await sendChat(user, 'draw a dog')
@@ -1033,7 +1033,7 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
     const user = userEvent.setup()
     renderChat()
 
-    await user.click(screen.getByRole('button', { name: 'Assistant' }))
+    await user.click(screen.getByRole('button', { name: 'God' }))
     await sendChat(user, 'draw a Ferrari')
 
     expect(await screen.findByRole('button', { name: 'Generated image, running' })).toBeTruthy()
@@ -1050,7 +1050,7 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
     expect(screen.getByRole('button', { name: 'Generated image, complete' })).toBeTruthy()
   })
 
-  it('passes the selected init image through an Assistant image-tool turn', async () => {
+  it('passes the selected init image through a God image-tool turn', async () => {
     const boundary = installApi({
       active: QWEN,
       models: [QWEN],
@@ -1069,7 +1069,7 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
     await user.click(screen.getByRole('button', { name: /init image/i }))
     await screen.findByText('reference.png')
     await user.click(screen.getByRole('button', { name: /^image$/i }))
-    await user.click(screen.getByRole('button', { name: 'Assistant' }))
+    await user.click(screen.getByRole('button', { name: 'God' }))
     await sendChat(user, 'Make the model labels generic')
 
     await waitFor(() => expect(boundary.generateImage).toHaveBeenCalledTimes(1))
@@ -1102,7 +1102,7 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
     const user = userEvent.setup()
     renderChat()
 
-    await user.click(screen.getByRole('button', { name: 'Assistant' }))
+    await user.click(screen.getByRole('button', { name: 'God' }))
     await sendChat(
       user,
       '<!-- offgrid-action:comic-book -->\nQ: Story brief\nA: Mac builds local AI.\nQ: Story length\nA: 10 distinct images'
@@ -1187,7 +1187,7 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
     const user = userEvent.setup()
     renderChat()
 
-    await user.click(screen.getByRole('button', { name: 'Assistant' }))
+    await user.click(screen.getByRole('button', { name: 'God' }))
     await sendChat(user, 'make two different scenes')
 
     await waitFor(() => expect(boundary.generateImage).toHaveBeenCalledTimes(2))

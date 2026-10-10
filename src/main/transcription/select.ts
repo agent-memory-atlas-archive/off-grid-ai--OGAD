@@ -153,6 +153,16 @@ export function getActiveTranscription(
         )
     }
   }
+  return getLocalTranscription(readSetting)
+}
+
+/**
+ * This machine's transcriber, never a remote server. For audio that must not leave the device
+ * whatever the user picked for transcription: features that listen all the time.
+ */
+export function getLocalTranscription(
+  readSetting: TranscriptionSettingReader = getSetting
+): TranscriptionService {
   const active = getActiveModal('transcription')
   const engine = engineForActiveModel(active, modelsByKind('transcription'))
   const language = resolveConfiguredTranscriptionLanguage(

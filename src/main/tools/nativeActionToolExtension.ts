@@ -9,7 +9,7 @@
 
 import { shell } from 'electron'
 import type { ToolCallStatus, ToolContext, ToolExtension, ToolResult } from '../tools'
-import type { ProposeOutcome, TickOutcome } from '@offgrid/use'
+import { WEB_USE_ACTION_TYPE, type ProposeOutcome, type TickOutcome } from '@offgrid/use'
 import { shouldGate } from '../actions/approval'
 import { getActionsRuntime } from '../actions/use-runtime'
 import { makeWinInlineRunner } from '../actions/semantic-rail-win'
@@ -32,11 +32,17 @@ import { createHash } from 'node:crypto'
 import { getWebUseSettings } from '../web-use-settings'
 import { getBrowserLinks } from '../extension-bridge/bridge-electron'
 import { actionArgsWithTaskLaunch } from '../tasks/task-launch-identity'
+import { actionArgsWithStartTab } from '../browser/browser-start-tab'
+import {
+  TASK_GOAL_PREREQUISITES_LABEL,
+  TASK_GOAL_REQUEST_LABEL,
+  TASK_GOAL_SUMMARY_LABEL
+} from '../../shared/task-display-title'
 
 /** The engine port the extension needs - implemented by the actions runtime,
  *  faked in tests. Optional: absent means the legacy path only. */
 export interface ActionsPort {
-  propose(input: unknown, meta: { source: 'chat' }): Promise<ProposeOutcome>
+  propose(input: unknown, meta: { source: 'chat' | 'routine' }): Promise<ProposeOutcome>
   waitForOutcome(actionId: string, timeoutMs: number): Promise<TickOutcome | undefined>
   whenParked(actionId: string): Promise<void>
   kick(): void
@@ -60,12 +66,12 @@ function taskGoalWithConversation(goal: unknown, context: ToolContext | undefine
   const currentRequest = context?.userQuery?.trim() ?? ''
   const completedPrerequisites = context?.completedPrerequisites?.filter(Boolean) ?? []
   const sections = [
-    currentRequest ? `Current user request (authoritative):\n${currentRequest}` : '',
+    currentRequest ? `${TASK_GOAL_REQUEST_LABEL}\n${currentRequest}` : '',
     completedPrerequisites.length
-      ? `Completed prerequisites (already done; continue from this state):\n${completedPrerequisites.map((item) => `- ${item}`).join('\n')}`
+      ? `${TASK_GOAL_PREREQUISITES_LABEL}\n${completedPrerequisites.map((item) => `- ${item}`).join('\n')}`
       : '',
     summary && summary.toLowerCase() !== 'placeholder' && summary !== currentRequest
-      ? `Structured task summary:\n${summary}`
+      ? `${TASK_GOAL_SUMMARY_LABEL}\n${summary}`
       : ''
   ].filter(Boolean)
   return sections.join('\n\n') || summary
@@ -75,10 +81,16 @@ function engineResult(
   actionType: string,
   text: string,
   status: ToolCallStatus = 'completed',
-  authoritative = true
+  authoritative = true,
+  taskId?: string
 ): string | ToolResult {
   return isTaskAction(actionType)
-    ? { text, status, ...(authoritative ? { authoritative: true } : {}) }
+    ? {
+        text,
+        status,
+        ...(authoritative ? { authoritative: true } : {}),
+        ...(taskId ? { taskId } : {})
+      }
     : text
 }
 
@@ -278,11 +290,16 @@ export class NativeActionToolExtension implements ToolExtension {
       {
         type: actionType,
         intent: spec.title(args),
-        args: actionArgsWithTaskLaunch(cleanArgs, context?.taskLaunch),
+        // A web task carries the tab its chat offered; no other action, and never a tab the
+        // model wrote into its own arguments.
+        args: actionArgsWithStartTab(
+          actionArgsWithTaskLaunch(cleanArgs, context?.taskLaunch),
+          actionType === WEB_USE_ACTION_TYPE ? context?.startTab : undefined
+        ),
         risk: spec.risk
       },
       {
-        source: 'chat',
+        source: context?.actionSource ?? 'chat',
         ...(context?.conversationId ? { sourceRef: context.conversationId } : {}),
         ...(context?.taskLaunch
           ? {
@@ -297,16 +314,27 @@ export class NativeActionToolExtension implements ToolExtension {
       return reply(`Error: the action was refused: ${proposed.reason}`, 'failed')
     }
     const taskReference = isTaskAction(actionType) ? `Task reference: ${proposed.id}. ` : ''
+    // A task's reply carries its accepted id: the one its run, progress and Stop use.
+    const taskReply = (text: string, status: ToolCallStatus): string | ToolResult =>
+      engineResult(actionType, text, status, true, proposed.id)
     if (proposed.deduped) {
-      return reply(
+      return taskReply(
         `${taskReference}A matching task is already in flight. No duplicate was started.`,
         'pending'
       )
     }
     actions.kick()
+    const unattendedRun = context?.actionSource === 'routine'
+    if (isTaskAction(actionType) && unattendedRun) {
+      const label = actionType === 'computer_use' ? 'Computer Use' : 'Web Use'
+      return taskReply(
+        `${taskReference}${label}: Waiting for the user's approval in Action Approval; it runs once they approve. Tell the user it is waiting for them.`,
+        'pending'
+      )
+    }
     if (isTaskAction(actionType)) {
       const label = actionType === 'computer_use' ? 'Computer Use' : 'Web Use'
-      return reply(
+      return taskReply(
         `${taskReference}${label} started. Live progress and the final result will appear in this chat. Do not call ${actionType} again for this goal.`,
         'pending'
       )
@@ -317,6 +345,12 @@ export class NativeActionToolExtension implements ToolExtension {
         .then((outcome) => ({ kind: 'outcome' as const, outcome })),
       actions.whenParked(proposed.id).then(() => ({ kind: 'parked' as const }))
     ])
+    if (raced.kind === 'parked' && unattendedRun) {
+      return reply(
+        `${taskReference}"${spec.title(args)}": Waiting for the user's approval in Action Approval; it runs once they approve. Tell the user it is waiting for them.`,
+        'pending'
+      )
+    }
     if (raced.kind === 'parked') {
       return reply(
         `${taskReference}Error: the action engine held this Chat action instead of starting it. No approval was created.`,

@@ -196,6 +196,15 @@ const offGridApi = {
     return unsubscribe(channel, sub)
   },
   proOff: (channel: string) => ipcRenderer.removeAllListeners(channel),
+  /** Web Use or Computer Use settings changed, here or from a paired browser. */
+  onTaskSettingsChanged: (
+    callback: (change: { key: string; value: unknown }) => void
+  ): (() => void) => {
+    const listener = (_event: unknown, change: { key: string; value: unknown }): void =>
+      callback(change)
+    ipcRenderer.on('task-settings:changed', listener)
+    return unsubscribe('task-settings:changed', listener)
+  },
   // Loopback HTTP URL for seekable local media (meeting recordings) — <video>
   // can't reliably stream large files over the custom protocol, so use real HTTP.
   getMediaUrl: (absPath: string) => ipcRenderer.invoke('media:url', absPath),
@@ -278,16 +287,22 @@ const offGridApi = {
   cancelRag: (streamId: string) => ipcRenderer.send('rag:cancel', streamId),
 
   // RAG Conversation History
-  createRagConversation: (id: string, title?: string, projectId?: string | null) =>
-    ipcRenderer.invoke('rag:create-conversation', id, title, projectId),
+  createRagConversation: (
+    id: string,
+    title?: string,
+    projectId?: string | null,
+    surface?: 'chat' | 'god'
+  ) => ipcRenderer.invoke('rag:create-conversation', id, title, projectId, surface),
   /**
    * One bounded page of the conversation list, newest first. Omit `page` for the newest page;
    * pass `updatedBefore` (the `updated_at` of the last row you hold) to continue.
    */
   getRagConversations: (
     projectId?: string | null,
-    page?: { limit?: number; updatedBefore?: string }
-  ) => ipcRenderer.invoke('rag:get-conversations', projectId, page),
+    page?: { limit?: number; updatedBefore?: string },
+    /** 'chat' leaves out God's conversations; 'god' lists only them. */
+    surface?: 'chat' | 'god'
+  ) => ipcRenderer.invoke('rag:get-conversations', projectId, page, surface),
   onRagConversationsChanged: (
     callback: (data: { conversationId: string; projectId: string | null }) => void
   ) => {
@@ -525,6 +540,12 @@ const offGridApi = {
   getActiveModalities: () => ipcRenderer.invoke('models:active-modalities'),
   getComputerUseActiveModels: () => ipcRenderer.invoke('models:computer-use-active'),
   getWebUseActiveModels: () => ipcRenderer.invoke('models:web-use-active'),
+  getTaskRoles: () => ipcRenderer.invoke('models:task-roles'),
+  setTaskRole: (
+    task: 'computer_use' | 'web_use',
+    role: 'decision' | 'grounding',
+    modelId: string
+  ) => ipcRenderer.invoke('models:set-task-role', task, role, modelId),
   onModelProgress: (
     callback: (data: {
       modelId: string
@@ -581,7 +602,8 @@ const offGridApi = {
     pause: (): Promise<PerformancePackStatus> => ipcRenderer.invoke('performance-pack:pause'),
     restart: (): Promise<void> => ipcRenderer.invoke('performance-pack:restart'),
     onChanged: (callback: (status: PerformancePackStatus) => void): (() => void) => {
-      const subscription = (_event: unknown, status: PerformancePackStatus): void => callback(status)
+      const subscription = (_event: unknown, status: PerformancePackStatus): void =>
+        callback(status)
       ipcRenderer.on('performance-pack:changed', subscription)
       return unsubscribe('performance-pack:changed', subscription)
     }
@@ -630,6 +652,7 @@ const offGridApi = {
     history?: { role: string; content: string }[],
     opts?: {
       assistantOnly?: boolean
+      allTools?: boolean
       connectors?: boolean
       conversationId?: string
       projectId?: string
@@ -638,6 +661,7 @@ const offGridApi = {
       imageAvailable?: boolean
       streamId?: string
       thinking?: boolean
+      context?: string
     }
   ) => ipcRenderer.invoke('tools:chat', query, history, opts),
 
@@ -659,6 +683,7 @@ const offGridApi = {
     threads?: number
     batchSize?: number
     speculativeDecoding?: 'off' | 'ngram' | 'mtp' | 'draft' | 'dflash'
+    speculativeDraftMax?: number
     draftModel?: string
     performanceMode?: 'conservative' | 'balanced' | 'extreme'
   }) => ipcRenderer.invoke('llm:set-settings', s),
@@ -962,11 +987,19 @@ const offGridApi = {
     args?: string[]
     envKeys?: string[]
     url?: string
+    liveOnly?: boolean
   }) => ipcRenderer.invoke('mcp:add', c),
   mcpSetEnabled: (id: number, enabled: boolean) =>
     ipcRenderer.invoke('mcp:set-enabled', id, enabled),
+  mcpUpdate: (
+    id: number,
+    changes: { name?: string; url?: string; command?: string; args?: string[] }
+  ) => ipcRenderer.invoke('mcp:update', id, changes),
   mcpRemove: (id: number) => ipcRenderer.invoke('mcp:remove', id),
+  mcpCancel: (id: number) => ipcRenderer.invoke('mcp:cancel', id),
   mcpTest: (id: number) => ipcRenderer.invoke('mcp:test', id),
+  mcpSetSecrets: (id: number, values: Record<string, string>) =>
+    ipcRenderer.invoke('mcp:set-secrets', id, values),
   mcpIngest: (id: number, query?: string) => ipcRenderer.invoke('mcp:ingest', id, query),
   mcpItems: (surface: string) => ipcRenderer.invoke('mcp:items', surface),
 

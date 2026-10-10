@@ -75,6 +75,8 @@ export type ChatMessage = {
   id: string
   role: SyncedMessageRole
   content: string
+  /** God's reactions to this message, oldest first (set by a variant through presentMessages). */
+  readonly reactions?: readonly string[]
   createdAt?: number
   context?: RagContext
   image?: string
@@ -192,6 +194,8 @@ export type MessageRowState = Readonly<{
   askSelections: Readonly<Record<string, readonly string[]>>
   incomingFiles: readonly IncomingSharedFile[]
   showGenerationDetails: boolean
+  /** The tools offered to the model, under an answer. Off in God. */
+  showToolsSent?: boolean
   regenerationDisabled: boolean
 }>
 

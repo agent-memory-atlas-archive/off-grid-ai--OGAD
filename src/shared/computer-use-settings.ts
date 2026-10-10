@@ -11,6 +11,24 @@ export type ComputerUseModelStrategy =
   | 'decision_plus_specialist'
   | 'decision_plus_reasoning'
 
+/** The task models a strategy runs besides Chat. Every place that shows or runs a strategy's
+ *  models reads this, so the Models screens, Tasks and a task's run name the same ones. */
+export type TaskModelRole = 'decision' | 'grounding'
+
+export function strategyTaskRoles(strategy: ComputerUseModelStrategy): readonly TaskModelRole[] {
+  switch (strategy) {
+    case 'same_as_chat':
+      return []
+    case 'decision_plus_reasoning':
+      return ['decision']
+    case 'decision_plus_specialist':
+      return ['decision', 'grounding']
+    case 'separate_specialist':
+    case 'text_plus_specialist':
+      return ['grounding']
+  }
+}
+
 export interface ComputerUseSettings {
   modelStrategy: ComputerUseModelStrategy
   groundingModelId: string | null

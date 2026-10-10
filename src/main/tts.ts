@@ -127,12 +127,14 @@ export async function prepareVoiceAssets(
 export async function synthesize(
   text: string,
   voice?: string,
-  onProgress?: (progress: DownloadProgress) => void
+  onProgress?: (progress: DownloadProgress) => void,
+  /** This machine's own voices, even when a remote voice is chosen (a WAV, always). */
+  options: { readonly local?: boolean } = {}
 ): Promise<{ dataUrl: string }> {
   return recordAIRequest(
     { modality: 'tts', source: 'Speech synthesis', request: { text, voice } },
     async (log) => {
-      const remote = getActiveRemoteVisionServerForModality('voice')
+      const remote = options.local ? null : getActiveRemoteVisionServerForModality('voice')
       if (remote) {
         log.update({ model: remote.selectedModel, backend: 'Remote' })
         if (remote.provider !== 'openrouter') return synthesizeRemoteVoice(remote, text, voice)
