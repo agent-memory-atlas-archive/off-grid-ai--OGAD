@@ -11,6 +11,9 @@ import { SidePanel } from './SidePanel'
 import { openModelSettingsPanel } from '@renderer/lib/model-settings-panel'
 import { TaskLineups } from './TaskLineups'
 import { useTaskRoles } from '../lib/task-roles'
+import { resolveActiveTextModel } from '../lib/model-summary'
+import { invalidateLlmSettings } from '../lib/settings-invalidation'
+import { FieldError } from '@offgrid/operator-ui/operator/forms'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (): any => (window as any).api
@@ -82,6 +85,7 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
   const [active, setActive] = useState<Record<string, string | null>>({})
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState<string | null>(null)
+  const [selectionError, setSelectionError] = useState<string | null>(null)
   const [unload, setUnload] = useState<Record<string, UnloadStatus>>({})
   const [taskRoles, reloadTaskRoles] = useTaskRoles()
 
@@ -93,9 +97,7 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
     const text = await api().getActiveModel?.()
     const modal = (await api().getActiveModalities?.()) ?? {}
     const nextActiveIds = new Set<string>((await api().getActiveModelIds?.()) ?? [])
-    const remoteTextActive = catalogModels.some(
-      (model) => model.remoteServerId && nextActiveIds.has(model.id)
-    )
+    const remoteTextActive = resolveActiveTextModel(catalogModels, text, nextActiveIds).remote
     setActiveIds(nextActiveIds)
     setActive({
       text: remoteTextActive ? null : (text ?? modal.text ?? null),
@@ -123,25 +125,35 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
 
   const choose = async (mode: PickerMode, m: ModelEntry): Promise<void> => {
     setBusy(m.id)
+    setSelectionError(null)
     clearUnloadStatus(mode) // re-selecting reloads this modality on next use
     try {
       if (mode === 'text') {
         const result = await api().activateModel?.(m.id)
-        if (result?.success !== false) {
+        if (!result?.success) {
+          throw new Error(result?.error ?? 'Model selection is unavailable. Restart the app.')
+        }
+        if (result.success) {
           setActive((current) => ({ ...current, text: m.remoteServerId ? null : m.id }))
           setActiveIds(new Set((await api().getActiveModelIds?.()) ?? []))
           await load()
+          invalidateLlmSettings()
         }
       } else {
         const fname = primaryFile(m)
         if (m.remoteServerId) {
           const result = await api().activateModel?.(m.id)
-          if (result?.success !== false) await load()
+          if (!result?.success) {
+            throw new Error(result?.error ?? 'Model selection is unavailable. Restart the app.')
+          }
+          await load()
         } else {
           await api().setActiveModalModel?.(mode, fname)
           setActive((a) => ({ ...a, [mode]: fname }))
         }
       }
+    } catch (error) {
+      setSelectionError(error instanceof Error ? error.message : 'Could not select the model.')
     } finally {
       setBusy(null)
     }
@@ -195,6 +207,7 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
         </div>
       </div>
       <div className="flex-1 space-y-5 overflow-y-auto p-4">
+        {selectionError && <FieldError>{selectionError}</FieldError>}
         <TaskLineups
           view={taskRoles}
           models={models}
@@ -274,6 +287,8 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                   {list.map((m) => (
                     <button
                       key={m.id}
+                      aria-pressed={isActive(m)}
+                      disabled={busy !== null}
                       onClick={() => choose(mode, m)}
                       className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-xs transition-colors ${
                         isActive(m)

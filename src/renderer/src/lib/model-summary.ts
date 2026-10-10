@@ -49,6 +49,7 @@ export function modelNameForFile(file: string | null | undefined): string | null
 interface TextModelSummaryEntry {
   id: string
   name?: string
+  kind?: string
   remoteServerId?: string
 }
 
@@ -59,7 +60,12 @@ export function resolveActiveTextModel(
   localActiveId: string | null | undefined,
   activeIds: ReadonlySet<string>
 ): { name: string | null; remote: boolean } {
-  const remote = models.find((model) => model.remoteServerId && activeIds.has(model.id))
+  const remote = models.find(
+    (model) =>
+      model.remoteServerId &&
+      (model.kind === undefined || model.kind === 'text' || model.kind === 'vision') &&
+      activeIds.has(model.id)
+  )
   if (remote) return { name: remote.name ?? remote.id, remote: true }
   return { name: resolveModelName(models, localActiveId), remote: false }
 }

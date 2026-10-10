@@ -879,7 +879,7 @@ export function SettingsPanel({
                 <Row
                   label="Draft token limit"
                   controlId="speculative-draft-max"
-                  hint="Maximum tokens proposed per step. More is not always faster. Auto uses six for Qwen3.5 9B on standard llama.cpp Metal, two for other MTP engines, and the engine default for Draft and DFlash."
+                  hint="Maximum tokens proposed per step. More is not always faster. Auto uses two for MTP and the engine default for Draft and DFlash."
                 >
                   <NativeSelect
                     id="speculative-draft-max"

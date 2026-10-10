@@ -158,11 +158,9 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
   if (i.speculativeDecoding === 'ngram') {
     args.push('--spec-type', 'ngram-cache')
   } else if (i.speculativeDecoding === 'mtp') {
-    // Six draft tokens improves Qwen3.5 9B throughput on Metal. Keep the
-    // existing limit for other models until their speed has been measured.
-    const draftMax = i.speculativeDraftMax
-      ? String(i.speculativeDraftMax)
-      : /(?:^|[/\\])Qwen3\.5-9B-[^/\\]+\.gguf$/i.test(i.modelPath) ? '6' : '2'
+    // A short draft limits rejected work on normal chat prompts. Larger
+    // user-selected limits remain available for more predictable output.
+    const draftMax = i.speculativeDraftMax ? String(i.speculativeDraftMax) : '2'
     args.push('--spec-type', 'draft-mtp', '--spec-draft-n-max', draftMax)
     if (i.draftModelPath) {
       args.push('--spec-draft-model', i.draftModelPath, '--spec-draft-ngl', String(i.gpuLayers))

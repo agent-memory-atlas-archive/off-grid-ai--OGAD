@@ -72,6 +72,32 @@ describe('resolveActiveTextModel', () => {
       remote: false
     })
   })
+
+  it('keeps the local text selection when remote media and task models are active', () => {
+    const otherModels = ['voice', 'speech', 'image', 'transcription', 'computer_use'].map(
+      (kind) => ({ id: `remote:${kind}`, name: `Remote ${kind}`, kind, remoteServerId: 'server' })
+    )
+    expect(
+      resolveActiveTextModel(
+        [{ id: 'qwen', name: 'Qwen 3.5 9B', kind: 'text' }, ...otherModels],
+        'qwen',
+        new Set(['qwen', ...otherModels.map((model) => model.id)])
+      )
+    ).toEqual({ name: 'Qwen 3.5 9B', remote: false })
+  })
+
+  it.each(['text', 'vision'])('selects remote %s rather than an active voice model', (kind) => {
+    expect(
+      resolveActiveTextModel(
+        [
+          { id: 'tts', name: 'Qwen Audio TTS', kind: 'voice', remoteServerId: 'server' },
+          { id: 'chat', name: 'Remote chat', kind, remoteServerId: 'server' }
+        ],
+        'qwen',
+        new Set(['tts', 'chat'])
+      )
+    ).toEqual({ name: 'Remote chat', remote: true })
+  })
 })
 
 describe('modelNameForFile', () => {
