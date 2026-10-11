@@ -70,6 +70,11 @@ const server = http.createServer((request, response) => {
                   .join('\n')
         }))
     })
+    if (prompt === 'Keep the saved answer after failure.' && attempt === 2) {
+      response.writeHead(503, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify({ error: { message: 'Synthetic model unavailable.' } }))
+      return
+    }
     response.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -79,6 +84,15 @@ const server = http.createServer((request, response) => {
       response.write(delta(answer))
       response.write(delta('', 'stop'))
       response.end('data: [DONE]\n\n')
+    }
+    if (prompt === 'Finish while I prepare another chat.') {
+      response.write(delta('The background reply started.'))
+      const timer = setTimeout(() => {
+        timers.delete(timer)
+        finish(' The background reply is complete.')
+      }, 5000)
+      timers.add(timer)
+      return
     }
     const interruptedRetry = prompt === 'Keep the saved answer during retry.' && attempt === 2
     if (prompt === 'Hold this reply open.' || interruptedRetry) {
@@ -108,7 +122,8 @@ const server = http.createServer((request, response) => {
       'Keep each response version.': `Original answer version ${attempt}.`,
       'Keep the edited response too.': 'Edited answer version 4.',
       'Add a later turn.': 'The later answer will be removed by the edit.',
-      'Keep the saved answer during retry.': 'The saved answer remains available.'
+      'Keep the saved answer during retry.': 'The saved answer remains available.',
+      'Keep the saved answer after failure.': 'The saved answer before failure remains available.'
     }
     finish(answers[prompt] ?? `Unexpected prompt: ${String(prompt)}`)
   })

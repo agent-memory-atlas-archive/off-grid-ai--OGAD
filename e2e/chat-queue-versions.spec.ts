@@ -241,4 +241,103 @@ test.describe('Desktop queue and saved response versions', () => {
     ).toBeVisible()
     await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeHidden()
   })
+
+  test('Stop during resend keeps both the partial and earlier answer after restart', async () => {
+    await submit('Keep the saved answer during retry.')
+    await answer('The saved answer remains available.')
+    await page.getByRole('button', { name: 'Message actions', exact: true }).first().click()
+    await page.getByRole('menuitem', { name: 'Resend', exact: true }).click()
+    await expect(
+      page.getByText('The replacement reply is still running.', { exact: true }).last()
+    ).toBeVisible()
+    await page.getByRole('button', { name: 'Stop generating', exact: true }).click()
+    await expect(page.getByText('2/2', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Previous response' }).click()
+    await expect(
+      page.getByText('The saved answer remains available.', { exact: true }).last()
+    ).toBeVisible()
+    await closeApp()
+    await launchApp()
+    await expect(page.getByText('1/2', { exact: true })).toBeVisible()
+    await expect(
+      page.getByText('The saved answer remains available.', { exact: true }).last()
+    ).toBeVisible()
+    await page.getByRole('button', { name: 'Next response' }).click()
+    await expect(
+      page.getByText('The replacement reply is still running.', { exact: true }).last()
+    ).toBeVisible()
+  })
+
+  test('a failed resend keeps the earlier answer available', async () => {
+    await submit('Keep the saved answer after failure.')
+    await answer('The saved answer before failure remains available.')
+    await page.getByRole('button', { name: 'Message actions', exact: true }).first().click()
+    await page.getByRole('menuitem', { name: 'Resend', exact: true }).click()
+    await expect(page.getByText('2/2', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeHidden()
+    await page.getByRole('button', { name: 'Previous response' }).click()
+    await expect(
+      page.getByText('The saved answer before failure remains available.', { exact: true }).last()
+    ).toBeVisible()
+  })
+
+  test('a queued reply in another chat does not clear the current draft', async () => {
+    await submit('Finish while I prepare another chat.')
+    await expect(
+      page.getByText('The background reply started.', { exact: true }).last()
+    ).toBeVisible()
+    await submit('Queue this first.')
+    await page.getByRole('button', { name: 'New chat', exact: true }).click()
+    const composer = page.getByPlaceholder(/ask anything/i)
+    await composer.fill('Keep this unsent draft in the second chat.')
+    await expect
+      .poll(() =>
+        audit()
+          .filter((entry) => entry.event === 'request')
+          .map((entry) => entry.prompt)
+      )
+      .toEqual(['Finish while I prepare another chat.', 'Queue this first.'])
+    await expect(composer).toHaveValue('Keep this unsent draft in the second chat.')
+    await expect(
+      page.getByText('The first queued reply is complete.', { exact: true })
+    ).toHaveCount(0)
+    await page
+      .getByRole('button', { name: /^Finish while I prepare another chat\. Conversation actions/ })
+      .click()
+    await answer('The first queued reply is complete.')
+    expect(
+      audit()
+        .filter((entry) => entry.event === 'request')
+        .at(-1)?.messages
+    ).toContainEqual({
+      role: 'assistant',
+      content: 'The background reply started. The background reply is complete.'
+    })
+  })
+
+  test('ordinary Stop cancels both queued drafts before the next send', async () => {
+    await submit('Hold this reply open.')
+    await expect(
+      page.getByText('The first reply is still running.', { exact: true }).last()
+    ).toBeVisible()
+    await submit('Queue this first.')
+    await submit('Queue this second.')
+    await expect(page.getByText('2 queued', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Stop generating', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeHidden()
+    await expect(page.getByText('2 queued', { exact: true })).toBeHidden()
+    await submit('Send this ahead of the queue.')
+    await answer('The urgent reply is complete.')
+    expect(
+      audit()
+        .filter((entry) => entry.event === 'request')
+        .map((entry) => entry.prompt)
+    ).toEqual(['Hold this reply open.', 'Send this ahead of the queue.'])
+    await expect(
+      page.getByText('The first queued reply is complete.', { exact: true })
+    ).toHaveCount(0)
+    await expect(
+      page.getByText('The second queued reply is complete.', { exact: true })
+    ).toHaveCount(0)
+  })
 })

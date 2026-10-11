@@ -855,10 +855,10 @@ export function MemoryChat({
   // Queued sends carry their attachments too, so a message waiting behind an in-flight
   // generation keeps its image/files when it finally runs — keyed per conversation.
   const queuedRef = useRef<
-    Record<string, { text: string; atts: Attachment[]; assistantEnabled?: boolean }[]>
+    Record<string, { text: string; atts: Attachment[]; assistantEnabled?: boolean; projectId: string | null }[]>
   >({})
   const [queuedByConv, setQueuedByConv] = useState<
-    Record<string, { text: string; atts: Attachment[]; assistantEnabled?: boolean }[]>
+    Record<string, { text: string; atts: Attachment[]; assistantEnabled?: boolean; projectId: string | null }[]>
   >({})
   // Map streamId → convId so the onRagStream handler can route tokens to the right
   // conversation regardless of which tab is active when the event fires.
@@ -1496,7 +1496,7 @@ export function MemoryChat({
     // let them keep typing/sending. The queue drains in order when each finishes.
     const targetConv = opts?.conversationId ?? activeConversationId
     if (!regen && shouldQueue(targetConv, generatingRef.current)) {
-      const item = { text: typed, atts, assistantEnabled: assistantForTurn }
+      const item = { text: typed, atts, assistantEnabled: assistantForTurn, projectId }
       queuedRef.current = enqueue(queuedRef.current, targetConv as string, item, opts?.sendNow)
       setQueuedByConv({ ...queuedRef.current })
       if (isInput) {
@@ -1658,7 +1658,7 @@ export function MemoryChat({
       }
       setConvMessages(convId, (prev) => [...prev, userMessage])
     }
-    draftStore.set('')
+    if (isInput && draftStore.getSnapshot().trim() === typed) draftStore.set('')
     setLoading(true)
 
     // Persist user message (skip on regen — it's already in the thread). Stash
@@ -1818,11 +1818,7 @@ export function MemoryChat({
         setConvMessages(convId, (prev) => [...prev, assistantMessage])
         if (voiceMode) setAutoPlayId(assistantMessage.id)
         try {
-          const stored = await window.api.addRagMessage(
-            convId,
-            'assistant',
-            completedImage.storedContent,
-            withGeneratedImageReference(
+          const imageContext = withGeneratedImageReference(
               {
                 imageMetadata,
                 ...(img.durationMs === undefined ? {} : { durationMs: img.durationMs }),
@@ -1830,8 +1826,14 @@ export function MemoryChat({
               },
               { id: img.syncId, path: img.path }
             )
-          )
-          await announceImageMessagePersisted(convId, stored.uuid)
+          const stored = opts?.replacementMessageId
+            ? await window.api.updateRagMessage(convId, opts.replacementMessageId, completedImage.storedContent, imageContext)
+            : await window.api.addRagMessage(convId, 'assistant', completedImage.storedContent, imageContext)
+          if (!stored) throw new Error('Saved response was not found')
+          const storedId = stored === true ? opts!.replacementMessageId! : stored.uuid
+          setConvMessages(convId, (previous) => previous.map((message) => message.id === assistantMessage.id
+            ? { ...message, id: storedId } : message))
+          await announceImageMessagePersisted(convId, storedId)
         } catch {
           /* ignore */
         }
@@ -2182,11 +2184,7 @@ export function MemoryChat({
                 )
                 let imageMessageId: string = crypto.randomUUID()
                 try {
-                  const stored = await window.api.addRagMessage(
-                    convId,
-                    'assistant',
-                    completedImage.storedContent,
-                    withGeneratedImageReference(
+                  const imageContext = withGeneratedImageReference(
                       {
                         ...(ownsToolTurn ? toolCtxWithReasoning : {}),
                         ...(imageMetadata ? { imageMetadata } : {}),
@@ -2195,9 +2193,13 @@ export function MemoryChat({
                       },
                       { id: img.syncId, path: img.path }
                     )
-                  )
-                  imageMessageId = stored.uuid
-                  await announceImageMessagePersisted(convId, stored.uuid)
+                  const replacementId = ownsToolTurn ? opts?.replacementMessageId : undefined
+                  const stored = replacementId
+                    ? await window.api.updateRagMessage(convId, replacementId, completedImage.storedContent, imageContext)
+                    : await window.api.addRagMessage(convId, 'assistant', completedImage.storedContent, imageContext)
+                  if (!stored) throw new Error('Saved response was not found')
+                  imageMessageId = stored === true ? replacementId! : stored.uuid
+                  await announceImageMessagePersisted(convId, imageMessageId)
                 } catch {
                   /* Keep the generated file visible even if this database write fails. */
                 }
@@ -2327,7 +2329,8 @@ export function MemoryChat({
         if (generatedImageCount === 0) {
           let restoredMessageId = toolStreamId
           try {
-            const stored = comicReaderPersistence.saved
+            const retainedId = opts?.replacementMessageId ?? (comicReaderPersistence.saved ? comicReaderMessageId : undefined)
+            const stored = retainedId
               ? await window.api.updateRagMessage(
                   convId,
                   comicReaderMessageId,
@@ -2336,7 +2339,7 @@ export function MemoryChat({
                 )
               : await window.api.addRagMessage(convId, 'assistant', answer, toolCtxWithReasoning)
             if (!stored) throw new Error('Comic reader message was not found')
-            restoredMessageId = stored === true ? comicReaderMessageId : stored.uuid
+            restoredMessageId = stored === true ? retainedId! : stored.uuid
           } catch {
             /* The completed text answer remains visible if persistence fails. */
           }
@@ -2452,10 +2455,12 @@ export function MemoryChat({
     setQueuedByConv({ ...next })
     if (item === undefined) return
     setTimeout(() => {
+      if (cancelledRef.current.has(convId)) return
       void sendMessageRef.current(item.text || ' ', {
         atts: item.atts,
         conversationId: convId,
-        assistantEnabled: item.assistantEnabled
+        assistantEnabled: item.assistantEnabled,
+        projectIdOverride: item.projectId
       })
     }, 30)
   }
@@ -2632,6 +2637,13 @@ export function MemoryChat({
       const convId = cid ?? activeConversationId
       if (!convId) return
       cancelledRef.current.add(convId)
+      if (!preserveQueue && queuedRef.current[convId]?.length) {
+        queuedRef.current = clearQueue(queuedRef.current, convId)
+        setQueuedByConv({ ...queuedRef.current })
+      }
+      for (const [streamId, owner] of streamConvRef.current) {
+        if (owner === convId && streamId.startsWith('prepare-')) streamConvRef.current.delete(streamId)
+      }
       if (task?.journeyId === convId) {
         try {
           const stopped = await stopLiveTask(task)
@@ -2652,10 +2664,6 @@ export function MemoryChat({
       if (streamingId) {
         window.api.cancelRag(streamingId)
         await finalizeStoppedTurn(convId, streamingId)
-      }
-      if (!preserveQueue && queuedRef.current[convId]?.length) {
-        queuedRef.current = clearQueue(queuedRef.current, convId)
-        setQueuedByConv({ ...queuedRef.current })
       }
       if (!preserveQueue) markGenerating(convId, false)
       // Cancel + clear the image job ONLY if THIS conversation owns it, so stopping
@@ -3055,6 +3063,9 @@ export function MemoryChat({
           const replacedTaskIds = taskReferencesInMessages(messages.slice(i + 1))
           const cid = activeConversationId
           if (!cid) return
+          const preparationId = `prepare-${crypto.randomUUID()}`
+          streamConvRef.current.set(preparationId, cid)
+          cancelledRef.current.delete(cid)
           markGenerating(cid, true)
           // Keep the prior answer in storage until its replacement is saved.
           // Restarting during generation must not lose response versions.
@@ -3069,10 +3080,15 @@ export function MemoryChat({
               await window.api.truncateRagMessages(cid, priorAnswer ? messages.indexOf(priorAnswer) + 1 : i + 1)
               if (replacedTaskIds.length) await window.api.tasks?.remove?.(replacedTaskIds)
             } catch (error) {
+              streamConvRef.current.delete(preparationId)
               console.error('Failed to prepare the replacement response:', error)
               markGenerating(cid, false)
               await refreshConversationMessages(cid)
               drainQueue(cid)
+              return
+            }
+            if (!streamConvRef.current.delete(preparationId)) {
+              await refreshConversationMessages(cid)
               return
             }
             // The turn's own attachments, not the composer's - the composer was cleared when this
@@ -3114,6 +3130,9 @@ export function MemoryChat({
     // record of it - so the chip vanished from the thread and every later regenerate lost it too.
     const cid = activeConversationId
     if (!cid) return
+    const preparationId = `prepare-${crypto.randomUUID()}`
+    streamConvRef.current.set(preparationId, cid)
+    cancelledRef.current.delete(cid)
     markGenerating(cid, true)
     const priorAnswer = messages.slice(idx + 1).find((message) => message.role === 'assistant' && !message.notice)
     const priorVariants = priorAnswer?.variants ?? (priorAnswer?.content ? [priorAnswer.content] : undefined)
@@ -3146,6 +3165,7 @@ export function MemoryChat({
         }
         if (replacedTaskIds.length) await window.api.tasks?.remove?.(replacedTaskIds)
       } catch (error) {
+        streamConvRef.current.delete(preparationId)
         console.error('Failed to persist the edited user message:', error)
         markGenerating(cid, false)
         drainQueue(cid)
@@ -3156,6 +3176,10 @@ export function MemoryChat({
             console.error('Failed to restore the conversation after the edit failed:', refreshError)
           }
         }
+        return
+      }
+      if (!streamConvRef.current.delete(preparationId)) {
+        await refreshConversationMessages(cid)
         return
       }
       try {
