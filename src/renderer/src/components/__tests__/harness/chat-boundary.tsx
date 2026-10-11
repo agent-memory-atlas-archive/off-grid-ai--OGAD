@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { vi } from 'vitest'
+import { afterEach, vi } from 'vitest'
 import { MemoryChat } from '../../MemoryChat'
 import { TooltipProvider } from '../../ui/tooltip'
 import type {
@@ -137,8 +137,12 @@ export class ChatBoundary {
   private readonly pendingConversationReads = new Map<string, ReturnType<typeof deferred<void>>>()
   private nextMessageId = 10
   private pendingUserWrite: ReturnType<typeof deferred<void>> | null = null
+  private readonly heldUserWrites = new Set<ReturnType<typeof deferred<void>>>()
+  private disposed = false
 
-  readonly cancelRag = vi.fn()
+  readonly cancelRag = vi.fn((streamId: string) => {
+    this.calls.find((call) => call.streamId === streamId)?.turn.reject(new Error('Cancelled'))
+  })
   readonly listTasks = vi.fn(async () => [] as TaskSnapshot[])
   readonly stopComputerTask = vi.fn(async () => true)
   readonly guideTask = vi.fn(async () => ({ available: true, accepted: true }))
@@ -154,6 +158,7 @@ export class ChatBoundary {
         const gate = this.pendingUserWrite
         this.pendingUserWrite = null
         await gate.promise
+        this.heldUserWrites.delete(gate)
       }
       this.messages[conversationId] ??= []
       const id = this.nextMessageId++
@@ -308,6 +313,7 @@ export class ChatBoundary {
           thinking: thinking ?? false,
           turn
         })
+        if (this.disposed) turn.resolve({ answer: '', context: { unified: [] } })
         return turn.promise
       }
     ),
@@ -324,6 +330,7 @@ export class ChatBoundary {
           thinking: !!options.thinking,
           turn
         })
+        if (this.disposed) turn.resolve({ answer: '', context: { unified: [] } })
         return turn.promise
       }
     )
@@ -331,10 +338,23 @@ export class ChatBoundary {
 
   blockNextUserWrite(): void {
     this.pendingUserWrite = deferred<void>()
+    this.heldUserWrites.add(this.pendingUserWrite)
   }
 
   releaseUserWrite(): void {
-    this.pendingUserWrite?.resolve()
+    for (const write of this.heldUserWrites) write.resolve()
+  }
+
+  /** Finish the boundary work that a production sender can still own after unmount. */
+  dispose(): void {
+    this.disposed = true
+    this.releaseUserWrite()
+    this.pendingUserWrite = null
+    for (const read of this.pendingConversationReads.values()) read.resolve()
+    this.pendingConversationReads.clear()
+    for (const call of this.calls) call.turn.resolve({ answer: '', context: { unified: [] } })
+    for (const speech of this.speechTurns) speech.resolve({ dataUrl: '' })
+    this.activeRagStreams.length = 0
   }
 
   blockConversationRead(conversationId: string): void {
@@ -438,7 +458,32 @@ export class ChatBoundary {
   }
 }
 
+const installedBoundaries = new Set<ChatBoundary>()
+
+afterEach(async () => {
+  cleanup()
+  // Queued turns can start after a reply settles. Keep the old API installed until
+  // their timers and final storage promises finish, rather than leaking a sender
+  // into the next test's boundary through window.api.
+  let previousCallCount: number
+  let callCount = -1
+  do {
+    previousCallCount = callCount
+    await act(async () => {
+      for (const boundary of installedBoundaries) boundary.dispose()
+      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(50)
+      else await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    callCount = [...installedBoundaries].reduce(
+      (total, boundary) => total + boundary.calls.length,
+      0
+    )
+  } while (callCount !== previousCallCount)
+  installedBoundaries.clear()
+})
+
 export function installBoundary(boundary: ChatBoundary): void {
+  installedBoundaries.add(boundary)
   ; (globalThis as unknown as { window: { api: unknown } }).window.api = boundary.api
 }
 
