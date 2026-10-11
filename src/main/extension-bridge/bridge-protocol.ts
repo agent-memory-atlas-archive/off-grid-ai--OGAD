@@ -177,6 +177,9 @@ export interface RpcEnvelope extends Sealed {
 
 export const RPC_METHODS = [
   'state',
+  'chat.start',
+  'chat.read',
+  'chat.stop',
   'conversations.list',
   'conversations.put',
   'conversations.delete',

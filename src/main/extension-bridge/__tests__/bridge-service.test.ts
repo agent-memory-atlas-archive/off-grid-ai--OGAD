@@ -64,7 +64,9 @@ interface Setup {
   sealedFor: { browser: CryptoKeyPair }
 }
 
-async function setup(opts: { approve?: boolean; features?: BridgeFeatures } = {}): Promise<Setup> {
+async function setup(
+  opts: { approve?: boolean; features?: BridgeFeatures; chat?: BridgeData['chat'] } = {}
+): Promise<Setup> {
   const desk = await generateKeyPair()
   let saved: PairedBrowser[] = []
   let now = 1_000_000
@@ -72,7 +74,8 @@ async function setup(opts: { approve?: boolean; features?: BridgeFeatures } = {}
   const prompts: string[] = []
   const calls: string[] = []
   const data: BridgeData = {
-    features: () => opts.features ?? FREE,
+    chat: opts.chat,
+    features: () => opts.features ?? PRO,
     desktopName: () => 'Off Grid AI Desktop',
     listConversations: async () => [{ id: 'c1' }],
     putConversation: async () => {
@@ -83,7 +86,7 @@ async function setup(opts: { approve?: boolean; features?: BridgeFeatures } = {}
     },
     // As the desktop lists them: connector tools always, its own tools only when it has them.
     listTools: async () =>
-      (opts.features ?? FREE).tools
+      (opts.features ?? PRO).tools
         ? [{ name: 'notion_search' }, { name: 'mail_send' }, { name: 'web_use' }]
         : [{ name: 'notion_search' }],
     runTool: async (name, _args, _browser, tabId) => ({
@@ -201,6 +204,35 @@ describe('pairing', () => {
 })
 
 describe('sealed rpc', () => {
+  it('keeps setup and cleanup available, but refuses every feature without Pro', async () => {
+    const s = await setup({ features: FREE })
+    await s.pair()
+    expect((await s.call('device000001', 'state')).body).toMatchObject({ ok: true })
+    for (const [method, params] of [
+      ['conversations.list', {}],
+      ['conversations.put', { conversation: {} }],
+      ['conversations.delete', { id: 'c1' }],
+      ['tools.list', {}],
+      ['tools.run', { name: 'notion_search', args: {} }],
+      ['settings.get', { section: 'voice' }],
+      ['settings.set', { section: 'voice', patch: { voice: 'af_heart' } }],
+      ['models.setTaskRole', { task: 'web_use', role: 'grounding', modelId: 'grounder-1' }]
+    ] as const) {
+      expect((await s.call('device000001', method, params)).body).toMatchObject({
+        ok: false,
+        error: 'pro_required'
+      })
+    }
+    expect(s.calls).toEqual([])
+    expect(await s.bridge.linkKey('device000001')).toBeNull()
+    expect((await s.call('device000001', 'tasks.stop', { taskId: 'task-1' })).body).toMatchObject({
+      ok: true,
+      result: true
+    })
+    expect((await s.call('device000001', 'unpair')).body).toMatchObject({ ok: true })
+    expect(s.saved()).toEqual([])
+  })
+
   it('answers a paired browser, sealed so only it can read the reply', async () => {
     const s = await setup()
     await s.pair()
@@ -210,7 +242,7 @@ describe('sealed rpc', () => {
       result: {
         desktopName: 'Off Grid AI Desktop',
         deviceName: 'Chrome on this Mac',
-        features: FREE
+        features: PRO
       }
     })
     expect(JSON.stringify(r.raw)).not.toContain('Off Grid AI Desktop')
@@ -285,7 +317,7 @@ describe('sealed rpc', () => {
       result: [{ id: 'c1' }]
     })
     expect((await s.call('device000001', 'tools.list')).body).toMatchObject({
-      result: [{ name: 'notion_search' }]
+      result: [{ name: 'notion_search' }, { name: 'mail_send' }, { name: 'web_use' }]
     })
     await s.call('device000001', 'conversations.put', { conversation: {} })
     await s.call('device000001', 'conversations.delete', { id: 'c1' })
@@ -307,11 +339,10 @@ describe('sealed rpc', () => {
       (await free.call('device000001', 'tools.run', { name: 'mail_send', args: {} })).body
     ).toMatchObject({ ok: false, error: 'pro_required' })
 
-    // A connector tool the desktop lists runs on a free desktop too (review finding: it was
-    // listed, then refused as Pro-only).
+    // Connector tools are also part of the Pro browser extension.
     expect(
       (await free.call('device000001', 'tools.run', { name: 'notion_search', args: {} })).body
-    ).toMatchObject({ ok: true, result: { output: 'ran notion_search' } })
+    ).toMatchObject({ ok: false, error: 'pro_required' })
 
     // Pro, but this desktop cannot answer for the vault or tools yet: never "upgrade".
     const stale = await setup({ features: { ...PRO, vault: false, tools: false } })
@@ -385,7 +416,7 @@ describe('sealed rpc', () => {
       ok: false,
       error: 'invalid'
     })
-    const free = await setup()
+    const free = await setup({ features: FREE })
     await free.pair()
     expect((await free.call('device000001', 'tasks.latest', { since: 1 })).body).toMatchObject({
       ok: false,
@@ -408,11 +439,24 @@ describe('sealed rpc', () => {
         error: 'invalid'
       })
     }
-    const free = await setup()
+    const free = await setup({ features: FREE })
     await free.pair()
     expect(
       (await free.call('device000001', 'tasks.stop', { taskId: 'task-1' })).body
-    ).toMatchObject({ ok: false, error: 'pro_required' })
+    ).toMatchObject({ ok: true, result: true })
+  })
+
+  it('unpairs after Pro ends even when chat cleanup is unavailable', async () => {
+    const s = await setup({
+      features: FREE,
+      chat: async () => {
+        throw new Error('chat_unavailable')
+      }
+    })
+    await s.pair()
+    expect((await s.call('device000001', 'unpair')).body).toMatchObject({ ok: true })
+    expect(s.saved()).toEqual([])
+    expect((await s.call('device000001', 'state')).status).toBe(401)
   })
 
   it('unpair removes the browser; its key stops working', async () => {

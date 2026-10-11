@@ -103,6 +103,7 @@ export const HOOKS = {
    * extension's vault protocol. Pro registers it; free builds leave it inert and the bridge
    * reports the vault as unavailable.
    */
+  extensionChatRequest: 'chat.extensionRequest',
   extensionVaultRequest: 'vault.extensionRequest',
   /** Legacy MCP-only predecessor of actionsProposeApproval. Kept so a pro build
    *  that has not yet migrated still gates connector writes; remove once
