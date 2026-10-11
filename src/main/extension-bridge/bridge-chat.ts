@@ -1,4 +1,5 @@
 // Shared bridge contract. Desktop owns execution; browsers read bounded event pages.
+import type { AutomationTaskControlIntent } from '@offgrid/automation'
 export interface ChatTurn {
   role: 'user' | 'assistant'
   content: string
@@ -28,6 +29,8 @@ export type ChatRequest =
   | { action: 'start'; input: ChatStart }
   | { action: 'read'; runId: string; cursor: number }
   | { action: 'stop'; runId: string }
+  | { action: 'control'; runId: string; intent: AutomationTaskControlIntent }
+  | { action: 'guide'; runId: string; text: string }
   | { action: 'disconnect' }
   | { action: 'conversations' }
 
