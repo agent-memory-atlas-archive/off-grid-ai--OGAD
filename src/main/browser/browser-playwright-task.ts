@@ -71,7 +71,12 @@ export async function runBrowserPlaywrightTask(
       errorName: error instanceof Error ? error.name : typeof error,
       error: compact(detail)
     })
-    return fallback(`Semantic control was unavailable: ${compact(detail)}`)
+    return {
+      ok: false,
+      fallback: false,
+      summary: `Web Use stopped: ${compact(detail)}`,
+      handoffs: 0
+    }
   }
 }
 
@@ -99,7 +104,11 @@ async function runSemanticLoop(
       isError: observation.isError,
       ...semanticSnapshotDiagnostics(observation.text)
     })
-    return fallback('The page did not expose usable semantic controls.')
+    return fallback(
+      observation.isError
+        ? `The page could not be read: ${compact(observation.text)}`
+        : 'The page did not expose usable semantic controls.'
+    )
   }
   await publishObservation(input, { step: 0, phase: 'observing', summary: 'Initial page' })
 
@@ -147,7 +156,8 @@ async function runSemanticStep(
     if (error instanceof NoSupportedActionError) {
       return reobserveForRetry(input, state, {
         note: 'The Decision model rejected every proposed action as unsafe or unsupported. Propose different actions from this fresh snapshot.',
-        step: 're-observed the page after the Decision model rejected every proposal'
+        step: 're-observed the page after the Decision model rejected every proposal',
+        stop: 'Stopped: the model proposed no action it could run on this page.'
       })
     }
     if (!modelLease.signal.aborted) throw error
@@ -173,7 +183,10 @@ async function runSemanticStep(
   }
   if (skipUnchangedDuplicate(input, state, decision)) {
     return state.noChangeCount >= MAX_NO_CHANGE
-      ? fallback('Semantic control made no visible progress.', state.handoffs)
+      ? fallback(
+          `Stopped: the model kept repeating "${stepLabel(decision)}" on a page that did not change.`,
+          state.handoffs
+        )
       : undefined
   }
   return performSemanticAction(context, decision, step)
@@ -295,8 +308,7 @@ async function performSemanticAction(
     state.observation = await observeWithCurrentLease(input)
     return undefined
   }
-  // The model writes its summary as a sentence; drop its full stop before the status joins it.
-  const label = actionLabel(decision).replace(/[.!]+$/, '')
+  const label = stepLabel(decision)
   input.onStep(`${label}: ${result.isError ? 'not completed' : 'completed'}`)
   if (result.isError) return recoverActionError(input, state, result)
 
@@ -308,8 +320,13 @@ async function performSemanticAction(
   await publishObservation(input, { step, phase: 'checking', summary: actionLabel(decision) })
   updateProgressEvidence(context, { decision, actionKey, before })
   return state.noChangeCount >= MAX_NO_CHANGE
-    ? fallback('Semantic control made no visible progress.', state.handoffs)
+    ? fallback(`Stopped: the page did not change after "${label}", twice in a row.`, state.handoffs)
     : undefined
+}
+
+/** The model writes its summary as a sentence; drop its full stop before a status joins it. */
+function stepLabel(decision: SemanticDecision): string {
+  return actionLabel(decision).replace(/[.!]+$/, '')
 }
 
 async function publishObservation(
@@ -334,14 +351,14 @@ async function publishObservation(
 async function reobserveForRetry(
   input: BrowserPlaywrightTaskInput,
   state: SemanticLoopState,
-  why: { readonly note: string; readonly step: string }
+  why: { readonly note: string; readonly step: string; readonly stop: string }
 ): Promise<BrowserPlaywrightTaskResult | undefined> {
   state.observation = await observeWithCurrentLease(input)
   const after = fingerprint(state.observation.text)
   state.noChangeCount = after === state.lastFingerprint ? state.noChangeCount + 1 : 0
   state.lastFingerprint = after
   if (state.noChangeCount >= MAX_NO_CHANGE) {
-    return fallback('Semantic control made no visible progress.', state.handoffs)
+    return fallback(why.stop, state.handoffs)
   }
   state.recoveryNote = why.note
   input.onStep(why.step)
@@ -360,10 +377,19 @@ async function recoverActionError(
   if (isStaleReference(result)) {
     return reobserveForRetry(input, state, {
       note: 'The element reference became stale. Use only a reference from this fresh snapshot.',
-      step: 're-observed the page after a stale element reference'
+      step: 're-observed the page after a stale element reference',
+      stop: 'Stopped: the model kept acting on page elements that are no longer there.'
     })
   }
-  return fallback(`Semantic action failed: ${compact(result.text)}`, state.handoffs)
+  // A refused or failed action (a disabled button, a field the agent may not type in, a
+  // Playwright timeout) usually leaves the page as it was. Say why and let the model choose
+  // again; the no-progress limit still ends a task that keeps failing.
+  const why = compact(result.text)
+  return reobserveForRetry(input, state, {
+    note: `The last action failed: ${why} Choose a different action from this fresh snapshot.`,
+    step: `re-observed the page after the action failed: ${why}`,
+    stop: `Stopped: ${why}`
+  })
 }
 
 async function recoverObservationError(
@@ -375,7 +401,10 @@ async function recoverObservationError(
     await recoverStateAfterCrash(input, state)
     return 'recovered'
   }
-  return fallback('The semantic page snapshot failed after the action.', state.handoffs)
+  return fallback(
+    `The page could not be read after the action: ${compact(state.observation.text)}`,
+    state.handoffs
+  )
 }
 
 async function recoverStateAfterCrash(

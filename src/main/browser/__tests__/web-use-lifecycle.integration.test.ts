@@ -407,7 +407,10 @@ describe('Web Use shared lifecycle', () => {
       }),
       call: async (name: string): Promise<PlaywrightToolResult> => {
         calls.push(name)
-        return { text: 'Element 9 not found, the id is stale. Take a fresh snapshot.', isError: true }
+        return {
+          text: 'Element 9 not found, the id is stale. Take a fresh snapshot.',
+          isError: true
+        }
       },
       recoverPage: async (): Promise<PlaywrightToolResult> => ({ text: 'ok', isError: false })
     } as unknown as PlaywrightMcpSession
@@ -426,5 +429,121 @@ describe('Web Use shared lifecycle', () => {
     })
     expect(result.ok).toBe(false)
     expect(calls.length).toBeLessThanOrEqual(3)
+  })
+  describe('a failed or unchanged action', () => {
+    const FORM =
+      'textbox "Password" [required] [ref=e1]\nbutton "Create Account" [disabled] [ref=e2]\nbutton "Next" [ref=e3]'
+    const DISABLED =
+      '"Create Account" is disabled, so clicking it does nothing. Fill the fields marked required or invalid first.'
+
+    function run(
+      session: PlaywrightMcpSession,
+      notes: string[]
+    ): ReturnType<typeof runBrowserPlaywrightTask> {
+      return runBrowserPlaywrightTask({
+        goal: 'Create the account',
+        plan,
+        session,
+        guard: new VisionGuard({ taskId: 'web-failed-action', kind: 'web_use' }),
+        activeDriver: () => pointerDriver([]),
+        activeUrl: () => 'https://example.test/signup',
+        waitForUser: async () => undefined,
+        takeGuidance: () => [],
+        onStep: (note) => void notes.push(note),
+        onPhase: () => undefined,
+        onProgress: () => undefined
+      })
+    }
+
+    /** A page no action changes. */
+    function unchangedPage(): PlaywrightMcpSession {
+      return {
+        snapshot: async (): Promise<PlaywrightToolResult> => ({ text: FORM, isError: false }),
+        call: async (): Promise<PlaywrightToolResult> => ({ text: 'completed', isError: false }),
+        recoverPage: async (): Promise<PlaywrightToolResult> => ({ text: 'ok', isError: false })
+      } as unknown as PlaywrightMcpSession
+    }
+
+    function failingFirst(snapshots: string[], calls: string[]): PlaywrightMcpSession {
+      return {
+        snapshot: async (): Promise<PlaywrightToolResult> => ({
+          text: snapshots.length > 1 ? (snapshots.shift() as string) : (snapshots[0] ?? FORM),
+          isError: false
+        }),
+        call: async (name: string): Promise<PlaywrightToolResult> => {
+          calls.push(name)
+          return calls.length === 1
+            ? { text: DISABLED, isError: true }
+            : { text: 'completed', isError: false }
+        },
+        recoverPage: async (): Promise<PlaywrightToolResult> => ({ text: 'ok', isError: false })
+      } as unknown as PlaywrightMcpSession
+    }
+
+    it('re-observes after a refused click and lets the model choose again', async () => {
+      // Found against a real signup page: a click on a disabled Create Account button used to
+      // end the task on the spot ("Semantic action failed"), or, in the browser, report a
+      // click that did nothing.
+      model.replies.push(
+        decision({ action: 'click', ref: 'e2', element: 'Create Account', summary: 'Create' }),
+        decision({ action: 'click', ref: 'e3', element: 'Next', summary: 'Next' }),
+        decision({ action: 'done', evidenceText: 'Account created', summary: 'Account created.' })
+      )
+      const calls: string[] = []
+      const notes: string[] = []
+      const done = 'heading "Account created" [ref=d1]'
+      const result = await run(failingFirst([FORM, FORM, done, done], calls), notes)
+      expect(result).toMatchObject({ ok: true, summary: 'Account created.' })
+      expect(calls).toEqual(['browser_click', 'browser_click'])
+      expect(notes).toContain(`re-observed the page after the action failed: ${DISABLED}`)
+    })
+
+    it('stops with the reason the action kept failing, in words the user can act on', async () => {
+      for (let i = 0; i < 3; i += 1) {
+        model.replies.push(
+          decision({ action: 'click', ref: 'e2', element: 'Create Account', summary: 'Create' })
+        )
+      }
+      const calls: string[] = []
+      const session = {
+        snapshot: async (): Promise<PlaywrightToolResult> => ({ text: FORM, isError: false }),
+        call: async (name: string): Promise<PlaywrightToolResult> => {
+          calls.push(name)
+          return { text: DISABLED, isError: true }
+        },
+        recoverPage: async (): Promise<PlaywrightToolResult> => ({ text: 'ok', isError: false })
+      } as unknown as PlaywrightMcpSession
+      const result = await run(session, [])
+      expect(result).toEqual({
+        ok: false,
+        fallback: true,
+        summary: `Stopped: ${DISABLED}`,
+        handoffs: 0
+      })
+      expect(calls).toHaveLength(2)
+    })
+
+    it('names the last action when two actions in a row leave the page unchanged', async () => {
+      model.replies.push(
+        decision({ action: 'click', ref: 'e3', element: 'Next', summary: 'Click Next.' }),
+        decision({ action: 'click', ref: 'e1', element: 'Password', summary: 'Focus Password.' })
+      )
+      const result = await run(unchangedPage(), [])
+      expect(result.summary).toBe(
+        'Stopped: the page did not change after "Focus Password", twice in a row.'
+      )
+    })
+
+    it('names the action the model kept repeating on an unchanged page', async () => {
+      for (let i = 0; i < 3; i += 1) {
+        model.replies.push(
+          decision({ action: 'click', ref: 'e3', element: 'Next', summary: 'Click Next.' })
+        )
+      }
+      const result = await run(unchangedPage(), [])
+      expect(result.summary).toBe(
+        'Stopped: the model kept repeating "Click Next" on a page that did not change.'
+      )
+    })
   })
 })

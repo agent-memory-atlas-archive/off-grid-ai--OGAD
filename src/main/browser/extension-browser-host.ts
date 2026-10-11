@@ -8,9 +8,10 @@
 // The visual fallback (canvas, maps, remote desktops) needs OGAD's own view, so here a page
 // that needs it ends the task with that reason instead of guessing.
 //
-// Chromium tabs are driven by Playwright over the debugger protocol. Firefox has none for
-// extensions, so there the loop's Playwright tools are answered by the extension in the page
-// (extension-snapshot-session.ts); openTaskSession picks from what the browser reports.
+// Chromium tabs are driven by Playwright over the debugger protocol, and from inside the page
+// while Chrome refuses the debugger (debugger-fallback-session.ts). Firefox has no debugger for
+// extensions, so there the loop's Playwright tools are always answered by the extension in the
+// page (extension-snapshot-session.ts); openTaskSession picks from what the browser reports.
 
 import { automationTaskReadStatus } from '@offgrid/automation'
 import { encodeTaskPhase } from '../../shared/task-execution-plan'
@@ -31,12 +32,14 @@ import type { BrowserRailHost, BrowserTaskRequest, WebTaskResult } from './brows
 import { ElectronPlaywrightRelay } from './electron-playwright-relay'
 import { createExtensionPageProvider, type ExtensionTabContents } from './extension-tab-pages'
 import { ExtensionSnapshotSession } from './extension-snapshot-session'
+import {
+  DebuggerFallbackSession,
+  type DebuggerConnection,
+  type PageControl
+} from './debugger-fallback-session'
 import { PlaywrightMcpSession, type SemanticPageSession } from './playwright-mcp-session'
 
 const START_URL = 'https://www.google.com'
-
-export const NEEDS_IN_APP_BROWSER =
-  'This page needs visual control, which runs in the Off Grid AI browser. Switch Tasks > Web Use to the Off Grid AI browser to finish it.'
 
 type PageProvider = ReturnType<typeof createExtensionPageProvider>
 
@@ -47,35 +50,63 @@ export interface TaskSession {
   close: () => Promise<void>
 }
 
+/** Said in the task's steps when control moves between the debugger and the page. */
+export const CONTROL_STEPS: Record<PageControl, string> = {
+  page: 'Chrome blocked debugger control because another extension (often a password manager) added a frame to this page. Continuing with page controls until it goes.',
+  debugger: 'Debugger control is back.'
+}
+
+/** Attach Chrome's debugger to the task tab and start Playwright MCP over it. */
+async function connectDebugger(
+  pages: PageProvider,
+  tab: () => ExtensionTabContents
+): Promise<DebuggerConnection> {
+  const relay = new ElectronPlaywrightRelay(pages)
+  const playwright = new PlaywrightMcpSession(relay)
+  const target = tab()
+  const close = async (): Promise<void> => {
+    await playwright.close().catch(() => undefined)
+    await relay.stop().catch(() => undefined)
+  }
+  try {
+    target.debugger.attach()
+    // Await Chrome's attachment before starting MCP, including its permission refusal.
+    await target.debugger.sendCommand('Target.getTargetInfo')
+    await playwright.connect()
+  } catch (error) {
+    await close()
+    target.debugger.detach()
+    throw error
+  }
+  return { session: playwright, close }
+}
+
 /**
  * Drive the task tab the way this browser allows: Playwright over the debugger protocol where
- * it has one (Chromium), the extension's in-page answers otherwise (Firefox).
+ * it has one (Chromium), falling back to the extension's in-page answers while Chrome refuses
+ * the debugger; in-page only where there is none (Firefox).
  */
 export async function openTaskSession(
   link: BrowserLink,
   pages: PageProvider,
-  tab: ExtensionTabContents
+  tab: ExtensionTabContents,
+  onStep: (note: string) => void = () => undefined
 ): Promise<TaskSession> {
   const caps = (await link.request('browser.caps')) as { cdp?: unknown } | null
   const current = (): ExtensionTabContents => pages.active() ?? tab
+  const page = new ExtensionSnapshotSession(link, () => current().tabId)
   if (caps?.cdp !== true) {
-    return {
-      session: new ExtensionSnapshotSession(link, () => current().tabId),
-      driver: () => null,
-      close: async () => undefined
-    }
+    return { session: page, driver: () => null, close: async () => undefined }
   }
-  const relay = new ElectronPlaywrightRelay(pages)
-  const playwright = new PlaywrightMcpSession(relay)
-  tab.debugger.attach()
-  await playwright.connect()
+  const session = new DebuggerFallbackSession({
+    connect: () => connectDebugger(pages, current),
+    page,
+    onSwitch: (to) => onStep(CONTROL_STEPS[to])
+  })
   return {
-    session: playwright,
-    driver: () => new BrowserDriver(current().transport()),
-    close: async () => {
-      await playwright.close().catch(() => undefined)
-      await relay.stop().catch(() => undefined)
-    }
+    session,
+    driver: () => (session.usesDebugger() ? new BrowserDriver(current().transport()) : null),
+    close: () => session.close()
   }
 }
 
@@ -165,7 +196,7 @@ async function runInBrowser(
       tab = await pages.adopt(startTabId, taskId, url)
       recordStep(`working in your tab in ${link.browser.name}`)
     }
-    const task = await openTaskSession(link, pages, tab)
+    const task = await openTaskSession(link, pages, tab, recordStep)
     const semantic = await runBrowserPlaywrightTask({
       goal,
       plan,
@@ -192,8 +223,7 @@ async function runInBrowser(
     }).finally(task.close)
 
     const finalUrl = (pages.active() ?? tab).getURL()
-    if (semantic.fallback) guard.fail(NEEDS_IN_APP_BROWSER)
-    else if (!semantic.ok && !guard.isHalted) guard.fail(semantic.summary)
+    if ((semantic.fallback || !semantic.ok) && !guard.isHalted) guard.fail(semantic.summary)
     else if (semantic.ok && guard.automationStatus !== 'completed') {
       guard.fail('Web Use ended without a verified completion state.')
     }

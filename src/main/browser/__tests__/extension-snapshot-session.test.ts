@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { BrowserLink } from '../../extension-bridge/bridge-socket'
 import type { SocketOp } from '../../extension-bridge/bridge-socket-protocol'
 import { ExtensionSnapshotSession } from '../extension-snapshot-session'
-import { openTaskSession } from '../extension-browser-host'
+import { CONTROL_STEPS, openTaskSession } from '../extension-browser-host'
+import { DEBUGGER_BLOCKED } from '../debugger-fallback-session'
 import { createExtensionPageProvider } from '../extension-tab-pages'
 
 // Firefox has no debugger protocol for extensions, so the loop's Playwright tools go to the
@@ -89,5 +90,31 @@ describe('openTaskSession', () => {
     expect((await task.session.snapshot()).text).toBe(SNAPSHOT)
     await task.close()
     expect(link.calls.map((c) => c.op)).toEqual(['tab.create', 'browser.caps', 'page.call'])
+  })
+  it('answers from the page while Chrome refuses the debugger, and says why', async () => {
+    // Chrome refuses to attach while another extension's frame (a password manager's menu)
+    // is in the tab. Before, the whole task fell back for good; now the page answers until
+    // the debugger can attach again.
+    const link = fakeLink((op, args) => {
+      if (op === 'browser.caps') return { cdp: true }
+      if (op === 'tab.create') return { tabId: 7, url: String(args.url), title: '' }
+      if (op === 'cdp.attach') throw new Error(DEBUGGER_BLOCKED)
+      return op === 'page.call' ? { text: SNAPSHOT, isError: false } : null
+    })
+    const pages = createExtensionPageProvider(link)
+    const tab = await pages.open('https://shop.test/')
+    const steps: string[] = []
+    const task = await openTaskSession(link, pages, tab, (note) => steps.push(note))
+    expect((await task.session.snapshot()).text).toBe(SNAPSHOT)
+    expect(task.driver()).toBeNull()
+    expect(steps).toEqual([CONTROL_STEPS.page])
+    await task.close()
+    expect(link.calls.map((c) => c.op)).toEqual([
+      'tab.create',
+      'browser.caps',
+      'cdp.attach',
+      'cdp.detach',
+      'page.call'
+    ])
   })
 })
