@@ -8,6 +8,7 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { BrowserLink } from '../extension-bridge/bridge-socket'
 import { createExtensionBrowserHost } from '../browser/extension-browser-host'
+import type { WebTaskResult } from '../browser/browser-rail'
 import { setRemoteVisionServerSettings } from '../vision/remote-vision-server'
 import { getTaskRun } from '../tasks/task-history'
 import { getDB } from '../database'
@@ -89,7 +90,7 @@ void app.whenReady().then(async () => {
       endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
       apiKey: 'synthetic-key'
     })
-    const run = (taskId: string) =>
+    const run = (taskId: string): Promise<WebTaskResult> =>
       createExtensionBrowserHost(() => link, 42).runTask({
         goal: 'Read unread notifications',
         taskId,
