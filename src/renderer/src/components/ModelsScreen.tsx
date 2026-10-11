@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { isDecisionModel, useTaskRoles } from '../lib/task-roles'
 import { AnimatePresence } from 'motion/react'
 import { Button } from '@offgrid/operator-ui/operator/button'
+import '@offgrid/operator-ui/styles.css'
 import {
   IconDownload,
   IconCircleCheck,
@@ -1210,6 +1211,7 @@ export function ModelsScreen({
               <Button
                 size="sm"
                 variant={mtpDownloads ? 'secondary' : 'outline'}
+                className="min-h-0 rounded px-2 py-1 text-[10px] leading-normal shadow-none"
                 aria-pressed={mtpDownloads}
                 onClick={() => {
                   setMtpDownloads((enabled) => !enabled)
