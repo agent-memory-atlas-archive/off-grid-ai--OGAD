@@ -61,7 +61,7 @@ describe('Computer Use settings persistence', () => {
     setComputerUseSettings({ checkpointInterval: 2, screenshotSize: 'unknown' })
     expect(getComputerUseSettings()).toMatchObject({
       checkpointInterval: 8,
-      screenshotSize: 'large'
+      screenshotSize: 'balanced'
     })
   })
 

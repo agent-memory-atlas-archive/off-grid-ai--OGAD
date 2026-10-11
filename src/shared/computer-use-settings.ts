@@ -66,7 +66,9 @@ export const DEFAULT_COMPUTER_USE_SETTINGS: Readonly<ComputerUseSettings> = {
   decisionModelId: null,
   showPictureInPicture: false,
   context: 'auto',
-  screenshotSize: 'large',
+  // 1440px keeps a screenshot above the 1024 image tokens Qwen-VL grounding needs while
+  // reading in about half the time of 1920px (~2,300 tokens) on Apple Silicon.
+  screenshotSize: 'balanced',
   screenshotQuality: 'balanced',
   checkpointInterval: 8,
   visualHistoryFrames: 1,
