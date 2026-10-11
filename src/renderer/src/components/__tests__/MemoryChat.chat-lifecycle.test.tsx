@@ -1396,6 +1396,18 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
           context: expect.objectContaining({ reasoning: 'Partial reasoning' })
         })
       )
+      expect(
+        boundary.messages['conversation-a']!.filter(
+          (message) => message.content === 'Partial after reload'
+        )
+      ).toHaveLength(1)
+      expect(
+        boundary.addRagMessage.mock.calls.filter(
+          ([, role, content]) => role === 'assistant' && content === 'Partial after reload'
+        )
+      ).toHaveLength(1)
+      act(() => boundary.emitStream({ streamId: 'orphan', type }))
+      expect(screen.getAllByText('Partial after reload')).toHaveLength(1)
       boundary.resolve(0, 'Restored queue answer')
       await screen.findByText('Restored queue answer')
       await waitFor(() =>
@@ -1404,7 +1416,99 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
     }
   )
 
-  it('Stop saves an unclaimed partial response', async () => {
+  it('ordinary Stop after remount saves one partial and discards both queued drafts', async () => {
+    const boundary = new ChatBoundary()
+    installBoundary(boundary)
+    const user = userEvent.setup()
+    const view = renderChat({ conversationId: 'conversation-a' })
+    await send('Hold this reply open.', user)
+    await waitFor(() => expect(boundary.calls).toHaveLength(1))
+    act(() => boundary.emit(0, 'The first reply is still running.'))
+    // Native cancellation resolves with the streamed partial instead of rejecting.
+    boundary.cancelRag.mockImplementation(() => {
+      boundary.activeRagStreams.length = 0
+      boundary.resolve(0, 'The first reply is still running.')
+    })
+    await send('Queue this first.', user)
+    await screen.findByText('1 queued')
+    boundary.activeRagStreams.push({
+      streamId: boundary.calls[0]!.streamId,
+      conversationId: 'conversation-a',
+      content: 'The first reply is still running.',
+      reasoning: '',
+      reasoningRequested: false,
+      phase: 'answering'
+    })
+    view.unmount()
+    renderChat({ conversationId: 'conversation-a' })
+    await screen.findByText('The first reply is still running.')
+    await screen.findByText('1 queued')
+    await send('Queue this second.', user)
+    await screen.findByText('2 queued')
+    await user.click(screen.getByRole('button', { name: /stop generating/i }))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /stop generating/i })).toBeNull()
+    )
+    act(() => boundary.emitStream({ streamId: boundary.calls[0]!.streamId, type: 'done' }))
+    await send('Send this ahead of the queue.', user)
+    await waitFor(() => expect(boundary.calls).toHaveLength(2))
+    boundary.resolve(1, 'The urgent reply is complete.')
+    await screen.findByText('The urgent reply is complete.')
+    expect(boundary.calls.map(({ query }) => query)).toEqual([
+      'Hold this reply open.',
+      'Send this ahead of the queue.'
+    ])
+    expect(
+      boundary.messages['conversation-a']!.filter(
+        (message) => message.content === 'The first reply is still running.'
+      )
+    ).toHaveLength(1)
+    expect(
+      boundary.addRagMessage.mock.calls.filter(
+        ([, role, content]) =>
+          role === 'assistant' && content === 'The first reply is still running.'
+      )
+    ).toHaveLength(1)
+    expect(screen.getAllByText('The first reply is still running.')).toHaveLength(1)
+    expect(screen.queryByText(/\d queued/)).toBeNull()
+    cleanup()
+    renderChat({ conversationId: 'conversation-a' })
+    await screen.findByText('The first reply is still running.')
+    expect(screen.getAllByText('The first reply is still running.')).toHaveLength(1)
+  })
+
+  it('Stop during resend retains the earlier answer and one partial version', async () => {
+    const boundary = new ChatBoundary()
+    installBoundary(boundary)
+    const user = userEvent.setup()
+    renderChat({ conversationId: 'conversation-a' })
+    await send('Question to resend', user)
+    await waitFor(() => expect(boundary.calls).toHaveLength(1))
+    boundary.resolve(0, 'Earlier answer')
+    await screen.findByText('Earlier answer')
+    openActionsFor('Question to resend')
+    await user.click(screen.getByRole('menuitem', { name: 'Resend' }))
+    await waitFor(() => expect(boundary.calls).toHaveLength(2))
+    act(() => boundary.emit(1, 'Partial resend'))
+    await screen.findByText('Partial resend')
+    await user.click(screen.getByRole('button', { name: /stop generating/i }))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /stop generating/i })).toBeNull()
+    )
+    const saved = boundary.messages['conversation-a']!.filter(
+      (message) => message.role === 'assistant'
+    )
+    expect(saved).toHaveLength(1)
+    expect(saved[0]!.content).toBe('Partial resend')
+    expect(saved[0]!.context).toMatchObject({
+      variants: [
+        expect.objectContaining({ content: 'Earlier answer' }),
+        expect.objectContaining({ content: 'Partial resend' })
+      ]
+    })
+  })
+
+  it('Stop after remount saves an unclaimed partial once and clears both queued drafts', async () => {
     const boundary = new ChatBoundary()
     boundary.activeRagStreams.push({
       streamId: 'orphan-stop',
@@ -1416,10 +1520,16 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
     })
     installBoundary(boundary)
     const user = userEvent.setup()
+    const view = renderChat({ conversationId: 'conversation-a' })
+    await screen.findByText('Unclaimed partial')
+    await send('Queue this first.', user)
+    await screen.findByText('1 queued')
+    view.unmount()
     renderChat({ conversationId: 'conversation-a' })
     await screen.findByText('Unclaimed partial')
-    await send('Urgent question', user)
     await screen.findByText('1 queued')
+    await send('Queue this second.', user)
+    await screen.findByText('2 queued')
     await user.click(screen.getByRole('button', { name: /stop generating/i }))
     await waitFor(() =>
       expect(boundary.messages['conversation-a']).toContainEqual(
@@ -1433,7 +1543,28 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
       )
     )
     expect(boundary.cancelRag).toHaveBeenCalledWith('orphan-stop')
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /stop generating/i })).toBeNull()
+    )
+    act(() => boundary.emitStream({ streamId: 'orphan-stop', type: 'cancel' }))
     expect(boundary.calls).toHaveLength(0)
+    expect(
+      boundary.messages['conversation-a']!.filter(
+        (message) => message.content === 'Unclaimed partial'
+      )
+    ).toHaveLength(1)
+    expect(
+      boundary.addRagMessage.mock.calls.filter(
+        ([, role, content]) => role === 'assistant' && content === 'Unclaimed partial'
+      )
+    ).toHaveLength(1)
+    expect(screen.getAllByText('Unclaimed partial')).toHaveLength(1)
+    expect(screen.queryByText(/\d queued/)).toBeNull()
+    await send('Send ahead of the discarded queue.', user)
+    await waitFor(() => expect(boundary.calls).toHaveLength(1))
+    boundary.resolve(0, 'Urgent completed')
+    await screen.findByText('Urgent completed')
+    expect(boundary.calls.map(({ query }) => query)).toEqual(['Send ahead of the discarded queue.'])
   })
 
   it('persists the selected answer and retains its full record after failed regeneration', async () => {

@@ -39,7 +39,12 @@ import {
   unownedTerminal
 } from '../chat-run-lifecycle'
 import { observeOwnedRun } from '../chat-run-owner'
-import { observedAnswer, persistObservedTurn, type TurnPersistence } from '../chat-turn-persistence'
+import {
+  observedAnswer,
+  persistObservedTurn,
+  retainedFinalizedTurnCount,
+  type TurnPersistence
+} from '../chat-turn-persistence'
 import { stopChatRun, type StopDependencies } from '../chat-stop'
 import type { ChatMessage } from '../../components/MemoryChat/types'
 
@@ -196,6 +201,35 @@ describe('restored stream ownership and cancellation', () => {
         'a'
       )
     ).toBe('send-new')
+  })
+  it('reattaches the sender reservation before cancelling a native image stream', () => {
+    const state = persistence()
+    const owner = new Map([['image:a', 'a']])
+    const dependencies = {
+      ...state,
+      cancelledRef: { current: new Set<string>() },
+      queuedRef: { current: {} },
+      setQueuedByConv: vi.fn(),
+      cancelRag: vi.fn()
+    }
+    observeOwnedRun(
+      { action: 'attach', conversationId: 'a', owner },
+      'a',
+      'send-held',
+      dependencies
+    )
+    expect(targetRun(owner, 'a')).toBe('send-held')
+    const cancel = {
+      action: 'cancel' as const,
+      conversationId: 'a',
+      runId: targetRun(owner, 'a'),
+      preserveQueue: true,
+      claimed: false
+    }
+    observeOwnedRun(cancel, 'a', 'send-held', dependencies)
+    expect(cancel.claimed).toBe(true)
+    expect(dependencies.cancelledRef.current.has('a')).toBe(true)
+    expect(dependencies.cancelRag).not.toHaveBeenCalled()
   })
   it('captures the run before awaiting task Stop; a drained urgent send survives', async () => {
     const state = persistence()
@@ -447,4 +481,95 @@ it('cancels preparation only in the target conversation', () => {
       'a'
     )
   ).toEqual(['prepare-a'])
+})
+
+// Separate maps model a sender that survives navigation and a newly mounted observer.
+it.each(['stop-first', 'terminal-first', 'unclaimed-cancel', 'concurrent'])(
+  'finalizes one partial across observers (%s)',
+  async (order) => {
+    const first = persistence()
+    first.api.updateRagMessage = vi.fn(async () => false)
+    first.api.addRagMessage = vi.fn(async () => ({
+      id: 1,
+      uuid: 'saved'
+    }))
+    const second = {
+      ...first,
+      streamConvRef: { current: new Map([['stream', 'a']]) }
+    }
+    const stopDependencies: StopDependencies = {
+      ...first,
+      activeConversationId: 'a',
+      cancelledRef: { current: new Set() },
+      queuedRef: { current: {} },
+      setQueuedByConv: vi.fn(),
+      setAttachWarn: vi.fn(),
+      stopLiveTask: async () => true,
+      dispatch: vi.fn(),
+      cancelRag: vi.fn(),
+      finalizeStoppedTurn: () => persistObservedTurn(first, 'a', 'stream'),
+      markGenerating: vi.fn(),
+      drainQueue: vi.fn(),
+      imageGenConv: null,
+      cancelImageGen: vi.fn(),
+      setImageGenConv: vi.fn(),
+      setImgProgress: vi.fn(),
+      setLoading: vi.fn()
+    }
+    const stop = (): Promise<void> => stopChatRun(stopDependencies, 'a', null)
+    const terminal = (): Promise<void> =>
+      settleUnownedStream(
+        () => persistObservedTurn(second, 'a', 'stream'),
+        () => {},
+        () => {}
+      )
+    if (order === 'concurrent') await Promise.all([stop(), terminal()])
+    else if (order === 'unclaimed-cancel') {
+      await terminal()
+      await terminal()
+    } else if (order === 'terminal-first') {
+      await terminal()
+      await stop()
+    } else {
+      await stop()
+      await terminal()
+    }
+    expect(first.api.addRagMessage).toHaveBeenCalledOnce()
+    expect(first.api.updateRagMessage).toHaveBeenCalledOnce()
+    expect(first.messagesByConvRef.current.a).toHaveLength(1)
+    expect(first.messagesByConvRef.current.a![0]).toMatchObject({
+      id: 'saved',
+      content: 'Partial answer'
+    })
+  }
+)
+
+it('retains a pending save and a late observer only until the settlement grace expires', async () => {
+  vi.useFakeTimers()
+  try {
+    const first = persistence()
+    let finish!: (updated: boolean) => void
+    first.api.updateRagMessage = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve
+        })
+    )
+    const saved = persistObservedTurn(first, 'a', 'stream')
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(retainedFinalizedTurnCount(first.api)).toBe(1)
+    finish(true)
+    await saved
+    await vi.advanceTimersByTimeAsync(4_999)
+    const second = { ...first, streamConvRef: { current: new Map([['stream', 'a']]) } }
+    await persistObservedTurn(second, 'a', 'stream')
+    expect(first.api.updateRagMessage).toHaveBeenCalledOnce()
+    expect(retainedFinalizedTurnCount(first.api)).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(retainedFinalizedTurnCount(first.api)).toBe(0)
+    expect(first.api.addRagMessage).not.toHaveBeenCalled()
+  } finally {
+    vi.useRealTimers()
+  }
 })

@@ -58,8 +58,17 @@ export function observeOwnedRun(
     detail.action === 'started'
   )
     return
-  if (detail.action === 'cancel' && !matchesRunCancel(detail.runId, runId)) return
+  // A remounted view knows the native stream id, not the sender reservation id.
+  if (
+    detail.action === 'cancel' &&
+    !matchesRunCancel(detail.runId, runId) &&
+    !matchesRunCancel(detail.runId, activeStream?.() ?? runId)
+  )
+    return
   detail.claimed = true
+  // A reattached view must address the surviving sender, including image jobs
+  // whose native image:<conversation> stream is not the sender's reservation.
+  if (detail.action === 'attach') detail.owner?.set(runId, convId)
   if (detail.action !== 'cancel') return
   cancelledRef.current.add(convId)
   if (runId.startsWith('prepare-')) cancelledRef.current.add(runId)

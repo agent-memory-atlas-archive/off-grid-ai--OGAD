@@ -67,6 +67,16 @@ export function observedAnswer(
   return { ...answer, variants, variantIndex, context }
 }
 
+// The API is shared by mounted views and senders that survive navigation. Local
+// stream maps are routing state; they cannot arbitrate two observers of one run.
+const finalizedTurns = new WeakMap<TurnPersistence['api'], Map<string, Promise<ChatMessage>>>()
+const FINALIZED_TURN_GRACE_MS = 5_000
+
+/** Inspect retained claims without exposing their messages or allowing mutation. */
+export function retainedFinalizedTurnCount(api: TurnPersistence['api']): number {
+  return finalizedTurns.get(api)?.size ?? 0
+}
+
 export async function persistObservedTurn(
   dependencies: TurnPersistence,
   convId: string,
@@ -75,7 +85,51 @@ export async function persistObservedTurn(
   status: ChatMessage['turnStatus'] = 'cancelled'
 ): Promise<void> {
   const d = dependencies
-  if (!d.streamConvRef.current.has(streamId)) return
+  let turns = finalizedTurns.get(d.api)
+  if (!turns) {
+    turns = new Map()
+    finalizedTurns.set(d.api, turns)
+  }
+  const key = JSON.stringify([convId, streamId])
+  const existing = turns.get(key)
+  if (existing) {
+    d.streamConvRef.current.delete(streamId)
+    const answer = await existing
+    // A separate view can still have the temporary row. Retire it without
+    // appending another copy of the saved answer.
+    d.setConvMessages(convId, (previous) => {
+      if (!previous.some((message) => message.id === streamId)) return previous
+      const withoutStream = previous.filter((message) => message.id !== streamId)
+      return withoutStream.some((message) => message.id === answer.id)
+        ? withoutStream
+        : previous.map((message) => (message.id === streamId ? answer : message))
+    })
+    return
+  }
+  if (d.streamConvRef.current.get(streamId) !== convId) return
+  // Claim synchronously before any persistence or message update can notify peers.
+  const finalizing = Promise.resolve().then(() =>
+    saveObservedTurn(d, convId, streamId, settled, status)
+  )
+  turns.set(key, finalizing)
+  try {
+    await finalizing
+  } finally {
+    // Keep the claim while saving and briefly after settlement so Stop and the
+    // terminal observer share one save, including across a remount.
+    setTimeout(() => {
+      if (turns.get(key) === finalizing) turns.delete(key)
+    }, FINALIZED_TURN_GRACE_MS)
+  }
+}
+
+async function saveObservedTurn(
+  d: TurnPersistence,
+  convId: string,
+  streamId: string,
+  settled: TurnSettlement | undefined,
+  status: ChatMessage['turnStatus']
+): Promise<ChatMessage> {
   d.streamConvRef.current.delete(streamId)
   const current = (d.messagesByConvRef.current[convId] ?? []).find(
     (message) => message.id === streamId
@@ -107,14 +161,13 @@ export async function persistObservedTurn(
     const storedId = updated
       ? savedId
       : (await d.api.addRagMessage(convId, 'assistant', answer.content, answer.context)).uuid
+    const storedAnswer = { ...answer, id: storedId, replacementMessageId: undefined }
     d.setConvMessages(convId, (previous) =>
-      previous.map((message) =>
-        message.id === streamId
-          ? { ...answer, id: storedId, replacementMessageId: undefined }
-          : message
-      )
+      previous.map((message) => (message.id === streamId ? storedAnswer : message))
     )
+    return storedAnswer
   } catch (error) {
     console.error('Failed to persist observed assistant message:', error)
+    return answer
   }
 }

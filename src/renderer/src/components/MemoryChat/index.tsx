@@ -1194,11 +1194,13 @@ export function MemoryChat({
       setImgProgress(null)
       // The sender saves the message after the native job reaches its terminal phase.
       // Its settled signal releases both the local and any reattached queue.
+      // Without a sender, the native terminal event must release and drain it.
       if (
         !rendererOwnsRun(job.conversationId) &&
         ![...streamConvRef.current.values()].includes(job.conversationId)
       ) {
         markGenerating(job.conversationId, false)
+        drainQueue(job.conversationId)
       }
     }
     const offJob = window.api.onImageGenJobState(observe)
