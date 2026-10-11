@@ -25,6 +25,7 @@ import { callHookAsync, HOOKS } from './bootstrap/hookRegistry'
 import {
   boundToolResult,
   callsWithinToolBudget,
+  elideStaleToolResults,
   normalizeMaxToolCalls,
   repeatedToolCallDecision,
   repeatedToolCallFinalAnswerInstruction,
@@ -1025,6 +1026,10 @@ export async function toolChat(
   const callRecords: ToolCallRecord[] = []
   let stopInstruction: string | undefined
   while (toolCalls.length < maxToolCalls) {
+    // Past the soft threshold, older bulky tool results become short stubs so a long
+    // tool sequence keeps room to finish instead of ending in "Context is full."
+    const elision = elideStaleToolResults(messages, maxPromptChars)
+    if (elision.elided) messages.splice(0, messages.length, ...elision.messages)
     if (toolPromptChars(messages) > maxPromptChars) {
       return resultWithImages({ answer: 'Context is full.', toolCalls, unified })
     }

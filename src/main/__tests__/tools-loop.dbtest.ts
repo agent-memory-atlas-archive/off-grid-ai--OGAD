@@ -1099,4 +1099,50 @@ describe('web tools — real parsers over fetch faked at the network boundary', 
     expect(JSON.stringify(finalRequest.messages)).toContain('kept repeating the same calculator call')
   })
 
+  it('elides older bulky tool results once the window fills, keeping the latest two whole', async () => {
+    const pageText = (page: number): string => `page${String(page)} `.repeat(1_000)
+    const extension = {
+      id: 'big-page-ext',
+      schemas: () => [
+        {
+          type: 'function',
+          function: {
+            name: 'big_page',
+            description: 'Read one long page',
+            parameters: { type: 'object', properties: { page: { type: 'number' } } }
+          }
+        }
+      ],
+      canHandle: (name: string) => name === 'big_page',
+      execute: async (_name: string, args: Record<string, unknown>) => pageText(Number(args.page))
+    }
+    registerToolExtension(extension)
+    const service = llm as unknown as { ctxSize: number }
+    const previousContext = service.ctxSize
+    service.ctxSize = 8_192
+    try {
+      enqueueReactiveAfterEmptyPlan(
+        ...[1, 2, 3, 4].map((page) => ({ toolCalls: [{ name: 'big_page', args: { page } }] })),
+        { content: 'Compared all four pages.' }
+      )
+      const r = await toolChat('big_page: compare four pages', [], { connectors: true })
+
+      expect(r.answer).toBe('Compared all four pages.')
+      const finalRequest = fake.requests[4] as {
+        messages: { role: string; content: unknown }[]
+      }
+      const toolContents = finalRequest.messages
+        .filter((m) => m.role === 'tool')
+        .map((m) => String(m.content))
+      expect(toolContents).toHaveLength(4)
+      expect(toolContents[0]).toMatch(
+        /^\[big_page result elided to save context: \d+ characters\. Call big_page again/
+      )
+      expect(toolContents[2]).toBe(pageText(3))
+      expect(toolContents[3]).toBe(pageText(4))
+    } finally {
+      service.ctxSize = previousContext
+      unregisterToolExtension(extension.id, extension)
+    }
+  })
 })
