@@ -1796,6 +1796,86 @@ export function setupIPC(): void {
 
   // Storage + download manager
   ipcMain.handle('models:storage', () => import('./models-manager').then((m) => m.getStorageInfo()))
+  ipcMain.handle('models:choose-directory', async () => {
+    const { dialog } = await import('electron')
+    const fs = await import('node:fs')
+    const current = (await import('./runtime-env')).modelsDir()
+    const result = await dialog.showOpenDialog({
+      title: 'Choose model storage folder',
+      defaultPath: current,
+      properties: ['openDirectory', 'createDirectory']
+    })
+    if (result.canceled || !result.filePaths[0]) return { canceled: true }
+    const directory = result.filePaths[0]
+    const downloads = await import('./models-manager').then((m) => m.listDownloads())
+    if (downloads.some((entry) => entry.status === 'queued' || entry.status === 'downloading')) {
+      return { error: 'Wait for model downloads to finish or cancel them, then try again.' }
+    }
+    try {
+      const { saveModelStorageChoice } = await import('./model-storage-choice')
+      const profile = app.getPath('userData')
+      const currentFiles = fs.existsSync(current) ? fs.readdirSync(current) : []
+      const sameFolder =
+        fs.existsSync(current) && fs.realpathSync(current) === fs.realpathSync(directory)
+      let moved = false
+      let warning: string | undefined
+      if (!sameFolder && currentFiles.length) {
+        const choice = await dialog.showMessageBox({
+          type: 'question',
+          title: 'Existing model files',
+          message: 'Move your existing model files to the new folder?',
+          detail:
+            'Move keeps your downloaded models in the new folder after restart. Leave keeps them in the old folder and adds it as a folder to scan.',
+          buttons: ['Move files', 'Leave files', 'Cancel'],
+          defaultId: 0,
+          cancelId: 2
+        })
+        if (choice.response === 2) return { canceled: true }
+        if (choice.response === 0) {
+          const result = await import('./model-storage-move').then((m) =>
+            m.moveModelStorage(profile, current, directory)
+          )
+          moved = result.moved > 0
+          warning = result.warning
+        } else {
+          const { addModelScanFolder } = await import('./model-storage-choice')
+          addModelScanFolder(profile, current)
+        }
+      }
+      if (!moved) saveModelStorageChoice(profile, directory)
+      return { directory, moved, warning, restartRequired: !sameFolder }
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : 'Cannot use this folder.' }
+    }
+  })
+  ipcMain.handle('models:restart-for-directory', () => requestApplicationRelaunch(app))
+  ipcMain.handle('models:scan-folders', () =>
+    import('./model-storage-choice').then((m) => m.readModelScanFolders(app.getPath('userData')))
+  )
+  ipcMain.handle('models:add-scan-folder', async () => {
+    const { dialog } = await import('electron')
+    const result = await dialog.showOpenDialog({
+      title: 'Add a model folder',
+      properties: ['openDirectory']
+    })
+    if (result.canceled || !result.filePaths[0]) return { canceled: true }
+    try {
+      const folders = await import('./model-storage-choice').then((m) =>
+        m.addModelScanFolder(app.getPath('userData'), result.filePaths[0]!)
+      )
+      BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('models:inventory-changed'))
+      return { folders }
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : 'Cannot read this folder.' }
+    }
+  })
+  ipcMain.handle('models:remove-scan-folder', async (_, directory: string) => {
+    const folders = await import('./model-storage-choice').then((m) =>
+      m.removeModelScanFolder(app.getPath('userData'), directory)
+    )
+    BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('models:inventory-changed'))
+    return folders
+  })
   ipcMain.handle('models:delete-orphans', () =>
     import('./models-manager').then((m) => m.deleteOrphans())
   )
