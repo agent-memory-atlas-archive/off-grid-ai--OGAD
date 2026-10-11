@@ -19,6 +19,7 @@ import { getActiveRemoteVisionServerForModality } from './vision/remote-vision-s
 import { listRemoteVoices, synthesizeRemoteVoice } from './remote-media-runtime'
 import { writeDiagnosticLog } from './diagnostics-log'
 import { modelsDir, requireModelStorage, resourceDirs } from './runtime-env'
+import { modelReadDirectories } from './model-paths'
 import type { ManagedRuntime } from './runtime-manager'
 import { chooseVoice, DEFAULT_VOICE } from './tts-logic'
 import { OnnxSpeechRuntime } from './tts-onnx'
@@ -56,6 +57,9 @@ function cacheDirectory(): string {
 
 function bundledCacheDirectory(): string | undefined {
   return [
+    ...modelReadDirectories()
+      .filter((root) => root !== modelsDir())
+      .map((root) => path.join(root, '.cache', 'executorch-speech')),
     ...resourceDirs().map((root) => path.join(root, 'speech-assets')),
     path.resolve(process.cwd(), '../executorch-speech/generated/default-assets')
   ].find((candidate) => fs.existsSync(path.join(candidate, 'index.json')))
