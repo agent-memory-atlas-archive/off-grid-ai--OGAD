@@ -87,8 +87,8 @@ export function StoragePanel(): React.ReactElement {
 
   useEffect(() => {
     refresh()
-    api
-      .getModelScanFolders?.()
+    Promise.resolve()
+      .then(() => api.getModelScanFolders())
       .then((folders: string[] | undefined) => setScanFolders(folders ?? []))
       .catch(() => {})
     const t = setInterval(refresh, 3000)
