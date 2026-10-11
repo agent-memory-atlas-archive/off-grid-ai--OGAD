@@ -12,17 +12,34 @@
 export interface HistoryTurn {
   role: string
   content: string
-  context?: { taskGuidance?: unknown; attachments?: { name: string; kind: string; text?: string }[] } | null
+  variants?: string[]
+  variantIndex?: number
+  context?: {
+    taskGuidance?: unknown
+    attachments?: { name: string; kind: string; text?: string }[]
+  } | null
   attachments?: { name: string; kind: string; text?: string }[]
   notice?: boolean
 }
 
 function modelContent(turn: HistoryTurn): string {
-  if (turn.role !== 'user') return turn.content
+  if (turn.role !== 'user') {
+    const index = turn.variantIndex
+    const selected =
+      turn.role === 'assistant' &&
+      typeof index === 'number' &&
+      Number.isInteger(index) &&
+      index >= 0
+        ? turn.variants?.[index]
+        : undefined
+    return typeof selected === 'string' ? selected : turn.content
+  }
   const attachments = turn.attachments ?? turn.context?.attachments ?? []
   const text = attachments
     .filter((attachment) => attachment.text && attachment.kind !== 'audio')
-    .map((attachment) => `--- attached ${attachment.kind}: ${attachment.name} ---\n${attachment.text}`)
+    .map(
+      (attachment) => `--- attached ${attachment.kind}: ${attachment.name} ---\n${attachment.text}`
+    )
     .join('\n\n')
   return text ? `${text}\n\n${turn.content}` : turn.content
 }
@@ -60,7 +77,8 @@ export function buildSendHistory<T extends HistoryTurn>(
       ]
     : []
   const preCompactionLabels = preCompactionExcerpts.map(
-    (turn) => `${turn.role === 'assistant' ? 'Assistant' : 'User'}: ${turn.content.slice(0, 90)}`
+    (turn) =>
+      `${turn.role === 'assistant' ? 'Assistant' : 'User'}: ${(turn.role === 'assistant' ? modelContent(turn) : turn.content).slice(0, 90)}`
   )
   const flat = [
     ...(preCompactionLabels.length

@@ -342,4 +342,37 @@ test.describe('Desktop queue and saved response versions', () => {
       page.getByText('The second queued reply is complete.', { exact: true })
     ).toHaveCount(0)
   })
+
+  test('the selected older answer is sent as context before and after restart', async () => {
+    await submit('Keep each response version.')
+    await answer('Original answer version 1.')
+    await page.getByRole('button', { name: 'Message actions', exact: true }).first().click()
+    await page.getByRole('menuitem', { name: 'Resend', exact: true }).click()
+    await answer('Original answer version 2.')
+    await page.getByRole('button', { name: 'Previous response' }).click()
+    await expect(page.getByText('1/2', { exact: true })).toBeVisible()
+    await submit('Add a later turn.')
+    await answer('The later answer will be removed by the edit.')
+    expect(
+      audit()
+        .filter((entry) => entry.event === 'request')
+        .at(-1)?.messages
+    ).toContainEqual({
+      role: 'assistant',
+      content: 'Original answer version 1.'
+    })
+    await closeApp()
+    await launchApp()
+    await expect(page.getByText('1/2', { exact: true })).toBeVisible()
+    await submit('Send this ahead of the queue.')
+    await answer('The urgent reply is complete.')
+    const messages = audit()
+      .filter((entry) => entry.event === 'request')
+      .at(-1)?.messages
+    expect(messages).toContainEqual({ role: 'assistant', content: 'Original answer version 1.' })
+    expect(messages).not.toContainEqual({
+      role: 'assistant',
+      content: 'Original answer version 2.'
+    })
+  })
 })
