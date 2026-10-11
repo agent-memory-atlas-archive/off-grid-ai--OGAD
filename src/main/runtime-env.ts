@@ -87,19 +87,19 @@ export function modelsDir(): string {
 }
 
 /** A chosen folder must stay present. Never recreate its path after a drive is removed. */
-export function modelStorageError(): string | null {
-  if (!cfg.modelsDir) return null
+export function modelStorageError(directory = cfg.modelsDir): string | null {
+  if (!directory) return null
   try {
-    if (!fs.statSync(cfg.modelsDir).isDirectory()) throw new Error('not a folder')
-    fs.accessSync(cfg.modelsDir, fs.constants.R_OK | fs.constants.W_OK)
+    if (!fs.statSync(directory).isDirectory()) throw new Error('not a folder')
+    fs.accessSync(directory, fs.constants.R_OK | fs.constants.W_OK)
     return null
   } catch {
-    return `The selected model folder is unavailable: ${cfg.modelsDir}. Connect the drive or choose another folder.`
+    return `The selected model folder is unavailable: ${directory}. Connect the drive or choose another folder.`
   }
 }
 
-export function requireModelStorage(): void {
-  const error = modelStorageError()
+export function requireModelStorage(directory?: string): void {
+  const error = modelStorageError(directory)
   if (error) throw new Error(error)
 }
 

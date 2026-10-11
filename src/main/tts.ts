@@ -12,6 +12,7 @@ import {
 } from '@offgrid/executorch-speech'
 import { kokoroVoiceLabel, speechLanguageLabel, type RuntimeSpeechVoice } from '@offgrid/speech'
 import fs from 'fs'
+import { createHash } from 'node:crypto'
 import { recordAIRequest } from './ai-request-log'
 import os from 'os'
 import path from 'path'
@@ -20,7 +21,7 @@ import { getActiveRemoteVisionServerForModality } from './vision/remote-vision-s
 import { listRemoteVoices, synthesizeRemoteVoice } from './remote-media-runtime'
 import { writeDiagnosticLog } from './diagnostics-log'
 import { modelsDir, requireModelStorage, resourceDirs } from './runtime-env'
-import { modelReadDirectories } from './model-paths'
+import { modelReadDirectories, resolveIndexedModelPackage } from './model-paths'
 import type { ManagedRuntime } from './runtime-manager'
 import { chooseVoice, DEFAULT_VOICE } from './tts-logic'
 import { OnnxSpeechRuntime } from './tts-onnx'
@@ -51,7 +52,23 @@ function executablePath(): string {
   return executable
 }
 
-function cacheDirectory(): string {
+function cacheDirectory(voice: string): string {
+  const assets = Object.entries(
+    speechCapabilities.voices.find((entry) => entry.id === voice)?.assets ?? {}
+  )
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    .map(([asset, url]) => ({
+      name: `${asset}-${createHash('sha256').update(url).digest('hex').slice(0, 12)}-${path.basename(new URL(url).pathname)}`,
+      url
+    }))
+  const bundled = bundledCacheDirectory()
+  const cached =
+    assets.length &&
+    resolveIndexedModelPackage(assets, [
+      ...modelReadDirectories().map((root) => path.join(root, '.cache', 'executorch-speech')),
+      ...(bundled ? [bundled] : [])
+    ])
+  if (cached) return cached
   requireModelStorage()
   return path.join(modelsDir(), '.cache', 'executorch-speech')
 }
@@ -66,8 +83,12 @@ function bundledCacheDirectory(): string | undefined {
   ].find((candidate) => fs.existsSync(path.join(candidate, 'index.json')))
 }
 
-function runtime(): ExecutorchSpeechRuntime {
-  return new ExecutorchSpeechRuntime(cacheDirectory(), executablePath(), bundledCacheDirectory())
+function runtime(voice: string): ExecutorchSpeechRuntime {
+  return new ExecutorchSpeechRuntime(
+    cacheDirectory(voice),
+    executablePath(),
+    bundledCacheDirectory()
+  )
 }
 
 async function synthesizeExecutorch(input: Parameters<ExecutorchSpeechRuntime['synthesize']>[0]): Promise<void> {
@@ -76,7 +97,7 @@ async function synthesizeExecutorch(input: Parameters<ExecutorchSpeechRuntime['s
   try {
     // This bundled native target links the XNNPACK CPU backend only.
     status.ready('CPU (ExecuTorch)')
-    await runtime().synthesize(input)
+    await runtime(input.voiceId).synthesize(input)
   } catch (error) {
     status.fail(error)
     throw error
@@ -133,7 +154,7 @@ async function prepareVoiceAssetsInner(
       writeDiagnosticLog('tts', 'onnx.prepare.failed', { error: messageOf(error) }, 'warn')
     }
   }
-  await prepareVoice(cacheDirectory(), voice, onProgress, undefined, bundledCacheDirectory())
+  await prepareVoice(cacheDirectory(voice), voice, onProgress, undefined, bundledCacheDirectory())
 }
 
 /** Synthesize speech for `text`; returns a WAV data URL. */

@@ -4,11 +4,15 @@ import { createHash } from 'node:crypto'
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises'
 import { speechCapabilities } from '@offgrid/executorch-speech'
 import {
+  addModelScanFolder,
+  removeModelScanFolder,
+  readModelScanFolders,
   readPendingModelCleanup,
   readModelStorageChoice,
   saveModelStorageChoice,
   type PendingModelCleanup
 } from './model-storage-choice'
+import { resolveModelReference } from './model-paths'
 import { configureRuntime } from './runtime-env'
 import {
   beginStorageMove,
@@ -285,7 +289,8 @@ function copyMetadata(
   from: string,
   to: string,
   promoted: string[],
-  pending: PendingModelCleanup[]
+  pending: PendingModelCleanup[],
+  transform: (name: string, bytes: Buffer) => Buffer = (_name, bytes) => bytes
 ): void {
   // Settings may change during the asynchronous model copy. Refresh small metadata
   // synchronously so no renderer write can occur between this snapshot and the switch.
@@ -298,10 +303,21 @@ function copyMetadata(
       if (index >= 0) pending.splice(index, 1)
       continue
     }
-    const bytes = fs.readFileSync(path.join(from, name))
+    const bytes = transform(name, fs.readFileSync(path.join(from, name)))
     const target = path.join(to, name)
+    let parent = path.dirname(target)
+    while (parent !== to) {
+      if (
+        fs.existsSync(parent) &&
+        (fs.lstatSync(parent).isSymbolicLink() || !fs.statSync(parent).isDirectory())
+      )
+        throw new Error('The new folder contains an unsafe model path.')
+      parent = path.dirname(parent)
+    }
     fs.mkdirSync(path.dirname(target), { recursive: true })
     if (!promoted.includes(target)) {
+      if (fs.existsSync(target))
+        throw new Error(`The new folder already contains ${name}. Choose another folder.`)
       const fd = fs.openSync(target, 'wx')
       fs.closeSync(fd)
       promoted.push(target)
@@ -407,5 +423,115 @@ export async function cleanupMovedModelStorage(
     if (saved) saveModelStorageChoice(profile, saved, remaining)
   } catch (error) {
     console.warn('[model-storage] Could not update cleanup record:', error)
+  }
+}
+
+function isRegistryObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isRegistryFile(
+  value: unknown
+): value is string | (Record<string, unknown> & { name: string }) {
+  return typeof value === 'string' || (isRegistryObject(value) && typeof value.name === 'string')
+}
+
+/** Rewrite supported references without mutating the entry or dropping file metadata. */
+export function rewriteRegistryEntryReferences(
+  entry: unknown,
+  reference: (name: string) => string
+): unknown {
+  if (!isRegistryObject(entry)) {
+    return entry
+  }
+  const rewritten = { ...entry }
+  if (Array.isArray(entry.files)) {
+    rewritten.files = entry.files.map((file: unknown) => {
+      if (typeof file === 'string') {
+        return reference(file)
+      }
+      if (isRegistryFile(file) && typeof file !== 'string') {
+        return { ...file, name: reference(file.name) }
+      }
+      return file
+    })
+  }
+  for (const key of ['primary', 'mmproj']) {
+    if (typeof entry[key] === 'string') {
+      rewritten[key] = reference(entry[key])
+    }
+  }
+  return rewritten
+}
+
+function validRegistryEntry(entry: unknown): boolean {
+  return (
+    isRegistryObject(entry) &&
+    (entry.files === undefined ||
+      (Array.isArray(entry.files) && entry.files.every(isRegistryFile))) &&
+    ['primary', 'mmproj'].every(
+      (key) => entry[key] === undefined || entry[key] === null || typeof entry[key] === 'string'
+    )
+  )
+}
+
+/** Keep weights in place, but carry settings and registries into the new write folder. */
+export function leaveModelStorage(profile: string, source: string, destination: string): void {
+  const release = beginStorageMove()
+  const promoted: string[] = []
+  let addedScanFolder: string | null = null
+  try {
+    if (storageDownloadsActive()) throw new Error(STORAGE_DOWNLOAD_ERROR)
+    const from = fs.realpathSync(source)
+    const to = fs.realpathSync(destination)
+    if (from === to) return
+    copyMetadata(from, to, promoted, [], (name, bytes) => {
+      const registry = name === 'downloaded-models.json' || name === 'local-models.json'
+      const keys =
+        name === 'active-model.json'
+          ? ['primary', 'mmproj']
+          : name === 'llm-settings.json'
+            ? ['draftModel']
+            : []
+      if (!registry && !keys.length) return bytes
+      try {
+        const value: unknown = JSON.parse(bytes.toString('utf8'))
+        const roots = [from, ...readModelScanFolders(profile)]
+        const reference = (file: string): string => resolveModelReference(file, roots)
+        if (registry) {
+          if (!Array.isArray(value) || !value.every(validRegistryEntry)) {
+            throw new Error('Invalid registry structure')
+          }
+          return Buffer.from(
+            JSON.stringify(
+              value.map((entry) => rewriteRegistryEntryReferences(entry, reference)),
+              null,
+              2
+            )
+          )
+        }
+        if (!isRegistryObject(value)) {
+          throw new Error('Invalid settings structure')
+        }
+        for (const key of keys) {
+          if (typeof value[key] === 'string' && value[key]) value[key] = reference(value[key])
+        }
+        return Buffer.from(JSON.stringify(value, null, 2))
+      } catch {
+        // Do not log parser errors: their messages can include private metadata.
+        console.warn('[model-storage] Could not rewrite metadata; copying unchanged:', name)
+        return bytes
+      }
+    })
+    const alreadyScanned = readModelScanFolders(profile).includes(from)
+    addModelScanFolder(profile, from)
+    if (!alreadyScanned) addedScanFolder = from
+    saveModelStorageChoice(profile, to)
+  } catch (error) {
+    for (const target of promoted) fs.rmSync(target, { force: true })
+    if (addedScanFolder) removeModelScanFolder(profile, addedScanFolder)
+    throw error
+  } finally {
+    release()
   }
 }

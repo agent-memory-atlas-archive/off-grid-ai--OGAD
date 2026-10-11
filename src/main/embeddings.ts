@@ -3,7 +3,8 @@ import { beginRuntimeBackend, providerLabel } from './runtime-backends'
 import path from 'path'
 import { existsSync } from 'fs'
 import { Worker } from 'worker_threads'
-import { modelsDir, requireModelStorage } from './runtime-env'
+import { modelsDir } from './runtime-env'
+import { modelReadDirectories } from './model-paths'
 import { embedText, embeddingDevice, disposeEmbeddingModel } from './embeddings-core'
 import { getResidencyMode } from './runtime-residency'
 import { recordAIRequest, type AIRequestHandle } from './ai-request-log'
@@ -51,7 +52,13 @@ class EmbeddingService {
     // than assuming the built layout: assuming it made every embedding fail outside a packaged
     // build, which silently demoted vector search to the FTS fallback instead of erroring.
     const backendState = beginRuntimeBackend('embeddings', 'Xenova/all-MiniLM-L6-v2')
-    const worker = new Worker(entry, { workerData: { modelsDir: modelsDir(), backendPreference: getBackendPreference('embeddings') } })
+    const worker = new Worker(entry, {
+      workerData: {
+        modelsDir: modelsDir(),
+        modelReadDirectories: modelReadDirectories(),
+        backendPreference: getBackendPreference('embeddings')
+      }
+    })
     worker.on('message', (response: EmbeddingResponse) => {
       if (response.ready && response.device) {
         backendState.ready(providerLabel(response.device), undefined, response.fallbackReason)
@@ -114,19 +121,24 @@ class EmbeddingService {
       },
       async (log) => {
         const run = (): Promise<number[]> => {
-          requireModelStorage()
           const entry = builtWorkerEntry()
           // No built worker means we are running from source. Embed here rather than failing: a failed
           // embedding silently demotes every search to the FTS fallback, which is a far worse outcome
           // than briefly holding this thread in a context that has no UI to block.
           if (!entry)
-            return embedText(text, modelsDir(), (device, reason) => {
-              beginRuntimeBackend('embeddings', 'Xenova/all-MiniLM-L6-v2').ready(
-                providerLabel(device),
-                undefined,
-                reason
-              )
-            }, getBackendPreference('embeddings'))
+            return embedText(
+              text,
+              modelsDir(),
+              (device, reason) => {
+                beginRuntimeBackend('embeddings', 'Xenova/all-MiniLM-L6-v2').ready(
+                  providerLabel(device),
+                  undefined,
+                  reason
+                )
+              },
+              getBackendPreference('embeddings'),
+              modelReadDirectories()
+            )
           return new Promise<number[]>((resolve, reject) => {
             const worker = this.spawn(entry)
             const id = this.nextId++

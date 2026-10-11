@@ -69,7 +69,8 @@ export const MTP_COMPANIONS = {
   }
 }
 
-export const isMtpFileName = (name: string): boolean => /(?:^|[-_.])mtp(?:[-_.]|$)/i.test(name)
+export const isMtpFileName = (name: string): boolean =>
+  /(?:^|[-_.])mtp(?:[-_.]|$)/i.test(name.split(/[\\/]/).at(-1) ?? name)
 
 export interface LocalModelLike {
   id: string
@@ -95,10 +96,10 @@ export type SizeOf = (name: string) => number
 export type FilePresent = (name: string) => boolean
 
 export const isProjectorFileName = (name: string): boolean =>
-  /(?:^|[-_.])(mmproj|projector)(?:[-_.]|$)/i.test(name)
+  /(?:^|[-_.])(mmproj|projector)(?:[-_.]|$)/i.test(name.split(/[\\/]/).at(-1) ?? name)
 
 export const isDflashFileName = (name: string): boolean =>
-  /(?:^|[-_.])d-?flash(?:[-_.]|$)/i.test(name)
+  /(?:^|[-_.])d-?flash(?:[-_.]|$)/i.test(name.split(/[\\/]/).at(-1) ?? name)
 
 /** A catalog-shaped view of an imported local model whose primary file is present
  *  (size > 0). Tagged "Imported" and surfaced at the top of the catalog. */

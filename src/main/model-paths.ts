@@ -61,3 +61,60 @@ export function resolveModelPackage(
   }
   return null
 }
+
+/** Persisted imports can use absolute paths; managed names use the shared folder lookup. */
+export function resolveModelReference(name: string, roots = modelReadDirectories()): string {
+  if (path.isAbsolute(name)) {
+    try {
+      return fs.realpathSync(name)
+    } catch {
+      return name
+    }
+  }
+  return resolveModelAsset(name, roots) ?? path.join(roots[0]!, name)
+}
+
+/** Metadata writes stay in the chosen folder; reads also support folders left in place. */
+export function modelMetadataFile(name: string, roots = modelReadDirectories()): string {
+  return resolveModelAsset(name, roots) ?? path.join(roots[0]!, name)
+}
+
+/** Transformers packages must be complete in a single root, including their tokenizer. */
+export function resolveTransformersPackage(
+  id: string,
+  weight: string,
+  roots = modelReadDirectories()
+): string | null {
+  return resolveModelPackage(
+    ['config.json', 'tokenizer.json', 'tokenizer_config.json', `onnx/${weight}`],
+    roots.flatMap((root) => [path.join(root, id), path.join(root, '.cache', id)])
+  )
+}
+
+/** URL-indexed speech caches are usable only when every required asset is intact. */
+export function resolveIndexedModelPackage(
+  assets: Array<{ name: string; url: string }>,
+  roots: string[]
+): string | null {
+  for (const root of roots) {
+    try {
+      const index = JSON.parse(fs.readFileSync(path.join(root, 'index.json'), 'utf8'))
+      if (
+        assets.every(({ name, url }) => {
+          const file = resolveModelAsset(name, [root])
+          const record = index[name]
+          return (
+            file &&
+            record?.url === url &&
+            record.bytes > 0 &&
+            fs.statSync(file).size === record.bytes
+          )
+        })
+      )
+        return fs.realpathSync(root)
+    } catch {
+      // Missing or incomplete caches cannot satisfy a read.
+    }
+  }
+  return null
+}

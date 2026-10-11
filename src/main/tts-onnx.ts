@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { Worker } from 'node:worker_threads'
 import type { DownloadProgress } from '@offgrid/executorch-speech'
-import { modelsDir, requireModelStorage } from './runtime-env'
+import { modelsDir } from './runtime-env'
 import { modelReadDirectories } from './model-paths'
 import type { TtsWorkerResponse } from './tts-onnx-worker'
 import { getBackendPreference } from './backend-preferences'
@@ -45,7 +45,6 @@ export class OnnxSpeechRuntime {
 
   private spawn(): Worker {
     if (this.worker) return this.worker
-    requireModelStorage()
     const entry = workerEntry()
     if (!entry) throw new Error('The ONNX speech worker is not built.')
     const backendState = beginRuntimeBackend('speech', 'Kokoro')

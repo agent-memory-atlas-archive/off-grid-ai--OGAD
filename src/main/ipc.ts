@@ -1826,6 +1826,7 @@ export function setupIPC(): void {
       const sameFolder =
         fs.existsSync(current) && fs.realpathSync(current) === fs.realpathSync(directory)
       let moved = false
+      let left = false
       let unknownEntriesLeft = 0
       if (!sameFolder && currentFiles.length) {
         const choice = await dialog.showMessageBox({
@@ -1852,11 +1853,12 @@ export function setupIPC(): void {
           moved = true
           unknownEntriesLeft = moveResult.unknownEntriesLeft
         } else {
-          const { addModelScanFolder } = await import('./model-storage-choice')
-          addModelScanFolder(profile, current)
+          const { leaveModelStorage } = await import('./model-storage-move')
+          leaveModelStorage(profile, current, directory)
+          left = true
         }
       }
-      if (!moved) saveModelStorageChoice(profile, directory)
+      if (!moved && !left) saveModelStorageChoice(profile, directory)
       return { directory, moved, unknownEntriesLeft, restartRequired: !sameFolder }
     } catch (error) {
       return { error: error instanceof Error ? error.message : 'Cannot use this folder.' }

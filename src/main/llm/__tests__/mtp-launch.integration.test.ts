@@ -42,7 +42,7 @@ describe('MTP installation and persisted launch contract', () => {
   const previousDataDir = process.env.OFFGRID_DATA_DIR
 
   beforeEach(() => {
-    profile = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-mtp-'))
+    profile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-mtp-')))
     fs.mkdirSync(path.join(profile, 'models'))
     process.env.OFFGRID_DATA_DIR = profile
   })

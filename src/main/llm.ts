@@ -7,7 +7,14 @@ import { callHook } from './bootstrap/hookRegistry'
 import path from 'path'
 import { recordAIRequest, currentAIRequest } from './ai-request-log'
 import * as fs from 'fs'
-import { modelsDir as getModelsDir, binRoots, isPackaged, exe } from './runtime-env'
+import { modelMetadataFile, resolveModelReference } from './model-paths'
+import {
+  modelsDir as getModelsDir,
+  binRoots,
+  isPackaged,
+  exe,
+  requireModelStorage
+} from './runtime-env'
 import { reapOrphanProcessesOnPort, type PortReapResult } from './kill-orphan-port'
 import { loadAttempts, type KvCacheType, type PerformanceMode } from './model-sizing'
 import { resolveMaxTokens, maxTokensForWire, MAX_TOKENS_AUTO } from './llm/gen-params'
@@ -246,12 +253,6 @@ export class LLMService {
   // server — capture keeps running but its LLM distillation is deferred until
   // generation finishes (and the LLM warms back up).
   private paused = false
-  // Resolve lazily: the data dir can be set AFTER this class is constructed
-  // (e.g. an OFFGRID_USER_DATA / standalone-gateway override), so computing the
-  // path at construction would pin it to the wrong location and miss active-model.json.
-  private get activeModelFile(): string {
-    return path.join(getModelsDir(), 'active-model.json')
-  }
   // User-tunable inference settings (persisted). Context window needs a server
   // respawn to take effect (it's a launch arg); temperature is per-request.
   private temperature = 0.7
@@ -348,7 +349,7 @@ export class LLMService {
 
   private loadPersistedSettings(): void {
     try {
-      const s = JSON.parse(fs.readFileSync(this.settingsFile, 'utf-8'))
+      const s = JSON.parse(fs.readFileSync(modelMetadataFile('llm-settings.json'), 'utf-8'))
       if (typeof s.temperature === 'number') this.temperature = s.temperature
       if (typeof s.ctxSize === 'number') this.ctxSize = s.ctxSize
       if (typeof s.topP === 'number') this.topP = s.topP
@@ -458,7 +459,7 @@ export class LLMService {
             ? MTP_COMPANIONS['unsloth/gemma-4-12b-it-GGUF']
             : undefined
     if (!companion) return undefined
-    const candidate = path.join(getModelsDir(), companion.name)
+    const candidate = resolveModelReference(companion.name, [path.dirname(this.modelPath)])
     return readGgufMtpSupport(candidate, fs, undefined, companion.sizeBytes) ? candidate : undefined
   }
 
@@ -471,7 +472,7 @@ export class LLMService {
       (entry) => primaryFileName(entry) === selectedFile
     )
     const dflash = selectedEntry ? dflashFileName(selectedEntry) : undefined
-    const installedDflash = dflash && isValidGgufFile(path.join(getModelsDir(), dflash), fs)
+    const installedDflash = dflash && isValidGgufFile(resolveModelReference(dflash), fs)
     return {
       // No ordinary draft pair is declared by the catalog. Do not guess from an arbitrary
       // installed GGUF: llama.cpp also requires an exact vocabulary contract.
@@ -612,7 +613,7 @@ export class LLMService {
     }
     if (!this.speculativeModeSupported(this.speculativeDecoding, this.draftModel)) return undefined
     if (!this.draftModel || path.basename(this.draftModel) !== this.draftModel) return undefined
-    const candidate = path.join(getModelsDir(), this.draftModel)
+    const candidate = resolveModelReference(this.draftModel)
     return candidate !== this.modelPath && isValidGgufFile(candidate, fs) ? candidate : undefined
   }
 
@@ -627,6 +628,7 @@ export class LLMService {
    *  `userExplicit` pin-set (which fields the user set granularly), so a plain restart
    *  restores the pins and a mode preset can't reclobber an explicit KV/ctx choice. */
   private persist(): void {
+    requireModelStorage()
     fs.mkdirSync(path.dirname(this.settingsFile), { recursive: true })
     const temporaryFile = `${this.settingsFile}.tmp-${process.pid}`
     try {
@@ -878,19 +880,18 @@ export class LLMService {
   // ({ id, primary, mmproj }) after resolving a catalog entry; default to the
   // bundled Qwen3-VL vision model when nothing is selected yet.
   private resolveModel(): void {
-    const modelsDir = getModelsDir()
     if (this.runtimeModelOverride) {
-      this.modelPath = path.join(modelsDir, this.runtimeModelOverride.primary)
+      this.modelPath = resolveModelReference(this.runtimeModelOverride.primary)
       this.mmProjPath = this.runtimeModelOverride.mmproj
-        ? path.join(modelsDir, this.runtimeModelOverride.mmproj)
+        ? resolveModelReference(this.runtimeModelOverride.mmproj)
         : ''
       return
     }
     try {
-      const cfg = JSON.parse(fs.readFileSync(this.activeModelFile, 'utf-8'))
+      const cfg = JSON.parse(fs.readFileSync(modelMetadataFile('active-model.json'), 'utf-8'))
       if (cfg?.primary) {
-        this.modelPath = path.resolve(modelsDir, cfg.primary)
-        this.mmProjPath = cfg.mmproj ? path.resolve(modelsDir, cfg.mmproj) : ''
+        this.modelPath = resolveModelReference(cfg.primary)
+        this.mmProjPath = cfg.mmproj ? resolveModelReference(cfg.mmproj) : ''
         return
       }
     } catch {
@@ -901,8 +902,8 @@ export class LLMService {
     // false and setup ("Configure for me") downloads + activates a fitting model.
     // (The old default named a non-existent Qwen3-VL-4B and dead-ended fresh
     // installs at a 502 — never auto-resolvable. Keep this aligned with the catalog.)
-    this.modelPath = path.join(modelsDir, 'gemma-4-E4B-it-Q4_K_M.gguf')
-    this.mmProjPath = path.join(modelsDir, 'mmproj-gemma-4-E4B-it-F16.gguf')
+    this.modelPath = resolveModelReference('gemma-4-E4B-it-Q4_K_M.gguf')
+    this.mmProjPath = resolveModelReference('mmproj-gemma-4-E4B-it-F16.gguf')
   }
 
   private applyModelReload(): void {
@@ -998,7 +999,7 @@ export class LLMService {
     let id = this.runtimeModelOverride?.id ?? path.basename(this.modelPath)
     try {
       if (!this.runtimeModelOverride) {
-        const cfg = JSON.parse(fs.readFileSync(this.activeModelFile, 'utf-8'))
+        const cfg = JSON.parse(fs.readFileSync(modelMetadataFile('active-model.json'), 'utf-8'))
         if (cfg?.id) id = cfg.id
       }
     } catch {
@@ -1015,7 +1016,7 @@ export class LLMService {
     let id = this.runtimeModelOverride?.id ?? path.basename(this.modelPath)
     try {
       if (!this.runtimeModelOverride) {
-        const cfg = JSON.parse(fs.readFileSync(this.activeModelFile, 'utf-8'))
+        const cfg = JSON.parse(fs.readFileSync(modelMetadataFile('active-model.json'), 'utf-8'))
         if (cfg?.id) id = cfg.id
       }
     } catch {

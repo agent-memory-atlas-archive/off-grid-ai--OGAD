@@ -8,6 +8,9 @@ import * as downloadVerify from '../models/download-verify'
 import { createWindowAndScheduleModelStorageCleanup } from '../bootstrap/model-storage-cleanup'
 import {
   moveModelStorage,
+  leaveModelStorage,
+  ownedStorageFiles,
+  rewriteRegistryEntryReferences,
   cleanupMovedModelStorage,
   MOVE_SAFETY_BYTES,
   type MoveDependencies
@@ -19,6 +22,8 @@ import {
 } from '../model-storage-choice'
 import { configureRuntime, modelsDir } from '../runtime-env'
 import { modelReadDirectories, resolveModelAsset } from '../model-paths'
+import { installedDownloadedIds, readDownloaded } from '../downloaded-models'
+import * as modelPaths from '../model-paths'
 import { withStorageDownload } from '../model-storage-guard'
 
 const roots: string[] = []
@@ -401,4 +406,157 @@ describe('model cleanup startup scheduling', () => {
       expect(log).toHaveBeenCalledWith('[model-storage] Background cleanup failed:', error)
     }
   )
+})
+
+describe('registry reference rewriting', () => {
+  it('rewrites every supported field and preserves all other values without mutation', () => {
+    const entry = {
+      id: 'fixture',
+      files: [
+        'weight.gguf',
+        { name: 'projector.gguf', sha256: 'digest', role: 'projector' },
+        null,
+        42,
+        {},
+        { name: 7 },
+        ['nested']
+      ],
+      primary: 'weight.gguf',
+      mmproj: 'projector.gguf',
+      other: 'keep'
+    }
+    const original = structuredClone(entry)
+    const reference = vi.fn((name: string) => `/models/${name}`)
+    expect(rewriteRegistryEntryReferences(entry, reference)).toEqual({
+      ...entry,
+      files: [
+        '/models/weight.gguf',
+        { name: '/models/projector.gguf', sha256: 'digest', role: 'projector' },
+        null,
+        42,
+        {},
+        { name: 7 },
+        ['nested']
+      ],
+      primary: '/models/weight.gguf',
+      mmproj: '/models/projector.gguf'
+    })
+    expect(entry).toEqual(original)
+    expect(reference.mock.calls.flat()).toEqual([
+      'weight.gguf',
+      'projector.gguf',
+      'weight.gguf',
+      'projector.gguf'
+    ])
+    expect(rewriteRegistryEntryReferences({ primary: 'a', mmproj: 'b' }, reference)).toEqual({
+      primary: '/models/a',
+      mmproj: '/models/b'
+    })
+    for (const value of [
+      null,
+      undefined,
+      42,
+      'entry',
+      [],
+      { files: 42, primary: null, mmproj: false },
+      {}
+    ]) {
+      expect(rewriteRegistryEntryReferences(value, reference)).toEqual(value)
+    }
+  })
+})
+
+describe('Leave registry metadata', () => {
+  it.each(['strings', 'objects', 'primary/mmproj'])(
+    'preserves installed references for %s',
+    (shape) => {
+      const f = fixture()
+      fs.writeFileSync(path.join(f.source, 'projector.gguf'), 'projector')
+      const names = ['weight.gguf', 'projector.gguf']
+      const fields =
+        shape === 'primary/mmproj'
+          ? { primary: names[0], mmproj: names[1] }
+          : {
+              files: shape === 'strings' ? names : names.map((name) => ({ name, sha256: 'digest' }))
+            }
+      const entry = { id: 'fixture', name: 'Fixture', kind: 'vision', ...fields }
+      const bytes = JSON.stringify([entry])
+      fs.writeFileSync(path.join(f.source, 'downloaded-models.json'), bytes)
+      // The ownership reader accepts all three historical registry shapes.
+      expect(ownedStorageFiles(f.source, [])).toEqual(
+        expect.arrayContaining(names.map((name) => expect.objectContaining({ name })))
+      )
+      leaveModelStorage(f.profile, f.source, f.destination)
+      configureRuntime({ modelsDir: readModelStorageChoice(f.profile)! })
+      const expected = names.map((name) => path.join(f.source, name))
+      const rewritten = readDownloaded(f.destination)[0] as unknown as {
+        files?: Array<string | { name: string; sha256: string }>
+        primary?: string
+        mmproj?: string
+      }
+      const references = rewritten.files
+        ? rewritten.files.map((file) => (typeof file === 'string' ? file : file.name))
+        : [rewritten.primary!, rewritten.mmproj!]
+      expect(references).toEqual(expected)
+      if (shape === 'objects') {
+        expect(rewritten.files).toEqual(expected.map((name) => ({ name, sha256: 'digest' })))
+      }
+      if (shape === 'strings') expect(installedDownloadedIds(f.destination)).toEqual(['fixture'])
+      for (const reference of references) {
+        expect(modelPaths.resolveModelReference(reference)).toBe(reference)
+        expect(fs.statSync(reference).size).toBeGreaterThan(0)
+        expect(fs.existsSync(path.join(f.destination, path.basename(reference)))).toBe(false)
+      }
+      expect(fs.readFileSync(path.join(f.source, 'downloaded-models.json'), 'utf8')).toBe(bytes)
+      expect(readPendingModelCleanup(f.profile)).toEqual([])
+    }
+  )
+
+  it.each([
+    ['downloaded-models.json', '{private broken json'],
+    ['downloaded-models.json', '{"files":[]}'],
+    ['downloaded-models.json', '[{"files":42}]'],
+    ['downloaded-models.json', '[null,42,"private"]'],
+    ['downloaded-models.json', '[{"files":[null,{"name":42}]}]'],
+    ['local-models.json', '[{"primary":"weight.gguf"},{"files":42}]'],
+    ['local-models.json', 'null'],
+    ['active-model.json', '{broken'],
+    ['active-model.json', '[]'],
+    ['llm-settings.json', 'false']
+  ])('copies malformed %s unchanged (%s)', (name, bytes) => {
+    const f = fixture()
+    fs.writeFileSync(path.join(f.source, name), bytes)
+    // A failed file transform must not prevent other metadata from being copied.
+    fs.writeFileSync(path.join(f.source, 'remote-vision-server.json'), '{"keep":true}')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    expect(() => leaveModelStorage(f.profile, f.source, f.destination)).not.toThrow()
+    expect(fs.readFileSync(path.join(f.destination, name), 'utf8')).toBe(bytes)
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      '[model-storage] Could not rewrite metadata; copying unchanged:',
+      name
+    )
+    expect(fs.readFileSync(path.join(f.destination, 'remote-vision-server.json'), 'utf8')).toBe(
+      '{"keep":true}'
+    )
+    expect(readModelStorageChoice(f.profile)).toBe(f.destination)
+    expect(fs.readFileSync(path.join(f.source, 'weight.gguf'), 'utf8')).toBe('weights')
+  })
+
+  it('copies the original bytes if reference resolution throws after a partial transform', () => {
+    const f = fixture()
+    const bytes = '[ {"files":["weight.gguf","projector.gguf"]} ]'
+    fs.writeFileSync(path.join(f.source, 'downloaded-models.json'), bytes)
+    vi.spyOn(modelPaths, 'resolveModelReference')
+      .mockReturnValueOnce('/rewritten/weight.gguf')
+      .mockImplementationOnce(() => {
+        throw new Error('private resolver detail')
+      })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    expect(() => leaveModelStorage(f.profile, f.source, f.destination)).not.toThrow()
+    expect(fs.readFileSync(path.join(f.destination, 'downloaded-models.json'), 'utf8')).toBe(bytes)
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      '[model-storage] Could not rewrite metadata; copying unchanged:',
+      'downloaded-models.json'
+    )
+  })
 })

@@ -20,7 +20,15 @@ const port = parentPort
 
 // modelsDir() reads Electron's app paths, which do not exist in a worker thread — the host
 // resolves the directory and passes it in.
-const { modelsDir, backendPreference = 'auto' } = workerData as { modelsDir: string; backendPreference?: BackendPreference }
+const {
+  modelsDir,
+  modelReadDirectories = [modelsDir],
+  backendPreference = 'auto'
+} = workerData as {
+  modelsDir: string
+  modelReadDirectories?: string[]
+  backendPreference?: BackendPreference
+}
 
 export interface EmbeddingRequest {
   id: number
@@ -38,10 +46,25 @@ export interface EmbeddingResponse {
 port.on('message', (request: EmbeddingRequest) => {
   void (async () => {
     try {
-      const vector = await embedText(request.text, modelsDir, (device, fallbackReason) => {
-        port.postMessage({ id: request.id, ready: true, device, fallbackReason } satisfies EmbeddingResponse)
-      }, backendPreference)
-      port.postMessage({ id: request.id, vector, device: embeddingDevice() ?? undefined } as EmbeddingResponse)
+      const vector = await embedText(
+        request.text,
+        modelsDir,
+        (device, fallbackReason) => {
+          port.postMessage({
+            id: request.id,
+            ready: true,
+            device,
+            fallbackReason
+          } satisfies EmbeddingResponse)
+        },
+        backendPreference,
+        modelReadDirectories
+      )
+      port.postMessage({
+        id: request.id,
+        vector,
+        device: embeddingDevice() ?? undefined
+      } as EmbeddingResponse)
     } catch (error) {
       port.postMessage({
         id: request.id,
