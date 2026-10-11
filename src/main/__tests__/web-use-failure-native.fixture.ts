@@ -1,6 +1,8 @@
 // Real task host, model client, page session and task history. Only the external browser
 // extension and HTTP model provider use contract-faithful synthetic boundaries.
-import { app } from 'electron'
+import { app, BrowserWindow } from 'electron'
+import { registerBrowserViewIpc, disposeBrowserHost } from '../browser/browser-host'
+import { controlVisionTask } from '../vision/vision-controller'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -11,6 +13,12 @@ import { getTaskRun } from '../tasks/task-history'
 import { getDB } from '../database'
 
 void app.whenReady().then(async () => {
+  let window: BrowserWindow | undefined
+  let holdModel = false
+  let modelStarted!: () => void
+  const pendingModel = new Promise<void>((resolve) => {
+    modelStarted = resolve
+  })
   let modelRequests = 0
   let modelFails = true
   const server = createServer((req, res) => {
@@ -18,6 +26,10 @@ void app.whenReady().then(async () => {
     if (req.method === 'GET') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ data: [{ id: 'synthetic/text', object: 'model' }] }))
+      return
+    }
+    if (holdModel) {
+      modelStarted()
       return
     }
     modelRequests += 1
@@ -99,11 +111,39 @@ void app.whenReady().then(async () => {
     assert.equal(visual.ok, false)
     assert.match(visual.summary, /canvas with no readable controls/)
     assert.equal(modelRequests, 2)
+    holdModel = true
+    const running = run('external-active')
+    await pendingModel
+    registerBrowserViewIpc()
+    window = new BrowserWindow({
+      show: false,
+      webPreferences: { nodeIntegration: true, contextIsolation: false, sandbox: false }
+    })
+    await window.loadURL('data:text/html,<title>Synthetic browser task</title>')
+    assert.equal(
+      await window.webContents.executeJavaScript(
+        "require('electron').ipcRenderer.invoke('browser:reopen', 'external-active')"
+      ),
+      false
+    )
+    const sessions = await window.webContents.executeJavaScript(
+      "require('electron').ipcRenderer.invoke('browser:get-sessions')"
+    )
+    assert.deepEqual(
+      sessions.sessions,
+      [],
+      'Opening task details must not allocate a duplicate browser page'
+    )
+    controlVisionTask('stop', 'external-active')
+    await running
     console.log('WEB_USE_FAILURE_NATIVE_PASSED')
   } catch (error) {
     console.error(error)
     process.exitCode = 1
   } finally {
+    window?.destroy()
+    disposeBrowserHost()
+    server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
     getDB().close()
     app.exit(process.exitCode ? 1 : 0)
