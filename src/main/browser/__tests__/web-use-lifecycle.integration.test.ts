@@ -3,7 +3,19 @@
  * dispatch are real. Only the remote model, Playwright MCP, and pointer driver
  * boundaries are faked.
  */
+import type { BrowserLink } from '../../extension-bridge/bridge-socket'
+import type { SocketEvent } from '../../extension-bridge/bridge-socket-protocol'
+import type { TaskRunUpdate } from '../../tasks/task-history-store'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const history = vi.hoisted(() => ({ updates: [] as TaskRunUpdate[] }))
+
+vi.mock('../../tasks/task-history', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../tasks/task-history')>()),
+  getTaskExecutionDevice: () => ({ id: 'test-device', name: 'Test device' }),
+  recordTaskRun: (update: TaskRunUpdate) => history.updates.push(update),
+  reportTaskProgress: () => undefined
+}))
 
 const model = vi.hoisted(() => ({
   replies: [] as Array<string | ((signal?: AbortSignal) => Promise<string>)>
@@ -28,6 +40,7 @@ vi.mock('../../llm', () => ({
   }
 }))
 
+import { createExtensionBrowserHost } from '../extension-browser-host'
 import { runBrowserPlaywrightTask } from '../browser-playwright-task'
 import type { PlaywrightMcpSession, PlaywrightToolResult } from '../playwright-mcp-session'
 import type { BrowserDriver } from '../browser-driver'
@@ -107,9 +120,71 @@ function pointerDriver(projected: string[]): BrowserDriver {
 
 beforeEach(() => {
   model.replies.length = 0
+  history.updates.length = 0
 })
 
 describe('Web Use shared lifecycle', () => {
+  it('follows an Apply Now child tab in the host and records the task step', async () => {
+    model.replies.push(
+      decision({ action: 'click', ref: 's1', element: 'Apply Now' }),
+      decision({
+        action: 'done',
+        evidenceText: 'Application form',
+        summary: 'The application form is open.'
+      })
+    )
+    const events = new Set<(event: SocketEvent) => void>()
+    const calls: Array<{ tabId: unknown; tool: unknown }> = []
+    const link: BrowserLink = {
+      browser: { id: 'device000001', name: 'Firefox extension', publicKey: 'k', pairedAt: 1 },
+      async request(op, args = {}) {
+        if (op === 'tab.adopt') return { tabId: 7, url: 'https://jobs.test/', title: 'Jobs' }
+        if (op === 'browser.caps') return { cdp: false }
+        if (op !== 'page.call') return {}
+        calls.push({ tabId: args.tabId, tool: args.tool })
+        if (args.tool === 'browser_click') {
+          for (const listener of [...events])
+            listener({
+              event: 'tab.opened',
+              tabId: 8,
+              data: { tabId: 8, openerTabId: 7, url: 'https://jobs.test/apply', title: 'Apply' }
+            })
+          return { text: 'Clicked Apply Now.', isError: false }
+        }
+        return {
+          text:
+            args.tabId === 7
+              ? 'button "Apply Now" [ref=s1]'
+              : 'heading "Application form" [ref=s2]',
+          isError: false
+        }
+      },
+      onEvent(listener) {
+        events.add(listener)
+        return () => events.delete(listener)
+      },
+      onClose: () => () => undefined,
+      close: () => undefined
+    }
+    const result = await createExtensionBrowserHost(() => link, 7).runTask({
+      goal: 'Open the application form',
+      taskId: 'web-child-tab',
+      journeyId: 'child-tab-journey',
+      checkpoint: { taskId: 'web-child-tab', steps: [], plan }
+    })
+    expect(result).toMatchObject({ ok: true, finalUrl: 'https://jobs.test/apply' })
+    expect(calls).toEqual([
+      { tabId: 7, tool: 'browser_snapshot' },
+      { tabId: 7, tool: 'browser_click' },
+      { tabId: 8, tool: 'browser_snapshot' },
+      { tabId: 8, tool: 'browser_snapshot' }
+    ])
+    const note = 'The page opened a new tab. Continuing there.'
+    expect(result.steps.filter((step) => step === note)).toHaveLength(1)
+    expect(history.updates.some((update) => update.steps?.includes(note))).toBe(true)
+    expect(events.size).toBe(0)
+  })
+
   it('publishes bounded replay observations for a semantic-only task', async () => {
     model.replies.push(
       decision({ action: 'click', ref: 's1', element: 'Submit' }),
@@ -407,7 +482,10 @@ describe('Web Use shared lifecycle', () => {
       }),
       call: async (name: string): Promise<PlaywrightToolResult> => {
         calls.push(name)
-        return { text: 'Element 9 not found, the id is stale. Take a fresh snapshot.', isError: true }
+        return {
+          text: 'Element 9 not found, the id is stale. Take a fresh snapshot.',
+          isError: true
+        }
       },
       recoverPage: async (): Promise<PlaywrightToolResult> => ({ text: 'ok', isError: false })
     } as unknown as PlaywrightMcpSession

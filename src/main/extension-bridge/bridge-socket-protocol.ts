@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier -- Keep the shared protocol identical to the extension. */
 // SHARED VERBATIM with off-grid-ai/browser-extension src/shared/bridge/socket.ts. Change both.
 // The live channel between a paired browser and Off Grid AI Desktop, for work that needs a
 // stream rather than request/response: the desktop driving a tab (web_use in the default
@@ -175,8 +176,11 @@ export type SocketReply =
 
 /** Events the browser sends up unprompted. `ping` keeps an idle link (and the extension's
  *  worker) alive; it carries nothing. */
+/** `tab.opened` is sent after registering a child of a current task tab. Its data contains
+ *  tabId, openerTabId, url (pendingUrl first, else url or empty), and title (or empty). */
 export interface SocketEvent {
-  readonly event: 'cdp.event' | 'cdp.detached' | 'tab.removed' | 'tab.updated' | 'ping'
+  readonly event:
+    'cdp.event' | 'cdp.detached' | 'tab.removed' | 'tab.updated' | 'tab.opened' | 'ping'
   readonly tabId: number
   readonly data: Record<string, unknown>
 }
@@ -206,8 +210,19 @@ export function parseUpstream(raw: unknown): SocketReply | SocketEvent | null {
       ? { id: raw.id as number, ok: false, error: raw.error }
       : null
   }
-  const events = ['cdp.event', 'cdp.detached', 'tab.removed', 'tab.updated', 'ping']
+  if (raw.event === 'tab.opened' && !isOpenedData(raw.data, raw.tabId)) return null
+  const events = ['cdp.event', 'cdp.detached', 'tab.removed', 'tab.updated', 'tab.opened', 'ping']
   return events.includes(raw.event as string) && Number.isSafeInteger(raw.tabId) && isObj(raw.data)
     ? { event: raw.event as SocketEvent['event'], tabId: raw.tabId as number, data: raw.data }
     : null
+}
+
+function isOpenedData(data: unknown, tabId: unknown): boolean {
+  return (
+    isObj(data) &&
+    data.tabId === tabId &&
+    Number.isSafeInteger(data.openerTabId) &&
+    typeof data.url === 'string' &&
+    typeof data.title === 'string'
+  )
 }

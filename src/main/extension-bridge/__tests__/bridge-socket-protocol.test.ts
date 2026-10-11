@@ -104,6 +104,21 @@ describe('createChannel', () => {
 })
 
 describe('message shapes', () => {
+  it('validates the child tab event exactly', () => {
+    const data = { tabId: 8, openerTabId: 7, url: '', title: '' }
+    const event = { event: 'tab.opened', tabId: 8, data }
+    expect(parseUpstream(event)).toEqual(event)
+    expect(parseUpstream({ ...event, data: { ...data, tabId: 9 } })).toBeNull()
+    expect(parseUpstream({ ...event, data: { tabId: 8, url: '', title: '' } })).toBeNull()
+    for (const invalid of [
+      { ...data, openerTabId: 1.5 },
+      { ...data, openerTabId: '7' },
+      { ...data, url: null },
+      { ...data, title: undefined }
+    ])
+      expect(parseUpstream({ ...event, data: invalid })).toBeNull()
+  })
+
   it('accepts only known commands', () => {
     expect(parseCommand({ id: 3, op: 'cdp.send', args: { method: 'Page.navigate' } })).toEqual({
       id: 3,

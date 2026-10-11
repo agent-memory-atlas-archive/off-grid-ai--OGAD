@@ -67,7 +67,7 @@ export async function openTaskSession(
   }
   if (caps?.cdp !== true) return pageSession
   const relay = new ElectronPlaywrightRelay(pages)
-  const playwright = new PlaywrightMcpSession(relay)
+  const playwright = new PlaywrightMcpSession(relay, () => current().tabId)
   try {
     tab.debugger.attach()
     // Await Chrome's attachment before starting MCP, including its permission refusal.
@@ -127,7 +127,6 @@ async function runInBrowser(
   const controller = new AbortController()
   const steps: string[] = checkpoint ? [...checkpoint.steps] : []
   const device = getTaskExecutionDevice()
-  const pages = createExtensionPageProvider(link)
 
   const setState = (status: Parameters<typeof recordTaskRun>[0]['status'], summary = ''): void => {
     recordTaskRun({
@@ -147,6 +146,9 @@ async function runInBrowser(
     steps.push(note)
     recordTaskRun({ taskId, journeyId, kind: 'web_use', title: goal, steps: [...steps] })
   }
+  const pages = createExtensionPageProvider(link, () =>
+    recordStep('The page opened a new tab. Continuing there.')
+  )
   const releaseSession = registerVisionSession(taskId, guard, controller, (_s, status, action) =>
     setState(status, action)
   )

@@ -1,3 +1,6 @@
+import { WebSocket } from 'ws'
+import { ElectronPlaywrightRelay } from '../electron-playwright-relay'
+import { runBounded } from '../playwright-boundary-wait'
 import { describe, expect, it } from 'vitest'
 import type { BrowserLink } from '../../extension-bridge/bridge-socket'
 import type { SocketEvent, SocketOp } from '../../extension-bridge/bridge-socket-protocol'
@@ -59,6 +62,105 @@ function fakeLink(): FakeLink {
 }
 
 describe('extension tab pages under the Playwright relay', () => {
+  it('follows only tracked openers and falls back when the child closes', async () => {
+    const link = fakeLink()
+    const followed: string[] = []
+    const provider = createExtensionPageProvider(link, () => followed.push('followed'))
+    const opener = await provider.adopt(7, 'task-1')
+    link.emit({
+      event: 'tab.opened',
+      tabId: 90,
+      data: { tabId: 90, openerTabId: 999, url: 'https://other.test/', title: '' }
+    })
+    expect(provider.active()).toBe(opener)
+    expect(provider.pages()).toHaveLength(1)
+    expect(followed).toEqual([])
+    const opened: SocketEvent = {
+      event: 'tab.opened',
+      tabId: 91,
+      data: { tabId: 91, openerTabId: 7, url: 'https://apply.test/', title: 'Apply' }
+    }
+    link.emit(opened)
+    link.emit(opened)
+    expect(provider.active()?.tabId).toBe(91)
+    expect(provider.active()?.getURL()).toBe('https://apply.test/')
+    expect(provider.pages()).toHaveLength(2)
+    expect(followed).toEqual(['followed'])
+    link.emit({ event: 'tab.removed', tabId: 91, data: {} })
+    expect(provider.active()).toBe(opener)
+    await provider.closeAll()
+    link.emit(opened)
+    expect(provider.pages()).toEqual([])
+    expect(followed).toEqual(['followed'])
+  })
+
+  it('announces a child target over the real relay and forwards commands to it', async () => {
+    const link = fakeLink()
+    const provider = createExtensionPageProvider(link)
+    const opener = await provider.adopt(7, 'task-1')
+    const relay = new ElectronPlaywrightRelay(provider)
+    let socket: WebSocket | undefined
+    try {
+      socket = new WebSocket(await relay.start())
+      const client = socket
+      await new Promise<void>((resolve, reject) => {
+        client.once('open', resolve)
+        client.once('error', reject)
+      })
+      const messages: Array<{ id?: number; method?: string; params?: unknown; error?: unknown }> =
+        []
+      client.on('message', (data) => messages.push(JSON.parse(data.toString())))
+      const command = async (id: number, method: string, sessionId?: string): Promise<void> => {
+        client.send(JSON.stringify({ id, method, params: {}, sessionId }))
+        await runBounded({
+          label: 'Test relay reply',
+          timeoutMs: 1000,
+          run: async (signal) => {
+            while (!messages.some((m) => m.id === id)) {
+              signal.throwIfAborted()
+              await new Promise((resolve) => setTimeout(resolve, 5))
+            }
+          }
+        })
+        expect(messages.find((m) => m.id === id)?.error).toBeUndefined()
+      }
+      await command(1, 'Target.setAutoAttach')
+      link.emit({
+        event: 'tab.opened',
+        tabId: 91,
+        data: { tabId: 91, openerTabId: opener.tabId, url: 'https://apply.test/', title: 'Apply' }
+      })
+      await relay.syncPages()
+      await command(2, 'Target.getTargets')
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          method: 'Target.attachedToTarget',
+          params: expect.objectContaining({
+            sessionId: 'offgrid-page-91',
+            targetInfo: expect.objectContaining({ targetId: 'T91', url: 'https://apply.test/' })
+          })
+        })
+      )
+      expect(link.calls).toContainEqual({ op: 'cdp.attach', args: { tabId: 91 } })
+      expect(relay.pageIndex(91)).toBe(1)
+      await command(3, 'Runtime.evaluate', 'offgrid-page-91')
+      expect(link.calls.at(-1)?.args).toMatchObject({ tabId: 91, method: 'Runtime.evaluate' })
+      link.emit({ event: 'tab.removed', tabId: 91, data: {} })
+      await command(4, 'Target.getTargets')
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          method: 'Target.detachedFromTarget',
+          params: { sessionId: 'offgrid-page-91', targetId: 'T91' }
+        })
+      )
+      expect(relay.pageIndex(7)).toBe(0)
+    } finally {
+      socket?.terminate()
+      await relay.stop()
+      await provider.closeAll()
+    }
+  })
+
   it('opens a tab, attaches its debugger, and names it to Playwright', async () => {
     const link = fakeLink()
     const provider = createExtensionPageProvider(link)

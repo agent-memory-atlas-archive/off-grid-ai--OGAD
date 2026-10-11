@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises'
 import { createConnection } from '@playwright/mcp'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
@@ -51,8 +52,12 @@ export class PlaywrightMcpSession implements SemanticPageSession {
   private connected = false
   private closed = false
   private callSequence = 0
+  private activePageInitialized = false
 
-  constructor(private readonly relay: ElectronPlaywrightRelay) {}
+  constructor(
+    private readonly relay: ElectronPlaywrightRelay,
+    private readonly activePageId?: () => number
+  ) {}
 
   async connect(): Promise<void> {
     if (this.connected) return
@@ -148,6 +153,7 @@ export class PlaywrightMcpSession implements SemanticPageSession {
         name,
         durationMs: Date.now() - syncStartedAt
       })
+      if (this.activePageId) await this.selectActivePage(signal)
       const toolStartedAt = Date.now()
       const normalized = await runBounded({
         label: `Playwright MCP ${name}`,
@@ -182,6 +188,63 @@ export class PlaywrightMcpSession implements SemanticPageSession {
       })
       throw error
     }
+  }
+
+  private async selectActivePage(signal?: AbortSignal): Promise<void> {
+    if (!this.activePageInitialized) {
+      // MCP opens its CDP connection lazily on the first tool call.
+      const result = await runBounded({
+        label: 'Playwright MCP tab initialization',
+        timeoutMs: CONNECT_TIMEOUT_MS,
+        signal,
+        run: async (boundedSignal) =>
+          normalizeToolResult(
+            await this.client.callTool(
+              {
+                name: 'browser_tabs',
+                arguments: { action: 'list' }
+              },
+              undefined,
+              { signal: boundedSignal, timeout: CONNECT_TIMEOUT_MS + 5_000 }
+            )
+          )
+      })
+      if (result.isError) throw new Error(result.text)
+      this.activePageInitialized = true
+      await runBounded({
+        label: 'Playwright relay initial page sync',
+        timeoutMs: PAGE_SYNC_TIMEOUT_MS,
+        signal,
+        run: () => this.relay.syncPages()
+      })
+    }
+    await runBounded({
+      label: 'Playwright MCP active tab selection',
+      timeoutMs: PAGE_SYNC_TIMEOUT_MS,
+      signal,
+      run: async (boundedSignal) => {
+        // A target announcement precedes Playwright's asynchronous page initialization.
+        // MCP retains the old current tab when a page opens, so select the provider's tab.
+        for (;;) {
+          boundedSignal.throwIfAborted()
+          const index = this.relay.pageIndex(this.activePageId!())
+          if (index < 0) throw new Error('The active browser tab is not attached.')
+          const result = normalizeToolResult(
+            await this.client.callTool(
+              {
+                name: 'browser_tabs',
+                arguments: { action: 'select', index }
+              },
+              undefined,
+              { signal: boundedSignal, timeout: PAGE_SYNC_TIMEOUT_MS + 5_000 }
+            )
+          )
+          if (!result.isError) return
+          if (!result.text.includes(`Tab ${index} not found`)) throw new Error(result.text)
+          await delay(50, undefined, { signal: boundedSignal })
+        }
+      }
+    })
   }
 
   async close(): Promise<void> {

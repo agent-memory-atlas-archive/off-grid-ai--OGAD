@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BrowserLink } from '../../extension-bridge/bridge-socket'
-import type { SocketOp } from '../../extension-bridge/bridge-socket-protocol'
+import type { SocketEvent, SocketOp } from '../../extension-bridge/bridge-socket-protocol'
 import { ExtensionSnapshotSession } from '../extension-snapshot-session'
 import { openTaskSession } from '../extension-browser-host'
 import { createExtensionPageProvider } from '../extension-tab-pages'
@@ -10,16 +10,24 @@ import { createExtensionPageProvider } from '../extension-tab-pages'
 
 function fakeLink(reply: (op: SocketOp, args: Record<string, unknown>) => unknown): BrowserLink & {
   calls: Array<{ op: SocketOp; args: Record<string, unknown> }>
+  emit(event: SocketEvent): void
 } {
   const calls: Array<{ op: SocketOp; args: Record<string, unknown> }> = []
+  const listeners = new Set<(event: SocketEvent) => void>()
   return {
+    emit: (event) => {
+      for (const listener of [...listeners]) listener(event)
+    },
     browser: { id: 'device000001', name: 'Firefox extension', publicKey: 'k', pairedAt: 1 },
     calls,
     async request(op, args = {}) {
       calls.push({ op, args })
       return reply(op, args)
     },
-    onEvent: () => () => undefined,
+    onEvent: (listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
     onClose: () => () => undefined,
     close: () => undefined
   }
@@ -73,6 +81,34 @@ describe('ExtensionSnapshotSession', () => {
 })
 
 describe('openTaskSession', () => {
+  it('takes the next semantic snapshot and action in the child, then returns to the opener', async () => {
+    const link = fakeLink((op) =>
+      op === 'browser.caps'
+        ? { cdp: false }
+        : op === 'tab.adopt'
+          ? { tabId: 7, url: 'https://jobs.test/', title: 'Jobs' }
+          : { text: SNAPSHOT, isError: false }
+    )
+    const pages = createExtensionPageProvider(link)
+    const tab = await pages.adopt(7, 'task-1')
+    const task = await openTaskSession(link, pages, tab)
+    await task.session.snapshot()
+    link.emit({
+      event: 'tab.opened',
+      tabId: 8,
+      data: { tabId: 8, openerTabId: 7, url: 'https://jobs.test/apply', title: 'Apply' }
+    })
+    await task.session.snapshot()
+    await task.session.call('browser_type', { ref: 'e1', text: 'Applicant' })
+    link.emit({ event: 'tab.removed', tabId: 8, data: {} })
+    await task.session.snapshot()
+    expect(
+      link.calls.filter((call) => call.op === 'page.call').map((call) => call.args.tabId)
+    ).toEqual([7, 8, 8, 7])
+    await task.close()
+    await pages.closeAll()
+  })
+
   it('uses the in-page session, and never the debugger, when the browser has none', async () => {
     const link = fakeLink((op, args) =>
       op === 'browser.caps'

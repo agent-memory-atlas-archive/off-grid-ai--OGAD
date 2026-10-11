@@ -180,10 +180,13 @@ export class ExtensionTabContents implements RelayContents {
 
 /**
  * The tabs one task owns in the user's browser. It starts with the tab it opens, or the tab the
- * browser offered for it (browser-start-tab.ts), and grows with any tab the page opens through
- * Playwright. It never sees the user's other tabs.
+ * browser offered for it (browser-start-tab.ts), and grows with tabs opened by the page or
+ * through Playwright. It never sees the user's other tabs.
  */
-export function createExtensionPageProvider(link: BrowserLink): ElectronPlaywrightPageProvider & {
+export function createExtensionPageProvider(
+  link: BrowserLink,
+  onFollow?: () => void
+): ElectronPlaywrightPageProvider & {
   open(url: string): Promise<ExtensionTabContents>
   /** Start in the offered tab instead of a new one, at `url` when the task names one. */
   /** `taskId`: the task the browser offered this tab to; only that task's offer lets it in. */
@@ -210,6 +213,16 @@ export function createExtensionPageProvider(link: BrowserLink): ElectronPlaywrig
       await link.request('tab.adopt', { tabId, taskId, ...(url === undefined ? {} : { url }) }),
       'The browser did not hand over its tab.'
     )
+  const stopOpened = link.onEvent((event) => {
+    if (
+      event.event !== 'tab.opened' ||
+      !pages.has(event.data.openerTabId as number) ||
+      pages.has(event.tabId)
+    )
+      return
+    track(event.data, 'The browser did not open a task tab.')
+    onFollow?.()
+  })
   const asPage = (contents: ExtensionTabContents): RelayPage => ({ id: contents.tabId, contents })
   return {
     pages: () => [...pages.values()].filter((p) => !p.isDestroyed()).map(asPage),
@@ -225,6 +238,7 @@ export function createExtensionPageProvider(link: BrowserLink): ElectronPlaywrig
     adopt,
     active: () => [...pages.values()].filter((p) => !p.isDestroyed()).at(-1),
     async closeAll() {
+      stopOpened()
       for (const p of [...pages.values()]) {
         await link.request('cdp.detach', { tabId: p.tabId }).catch(() => undefined)
         p.destroy()

@@ -173,6 +173,11 @@ export class ElectronPlaywrightAttachments {
     )
   }
 
+  /** Attachment order is the order Playwright receives page targets. */
+  pageIndex(id: number): number {
+    return [...this.attached.keys()].indexOf(id)
+  }
+
   attachedPage(id: number): AttachedPage | undefined {
     return this.attached.get(id)
   }
