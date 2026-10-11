@@ -677,6 +677,7 @@ const offGridApi = {
       streamId?: string
       thinking?: boolean
       context?: string
+      rules?: readonly string[]
     }
   ) => ipcRenderer.invoke('tools:chat', query, history, opts),
 

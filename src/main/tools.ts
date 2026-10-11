@@ -589,6 +589,16 @@ export type UnifiedSource = SearchResult
  * callbacks (e.g. the pro skills-engine caller) and it just buffers - the final answer is
  * always the return value either way. Returns the final answer + the calls made.
  */
+/**
+ * The user's standing rules, last in the system prompt where the model weighs them most. Every
+ * rule is kept: tone and persona rules ("speak like a Greek god") shape every reply.
+ */
+function standingRules(rules: readonly string[] | undefined): string {
+  const kept = (rules ?? []).map((rule) => rule.trim()).filter(Boolean)
+  if (!kept.length) return ''
+  return `\n\nThe user's standing rules. Follow every one in every reply, including how you speak and the persona you take:\n${kept.map((rule) => `- ${rule}`).join('\n')}`
+}
+
 export async function toolChat(
   query: string,
   history: { role: string; content: string }[] = [],
@@ -603,6 +613,8 @@ export async function toolChat(
     actionSource?: 'chat' | 'routine'
     /** What the user is doing now (God's context): added to the system prompt, bounded. */
     context?: string
+    /** God's standing rules: closing the system prompt, kept whole so none is cut away. */
+    rules?: readonly string[]
     connectors?: boolean
     conversationId?: string
     /** Active project — offers search_knowledge_base + scopes it to this project. */
@@ -696,6 +708,7 @@ export async function toolChat(
       const s = await e.schemas()
       const enabledSchemas = s.filter((schema) => {
         const name = (schema as { function?: { name?: unknown } }).function?.name
+        if (opts.startTab && name === 'computer_use') return false
         if (opts.assistantOnly && (name === 'web_use' || name === 'computer_use')) return true
         return toolsEnabled && (typeof name !== 'string' || !disabled.has(name))
       })
@@ -894,7 +907,11 @@ export async function toolChat(
     (hints.length ? ' ' + hints.join(' ') : '') +
     (typeof opts.context === 'string' && opts.context.trim()
       ? `\n\nWhat you know about the user right now:\n${opts.context.trim().slice(0, 2000)}`
-      : '')
+      : '') +
+    (opts.startTab
+      ? '\nThis request comes from a paired browser tab. Use web_use for requested work on that website, including opening notifications. It will use that tab and its current login. Prefer visible page controls; do not invent URL paths or supply a guessed starting URL.'
+      : '') +
+    standingRules(opts.rules)
 
   // Attached images ride on the current user turn so the vision model can read
   // them even in tools/connectors mode (otherwise they were silently dropped).

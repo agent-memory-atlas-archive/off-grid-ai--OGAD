@@ -2186,6 +2186,8 @@ export function setupIPC(): void {
         thinking?: boolean
         /** What the user is doing now (God's context), added to the system prompt. */
         context?: string
+        /** God's standing rules, which every reply follows. */
+        rules?: readonly string[]
       }
     ) => {
       const { toolChat } = await import('./tools')
