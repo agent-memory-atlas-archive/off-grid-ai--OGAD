@@ -229,6 +229,9 @@ export function MemoryChat({
   // after activeConversationId) is the active tab's slice; sends target their own conv.
   const [messagesByConv, setMessagesByConv] = useState<Record<string, ChatMessage[]>>({})
   const messagesByConvRef = useRef(messagesByConv)
+  const [nextMessages, setNextMessages] = useState<
+    Record<string, { messageId: string; answer: string; text: string }>
+  >({})
   const setConvMessages = useCallback(
     (
       cid: string | null,
@@ -2482,6 +2485,25 @@ export function MemoryChat({
           )
         )
         if (voiceMode) setAutoPlayId(storedId)
+        if (
+          tr?.answer &&
+          !tr.cutoff &&
+          !cancelledRef.current.has(convId) &&
+          imageRequests.length === 0 &&
+          toolCalls.every((call) => call.status === 'completed')
+        ) {
+          void window.api
+            .suggestNextChatMessage(trimmed, answer)
+            .then((text) => {
+              const latest = messagesByConvRef.current[convId]?.at(-1)
+              if (!text || latest?.id !== storedId || latest.content !== answer) return
+              setNextMessages((previous) => ({
+                ...previous,
+                [convId]: { messageId: storedId, answer, text }
+              }))
+            })
+            .catch(() => {})
+        }
       } catch {
         /* ignore */
         if (voiceMode) setAutoPlayId(toolStreamId)
@@ -4738,6 +4760,13 @@ export function MemoryChat({
                             store={draftStore}
                             skills={skills}
                             mode={mode}
+                            suggestion={
+                              activeConversationId &&
+                              nextMessages[activeConversationId]?.messageId === messages.at(-1)?.id &&
+                              nextMessages[activeConversationId]?.answer === messages.at(-1)?.content
+                                ? nextMessages[activeConversationId]?.text
+                                : undefined
+                            }
                             activeProjectName={activeProjectName ?? undefined}
                             attachmentPending={attachments.some(
                               (attachment) => attachment.status === 'loading'

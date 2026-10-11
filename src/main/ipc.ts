@@ -1,6 +1,7 @@
 import { ipcMain, BrowserWindow, app, clipboard } from 'electron'
 import { listBridgeBrowsers } from './extension-bridge/bridge-electron'
 import { setupAIRequestLogIPC } from './ai-request-log-ipc'
+import { setupChatNextActionIpc } from './chat-next-action'
 import { setupArtifactPreviewIpc } from './artifact-preview-ipc'
 import {
   getDB,
@@ -594,6 +595,7 @@ export function setupIPC(): void {
   ipcMain.handle('performance-pack:pause', pausePerformancePack)
   ipcMain.handle('performance-pack:restart', () => requestApplicationRelaunch(app))
   setupAIRequestLogIPC()
+  setupChatNextActionIpc()
   setupVoiceTranscriptionIpc()
   const db = getDB()
   setupTtsIpc()
