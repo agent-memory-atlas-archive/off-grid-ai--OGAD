@@ -521,12 +521,12 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
     await llm.setSettings({ maxToolCalls: 7 })
     try {
       enqueueReactiveAfterEmptyPlan(
-        ...Array.from({ length: 7 }, () => ({
-          toolCalls: [{ name: 'get_datetime', args: {} }]
+        ...Array.from({ length: 7 }, (_, step) => ({
+          toolCalls: [{ name: 'calculator', args: { expression: `${String(step)}+1` } }]
         })),
         { content: 'Finished after seven tool calls.' }
       )
-      const r = await toolChat('get_datetime keep going', [])
+      const r = await toolChat('calculator: keep going', [])
 
       expect(r.toolCalls).toHaveLength(7)
       expect(r.answer).toBe('Finished after seven tool calls.')
@@ -582,12 +582,12 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
     await llm.setSettings({ maxToolCalls: 3 })
     try {
       enqueueReactiveAfterEmptyPlan(
-        ...Array.from({ length: 3 }, () => ({
-          toolCalls: [{ name: 'get_datetime', args: {} }]
+        ...Array.from({ length: 3 }, (_, step) => ({
+          toolCalls: [{ name: 'calculator', args: { expression: `${String(step)}+1` } }]
         })),
         { content: 'Based on the tools, here is your answer.' }
       )
-      const r = await toolChat('get_datetime keep going', [])
+      const r = await toolChat('calculator: keep going', [])
       expect(r.toolCalls).toHaveLength(3)
       expect(r.answer).toBe('Based on the tools, here is your answer.')
       expect(r.answer).not.toMatch(/too many tool steps/i)
@@ -630,15 +630,15 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
       enqueueReactiveAfterEmptyPlan(
         {
           toolCalls: [
-            { name: 'get_datetime', args: {} },
-            { name: 'get_datetime', args: {} },
-            { name: 'get_datetime', args: {} }
+            { name: 'calculator', args: { expression: '1+1' } },
+            { name: 'calculator', args: { expression: '2+2' } },
+            { name: 'calculator', args: { expression: '3+3' } }
           ]
         },
         { content: 'Stopped after the configured two calls.' }
       )
 
-      const r = await toolChat('get_datetime use only the allowed calls', [])
+      const r = await toolChat('calculator: use only the allowed calls', [])
 
       expect(r.toolCalls).toHaveLength(2)
       expect(r.answer).toBe('Stopped after the configured two calls.')
@@ -1078,6 +1078,25 @@ describe('web tools — real parsers over fetch faked at the network boundary', 
     } finally {
       unregisterToolExtension(extension.id, extension)
     }
+  })
+
+  it('does not rerun a repeated identical call, and ends tool use when the model keeps repeating', async () => {
+    enqueueReactiveAfterEmptyPlan(
+      { toolCalls: [{ name: 'calculator', args: { expression: '2+2' } }] },
+      { toolCalls: [{ name: 'calculator', args: { expression: '2+2' } }] },
+      { toolCalls: [{ name: 'calculator', args: { expression: '2+2' } }] },
+      { content: 'It is 4.' }
+    )
+    const steps: string[] = []
+    const r = await toolChat('calculator: what is 2+2', [], { onStep: (c) => steps.push(c.name) })
+
+    expect(steps).toEqual(['calculator']) // only the first call ran
+    expect(r.toolCalls).toHaveLength(1)
+    expect(r.answer).toBe('It is 4.')
+    expect(JSON.stringify(fake.requests[2])).toContain('already called calculator')
+    const finalRequest = fake.requests[3] as { tools?: unknown[]; messages?: unknown[] }
+    expect(finalRequest.tools ?? []).toHaveLength(0)
+    expect(JSON.stringify(finalRequest.messages)).toContain('kept repeating the same calculator call')
   })
 
 })

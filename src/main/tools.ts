@@ -26,11 +26,15 @@ import {
   boundToolResult,
   callsWithinToolBudget,
   normalizeMaxToolCalls,
+  repeatedToolCallDecision,
+  repeatedToolCallFinalAnswerInstruction,
   resolveToolName,
+  toolCallKey,
   toolFailureMessage,
   toolLimitFinalAnswerInstruction,
   toolResultCharBudget,
-  unknownToolMessage
+  unknownToolMessage,
+  type ToolCallRecord
 } from '@offgrid/models'
 import { toolPromptChars } from './tools/prompt-budget'
 import { ANSWER_NOW_INSTRUCTION, emptyAnswerReason } from '../shared/empty-answer'
@@ -1017,6 +1021,9 @@ export async function toolChat(
     return stripChatControlTokens(stripQwenToolCallMarkup(content))
   }
   let round = 0
+  // Every call this response made or declined, in order, for repeat detection.
+  const callRecords: ToolCallRecord[] = []
+  let stopInstruction: string | undefined
   while (toolCalls.length < maxToolCalls) {
     if (toolPromptChars(messages) > maxPromptChars) {
       return resultWithImages({ answer: 'Context is full.', toolCalls, unified })
@@ -1148,6 +1155,26 @@ export async function toolChat(
         ) {
           c.args = { ...c.args, query }
         }
+        // A call identical to the one just before it is not run again: the model is told it
+        // already has that result. Repeating after that ends tool use with a forced answer.
+        const key = toolCallKey(c.name, c.args)
+        const repeat = repeatedToolCallDecision(callRecords, c.name, key)
+        if (repeat.action === 'stop') {
+          for (const unrun of callsToRun.slice(callsToRun.indexOf(c))) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: unrun.id,
+              content: 'Not run: tool use has ended because the same call kept repeating.'
+            })
+          }
+          stopInstruction = repeatedToolCallFinalAnswerInstruction(c.name)
+          break
+        }
+        if (repeat.action === 'skip') {
+          callRecords.push({ key, outcome: 'repeated' })
+          messages.push({ role: 'tool', tool_call_id: c.id, content: repeat.note })
+          continue
+        }
         opts.onStep?.({ name: c.name, args: c.args }) // surface the tool activity BEFORE running it
         // Uniform dispatch — every tool owns its own result. Merge any structured
         // side channels: sources are deduped into `unified` across rounds; image requests retain
@@ -1191,6 +1218,7 @@ export async function toolChat(
           finishAfterDeferredImages = imageRequests.length >= requestedImageCount
         }
         const status = res.status ?? 'completed'
+        callRecords.push({ key, outcome: status })
         toolCalls.push({ name: c.name, args: c.args, result: res.text, status })
         // Surface the COMPLETED call (with its result) live, so the UI can show each
         // tool call + result as it lands, not only in the final batch.
@@ -1204,6 +1232,7 @@ export async function toolChat(
           return resultWithImages({ answer: res.text, toolCalls, unified, metrics })
         }
       }
+      if (stopInstruction) break
       round += 1
       continue // let the model use the results
     }
@@ -1236,14 +1265,14 @@ export async function toolChat(
         : {})
     })
   }
-  // The configured emergency cap was reached with the model still calling tools. Instead of dead-ending
-  // with a canned "stopped" message, FORCE one final answer WITHOUT tools, so the
-  // user gets a real response built from the results gathered so far.
+  // The configured emergency cap was reached, or the model kept repeating one call, with the
+  // model still calling tools. Instead of dead-ending with a canned "stopped" message, FORCE one
+  // final answer WITHOUT tools, so the user gets a real response built from the results gathered so far.
   if (opts.signal?.aborted) {
     return resultWithImages({ answer: '', toolCalls, unified })
   }
   const finalMessages = [
-    { role: 'system', content: toolLimitFinalAnswerInstruction(maxToolCalls) },
+    { role: 'system', content: stopInstruction ?? toolLimitFinalAnswerInstruction(maxToolCalls) },
     ...messages.filter((message) => message.role !== 'system')
   ]
   if (toolPromptChars(finalMessages) > maxPromptChars) {
