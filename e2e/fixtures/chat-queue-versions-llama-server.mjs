@@ -94,6 +94,15 @@ const server = http.createServer((request, response) => {
       timers.add(timer)
       return
     }
+    if (prompt === 'Finish after I reopen Chat.') {
+      response.write(delta('The first reply is still running.'))
+      const timer = setTimeout(() => {
+        timers.delete(timer)
+        finish(' The reopened reply is complete.')
+      }, 10_000)
+      timers.add(timer)
+      return
+    }
     const interruptedRetry = prompt === 'Keep the saved answer during retry.' && attempt === 2
     if (prompt === 'Hold this reply open.' || interruptedRetry) {
       response.write(

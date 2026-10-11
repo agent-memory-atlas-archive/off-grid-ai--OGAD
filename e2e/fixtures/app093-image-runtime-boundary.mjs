@@ -35,6 +35,7 @@ audit('start')
 process.stderr.write('seed 93\n')
 // Hold only this external process so the UI can queue and interrupt a real image job.
 if (prompt === 'Hold this image for Send Now APP093') await sleep(30_000)
+if (prompt === 'Finish this image after reopen APP093') await sleep(10_000)
 for (let step = 1; step <= 4; step += 1) {
   await sleep(350)
   if (previewPath) {
@@ -42,6 +43,7 @@ for (let step = 1; step <= 4; step += 1) {
     fs.writeFileSync(previewPath, png)
   }
   process.stderr.write(`${step}/4 - 0.35s/it\n`)
+  audit(`progress:${step}`)
 }
 
 fs.mkdirSync(new URL('.', `file://${outputPath}`).pathname, { recursive: true })

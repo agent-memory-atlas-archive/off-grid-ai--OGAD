@@ -375,4 +375,93 @@ test.describe('Desktop queue and saved response versions', () => {
       content: 'Original answer version 2.'
     })
   })
+
+  for (const sendNow of [false, true]) {
+    test(`reattached chat drains saved history and queued drafts${sendNow ? ' with Send Now first' : ' after natural completion'}`, async () => {
+      const held = sendNow ? 'Hold this reply open.' : 'Finish after I reopen Chat.'
+      await submit(held)
+      await expect(
+        page.getByText('The first reply is still running.', { exact: true }).last()
+      ).toBeVisible()
+      await submit('Queue this first.')
+      await expect(page.getByText('1 queued', { exact: true })).toBeVisible()
+      await page.getByRole('button', { name: 'Settings', exact: true }).first().click()
+      await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+      await page.getByRole('button', { name: 'Chat', exact: true }).click()
+      await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeVisible()
+      await expect(page.getByText('1 queued', { exact: true })).toBeVisible()
+      await submit('Queue this second.')
+      await page.getByRole('button', { name: 'Settings', exact: true }).first().click()
+      await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+      await page.getByRole('button', { name: 'Chat', exact: true }).click()
+      await expect(page.getByText('2 queued', { exact: true })).toBeVisible()
+      if (sendNow)
+        await submit(
+          'Send this ahead of the queue.',
+          process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter'
+        )
+      await answer('The second queued reply is complete.')
+      const requests = audit().filter((entry) => entry.event === 'request')
+      expect(requests.map((entry) => entry.prompt)).toEqual([
+        held,
+        ...(sendNow ? ['Send this ahead of the queue.'] : []),
+        'Queue this first.',
+        'Queue this second.'
+      ])
+      expect(requests[1].messages).toContainEqual({
+        role: 'assistant',
+        content: sendNow
+          ? 'The first reply is still running.'
+          : 'The first reply is still running. The reopened reply is complete.'
+      })
+      expect(requests.at(-1)?.messages).toContainEqual({
+        role: 'assistant',
+        content: 'The first queued reply is complete.'
+      })
+      await closeApp()
+      await launchApp()
+      await answer('The second queued reply is complete.')
+      await expect(
+        page
+          .getByTestId(/^chat-message-/)
+          .getByText('The first queued reply is complete.', { exact: true })
+      ).toHaveCount(1)
+    })
+  }
+
+  test('ordinary Stop after remount saves one partial answer and clears both queued drafts', async () => {
+    await submit('Hold this reply open.')
+    await expect(
+      page.getByText('The first reply is still running.', { exact: true }).last()
+    ).toBeVisible()
+    await submit('Queue this first.')
+    await page.getByRole('button', { name: 'Settings', exact: true }).first().click()
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+    await page.getByRole('button', { name: 'Chat', exact: true }).click()
+    await expect(page.getByText('1 queued', { exact: true })).toBeVisible()
+    await submit('Queue this second.')
+    await page.getByRole('button', { name: 'Stop generating', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeHidden()
+    await submit('Send this ahead of the queue.')
+    await answer('The urgent reply is complete.')
+    expect(
+      audit()
+        .filter((entry) => entry.event === 'request')
+        .map((entry) => entry.prompt)
+    ).toEqual(['Hold this reply open.', 'Send this ahead of the queue.'])
+    await closeApp()
+    await launchApp()
+    await expect(
+      page
+        .getByTestId(/^chat-message-/)
+        .getByText('The first reply is still running.', { exact: true })
+    ).toHaveCount(1)
+    await answer('The urgent reply is complete.')
+    await expect(
+      page.getByText('The first queued reply is complete.', { exact: true })
+    ).toHaveCount(0)
+    await expect(
+      page.getByText('The second queued reply is complete.', { exact: true })
+    ).toHaveCount(0)
+  })
 })

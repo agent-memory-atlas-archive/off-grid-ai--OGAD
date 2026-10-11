@@ -229,20 +229,19 @@ export function MemoryChat({
   // after activeConversationId) is the active tab's slice; sends target their own conv.
   const [messagesByConv, setMessagesByConv] = useState<Record<string, ChatMessage[]>>({})
   const messagesByConvRef = useRef(messagesByConv)
-  messagesByConvRef.current = messagesByConv
   const setConvMessages = useCallback(
     (
       cid: string | null,
       updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])
     ): void => {
       const k = cid ?? NEW_CHAT
-      setMessagesByConv((prev) => ({
-        ...prev,
-        [k]:
-          typeof updater === 'function'
-            ? (updater as (p: ChatMessage[]) => ChatMessage[])(prev[k] ?? [])
-            : updater
-      }))
+      const previous = messagesByConvRef.current
+      const next = {
+        ...previous,
+        [k]: typeof updater === 'function' ? updater(previous[k] ?? []) : updater
+      }
+      messagesByConvRef.current = next
+      setMessagesByConv(next)
     },
     []
   )
@@ -855,14 +854,40 @@ export function MemoryChat({
   // Queued sends carry their attachments too, so a message waiting behind an in-flight
   // generation keeps its image/files when it finally runs — keyed per conversation.
   const queuedRef = useRef<
-    Record<string, { text: string; atts: Attachment[]; assistantEnabled?: boolean; projectId: string | null }[]>
+    Record<string, { text: string; atts: Attachment[]; assistantEnabled?: boolean; projectId: string | null; mode: ChatMode }[]>
   >({})
   const [queuedByConv, setQueuedByConv] = useState<
-    Record<string, { text: string; atts: Attachment[]; assistantEnabled?: boolean; projectId: string | null }[]>
+    Record<string, { text: string; atts: Attachment[]; assistantEnabled?: boolean; projectId: string | null; mode: ChatMode }[]>
   >({})
   // Map streamId → convId so the onRagStream handler can route tokens to the right
   // conversation regardless of which tab is active when the event fires.
   const streamConvRef = useRef<Map<string, string>>(new Map())
+  // The async sender survives navigation. Its listener owns cancellation and the final
+  // save; mounted views only observe it. No model "done" event releases this reservation.
+  type RunEvent = {
+    action: 'query' | 'attach' | 'detach' | 'cancel' | 'started' | 'settled'
+    conversationId: string
+    owner?: typeof streamConvRef.current
+    claimed?: boolean
+    conversations?: string[]
+    preserveQueue?: boolean
+    messages?: ChatMessage[]
+    queue?: (typeof queuedRef.current)[string]
+    stream?: { id: string; answer: string; reasoning: string; timeline?: AssistantTimelineEntry[]; tools?: ChatMessage['toolCalls'] }
+  }
+  const rendererOwnsRun = (conversationId: string): boolean => {
+    const detail: RunEvent = { action: 'query', conversationId }
+    window.dispatchEvent(new CustomEvent('offgrid:chat-run', { detail }))
+    return detail.claimed === true
+  }
+  const attachRendererRun = (conversationId: string): void => {
+    const detail: RunEvent = { action: 'attach', conversationId, owner: streamConvRef.current }
+    window.dispatchEvent(new CustomEvent('offgrid:chat-run', { detail }))
+    if (detail.queue?.length) {
+      queuedRef.current[conversationId] = [...detail.queue, ...(queuedRef.current[conversationId] ?? [])]
+      setQueuedByConv({ ...queuedRef.current })
+    }
+  }
   // Accumulated reasoning per streamId, mirrored from the onRagStream reasoning
   // events. Read DETERMINISTICALLY at persist time — reading it out of a
   // setConvMessages updater (a state-updater side effect) was unreliable: React
@@ -1144,6 +1169,7 @@ export function MemoryChat({
     const observe = (job: ImageGenerationJobContract): void => {
       if (!live || !job.conversationId) return
       if (job.phase === 'running') {
+        attachRendererRun(job.conversationId)
         setImageGenConv(job.conversationId)
         setImageJobStage(job.stage)
         setStreamingEnhancedPrompt(job.enhancedPrompt)
@@ -1159,7 +1185,12 @@ export function MemoryChat({
       setImageJobStage(null)
       setStreamingEnhancedPrompt('')
       setImgProgress(null)
-      markGenerating(job.conversationId, false)
+      // The sender saves the message after the native job reaches its terminal phase.
+      // Its settled signal releases both the local and any reattached queue.
+      if (!rendererOwnsRun(job.conversationId) &&
+        ![...streamConvRef.current.values()].includes(job.conversationId)) {
+        markGenerating(job.conversationId, false)
+      }
     }
     const offJob = window.api.onImageGenJobState(observe)
     const offConversation = window.api.onImageGenConversationUpdated((conversationId) => {
@@ -1247,8 +1278,8 @@ export function MemoryChat({
         const nextMessages = await loadLatestConversationMessages(convId)
         if (!nextMessages) return
         // Refresh from DB, but never clobber an in-flight stream for this conversation.
-        setMessagesByConv((prev) =>
-          prev[convId]?.some((m) => m.streaming) ? prev : { ...prev, [convId]: nextMessages }
+        setConvMessages(convId, (previous) =>
+          previous.some((message) => message.streaming) ? previous : nextMessages
         )
       } catch (e) {
         console.error('Failed to load messages:', e)
@@ -1289,6 +1320,12 @@ export function MemoryChat({
     const off = window.api.onRagConversationsChanged?.(({ conversationId }) => {
       void (async () => {
         try {
+          if (conversationId && generatingRef.current.has(conversationId) &&
+            !rendererOwnsRun(conversationId) &&
+            [...streamConvRef.current.values()].includes(conversationId)) {
+            // Main-owned bridge runs publish this only after their assistant row is saved.
+            await settleObservedRun(conversationId)
+          }
           if (conversationId && !generatingRef.current.has(conversationId)) {
             if (conversationId === activeConversationId) {
               await refreshConversationMessages(conversationId)
@@ -1417,12 +1454,10 @@ export function MemoryChat({
       try {
         await window.api.deleteRagConversation(convId)
         // Drop the deleted conversation's cached messages; reset to a fresh chat if active.
-        setMessagesByConv((prev) => {
-          const n = { ...prev }
-          delete n[convId]
-          n[NEW_CHAT] = []
-          return n
-        })
+        const nextMessages: Record<string, ChatMessage[]> = { ...messagesByConvRef.current, [NEW_CHAT]: [] }
+        delete nextMessages[convId]
+        messagesByConvRef.current = nextMessages
+        setMessagesByConv(nextMessages)
         setOpenTabs((t) => t.filter((id) => id !== convId))
         if (activeConversationId === convId) setActiveConversationId(null)
         await loadConversations()
@@ -1439,6 +1474,60 @@ export function MemoryChat({
     )
   }, [])
 
+  function listenToRun(convId: string, runId: string, activeStream?: () => string | undefined): () => void {
+    streamConvRef.current.set(runId, convId)
+    const observeRun = (event: Event): void => {
+      const detail = (event as CustomEvent<RunEvent>).detail
+      if (detail.action === 'query' && detail.conversationId === '*') {
+        detail.conversations?.push(convId)
+        return
+      }
+      if (detail.conversationId !== convId || detail.action === 'settled' || detail.action === 'started') return
+      detail.claimed = true
+      if (detail.action === 'attach' && detail.owner !== streamConvRef.current) {
+        detail.queue = queuedRef.current[convId]
+        queuedRef.current = clearQueue(queuedRef.current, convId)
+        setQueuedByConv({ ...queuedRef.current })
+      }
+      if (detail.action === 'detach' && detail.owner !== streamConvRef.current && detail.queue?.length) {
+        queuedRef.current[convId] = [...(queuedRef.current[convId] ?? []), ...detail.queue]
+      }
+      if (detail.action !== 'cancel') return
+      cancelledRef.current.add(convId)
+      if (runId.startsWith('prepare-')) cancelledRef.current.add(runId)
+      const streamId = activeStream?.()
+      if (streamId) window.api.cancelRag(streamId)
+      if (!detail.preserveQueue) {
+        queuedRef.current = clearQueue(queuedRef.current, convId)
+        setQueuedByConv({ ...queuedRef.current })
+      }
+      if (detail.stream) {
+        const { id, answer, reasoning, timeline, tools } = detail.stream
+        answerByStream.current[id] = answer
+        reasoningByStream.current[id] = reasoning
+        if (timeline) timelineByStream.current[id] = timeline
+        if (tools) toolCallsByStream.current[id] = tools
+      }
+    }
+    window.addEventListener('offgrid:chat-run', observeRun)
+    return () => {
+      window.removeEventListener('offgrid:chat-run', observeRun)
+      streamConvRef.current.delete(runId)
+    }
+  }
+
+  function announceRunSettled(convId: string): boolean {
+    cancelledRef.current.delete(convId)
+    markGenerating(convId, false)
+    setLoading(false)
+    const detail: RunEvent = {
+      action: 'settled', conversationId: convId, owner: streamConvRef.current,
+      messages: messagesByConvRef.current[convId]
+    }
+    window.dispatchEvent(new CustomEvent('offgrid:chat-run', { detail }))
+    return detail.claimed === true
+  }
+
   const sendMessage = async (
     override?: string,
     opts?: {
@@ -1452,6 +1541,7 @@ export function MemoryChat({
       conversationId?: string
       imageRequest?: ImageGenerationRequestContract
       projectIdOverride?: string | null
+      modeOverride?: ChatMode
       /** A form submission is user input even though its text is supplied as an argument. */
       asUserInput?: boolean
       /** Captured when a queued turn was submitted; Assistant never persists between turns. */
@@ -1462,6 +1552,7 @@ export function MemoryChat({
     // Regenerate/Resend: the user turn already exists in the thread — re-run it
     // in place instead of echoing another user bubble.
     const regen = opts?.regen ?? false
+    const turnMode = opts?.modeOverride ?? mode
     // God always acts (it is Pro) and reads every account; Chat's Assistant is per turn.
     const assistantForTurn = god ? true : (opts?.assistantEnabled ?? toolsOn)
     if (!regen && opts?.assistantEnabled === undefined) setToolsOn(false)
@@ -1496,7 +1587,7 @@ export function MemoryChat({
     // let them keep typing/sending. The queue drains in order when each finishes.
     const targetConv = opts?.conversationId ?? activeConversationId
     if (!regen && shouldQueue(targetConv, generatingRef.current)) {
-      const item = { text: typed, atts, assistantEnabled: assistantForTurn, projectId }
+      const item = { text: typed, atts, assistantEnabled: assistantForTurn, projectId, mode: turnMode }
       queuedRef.current = enqueue(queuedRef.current, targetConv as string, item, opts?.sendNow)
       setQueuedByConv({ ...queuedRef.current })
       if (isInput) {
@@ -1606,280 +1697,285 @@ export function MemoryChat({
     // conversation the user previously stopped can generate again.
     cancelledRef.current.delete(convId)
     markGenerating(convId, true)
-    // The image this turn is BASED on is an attachment on this turn, and saying so is the whole fix:
-    // it then travels, renders, and survives a reload by the same path every other attachment uses.
-    // Kept in app storage first, because the user's own copy can move or be deleted the moment the
-    // turn ends and its path means nothing on another device. The generation is pointed at the kept
-    // copy too, so there is one file and not two.
-    let keptInit: { id: string; path: string } | null = null
-    if (imgInit) {
-      try {
-        keptInit = await window.api.keepInitImage(imgInit)
-      } catch (e) {
-        // Not worth failing the turn over: the image still generates, it just has no before-picture.
-        console.error('Could not keep the init image', e)
-      }
+    const runId = `send-${crypto.randomUUID()}`
+    let activeStreamId: string | undefined
+    const releaseRun = listenToRun(convId, runId, () => activeStreamId)
+    const settleRun = async (): Promise<void> => {
+      releaseRun()
+      if (activeStreamId) streamConvRef.current.delete(activeStreamId)
+      if (!announceRunSettled(convId)) drainQueue(convId)
+      await loadConversations()
     }
-    const initAttachment = keptInit
-      ? {
-          id: keptInit.id,
-          name: keptInit.path.split('/').pop() || 'init image',
-          kind: 'image' as const,
-          path: keptInit.path
-        }
-      : undefined
-
-    const userMessageId = crypto.randomUUID()
-    if (!regen) {
-      const userMessage: ChatMessage = {
-        id: userMessageId,
-        role: 'user',
-        createdAt: Date.now(),
-        content: trimmed,
-        attachments: [
-          ...atts.map((a) => ({ name: a.name, kind: a.kind, text: a.text, path: a.path })),
-          // Drawn now, not only after a reload. Persisting it without this left the turn looking as
-          // though nothing had been attached until the conversation was loaded again.
-          ...(initAttachment
-            ? [{ name: initAttachment.name, kind: initAttachment.kind, path: initAttachment.path }]
-            : []),
-          ...(opts?.voiceClip?.path
-            ? [
-                {
-                  name: opts.voiceClip.path.split(/[\\/]/).at(-1) || 'voice.webm',
-                  kind: 'audio' as const,
-                  path: opts.voiceClip.path
-                }
-              ]
-            : [])
-        ],
-        audioUrl: opts?.voiceClip?.url,
-        audioDuration: opts?.voiceClip?.duration
-      }
-      setConvMessages(convId, (prev) => [...prev, userMessage])
-    }
-    if (isInput && draftStore.getSnapshot().trim() === typed) draftStore.set('')
-    setLoading(true)
-
-    // Persist user message (skip on regen — it's already in the thread). Stash
-    // the attachments in the message context so the clickable chips survive reload.
     try {
+      // The image this turn is BASED on is an attachment on this turn, and saying so is the whole fix:
+      // it then travels, renders, and survives a reload by the same path every other attachment uses.
+      // Kept in app storage first, because the user's own copy can move or be deleted the moment the
+      // turn ends and its path means nothing on another device. The generation is pointed at the kept
+      // copy too, so there is one file and not two.
+      let keptInit: { id: string; path: string } | null = null
+      if (imgInit) {
+        try {
+          keptInit = await window.api.keepInitImage(imgInit)
+        } catch (e) {
+          // Not worth failing the turn over: the image still generates, it just has no before-picture.
+          console.error('Could not keep the init image', e)
+        }
+      }
+      const initAttachment = keptInit
+        ? {
+            id: keptInit.id,
+            name: keptInit.path.split('/').pop() || 'init image',
+            kind: 'image' as const,
+            path: keptInit.path
+          }
+        : undefined
+
+      const userMessageId = crypto.randomUUID()
       if (!regen) {
-        const attMeta = atts.map((a) => ({
-          id: a.id,
-          name: a.name,
-          kind: a.kind,
-          text: a.text,
-          path: a.path,
-          mimeType: a.mimeType,
-          fileSize: a.fileSize,
-          createdAt: a.createdAt
-        }))
-        // Appended, never folded into `atts`: those are what the MODEL is given, and the init image is
-        // an input to the image runtime rather than text for the language model to read.
-        const voiceAttachment = opts?.voiceClip?.path
-          ? {
-              name: opts.voiceClip.path.split(/[\\/]/).at(-1) || 'voice.webm',
-              kind: 'audio' as const,
-              path: opts.voiceClip.path
-            }
-          : undefined
-        const persisted = [
-          ...attMeta,
-          ...(initAttachment ? [initAttachment] : []),
-          ...(voiceAttachment ? [voiceAttachment] : [])
-        ]
-        const stored = await window.api.addRagMessage(
-          convId,
-          'user',
-          trimmed,
-          persisted.length ? { attachments: persisted } : undefined
-        )
-        setConvMessages(convId, (previous) => previous.map((message) =>
-          message.id === userMessageId ? { ...message, id: stored.uuid } : message))
-      }
-    } catch (e) {
-      console.error('Failed to persist user message:', e)
-    }
-
-    // Catalogue attached inputs (files / pasted text) as artifacts of this chat &
-    // project, so the gallery holds the whole working set — inputs and outputs.
-    if (!regen) {
-      for (const a of atts) {
-        if (a.kind === 'image' && a.path) {
-          // Best-effort cataloguing: handle the async rejection with .catch (a try/catch
-          // can't catch a floating promise's rejection — S4822).
-          void window.api
-            .saveArtifact({
-              kind: 'image',
-              code: a.path,
-              title: a.name,
-              conversationId: convId,
-              projectId: projectId
-            })
-            .catch(() => {
-              /* ignore */
-            })
-        } else if (a.text) {
-          void window.api
-            .saveArtifact({
-              kind: 'text',
-              code: a.text,
-              title: a.name,
-              conversationId: convId,
-              projectId: projectId
-            })
-            .catch(() => {
-              /* ignore */
-            })
+        const userMessage: ChatMessage = {
+          id: userMessageId,
+          role: 'user',
+          createdAt: Date.now(),
+          content: trimmed,
+          attachments: [
+            ...atts.map((a) => ({ name: a.name, kind: a.kind, text: a.text, path: a.path })),
+            // Drawn now, not only after a reload. Persisting it without this left the turn looking as
+            // though nothing had been attached until the conversation was loaded again.
+            ...(initAttachment
+              ? [{ name: initAttachment.name, kind: initAttachment.kind, path: initAttachment.path }]
+              : []),
+            ...(opts?.voiceClip?.path
+              ? [
+                  {
+                    name: opts.voiceClip.path.split(/[\\/]/).at(-1) || 'voice.webm',
+                    kind: 'audio' as const,
+                    path: opts.voiceClip.path
+                  }
+                ]
+              : [])
+          ],
+          audioUrl: opts?.voiceClip?.url,
+          audioDuration: opts?.voiceClip?.duration
         }
+        setConvMessages(convId, (prev) => [...prev, userMessage])
       }
-    }
+      if (isInput && draftStore.getSnapshot().trim() === typed) draftStore.set('')
+      setLoading(true)
 
-    // Image-generation mode: render a prompt → image instead of a memory answer.
-    // Also auto-route when the user clearly asks for an image in chat ("draw a
-    // dog") so they get a picture instead of the text model refusing. The auto-
-    // route is SUPPRESSED when the agentic tools/connectors path owns the turn:
-    // there, image generation is a tool the model calls, so the renderer must not
-    // pre-decide (that double decision hijacked "draw ..." away from the tool loop).
-    // All memory adds search_memory to the normal tool catalog. Assistant and
-    // Connectors keep their own opt-in state.
-    const explicitAgentic = isAgenticTurn({ toolsOn: assistantForTurn, connectorsOn })
-    const autoImage = shouldAutoRouteImage({
-      mode,
-      imageAvailable,
-      agenticActive: explicitAgentic,
-      text: trimmed
-    })
-    if (opts?.imageRequest || mode === 'image' || autoImage) {
-      setShowImageOptions(false)
-      setImgProgress(null)
-      setImageGenConv(convId)
-      const seedNum = imgSeed.trim() === '' ? -1 : parseInt(imgSeed, 10)
-      const styleObj = STYLE_PRESETS.find((s) => s.name === activeStyle)
-      // In explicit image mode keep the exact prompt (+ any chosen style); on
-      // auto-route strip the "draw/generate an image of" phrasing to the subject.
-      const basePrompt = mode === 'image' ? trimmed : cleanImagePrompt(trimmed)
-      const fullPrompt = styleObj ? `${basePrompt}, ${styleObj.prompt}` : basePrompt
-      const imageRequest: ImageGenerationRequestContract = opts?.imageRequest ?? {
-        prompt: fullPrompt,
-        negativePrompt: imgNegative.trim() || undefined,
-        width: imgSize,
-        height: imgSize,
-        steps: imgSteps,
-        cfgScale: imgCfgScale,
-        seed: Number.isNaN(seedNum) ? -1 : seedNum,
-        model: imgModel || undefined,
-        enhancePrompt: enhanceImg,
-        // The kept copy, so the record of what this was made from cannot outlive the file it names.
-        initImage: keptInit?.path ?? imgInit ?? undefined,
-        strength: imgInit ? imgStrength : undefined
-      }
+      // Persist user message (skip on regen — it's already in the thread). Stash
+      // the attachments in the message context so the clickable chips survive reload.
       try {
-        const img = await window.api.generateImage({
-          ...imageRequest,
-          conversationId: convId, // the turn's own conversation (activeConversationId can lag for a fresh/queued chat)
-          projectId: projectId
-        })
-        const imageMetadata: ImageGenerationMetadata = {
-          width: img.width ?? imageRequest.width ?? imgSize,
-          height: img.height ?? imageRequest.height ?? imgSize,
-          steps: img.steps ?? imageRequest.steps ?? imgSteps,
-          cfgScale: img.cfgScale ?? imageRequest.cfgScale ?? imgCfgScale,
-          seed:
-            typeof img.seed === 'number'
-              ? img.seed
-              : (imageRequest.seed ?? (Number.isNaN(seedNum) ? -1 : seedNum)),
-          model: typeof img.model === 'string' ? img.model : imageRequest.model
-        }
-        const imageMetrics: GenerationMetrics | undefined =
-          typeof img.durationMs === 'number'
+        if (!regen) {
+          const attMeta = atts.map((a) => ({
+            id: a.id,
+            name: a.name,
+            kind: a.kind,
+            text: a.text,
+            path: a.path,
+            mimeType: a.mimeType,
+            fileSize: a.fileSize,
+            createdAt: a.createdAt
+          }))
+          // Appended, never folded into `atts`: those are what the MODEL is given, and the init image is
+          // an input to the image runtime rather than text for the language model to read.
+          const voiceAttachment = opts?.voiceClip?.path
             ? {
-                computeBackend: img.computeBackend,
-                modelName: img.model,
-                totalSeconds: img.durationMs / 1000
+                name: opts.voiceClip.path.split(/[\\/]/).at(-1) || 'voice.webm',
+                kind: 'audio' as const,
+                path: opts.voiceClip.path
               }
             : undefined
-        const completedImage = completedImageMessage(
-          `Generated for: ${trimmed}`,
-          imageRequest.prompt,
-          img.prompt
-        )
-        const assistantMessage: ChatMessage = {
-          id: `a-${Date.now()}`,
-          role: 'assistant',
-          ...completedImage,
-          image: img.dataUrl,
-          imagePath: img.path,
-          imageMetadata,
-          ...(img.durationMs === undefined ? {} : { generationTimeMs: img.durationMs }),
-          ...(imageMetrics ? { metrics: imageMetrics } : {})
-        }
-        setConvMessages(convId, (prev) => [...prev, assistantMessage])
-        if (voiceMode) setAutoPlayId(assistantMessage.id)
-        try {
-          const imageContext = withGeneratedImageReference(
-              {
-                imageMetadata,
-                ...(img.durationMs === undefined ? {} : { durationMs: img.durationMs }),
-                ...(imageMetrics ? { metrics: imageMetrics } : {})
-              },
-              { id: img.syncId, path: img.path }
-            )
-          const stored = opts?.replacementMessageId
-            ? await window.api.updateRagMessage(convId, opts.replacementMessageId, completedImage.storedContent, imageContext)
-            : await window.api.addRagMessage(convId, 'assistant', completedImage.storedContent, imageContext)
-          if (!stored) throw new Error('Saved response was not found')
-          const storedId = stored === true ? opts!.replacementMessageId! : stored.uuid
-          setConvMessages(convId, (previous) => previous.map((message) => message.id === assistantMessage.id
-            ? { ...message, id: storedId } : message))
-          await announceImageMessagePersisted(convId, storedId)
-        } catch {
-          /* ignore */
+          const persisted = [
+            ...attMeta,
+            ...(initAttachment ? [initAttachment] : []),
+            ...(voiceAttachment ? [voiceAttachment] : [])
+          ]
+          const stored = await window.api.addRagMessage(
+            convId,
+            'user',
+            trimmed,
+            persisted.length ? { attachments: persisted } : undefined
+          )
+          setConvMessages(convId, (previous) => previous.map((message) =>
+            message.id === userMessageId ? { ...message, id: stored.uuid } : message))
         }
       } catch (e) {
-        const memoryGuard = parseImageMemoryGuardError(e)
-        const errorContent =
-          memoryGuard?.message || (e as Error).message || 'Image generation failed.'
-        // User-cancelled: just drop the loading state, no error bubble.
-        if (!/cancel/i.test(errorContent)) {
-          console.error('Image generation failed', e)
-          setConvMessages(convId, (prev) => [
-            ...prev,
-            {
-              id: `a-${Date.now()}`,
-              role: 'assistant',
-              content: errorContent,
-              imageMemoryRetry: memoryGuard
-                ? { request: imageRequest, prompt: trimmed, conversationId: convId, projectId }
-                : undefined
-            }
-          ])
+        console.error('Failed to persist user message:', e)
+      }
+
+      // Catalogue attached inputs (files / pasted text) as artifacts of this chat &
+      // project, so the gallery holds the whole working set — inputs and outputs.
+      if (!regen) {
+        for (const a of atts) {
+          if (a.kind === 'image' && a.path) {
+            // Best-effort cataloguing: handle the async rejection with .catch (a try/catch
+            // can't catch a floating promise's rejection — S4822).
+            void window.api
+              .saveArtifact({
+                kind: 'image',
+                code: a.path,
+                title: a.name,
+                conversationId: convId,
+                projectId: projectId
+              })
+              .catch(() => {
+                /* ignore */
+              })
+          } else if (a.text) {
+            void window.api
+              .saveArtifact({
+                kind: 'text',
+                code: a.text,
+                title: a.name,
+                conversationId: convId,
+                projectId: projectId
+              })
+              .catch(() => {
+                /* ignore */
+              })
+          }
+        }
+      }
+
+      // Image-generation mode: render a prompt → image instead of a memory answer.
+      // Also auto-route when the user clearly asks for an image in chat ("draw a
+      // dog") so they get a picture instead of the text model refusing. The auto-
+      // route is SUPPRESSED when the agentic tools/connectors path owns the turn:
+      // there, image generation is a tool the model calls, so the renderer must not
+      // pre-decide (that double decision hijacked "draw ..." away from the tool loop).
+      // All memory adds search_memory to the normal tool catalog. Assistant and
+      // Connectors keep their own opt-in state.
+      if (cancelledRef.current.has(convId)) return
+      const explicitAgentic = isAgenticTurn({ toolsOn: assistantForTurn, connectorsOn })
+      const autoImage = shouldAutoRouteImage({
+        mode: turnMode,
+        imageAvailable,
+        agenticActive: explicitAgentic,
+        text: trimmed
+      })
+      if (opts?.imageRequest || turnMode === 'image' || autoImage) {
+        if (regen && opts?.history) setConvMessages(convId, opts.history)
+        setShowImageOptions(false)
+        setImgProgress(null)
+        setImageGenConv(convId)
+        const seedNum = imgSeed.trim() === '' ? -1 : parseInt(imgSeed, 10)
+        const styleObj = STYLE_PRESETS.find((s) => s.name === activeStyle)
+        // In explicit image mode keep the exact prompt (+ any chosen style); on
+        // auto-route strip the "draw/generate an image of" phrasing to the subject.
+        const basePrompt = turnMode === 'image' ? trimmed : cleanImagePrompt(trimmed)
+        const fullPrompt = styleObj ? `${basePrompt}, ${styleObj.prompt}` : basePrompt
+        const imageRequest: ImageGenerationRequestContract = opts?.imageRequest ?? {
+          prompt: fullPrompt,
+          negativePrompt: imgNegative.trim() || undefined,
+          width: imgSize,
+          height: imgSize,
+          steps: imgSteps,
+          cfgScale: imgCfgScale,
+          seed: Number.isNaN(seedNum) ? -1 : seedNum,
+          model: imgModel || undefined,
+          enhancePrompt: enhanceImg,
+          // The kept copy, so the record of what this was made from cannot outlive the file it names.
+          initImage: keptInit?.path ?? imgInit ?? undefined,
+          strength: imgInit ? imgStrength : undefined
+        }
+        try {
+          const img = await window.api.generateImage({
+            ...imageRequest,
+            conversationId: convId, // the turn's own conversation (activeConversationId can lag for a fresh/queued chat)
+            projectId: projectId
+          })
+          const imageMetadata: ImageGenerationMetadata = {
+            width: img.width ?? imageRequest.width ?? imgSize,
+            height: img.height ?? imageRequest.height ?? imgSize,
+            steps: img.steps ?? imageRequest.steps ?? imgSteps,
+            cfgScale: img.cfgScale ?? imageRequest.cfgScale ?? imgCfgScale,
+            seed:
+              typeof img.seed === 'number'
+                ? img.seed
+                : (imageRequest.seed ?? (Number.isNaN(seedNum) ? -1 : seedNum)),
+            model: typeof img.model === 'string' ? img.model : imageRequest.model
+          }
+          const imageMetrics: GenerationMetrics | undefined =
+            typeof img.durationMs === 'number'
+              ? {
+                  computeBackend: img.computeBackend,
+                  modelName: img.model,
+                  totalSeconds: img.durationMs / 1000
+                }
+              : undefined
+          const completedImage = completedImageMessage(
+            `Generated for: ${trimmed}`,
+            imageRequest.prompt,
+            img.prompt
+          )
+          const assistantMessage: ChatMessage = {
+            id: `a-${Date.now()}`,
+            role: 'assistant',
+            ...completedImage,
+            image: img.dataUrl,
+            imagePath: img.path,
+            imageMetadata,
+            ...(img.durationMs === undefined ? {} : { generationTimeMs: img.durationMs }),
+            ...(imageMetrics ? { metrics: imageMetrics } : {})
+          }
+          setConvMessages(convId, (prev) => [...prev, assistantMessage])
+          if (voiceMode) setAutoPlayId(assistantMessage.id)
           try {
-            await window.api.addRagMessage(convId, 'assistant', errorContent)
+            const imageContext = withGeneratedImageReference(
+                {
+                  imageMetadata,
+                  ...(img.durationMs === undefined ? {} : { durationMs: img.durationMs }),
+                  ...(imageMetrics ? { metrics: imageMetrics } : {})
+                },
+                { id: img.syncId, path: img.path }
+              )
+            const stored = opts?.replacementMessageId
+              ? await window.api.updateRagMessage(convId, opts.replacementMessageId, completedImage.storedContent, imageContext)
+              : await window.api.addRagMessage(convId, 'assistant', completedImage.storedContent, imageContext)
+            if (!stored) throw new Error('Saved response was not found')
+            const storedId = stored === true ? opts!.replacementMessageId! : stored.uuid
+            setConvMessages(convId, (previous) => previous.map((message) => message.id === assistantMessage.id
+              ? { ...message, id: storedId } : message))
+            await announceImageMessagePersisted(convId, storedId)
           } catch {
             /* ignore */
           }
+        } catch (e) {
+          const memoryGuard = parseImageMemoryGuardError(e)
+          const errorContent =
+            memoryGuard?.message || (e as Error).message || 'Image generation failed.'
+          // User-cancelled: just drop the loading state, no error bubble.
+          if (!/cancel/i.test(errorContent)) {
+            console.error('Image generation failed', e)
+            setConvMessages(convId, (prev) => [
+              ...prev,
+              {
+                id: `a-${Date.now()}`,
+                role: 'assistant',
+                content: errorContent,
+                imageMemoryRetry: memoryGuard
+                  ? { request: imageRequest, prompt: trimmed, conversationId: convId, projectId }
+                  : undefined
+              }
+            ])
+            try {
+              await window.api.addRagMessage(convId, 'assistant', errorContent)
+            } catch {
+              /* ignore */
+            }
+          }
+        } finally {
+          setImgProgress(null)
+          setImageGenConv((c) => (c === convId ? null : c))
         }
-      } finally {
-        cancelledRef.current.delete(convId)
-        markGenerating(convId, false)
-        setLoading(false)
-        setImgProgress(null)
-        setImageGenConv((c) => (c === convId ? null : c))
-        await loadConversations()
-        drainQueue(convId)
+        return
       }
-      return
-    }
 
-    let activeStreamId: string | undefined
-    try {
       // History is built from the TARGET conversation's own messages (never the
       // active tab's `messages`) — a drained-queue or background send is bound to
       // `convId`, so its history must come from that conversation (D8).
       const fullHistory = buildSendHistory(
-        opts?.history ?? messagesByConv[convId] ?? EMPTY_MSGS,
+        opts?.history ?? messagesByConvRef.current[convId] ?? EMPTY_MSGS,
         !!regen,
         trimmed,
         20,
@@ -1905,7 +2001,13 @@ export function MemoryChat({
         variantIndex: opts?.priorVariants?.length
       }
       seedStreamViewMessage(toolStreamMessage)
-      setConvMessages(convId, (prev) => [...prev, toolStreamMessage])
+      setConvMessages(convId, (prev) => [
+        ...(regen && opts?.history ? opts.history : prev), toolStreamMessage
+      ])
+      window.dispatchEvent(new CustomEvent<RunEvent>('offgrid:chat-run', { detail: {
+        action: 'started', conversationId: convId, owner: streamConvRef.current,
+        messages: messagesByConvRef.current[convId]
+      } }))
       const comicPageTotal = modelQuery.includes('<!-- offgrid-action:comic-book -->')
         ? comicBookPageCount(modelQuery)
         : null
@@ -2434,11 +2536,7 @@ export function MemoryChat({
         /* ignore */
       }
     } finally {
-      cancelledRef.current.delete(convId)
-      markGenerating(convId, false)
-      setLoading(false)
-      await loadConversations()
-      drainQueue(convId)
+      await settleRun()
       if (activeStreamId) {
         streamConvRef.current.delete(activeStreamId)
         delete timelineByStream.current[activeStreamId]
@@ -2461,10 +2559,82 @@ export function MemoryChat({
         atts: item.atts,
         conversationId: convId,
         assistantEnabled: item.assistantEnabled,
-        projectIdOverride: item.projectId
+        projectIdOverride: item.projectId,
+        modeOverride: item.mode
       })
     }, 30)
   }
+
+  async function settleObservedRun(conversationId: string, snapshot?: ChatMessage[]): Promise<void> {
+    // Renderer senders provide their final saved snapshot synchronously. Main-owned
+    // runs are read only after the stream registry confirms their saved completion.
+    if (snapshot) setConvMessages(conversationId, snapshot)
+    else {
+      const observedIds = [...streamConvRef.current].filter(([, cid]) => cid === conversationId).map(([id]) => id)
+      if (!observedIds.length) return
+      const active = await window.api.getActiveRagStreams?.() ?? []
+      if (active.some((stream) => stream.conversationId === conversationId)) return
+      const durable = await loadLatestConversationMessages(conversationId)
+      if (!durable || rendererOwnsRun(conversationId) ||
+        !observedIds.some((id) => streamConvRef.current.get(id) === conversationId)) return
+      setConvMessages(conversationId, durable)
+    }
+    for (const [id, cid] of streamConvRef.current) {
+      if (cid === conversationId) {
+        streamConvRef.current.delete(id)
+        clearStreamViewMessage(id)
+      }
+    }
+    cancelledRef.current.delete(conversationId)
+    markGenerating(conversationId, false)
+    setLoading(false)
+    drainQueue(conversationId)
+  }
+
+  useEffect(() => {
+    const onSettled = (event: Event): void => {
+      const detail = (event as CustomEvent<RunEvent>).detail
+      if (detail.owner === streamConvRef.current) return
+      if (detail.action === 'started' && detail.messages) {
+        const streaming = detail.messages.find((message) => message.streaming)
+        if (!streaming) return
+        streamConvRef.current.set(streaming.id, detail.conversationId)
+        seedStreamViewMessage(streaming)
+        setConvMessages(detail.conversationId, detail.messages)
+        markGenerating(detail.conversationId, true)
+        return
+      }
+      if (detail.action !== 'settled' || !generatingRef.current.has(detail.conversationId)) return
+      detail.claimed = true
+      const cid = detail.conversationId
+      void settleObservedRun(cid, detail.messages).catch((error) =>
+        console.error('Failed to refresh the completed conversation:', error))
+    }
+    window.addEventListener('offgrid:chat-run', onSettled)
+    // Native streams cover only model execution. Discover renderer reservations too:
+    // preparation and final database writes must keep a remounted composer busy.
+    const discovery: RunEvent = { action: 'query', conversationId: '*', conversations: [] }
+    window.dispatchEvent(new CustomEvent('offgrid:chat-run', { detail: discovery }))
+    for (const cid of new Set(discovery.conversations)) {
+      attachRendererRun(cid)
+      markGenerating(cid, true)
+    }
+    return () => {
+      window.removeEventListener('offgrid:chat-run', onSettled)
+      // A second navigation returns pending drafts to the still-running sender,
+      // so the next mounted view can claim them through the same attach handshake.
+      for (const [conversationId, queue] of Object.entries(queuedRef.current)) {
+        const detail: RunEvent = {
+          action: 'detach', conversationId, owner: streamConvRef.current, queue
+        }
+        window.dispatchEvent(new CustomEvent('offgrid:chat-run', { detail }))
+        if (detail.claimed && ![...streamConvRef.current.keys()].some((id) =>
+          (id.startsWith('send-') || id.startsWith('prepare-')) && streamConvRef.current.get(id) === conversationId)) {
+          queuedRef.current = clearQueue(queuedRef.current, conversationId)
+        }
+      }
+    }
+  }, [])
 
   const handleVoicePlaybackChange = useCallback((messageId: string, active: boolean): void => {
     setVoicePlaybackOwner((current) => nextVoicePlaybackOwner(current, messageId, active))
@@ -2665,13 +2835,21 @@ export function MemoryChat({
         }
       }
       setAttachWarn(null)
-      const streamingId = (messagesByConv[convId] ?? []).find((m) => m.streaming)?.id
-      if (streamingId) {
-        window.api.cancelRag(streamingId)
-        await finalizeStoppedTurn(convId, streamingId)
+      const streamingId = (messagesByConvRef.current[convId] ?? []).find((m) => m.streaming)?.id
+      const detail: RunEvent = {
+        action: 'cancel', conversationId: convId, preserveQueue,
+        stream: streamingId ? {
+          id: streamingId,
+          answer: answerByStream.current[streamingId] ?? '',
+          reasoning: reasoningByStream.current[streamingId] ?? '',
+          timeline: timelineByStream.current[streamingId], tools: toolCallsByStream.current[streamingId]
+        } : undefined
       }
-      // Preparation keeps its reservation until pending storage writes settle.
-      if (!preserveQueue && !preparing) markGenerating(convId, false)
+      window.dispatchEvent(new CustomEvent('offgrid:chat-run', { detail }))
+      if (streamingId && !detail.claimed) window.api.cancelRag(streamingId)
+      // The sender owns the final save, including after a navigation/remount.
+      // Preparation likewise keeps its reservation until pending storage writes settle.
+      if (!preserveQueue && !preparing && !detail.claimed) markGenerating(convId, false)
       // Cancel + clear the image job ONLY if THIS conversation owns it, so stopping
       // one conversation never kills another's in-flight image (D9). imgProgress is a
       // shared stream buffer — clear it too when the owner stops.
@@ -2865,11 +3043,9 @@ export function MemoryChat({
     const off = window.api.onRagStream((data) => {
       const cid = streamConvRef.current.get(data.streamId)
       if (!cid) return
-      if (data.type === 'done') {
-        streamConvRef.current.delete(data.streamId)
-        markGenerating(cid, false)
-        return
-      }
+      // Model completion precedes persistence. The sender's settled signal (or a
+      // main-owned run's saved-conversation event) releases the queue.
+      if (data.type === 'done') return
       if (
         data.type === 'step' &&
         data.step &&
@@ -2990,6 +3166,7 @@ export function MemoryChat({
       .then((streams) => {
         if (disposed) return
         for (const stream of streams) {
+          attachRendererRun(stream.conversationId)
           streamConvRef.current.set(stream.streamId, stream.conversationId)
           reasoningByStream.current[stream.streamId] = stream.reasoning
           timelineByStream.current[stream.streamId] = [
@@ -3070,22 +3247,22 @@ export function MemoryChat({
           const cid = activeConversationId
           if (!cid) return
           const preparationId = `prepare-${crypto.randomUUID()}`
-          streamConvRef.current.set(preparationId, cid)
+          const releasePreparation = listenToRun(cid, preparationId)
           cancelledRef.current.delete(cid)
           markGenerating(cid, true)
           // Keep the prior answer in storage until its replacement is saved.
           // Restarting during generation must not lose response versions.
           void (async () => {
-            // Resend replaces this turn immediately. Do this before stopping its
-            // operator task, because that stop can publish a terminal preview while
-            // the main process is still removing the old durable answer.
+            // Keep the known reply visible until preparation succeeds and its
+            // replacement stream is ready. Failed storage must not hide old versions.
             setRemoteWorkPreview(null)
-            setMessages((prev) => prev.slice(0, i + 1))
             let prepared = false
             try {
               await stopLiveWebUseForConversation(cid)
               if (cancelledRef.current.has(preparationId)) return
-              await window.api.truncateRagMessages(cid, priorAnswer ? messages.indexOf(priorAnswer) + 1 : i + 1)
+              const retainedCount = priorAnswer ? messages.indexOf(priorAnswer) + 1 : i + 1
+              await window.api.truncateRagMessages(cid, retainedCount)
+              setConvMessages(cid, (current) => current.slice(0, retainedCount))
               if (cancelledRef.current.has(preparationId)) return
               if (replacedTaskIds.length) await window.api.tasks?.remove?.(replacedTaskIds)
               prepared = !cancelledRef.current.has(preparationId)
@@ -3098,13 +3275,11 @@ export function MemoryChat({
                 } catch (error) {
                   console.error('Failed to restore the conversation after preparation stopped:', error)
                 } finally {
-                  streamConvRef.current.delete(preparationId)
+                  releasePreparation()
                   cancelledRef.current.delete(preparationId)
-                  cancelledRef.current.delete(cid)
-                  markGenerating(cid, false)
-                  drainQueue(cid)
+                  if (!announceRunSettled(cid)) drainQueue(cid)
                 }
-              } else streamConvRef.current.delete(preparationId)
+              } else releasePreparation()
             }
             if (!prepared) return
             // The turn's own attachments, not the composer's - the composer was cleared when this
@@ -3136,9 +3311,6 @@ export function MemoryChat({
     if (!text || (activeConversationId && generatingRef.current.has(activeConversationId))) return
     const idx = messages.findIndex((m) => m.id === id)
     if (idx < 0) return
-    setMessages((prev) =>
-      prev.slice(0, idx + 1).map((m, i) => (i === idx ? { ...m, content: text } : m))
-    )
     // Update the user row and retain its answer until the replacement is saved.
     //
     // The re-added row carries the ORIGINAL turn's attachments. Editing the words of a message
@@ -3147,7 +3319,7 @@ export function MemoryChat({
     const cid = activeConversationId
     if (!cid) return
     const preparationId = `prepare-${crypto.randomUUID()}`
-    streamConvRef.current.set(preparationId, cid)
+    const releasePreparation = listenToRun(cid, preparationId)
     cancelledRef.current.delete(cid)
     markGenerating(cid, true)
     const priorAnswer = messages.slice(idx + 1).find((message) => message.role === 'assistant' && !message.notice)
@@ -3178,8 +3350,12 @@ export function MemoryChat({
         if (cancelledRef.current.has(preparationId)) return
         const updated = await window.api.updateRagMessage(cid, id, text, { ...edited?.context, ...persisted })
         if (!updated) throw new Error('Saved user message was not found')
+        setConvMessages(cid, (current) => current.map((message) =>
+          message.id === id ? { ...message, content: text } : message))
         if (cancelledRef.current.has(preparationId)) return
-        await window.api.truncateRagMessages(cid, priorAnswer ? messages.indexOf(priorAnswer) + 1 : idx + 1)
+        const retainedCount = priorAnswer ? messages.indexOf(priorAnswer) + 1 : idx + 1
+        await window.api.truncateRagMessages(cid, retainedCount)
+        setConvMessages(cid, (current) => current.slice(0, retainedCount))
         if (cancelledRef.current.has(preparationId)) return
         if (replacedTaskIds.length) await window.api.tasks?.remove?.(replacedTaskIds)
         prepared = !cancelledRef.current.has(preparationId)
@@ -3192,13 +3368,11 @@ export function MemoryChat({
           } catch (refreshError) {
             console.error('Failed to restore the conversation after the edit failed:', refreshError)
           } finally {
-            streamConvRef.current.delete(preparationId)
+            releasePreparation()
             cancelledRef.current.delete(preparationId)
-            cancelledRef.current.delete(cid)
-            markGenerating(cid, false)
-            drainQueue(cid)
+            if (!announceRunSettled(cid)) drainQueue(cid)
           }
-        } else streamConvRef.current.delete(preparationId)
+        } else releasePreparation()
       }
       if (!prepared) return
       try {

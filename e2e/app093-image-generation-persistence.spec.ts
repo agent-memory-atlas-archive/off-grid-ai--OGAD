@@ -151,36 +151,20 @@ test('APP-093 generates one owned image and keeps it usable across a full relaun
 
   const composer = page.getByPlaceholder('Describe an image to generate…')
   await composer.fill(PROMPT)
-  await page.evaluate(() => {
-    const state = window as typeof window & {
-      __app093Progress?: string[]
-      __app093Observer?: MutationObserver
-    }
-    state.__app093Progress = []
-    state.__app093Observer = new MutationObserver(() => {
-      const step = document.body.innerText.match(/Step \d+\/4/)?.[0]
-      if (step && !state.__app093Progress?.includes(step)) state.__app093Progress?.push(step)
-    })
-    state.__app093Observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      characterData: true
-    })
-  })
   await page.getByTitle('Send').click()
 
   const generated = page.getByRole('img', { name: 'Generated', exact: true })
   await expect(generated).toHaveCount(1, { timeout: 15_000 })
-  const renderedProgress = await page.evaluate(() => {
-    const state = window as typeof window & {
-      __app093Progress?: string[]
-      __app093Observer?: MutationObserver
-    }
-    state.__app093Observer?.disconnect()
-    return state.__app093Progress ?? []
-  })
-  expect(renderedProgress).toContain('Step 1/4')
-  expect(renderedProgress).toContain('Step 4/4')
+  // The native process can finish between renderer frames. Check its actual progress
+  // emissions and the durable UI result instead of requiring each brief label to paint.
+  const progressEvents = fs
+    .readFileSync(runtimeLog, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as { event: string })
+    .filter(({ event }) => event.startsWith('progress:'))
+    .map(({ event }) => event)
+  expect(progressEvents).toEqual(['progress:1', 'progress:2', 'progress:3', 'progress:4'])
   await expect(
     page.locator('p').getByText(`Generated for: ${PROMPT}`, { exact: true }).last()
   ).toBeVisible()
@@ -335,3 +319,102 @@ test('Send Now cancels the active image and saves urgent and queued images in or
   expect(after).toEqual(before)
   expect(after.images.every((image) => fs.existsSync(image.path))).toBe(true)
 })
+
+for (const action of ['finish', 'send-now', 'stop']) {
+  const sendNow = action === 'send-now'
+  const stop = action === 'stop'
+  test(`reattached image chat drains queued images${sendNow ? ' with Send Now first' : stop ? ' with ordinary Stop clearing queued drafts' : ' after natural completion'}`, async () => {
+    await enterChat(true)
+    await page.getByRole('button', { name: /^Image$/ }).click()
+    await page.getByRole('button', { name: /Image options/i }).click()
+    const options = page
+      .locator('div')
+      .filter({ has: page.getByText('Guidance', { exact: true }) })
+      .last()
+    await options.getByLabel('Size').selectOption('256')
+    await options.getByLabel('Steps').fill('4')
+    if (await options.getByLabel('Enhance').isChecked())
+      await options.getByLabel('Enhance').uncheck()
+    const held =
+      sendNow || stop
+        ? 'Hold this image for Send Now APP093'
+        : 'Finish this image after reopen APP093'
+    const queued = 'A queued blue lighthouse APP093'
+    const urgent = 'An urgent green lighthouse APP093'
+    const events = (): Array<{ event: string; prompt: string }> =>
+      fs.existsSync(runtimeLog)
+        ? fs
+            .readFileSync(runtimeLog, 'utf8')
+            .trim()
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+        : []
+    let composer = page.locator('textarea')
+    await composer.fill(held)
+    await composer.press('Enter')
+    await expect
+      .poll(() =>
+        events()
+          .filter((entry) => entry.event === 'start')
+          .map((entry) => entry.prompt)
+      )
+      .toEqual([held])
+    await composer.fill(queued)
+    await composer.press('Enter')
+    await expect(page.getByText('1 queued', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Settings', exact: true }).first().click()
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+    await enterChat()
+    await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeVisible()
+    await expect(page.getByText('1 queued', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: /^Image$/ }).click()
+    await page.getByRole('button', { name: /Image options/i }).click()
+    const reopenedOptions = page
+      .locator('div')
+      .filter({ has: page.getByText('Guidance', { exact: true }) })
+      .last()
+    await reopenedOptions.getByLabel('Size').selectOption('256')
+    await reopenedOptions.getByLabel('Steps').fill('4')
+    if (await reopenedOptions.getByLabel('Enhance').isChecked())
+      await reopenedOptions.getByLabel('Enhance').uncheck()
+    if (stop) {
+      await page.getByRole('button', { name: 'Stop generating', exact: true }).click()
+      await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeHidden()
+    }
+    if (sendNow || stop) {
+      composer = page.locator('textarea')
+      await composer.fill(urgent)
+      await composer.press(
+        stop ? 'Enter' : process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter'
+      )
+    }
+    const completed = stop ? [urgent] : sendNow ? [urgent, queued] : [held, queued]
+    await expect
+      .poll(() =>
+        events()
+          .filter((entry) => entry.event === 'complete')
+          .map((entry) => entry.prompt)
+      )
+      .toEqual(completed)
+    await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeHidden()
+    await expect(page.getByRole('img', { name: 'Generated', exact: true })).toHaveCount(
+      completed.length
+    )
+    const owned = await scopedImages()
+    const stored = await page.evaluate(
+      async (id) => window.api.getRagMessages(id),
+      owned.conversationId
+    )
+    expect(
+      stored.filter((message) => message.role === 'assistant').map((message) => message.content)
+    ).toEqual(completed.map((prompt) => `Generated for: ${prompt}`))
+    await closeApp()
+    await launch()
+    await enterChat()
+    await expect(page.getByRole('img', { name: 'Generated', exact: true })).toHaveCount(
+      completed.length
+    )
+    expect(await scopedImages()).toEqual(owned)
+  })
+}
