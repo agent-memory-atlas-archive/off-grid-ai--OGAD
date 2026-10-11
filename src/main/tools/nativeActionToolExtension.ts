@@ -7,6 +7,7 @@
 // owner. Outside-Chat proposals enter the engine through the Actions surface, whose gate
 // remains responsible for approval. Reads and navigation stay inline.
 
+import { isToolAllowedForOrigin } from './tool-origin'
 import { shell } from 'electron'
 import type { ToolCallStatus, ToolContext, ToolExtension, ToolResult } from '../tools'
 import { WEB_USE_ACTION_TYPE, type ProposeOutcome, type TickOutcome } from '@offgrid/use'
@@ -224,9 +225,9 @@ export class NativeActionToolExtension implements ToolExtension {
     if (!spec) {
       return `Error: unknown action ${name}`
     }
-    if (name === 'computer_use' && context?.startTab) {
+    if (!isToolAllowedForOrigin(name, context?.origin, { acting: context?.acting })) {
       return {
-        text: 'This request belongs to a paired browser tab. Use web_use for this task; it retains that tab and its login.',
+        text: 'Error: tool_unavailable',
         status: 'failed',
         authoritative: true
       }

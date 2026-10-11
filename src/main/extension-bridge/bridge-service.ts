@@ -1,3 +1,4 @@
+import { isToolAllowedForOrigin } from '../tools/tool-origin'
 import { chatHandlers } from './bridge-chat-handlers'
 import { type ChatRequest } from './bridge-chat'
 // The extension bridge, as pure logic: pairing and the sealed RPC loop. Everything it touches
@@ -179,7 +180,10 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
       if (p.task !== undefined && (typeof p.task !== 'string' || p.task.length > 32_000)) {
         throw new Error('invalid')
       }
-      return deps.data.listTools(typeof p.task === 'string' ? p.task : undefined)
+      return (await deps.data.listTools(typeof p.task === 'string' ? p.task : undefined)).filter(
+        (tool) =>
+          isToolAllowedForOrigin((tool as { name?: unknown }).name, 'bridge', { acting: true })
+      )
     },
     'tools.run': async (p, browser) => {
       if (typeof p.name !== 'string' || typeof p.args !== 'object' || p.args === null) {
@@ -192,6 +196,8 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
       // What tools.list offers, this runs. A tool turned off since the browser listed it
       // never runs; Pro access is checked for every protected request below.
       const name = p.name
+      if (!isToolAllowedForOrigin(name, 'bridge', { acting: true }))
+        throw new Error('tool_unavailable')
       const listed = (await deps.data.listTools()).some(
         (tool) => (tool as { name?: unknown }).name === name
       )

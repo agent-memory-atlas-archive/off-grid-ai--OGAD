@@ -30,6 +30,9 @@ import {
   toolResultCharBudget
 } from '@offgrid/models'
 import { toolPromptChars } from './tools/prompt-budget'
+import { isToolAllowedForOrigin, type ToolOrigin } from './tools/tool-origin'
+import { selectChatToolSchemas } from './tools/chat-tool-selection'
+import { budgetTools } from './tools/tool-budget'
 import { ANSWER_NOW_INSTRUCTION, emptyAnswerReason } from '../shared/empty-answer'
 
 // Per-tool enable/disable, persisted as a list of disabled tool names.
@@ -52,6 +55,10 @@ export function setToolEnabled(name: string, enabled: boolean): void {
 // excludes the current conversation so it can't cite itself).
 export interface ToolContext {
   conversationId?: string
+  /** Trusted request boundary; never read from model arguments. */
+  origin?: ToolOrigin
+  /** Trusted request mode; never read from model arguments. */
+  acting?: boolean
   /** Who asked: a person in a chat, or a routine nobody is watching (its actions always wait for approval). */
   actionSource?: 'chat' | 'routine'
   /** Authenticated Mobile launch identity. Only the MCP admission boundary sets it. */
@@ -505,6 +512,9 @@ export async function runTool(
   ctx: ToolContext,
   exts: ToolExtension[]
 ): Promise<ToolResult> {
+  if (!isToolAllowedForOrigin(name, ctx.origin, { acting: ctx.acting })) {
+    return { text: 'Error: tool_unavailable', status: 'failed', authoritative: true }
+  }
   try {
     const ext = exts.find((e) => e.canHandle(name))
     if (ext) return asToolResult(await ext.execute(name, args, ctx))
@@ -575,6 +585,109 @@ export type ToolCall = {
 // interactive citation cards (thumbnail + open-in-Replay), same as the RAG path.
 export type UnifiedSource = SearchResult
 
+export async function selectChatTools(
+  query: string | undefined,
+  opts: {
+    origin?: ToolOrigin
+    assistantOnly?: boolean
+    allTools?: boolean
+    connectors?: boolean
+    projectId?: string
+    allMemory?: boolean
+    imageAvailable?: boolean
+  } = {},
+  history: { role: string; content: string }[] = []
+): Promise<{
+  tools: unknown[]
+  protectedToolCount: number
+  hints: string[]
+  exts: ToolExtension[]
+}> {
+  const toolsEnabled = opts.allTools || getSetting<boolean>('toolsEnabled', true) !== false
+  const imageAvailable = opts.imageAvailable ?? false
+  // Opt-in: pull in tools from registered pro extensions (e.g. MCP connectors)
+  // alongside the built-ins. Schemas are built once per turn; each extension
+  // caches whatever per-turn state it needs for execute(). Free build registers
+  // no extensions, so this is just the built-ins.
+  const exts =
+    toolsEnabled || opts.assistantOnly
+      ? selectToolExtensions(getToolExtensions(), { connectors: toolsEnabled && !!opts.connectors })
+      : []
+  const extSchemas: unknown[] = []
+  const hints: string[] = []
+  const extensionHints: { names: Set<string>; text: string }[] = []
+  const disabled = opts.allTools ? new Set<string>() : disabledSet()
+  for (const e of exts) {
+    try {
+      const s = await e.schemas()
+      const enabledSchemas = s.filter((schema) => {
+        const name = (schema as { function?: { name?: unknown } }).function?.name
+        if (!isToolAllowedForOrigin(name, opts.origin, { acting: opts.assistantOnly })) return false
+        if (opts.assistantOnly && (name === 'web_use' || name === 'computer_use')) return true
+        return toolsEnabled && (typeof name !== 'string' || !disabled.has(name))
+      })
+      if (enabledSchemas.length) {
+        extSchemas.push(...enabledSchemas)
+        if (e.systemHint && toolsEnabled) {
+          extensionHints.push({
+            names: new Set(
+              enabledSchemas.flatMap((schema) => {
+                const name = (schema as { function?: { name?: unknown } }).function?.name
+                return typeof name === 'string' ? [name] : []
+              })
+            ),
+            text: e.systemHint()
+          })
+        }
+      }
+    } catch (err) {
+      console.error('[tools] extension schemas', e.id, err)
+    }
+  }
+  const builtins = toolsEnabled
+    ? schemas(
+        imageAvailable,
+        { projectActive: !!opts.projectId, allMemory: !!opts.allMemory },
+        opts.allTools
+      )
+    : []
+  const assistantRequiredTools = opts.assistantOnly
+    ? extSchemas.filter((schema) => {
+        const name = (schema as { function?: { name?: unknown } }).function?.name
+        return name === 'web_use' || name === 'computer_use'
+      })
+    : []
+  const otherExtSchemas = extSchemas.filter((schema) => !assistantRequiredTools.includes(schema))
+  const rawTools = [...assistantRequiredTools, ...builtins, ...otherExtSchemas]
+  const {
+    tools: relevantTools,
+    protectedToolCount,
+    droppedCount
+  } = await selectChatToolSchemas(query, rawTools, assistantRequiredTools, {
+    ...opts,
+    imageAvailable,
+    history,
+    contextSize: llm.effectiveContextSize()
+  })
+  const relevantNames = new Set(
+    relevantTools.flatMap((schema) => {
+      const name = (schema as { function?: { name?: unknown } }).function?.name
+      return typeof name === 'string' ? [name] : []
+    })
+  )
+  hints.push(
+    ...extensionHints
+      .filter((hint) => [...hint.names].some((name) => relevantNames.has(name)))
+      .map((hint) => hint.text)
+  )
+  if (droppedCount) {
+    hints.push(
+      `Note: ${droppedCount} connector tool(s) were omitted this turn to fit the context window; ask the user to disable some connectors if a needed tool is missing.`
+    )
+  }
+  return { tools: relevantTools, protectedToolCount, hints, exts }
+}
+
 /**
  * Run a chat turn with tool-calling. STREAMS by default (thinking -> tool-call activity
  * -> answer) through the callbacks: `onDelta` gets reasoning/content deltas, `onStep`
@@ -587,6 +700,7 @@ export async function toolChat(
   history: { role: string; content: string }[] = [],
   opts: {
     pageText?: string
+    origin?: ToolOrigin
     startTab?: ToolContext['startTab']
     /** Assistant is selected for this turn; always include its browser and desktop tools. */
     assistantOnly?: boolean
@@ -651,6 +765,8 @@ export async function toolChat(
   const toolContext: ToolContext = {
     conversationId: opts.conversationId,
     startTab: opts.startTab,
+    origin: opts.origin,
+    acting: opts.assistantOnly,
     ...(opts.actionSource ? { actionSource: opts.actionSource } : {}),
     projectId: opts.projectId,
     userQuery: query,
@@ -672,173 +788,12 @@ export async function toolChat(
     }
   }
 
-  // Opt-in: pull in tools from registered pro extensions (e.g. MCP connectors)
-  // alongside the built-ins. Schemas are built once per turn; each extension
-  // caches whatever per-turn state it needs for execute(). Free build registers
-  // no extensions, so this is just the built-ins.
-  const exts =
-    toolsEnabled || opts.assistantOnly
-      ? selectToolExtensions(getToolExtensions(), { connectors: toolsEnabled && !!opts.connectors })
-      : []
-  const extSchemas: unknown[] = []
-  const hints: string[] = []
-  const extensionHints: { names: Set<string>; text: string }[] = []
-  const disabled = opts.allTools ? new Set<string>() : disabledSet()
-  for (const e of exts) {
-    try {
-      const s = await e.schemas()
-      const enabledSchemas = s.filter((schema) => {
-        const name = (schema as { function?: { name?: unknown } }).function?.name
-        if (opts.startTab && name === 'computer_use') return false
-        if (opts.assistantOnly && (name === 'web_use' || name === 'computer_use')) return true
-        return toolsEnabled && (typeof name !== 'string' || !disabled.has(name))
-      })
-      if (enabledSchemas.length) {
-        extSchemas.push(...enabledSchemas)
-        if (e.systemHint && toolsEnabled) {
-          extensionHints.push({
-            names: new Set(
-              enabledSchemas.flatMap((schema) => {
-                const name = (schema as { function?: { name?: unknown } }).function?.name
-                return typeof name === 'string' ? [name] : []
-              })
-            ),
-            text: e.systemHint()
-          })
-        }
-      }
-    } catch (err) {
-      console.error('[tools] extension schemas', e.id, err)
-    }
-  }
-  const builtins = toolsEnabled
-    ? schemas(
-        imageAvailable,
-        { projectActive: !!opts.projectId, allMemory: !!opts.allMemory },
-        opts.allTools
-      )
-    : []
-  const assistantRequiredTools = opts.assistantOnly
-    ? extSchemas.filter((schema) => {
-        const name = (schema as { function?: { name?: unknown } }).function?.name
-        return name === 'web_use' || name === 'computer_use'
-      })
-    : []
-  const otherExtSchemas = opts.assistantOnly
-    ? extSchemas.filter((schema) => !assistantRequiredTools.includes(schema))
-    : extSchemas
-  const rawTools = [...assistantRequiredTools, ...builtins, ...otherExtSchemas]
-  // Keep the tool payload within the model's context. llama-server inlines every
-  // tool schema into the prompt AND compiles it to a grammar, so a big connector
-  // set can blow past the context window and 400 the whole turn. Budget to a
-  // fraction of the effective context (leaving room for system + history +
-  // answer); prune verbose schemas first, drop connector tools only if needed.
-  // Route every enabled built-in and connector through local MiniLM. The older
-  // path ranked connectors only, and only when there were at least two of them;
-  // all built-ins were sent on every turn. Selection now runs for any non-empty
-  // catalog and sends only the tools pertinent to this message. If MiniLM cannot
-  // load, the lexical fallback fails closed to direct matches.
-  let relevantTools: unknown[] = []
-  if (rawTools.length > 0) {
-    const { selectRelevantTools } = await import('./tools/tool-ranking')
-    const lexicalTools = selectRelevantTools(query, rawTools)
-    const namedTool = rawTools.some((schema) => {
-      const name = (schema as { function?: { name?: unknown } }).function?.name
-      return typeof name === 'string' && query.toLowerCase().includes(name.toLowerCase())
-    })
-    // An explicit tool name needs no semantic ranking. If image generation is unavailable,
-    // an explicit generate_image request cannot be routed to that missing tool.
-    const unavailableImageTool = !imageAvailable && /\bgenerate_image\b/i.test(query)
-    if (!namedTool && !unavailableImageTool) {
-      try {
-        const { embeddings } = await import('./embeddings')
-        const { contextualToolRoutingText, selectRelevantToolsSemantic } =
-          await import('./tools/tool-embedding-ranking')
-        const routingText = contextualToolRoutingText(query, history)
-        relevantTools = await selectRelevantToolsSemantic(routingText, rawTools, {
-          embed: (t) => embeddings.generateEmbedding(t)
-        })
-      } catch {
-        // The direct-match selection below remains available offline.
-      }
-    }
-    // A semantic score must not hide a direct name or description match. This
-    // also keeps explicit tool requests available when a new embedding model
-    // ranks an unrelated schema first.
-    relevantTools = [
-      ...lexicalTools,
-      ...relevantTools.filter((tool) => !lexicalTools.includes(tool))
-    ]
-  }
-  const scopeToolName = opts.projectId
-    ? 'search_knowledge_base'
-    : opts.allMemory
-      ? 'search_memory'
-      : null
-  const explicitlyNamedTools = rawTools.filter((schema) => {
-    const name = (schema as { function?: { name?: unknown } }).function?.name
-    return (
-      typeof name === 'string' &&
-      (name === scopeToolName || query.toLowerCase().includes(name.toLowerCase()))
-    )
-  })
-  if (explicitlyNamedTools.length) {
-    const explicitNames = new Set(explicitlyNamedTools)
-    relevantTools = [
-      ...explicitlyNamedTools,
-      ...relevantTools.filter((schema) => !explicitNames.has(schema))
-    ]
-  }
-  // Acting is offered whenever the assistant may act, and the model decides from the prompt
-  // (answer questions; act when asked to do something on a website or in an app). Routing by the
-  // words of the message must not hide it: "can you check this site?" shares no words with it.
-  if (assistantRequiredTools.length) {
-    const acting = new Set(assistantRequiredTools)
-    relevantTools = [...assistantRequiredTools, ...relevantTools.filter((t) => !acting.has(t))]
-  }
-  if (!/\bbrave\b/i.test(query)) {
-    const hasPrimarySearch = relevantTools.some(
-      (schema) => (schema as { function?: { name?: unknown } }).function?.name === 'web_search'
-    )
-    if (hasPrimarySearch) {
-      relevantTools = relevantTools.filter(
-        (schema) => (schema as { function?: { name?: unknown } }).function?.name !== 'brave_search'
-      )
-    }
-  }
-  const relevantNames = new Set(
-    relevantTools.flatMap((schema) => {
-      const name = (schema as { function?: { name?: unknown } }).function?.name
-      return typeof name === 'string' ? [name] : []
-    })
+  const { tools, protectedToolCount, hints, exts } = await selectChatTools(
+    query,
+    { ...opts, imageAvailable },
+    history
   )
-  hints.push(
-    ...extensionHints
-      .filter((hint) => [...hint.names].some((name) => relevantNames.has(name)))
-      .map((hint) => hint.text)
-  )
-  const protectedToolCount =
-    explicitlyNamedTools.length +
-    assistantRequiredTools.filter((t) => !explicitlyNamedTools.includes(t)).length
-  const { budgetTools, MAX_TOOL_TOKENS } = await import('./tools/tool-budget')
   const ctx = llm.effectiveContextSize()
-  // Cap tool tokens in ABSOLUTE terms too, not just as a fraction of context:
-  // llama-server re-processes the entire tool prompt every tool round (gemma-4's
-  // sliding-window attention defeats the prompt cache), so on CPU-only inference a
-  // large tool payload dominates latency. ~4k keeps a useful connector set while
-  // roughly halving per-round prompt cost vs the old 45%-of-a-big-context budget.
-  const toolBudget = Math.max(1024, Math.min(Math.floor(ctx * 0.4), MAX_TOOL_TOKENS))
-  const budgeted = budgetTools(relevantTools, toolBudget, protectedToolCount)
-  if (budgeted.pruned || budgeted.droppedCount) {
-    console.warn(
-      `[tools] context budget ${toolBudget} tok: pruned schemas${budgeted.droppedCount ? `, dropped ${budgeted.droppedCount} connector tool(s)` : ''} to fit (final ~${budgeted.estTokens} tok)`
-    )
-    if (budgeted.droppedCount)
-      hints.push(
-        `Note: ${budgeted.droppedCount} connector tool(s) were omitted this turn to fit the context window; ask the user to disable some connectors if a needed tool is missing.`
-      )
-  }
-  const tools = budgeted.tools
   if (tools.length) {
     const plannerUnavailable = await llm.toolPlannerPreflight()
     if (plannerUnavailable) {

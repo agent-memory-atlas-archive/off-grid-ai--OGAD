@@ -87,7 +87,12 @@ async function setup(
     // As the desktop lists them: connector tools always, its own tools only when it has them.
     listTools: async () =>
       (opts.features ?? PRO).tools
-        ? [{ name: 'notion_search' }, { name: 'mail_send' }, { name: 'web_use' }]
+        ? [
+            { name: 'notion_search' },
+            { name: 'mail_send' },
+            { name: 'web_use' },
+            { name: 'computer_use' }
+          ]
         : [{ name: 'notion_search' }],
     runTool: async (name, _args, _browser, tabId) => ({
       ok: true,
@@ -166,6 +171,26 @@ async function setup(
 }
 
 describe('pairing', () => {
+  it('refuses desktop control from the bridge with no tab metadata', async () => {
+    const pro = await setup()
+    await pro.pair()
+    expect(
+      (
+        await pro.call('device000001', 'tools.run', {
+          name: 'computer_use',
+          args: {}
+        })
+      ).body
+    ).toMatchObject({ error: 'tool_unavailable' })
+    for (const params of [{}, { task: 'computer_use' }]) {
+      const reply = await pro.call('device000001', 'tools.list', params)
+      expect((reply.body as { result: unknown[] }).result).not.toContainEqual({
+        name: 'computer_use'
+      })
+      expect((reply.body as { result: unknown[] }).result).toContainEqual({ name: 'web_use' })
+    }
+  })
+
   it('shows the user the code both sides compute, and stores the browser on approval', async () => {
     const s = await setup()
     const reply = await s.pair()

@@ -119,7 +119,12 @@ describe('the engine path', () => {
       'web_use',
       // A start tab written by the model is never kept.
       { goal: 'Check the order page', __offgridStartBrowserId: 'other', __offgridStartTabId: 5 },
-      { conversationId: 'browser:chrome-1', startTab: { browserId: 'chrome-1', tabId: 42 } }
+      {
+        origin: 'bridge',
+        acting: true,
+        conversationId: 'browser:chrome-1',
+        startTab: { browserId: 'chrome-1', tabId: 42 }
+      }
     )
     expect(result).toMatchObject({ status: 'pending', taskId: 'act_1' })
     expect(startTabFromActionArgs((port.proposed[0] as { args: unknown }).args)).toEqual({
@@ -129,10 +134,15 @@ describe('the engine path', () => {
     const computer = await extension.execute(
       'computer_use',
       { goal: 'Open Notes' },
-      { conversationId: 'browser:chrome-1', startTab: { browserId: 'chrome-1', tabId: 42 } }
+      {
+        origin: 'bridge',
+        acting: true,
+        conversationId: 'browser:chrome-1',
+        startTab: { browserId: 'chrome-1', tabId: 42 }
+      }
     )
     expect(computer).toMatchObject({ status: 'failed', authoritative: true })
-    expect(computer).toMatchObject({ text: expect.stringContaining('Use web_use for this task') })
+    expect(computer).toMatchObject({ text: 'Error: tool_unavailable' })
     expect(port.proposed).toHaveLength(1)
   })
 
