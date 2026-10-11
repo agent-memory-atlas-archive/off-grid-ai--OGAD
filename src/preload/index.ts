@@ -622,6 +622,16 @@ const offGridApi = {
 
   // Storage + download manager
   getStorageInfo: () => ipcRenderer.invoke('models:storage'),
+  chooseModelDirectory: () => ipcRenderer.invoke('models:choose-directory'),
+  restartForModelDirectory: () => ipcRenderer.invoke('models:restart-for-directory'),
+  getModelScanFolders: () => ipcRenderer.invoke('models:scan-folders'),
+  addModelScanFolder: () => ipcRenderer.invoke('models:add-scan-folder'),
+  removeModelScanFolder: (directory: string) => ipcRenderer.invoke('models:remove-scan-folder', directory),
+  onModelInventoryChanged: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('models:inventory-changed', listener)
+    return () => ipcRenderer.removeListener('models:inventory-changed', listener)
+  },
   deleteOrphans: () => ipcRenderer.invoke('models:delete-orphans'),
   listDownloads: () => ipcRenderer.invoke('models:downloads'),
   retryDownload: (modelId: string) => ipcRenderer.invoke('models:retry-download', modelId),

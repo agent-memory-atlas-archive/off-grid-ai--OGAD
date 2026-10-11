@@ -1,5 +1,7 @@
+import { Button } from '@offgrid/operator-ui/operator/button'
+import '@offgrid/operator-ui/styles.css'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { HardDrives, Trash, ArrowsClockwise, X, Broom } from '@phosphor-icons/react'
+import { HardDrives, Trash, ArrowsClockwise, X, Broom, FolderOpen } from '@phosphor-icons/react'
 import { cn } from '@renderer/lib/utils'
 import { modelKindLabel } from '@renderer/lib/model-kind-labels'
 import { companionDownloadLabel } from '@renderer/lib/download-label'
@@ -27,6 +29,7 @@ interface ModelDiskEntry {
 }
 interface StorageInfo {
   dir: string
+  unavailable?: string
   totalBytes: number
   freeBytes: number
   models: ModelDiskEntry[]
@@ -56,6 +59,10 @@ export function StoragePanel(): React.ReactElement {
   const [info, setInfo] = useState<StorageInfo | null>(null)
   const [downloads, setDownloads] = useState<DownloadEntry[]>([])
   const [busy, setBusy] = useState<string | null>(null)
+  const [directoryError, setDirectoryError] = useState<string | null>(null)
+  const [pendingDirectory, setPendingDirectory] = useState<string | null>(null)
+  const [movedFiles, setMovedFiles] = useState(false)
+  const [scanFolders, setScanFolders] = useState<string[]>([])
   const liveProgress = useRef(new Map<string, DownloadEntry>())
 
   const refresh = useCallback(async () => {
@@ -80,6 +87,10 @@ export function StoragePanel(): React.ReactElement {
 
   useEffect(() => {
     refresh()
+    api
+      .getModelScanFolders?.()
+      .then((folders: string[] | undefined) => setScanFolders(folders ?? []))
+      .catch(() => {})
     const t = setInterval(refresh, 3000)
     return () => {
       clearInterval(t)
@@ -172,6 +183,46 @@ export function StoragePanel(): React.ReactElement {
   const openModelSettings = (kind?: string): void => {
     openModelSettingsPanel(modelSettingsTabForKind(kind))
   }
+  const chooseDirectory = async (): Promise<void> => {
+    setBusy('directory')
+    setDirectoryError(null)
+    try {
+      const result = await api.chooseModelDirectory()
+      if (result.error) setDirectoryError(result.error)
+      else if (result.restartRequired && result.directory) {
+        setPendingDirectory(result.directory)
+        setMovedFiles(Boolean(result.moved))
+        if (result.warning) setDirectoryError(result.warning)
+      }
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : 'Cannot use this folder.')
+    } finally {
+      setBusy(null)
+    }
+  }
+  const addScanFolder = async (): Promise<void> => {
+    setBusy('scan')
+    setDirectoryError(null)
+    try {
+      const result = await api.addModelScanFolder()
+      if (result.error) setDirectoryError(result.error)
+      else if (result.folders) setScanFolders(result.folders)
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : 'Cannot read this folder.')
+    } finally {
+      setBusy(null)
+    }
+  }
+  const removeScanFolder = async (directory: string): Promise<void> => {
+    setBusy('scan')
+    try {
+      setScanFolders(await api.removeModelScanFolder(directory))
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : 'Cannot remove this folder.')
+    } finally {
+      setBusy(null)
+    }
+  }
   const active = downloads.filter((d) => d.status === 'downloading' || d.status === 'queued')
   const runningCount = active.filter((d) => d.status === 'downloading').length
   const queuedCount = active.filter((d) => d.status === 'queued').length
@@ -213,6 +264,105 @@ export function StoragePanel(): React.ReactElement {
             style={{ width: `${Math.min(100, Math.round(usedFrac * 100))}%` }}
           />
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 border-t border-neutral-800/40 px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-[10px] uppercase tracking-widest text-neutral-500">Model folder</div>
+          <div className="mt-1 break-all text-[11px] text-neutral-300" title={info?.dir}>
+            {info?.dir ?? 'Reading...'}
+          </div>
+          <div className="mt-1 text-[10px] text-neutral-500">
+            Downloads for all model types go here. Compatible chat and vision GGUF models from LM
+            Studio and Ollama also appear in Models. External files stay where they are.
+          </div>
+          {info?.unavailable && (
+            <div role="alert" className="mt-2 text-[11px] text-red-400">
+              {info.unavailable} Model downloads are paused.
+            </div>
+          )}
+          {pendingDirectory && (
+            <div className="mt-2 text-[11px] text-neutral-300">
+              New folder: <span className="break-all">{pendingDirectory}</span>. Restart to use it.
+              {movedFiles
+                ? 'Existing files were moved.'
+                : 'Existing files stay in the current folder.'}
+            </div>
+          )}
+          {directoryError && (
+            <div role="alert" className="mt-2 text-[11px] text-red-400">
+              {directoryError}
+            </div>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            type="button"
+            onClick={chooseDirectory}
+            disabled={busy === 'directory' || active.length > 0}
+            className="min-h-0 shadow-none flex items-center gap-1.5 rounded-md border border-neutral-700 px-2.5 py-1 text-[11px] text-neutral-300 transition-colors hover:border-green-500 hover:text-white focus-visible:outline focus-visible:outline-green-500 disabled:opacity-50"
+          >
+            <FolderOpen className="h-3.5 w-3.5" />{' '}
+            {busy === 'directory' ? 'Choosing...' : 'Choose folder'}
+          </Button>
+          {pendingDirectory && (
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
+              onClick={() => api.restartForModelDirectory()}
+              className="min-h-0 shadow-none rounded-md bg-green-500 px-2.5 py-1 text-[11px] text-neutral-950 transition-colors hover:bg-green-400 focus-visible:outline focus-visible:outline-green-500"
+            >
+              Restart now
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="border-t border-neutral-800/40 px-4 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[10px] uppercase tracking-widest text-neutral-500">
+              Other model folders
+            </div>
+            <div className="mt-1 text-[10px] text-neutral-500">
+              Do you keep chat or vision models in another folder? Add it to find compatible GGUF
+              files without moving them.
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            type="button"
+            onClick={addScanFolder}
+            disabled={busy === 'scan'}
+            className="min-h-0 shadow-none flex shrink-0 items-center gap-1.5 rounded-md border border-neutral-700 px-2.5 py-1 text-[11px] text-neutral-300 transition-colors hover:border-green-500 hover:text-white focus-visible:outline focus-visible:outline-green-500 disabled:opacity-50"
+          >
+            <FolderOpen className="h-3.5 w-3.5" /> Add folder
+          </Button>
+        </div>
+        {scanFolders.length > 0 && (
+          <div className="mt-2 space-y-1">
+            {scanFolders.map((directory) => (
+              <div key={directory} className="flex items-center gap-2 text-[11px] text-neutral-300">
+                <span className="min-w-0 flex-1 break-all">{directory}</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  type="button"
+                  onClick={() => removeScanFolder(directory)}
+                  disabled={busy === 'scan'}
+                  aria-label={`Remove ${directory}`}
+                  className="min-h-0 shadow-none rounded p-1 text-neutral-500 transition-colors hover:text-red-400 focus-visible:outline focus-visible:outline-green-500 disabled:opacity-50"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Active + interrupted downloads */}
@@ -388,15 +538,17 @@ export function StoragePanel(): React.ReactElement {
                               Settings
                             </button>
                           )}
-                          <button
-                            onClick={() => del(m.id, m.name)}
-                            disabled={busy === m.id || m.active}
-                            aria-label={`Delete ${m.name}`}
-                            title={m.active ? 'Deactivate before deleting' : 'Delete'}
-                            className="shrink-0 rounded p-0.5 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
-                          >
-                            <Trash className="h-3 w-3" />
-                          </button>
+                          {!m.id.startsWith('external:') && (
+                            <button
+                              onClick={() => del(m.id, m.name)}
+                              disabled={busy === m.id || m.active}
+                              aria-label={`Delete ${m.name}`}
+                              title={m.active ? 'Deactivate before deleting' : 'Delete'}
+                              className="shrink-0 rounded p-0.5 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
+                            >
+                              <Trash className="h-3 w-3" />
+                            </button>
+                          )}
                         </div>
                       )
                     })}

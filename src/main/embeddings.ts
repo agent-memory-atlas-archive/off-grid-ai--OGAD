@@ -2,7 +2,7 @@ import { beginRuntimeBackend, providerLabel } from './runtime-backends'
 import path from 'path'
 import { existsSync } from 'fs'
 import { Worker } from 'worker_threads'
-import { modelsDir } from './runtime-env'
+import { modelsDir, requireModelStorage } from './runtime-env'
 import { embedText, embeddingDevice, disposeEmbeddingModel } from './embeddings-core'
 import { getResidencyMode } from './runtime-residency'
 import { recordAIRequest, type AIRequestHandle } from './ai-request-log'
@@ -108,6 +108,7 @@ class EmbeddingService {
       },
       async (log) => {
         const run = (): Promise<number[]> => {
+          requireModelStorage()
           const entry = builtWorkerEntry()
           // No built worker means we are running from source. Embed here rather than failing: a failed
           // embedding silently demotes every search to the FTS fallback, which is a far worse outcome

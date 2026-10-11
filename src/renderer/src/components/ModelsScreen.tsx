@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { isDecisionModel, useTaskRoles } from '../lib/task-roles'
 import { AnimatePresence } from 'motion/react'
 import { Button } from '@offgrid/operator-ui/operator/button'
+import '@offgrid/operator-ui/styles.css'
 import {
   IconDownload,
   IconCircleCheck,
@@ -27,7 +28,7 @@ import { companionDownloadLabel } from '@renderer/lib/download-label'
 import { formatTransferSpeed } from '@offgrid/sync'
 import { projectProgress } from '@offgrid/ui'
 import { downloadTimeRemaining } from '@renderer/lib/download-progress'
-import { formatParams } from '@renderer/lib/model-summary'
+import { formatParams, modelFileGuidance } from '@renderer/lib/model-summary'
 import {
   modelSettingsTabForKind,
   openModelSettingsPanel,
@@ -149,7 +150,7 @@ interface DownloadableModelFile {
   fileName: string
   quant: string
   sizeBytes: number
-  mmproj?: { fileName: string }
+  mmproj?: { fileName: string; sizeBytes?: number }
 }
 interface ModelEntry {
   id: string
@@ -414,6 +415,7 @@ export function ModelsScreen({
   const [variants, setVariants] = useState<DownloadableModelFile[]>([])
   const [variantLoading, setVariantLoading] = useState(false)
   const [variantError, setVariantError] = useState<string | null>(null)
+  const variantGuidance = useMemo(() => modelFileGuidance(variants, ramGb), [variants, ramGb])
   const [detailFiles, setDetailFiles] = useState<DownloadableModelFile[]>([])
   const [detailFilesLoading, setDetailFilesLoading] = useState(false)
   const [detailFilesError, setDetailFilesError] = useState<string | null>(null)
@@ -427,6 +429,15 @@ export function ModelsScreen({
     setDetailFilesError(null)
     setDetailFilesLoading(true)
     setDetail(m)
+  }, [])
+
+  useEffect(() => {
+    const unsubscribe = api.onModelInventoryChanged?.(() => {
+      api.getModelCatalog?.().then((catalog: { models: ModelEntry[] }) => setModels(catalog.models))
+      api.getInstalledModels?.().then(setInstalled)
+      refreshVision()
+    })
+    return typeof unsubscribe === 'function' ? unsubscribe : undefined
   }, [])
 
   const closeDetail = useCallback(() => {
@@ -1052,7 +1063,7 @@ export function ModelsScreen({
                   Settings
                 </button>
               )}
-              {!isRemote && (
+              {!isRemote && !m.id.startsWith('external:') && (
                 <button
                   onClick={() => removeModel(m.id, m.name)}
                   disabled={deleting === m.id || active}
@@ -1091,7 +1102,7 @@ export function ModelsScreen({
             }
             className="flex items-center gap-1 rounded border border-amber-400/50 px-2 py-1 text-[10px] text-amber-300 transition-all duration-150 hover:border-amber-400 hover:bg-amber-400/10 active:scale-95"
           >
-            <IconDownload className="h-3 w-3" /> Repair
+            <IconDownload className="h-3 w-3" /> {mtpMissing ? 'Add MTP' : 'Repair'}
           </button>
         )}
 
@@ -1210,6 +1221,7 @@ export function ModelsScreen({
               <Button
                 size="sm"
                 variant={mtpDownloads ? 'secondary' : 'outline'}
+                className="min-h-0 rounded px-2 py-1 text-[10px] leading-normal shadow-none"
                 aria-pressed={mtpDownloads}
                 onClick={() => {
                   setMtpDownloads((enabled) => !enabled)
@@ -1645,7 +1657,7 @@ export function ModelsScreen({
                       >
                         Use this model
                       </button>
-                      <button
+                      {!m.id.startsWith('external:') && <button
                         onClick={() => {
                           void removeModel(m.id, m.name)
                           closeDetail()
@@ -1653,7 +1665,7 @@ export function ModelsScreen({
                         className="rounded border border-neutral-800 px-3 py-1.5 text-xs text-neutral-500 transition-all duration-150 hover:border-red-500/60 hover:text-red-400 active:scale-95"
                       >
                         Delete
-                      </button>
+                      </button>}
                     </>
                   ) : downloading ? (
                     <span className="text-xs text-neutral-400">
@@ -1719,32 +1731,71 @@ export function ModelsScreen({
                 </p>
               )}
               <div className="space-y-2">
-                {variants.map((variant) => (
-                  <button
-                    key={variant.fileName}
-                    onClick={() => {
-                      setChosenVariants((current) => ({
-                        ...current,
-                        [variantModel.id]: variant.fileName
-                      }))
-                      download(variantModel.id, variant.fileName)
-                      setVariantModel(null)
-                    }}
-                    className="flex w-full flex-col gap-1 rounded border border-neutral-800 px-3 py-2 text-left transition-colors hover:border-green-500 hover:bg-green-500/5"
-                  >
-                    <span className="break-all text-[11px] text-neutral-200">
-                      {variant.fileName}
-                    </span>
-                    <span className="text-[10px] text-neutral-400">
-                      {formatSize(variant.sizeBytes)}
-                    </span>
-                    {variant.mmproj && (
-                      <span className="break-all text-[9px] text-neutral-500">
-                        Includes {variant.mmproj.fileName}
+                {variants.length > 0 && (
+                  <p className="text-[10px] text-neutral-400">
+                    Fastest: requires a benchmark on your device. Highest precision does not
+                    guarantee correct answers. Balance uses{' '}
+                    {ramGb ? `${ramGb} GB system RAM` : 'system RAM (unknown)'}; GPU memory and
+                    context size can change the fit.
+                  </p>
+                )}
+                {variants.map((variant) => {
+                  const guidance = variantGuidance.get(variant.fileName)
+                  return (
+                    <Button
+                      variant="outline"
+                      key={variant.fileName}
+                      onClick={() => {
+                        setChosenVariants((current) => ({
+                          ...current,
+                          [variantModel.id]: variant.fileName
+                        }))
+                        download(variantModel.id, variant.fileName)
+                        setVariantModel(null)
+                      }}
+                      className="h-auto w-full flex-col items-start gap-1 whitespace-normal rounded px-3 py-2 text-left leading-normal shadow-none"
+                    >
+                      <span className="break-all text-[11px] text-neutral-200">
+                        {variant.fileName}
                       </span>
-                    )}
-                  </button>
-                ))}
+                      <span className="text-[10px] text-neutral-400">
+                        {formatSize(variant.sizeBytes)}
+                      </span>
+                      {guidance && (
+                        <>
+                          {guidance.labels.length > 0 && (
+                            <span className="text-[10px] uppercase tracking-wide text-neutral-200">
+                              {guidance.labels.join(' / ')}
+                            </span>
+                          )}
+                          <span className="text-[10px] text-neutral-400">
+                            {guidance.quant} /{' '}
+                            {guidance.fit === 'ok'
+                              ? 'RAM headroom (estimate)'
+                              : guidance.fit === 'tight'
+                                ? 'Limited RAM headroom'
+                                : guidance.fit === 'risky'
+                                  ? 'High RAM use: may be slow or fail to load'
+                                  : 'RAM fit unknown'}
+                          </span>
+                          {guidance.split && (
+                            <span className="text-[10px] text-neutral-400">
+                              Requires all parts /{' '}
+                              {guidance.weightBytes !== null
+                                ? `${formatSize(guidance.weightBytes)} total weights`
+                                : 'Total weight size unknown'}
+                            </span>
+                          )}
+                        </>
+                      )}
+                      {variant.mmproj && (
+                        <span className="break-all text-[9px] text-neutral-500">
+                          Includes {variant.mmproj.fileName}
+                        </span>
+                      )}
+                    </Button>
+                  )
+                })}
               </div>
             </div>
           </SidePanel>

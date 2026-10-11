@@ -343,7 +343,7 @@ describe('assistant reply speech integration (#105)', () => {
     await user.click(await screen.findByRole('menuitem', { name: 'Speak' }))
 
     expect((await screen.findByRole('alert')).textContent).toMatch(
-      /speech could not be generated.*text-to-speech is installed in settings/i
+      /speech runtime exited with code 23\s+local speech model is unavailable/i
     )
     expect(audios).toHaveLength(0)
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Message actions' }), {
@@ -402,7 +402,7 @@ describe('assistant reply speech integration (#105)', () => {
       { timeout: 10_000 }
     )
     expect((await screen.findByRole('alert')).textContent).toMatch(
-      /speech could not be generated.*text-to-speech is installed in settings/i
+      /speech runtime exited with code 23\s+local speech model is unavailable/i
     )
     expect(trackStop).toHaveBeenCalledOnce()
 

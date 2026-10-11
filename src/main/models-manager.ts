@@ -72,7 +72,9 @@ import { getComputerUseSettings } from './computer-use-settings'
 import { getWebUseSettings } from './web-use-settings'
 import { clearTaskRolesFor, setTaskRoleModel } from './task-role-models'
 import { strategyTaskRoles } from '../shared/computer-use-settings'
-import { binRoots } from './runtime-env'
+import { binRoots, dataDir, modelStorageError } from './runtime-env'
+import { discoverExternalModels } from './external-models'
+import { readModelScanFolders } from './model-storage-choice'
 
 // Desktop ships the Prism llama.cpp engine required by these packed weights.
 // Keep this entry here: the shared catalog also feeds Mobile, whose llama.rn
@@ -418,6 +420,7 @@ function reusableKevCheckpointDir(modelsDirectory: string): string | null {
 }
 
 function modelFilePath(dir: string, name: string): string {
+  if (path.isAbsolute(name)) return name
   const managed = path.join(dir, name)
   if (fs.existsSync(managed)) return managed
   if (name.startsWith(KEV_BASE_PREFIX)) {
@@ -738,6 +741,8 @@ export async function downloadModel(
   })
 
   const dir = llm.getModelsDir()
+  const storageError = modelStorageError()
+  if (storageError) return publishRefusal(modelId, storageError, onProgress)
   fs.mkdirSync(dir, { recursive: true })
   ensureRegistryLoaded()
   // Re-entrancy guard (before any status emit / queue registration): a second
@@ -1078,6 +1083,7 @@ function deleteTransferredModel(context: TransferredDeletionContext): DeleteMode
 
 /** Delete a model's files from disk. Clears it as active if it was selected. */
 export async function deleteModel(modelId: string): Promise<DeleteModelResult> {
+  if (modelId.startsWith('external:')) return { success: false, error: 'External models are read only.' }
   const dir = llm.getModelsDir()
   // Imported local model: remove its files + registry entry, clear if active.
   if (modelId.startsWith('local:')) {
@@ -1188,7 +1194,7 @@ async function setActiveLlamaModel(
     llm.restoreSelectedModel()
   }
   // Imported local model: resolve from the local registry (not the catalog).
-  if (modelId.startsWith('local:')) {
+  if (modelId.startsWith('local:') || modelId.startsWith('external:')) {
     const lm = getLocalModels().find((m) => m.id === modelId)
     if (!lm) return { success: false, error: 'unknown local model' }
     if (!acceptsKind(lm.kind)) {
@@ -1423,7 +1429,7 @@ export async function activateModel(
   }
   let kind: string | undefined
   let requestedModal: Modality | null = null
-  if (modelId.startsWith('local:')) {
+  if (modelId.startsWith('local:') || modelId.startsWith('external:')) {
     kind = getLocalModels().find((m) => m.id === modelId)?.kind
   } else {
     const { modelSupportsKind, resolveHuggingFaceModel } = await import('@offgrid/models')
@@ -1547,16 +1553,20 @@ function localRegistryFile(dir = llm.getModelsDir()): string {
 }
 
 export function getLocalModels(dir = llm.getModelsDir()): LocalModel[] {
+  let managed: LocalModel[] = []
   try {
     const arr = JSON.parse(fs.readFileSync(localRegistryFile(dir), 'utf-8'))
-    return Array.isArray(arr) ? (arr as LocalModel[]) : []
+    managed = Array.isArray(arr) ? (arr as LocalModel[]) : []
   } catch {
-    return []
+    /* no imported models */
   }
+  return dir === llm.getModelsDir()
+    ? [...managed, ...discoverExternalModels(undefined, undefined, dir, readModelScanFolders(dataDir()))]
+    : managed
 }
 function saveLocalModels(list: LocalModel[], dir = llm.getModelsDir()): void {
   try {
-    fs.writeFileSync(localRegistryFile(dir), JSON.stringify(list, null, 2))
+    fs.writeFileSync(localRegistryFile(dir), JSON.stringify(list.filter((model) => !model.id.startsWith('external:')), null, 2))
   } catch {
     /* best effort */
   }
@@ -1754,6 +1764,8 @@ export async function importLocalModel(
     return { success: false, error: 'File is not a valid GGUF model (corrupt or wrong format)' }
 
   const dir = llm.getModelsDir()
+  const storageError = modelStorageError()
+  if (storageError) return { success: false, error: storageError }
   fs.mkdirSync(dir, { recursive: true })
   const fileName = path.basename(srcPath)
   const dest = path.join(dir, fileName)
@@ -1817,6 +1829,7 @@ export interface ModelDiskEntry {
 }
 export interface StorageInfo {
   dir: string
+  unavailable?: string
   totalBytes: number // all model files (incl. orphans + .part) in the models dir
   freeBytes: number // free space on the volume
   models: ModelDiskEntry[]
@@ -1827,6 +1840,8 @@ export interface StorageInfo {
  *  (gguf/.part in the models dir that no catalog entry or active selection claims). */
 export async function getStorageInfo(): Promise<StorageInfo> {
   const dir = llm.getModelsDir()
+  const unavailable = modelStorageError()
+  if (unavailable) return { dir, unavailable, totalBytes: 0, freeBytes: 0, models: [], orphans: [] }
   const CATALOG = await desktopCatalog()
   const catalog = CATALOG as unknown as CatalogEntry[]
   const reconciledDownloaded = reconcileDownloadedModelRegistry(dir, catalog)
