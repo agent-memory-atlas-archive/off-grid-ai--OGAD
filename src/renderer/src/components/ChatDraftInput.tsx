@@ -28,6 +28,8 @@ interface ChatDraftInputProps {
   attachmentPending: boolean
   onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void
   onSubmit: () => void
+  onSendNow?: () => void
+  busy?: boolean
 }
 
 function useDraft(store: ChatDraftStore): string {
@@ -43,7 +45,17 @@ function matchingSkills(value: string, skills: readonly SkillOption[]): readonly
 
 export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputProps>(
   function DraftInput(
-    { store, skills, mode, activeProjectName, attachmentPending, onPaste, onSubmit },
+    {
+      store,
+      skills,
+      mode,
+      activeProjectName,
+      attachmentPending,
+      onPaste,
+      onSubmit,
+      onSendNow,
+      busy
+    },
     forwardedRef
   ): React.JSX.Element {
     const value = useDraft(store)
@@ -67,7 +79,8 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
     }
 
     const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-      if (matches.length > 0) {
+      if (event.nativeEvent.isComposing || event.keyCode === 229) return
+      if (matches.length > 0 && !event.metaKey && !event.ctrlKey) {
         const query = value.slice(value.lastIndexOf('/') + 1).toLowerCase()
         const exact = skills.some((skill) => skill.name.toLowerCase() === query)
         if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey && !exact)) {
@@ -78,7 +91,10 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
       }
       if (event.key !== 'Enter' || event.shiftKey) return
       event.preventDefault()
-      if (!attachmentPending) onSubmit()
+      if (!attachmentPending) {
+        if ((event.metaKey || event.ctrlKey) && onSendNow) onSendNow()
+        else onSubmit()
+      }
     }
 
     return (
@@ -113,6 +129,11 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
           onKeyDown={handleKeyDown}
           onPaste={onPaste}
           rows={1}
+          aria-description={
+            busy
+              ? 'Enter to queue. Command or Control plus Enter to send now. Shift plus Enter for a new line.'
+              : 'Enter to send. Shift plus Enter for a new line.'
+          }
           placeholder={
             mode === 'image'
               ? 'Describe an image to generate…'
@@ -122,6 +143,11 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
           }
           className="max-h-52 w-full resize-none overflow-y-auto bg-transparent px-3.5 pt-3 text-sm text-foreground placeholder:text-muted-foreground outline-none"
         />
+        {busy ? (
+          <p className="px-3.5 pt-1 text-[10px] text-muted-foreground">
+            Enter to queue · ⌘/Ctrl+Enter to send now
+          </p>
+        ) : null}
       </>
     )
   }

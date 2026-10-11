@@ -803,7 +803,6 @@ export function MemoryChat({
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const voiceMountedRef = useRef(true)
   const speechRequestRef = useRef(0)
-  const pendingVariantsRef = useRef<string[] | null>(null) // prior answers to keep when regenerating
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
@@ -1444,6 +1443,10 @@ export function MemoryChat({
     override?: string,
     opts?: {
       regen?: boolean
+      priorVariants?: string[]
+      replacementMessageId?: string
+      history?: ChatMessage[]
+      sendNow?: boolean
       voiceClip?: { url: string; duration: number; path?: string }
       atts?: Attachment[]
       conversationId?: string
@@ -1492,6 +1495,19 @@ export function MemoryChat({
     // Don't block the user — if a generation is in flight, queue this message and
     // let them keep typing/sending. The queue drains in order when each finishes.
     const targetConv = opts?.conversationId ?? activeConversationId
+    if (!regen && shouldQueue(targetConv, generatingRef.current)) {
+      const item = { text: typed, atts, assistantEnabled: assistantForTurn }
+      queuedRef.current = enqueue(queuedRef.current, targetConv as string, item, opts?.sendNow)
+      setQueuedByConv({ ...queuedRef.current })
+      if (isInput) {
+        draftStore.set('')
+        setAttachments([])
+      }
+      if (opts?.sendNow) {
+        await stopGeneration(targetConv, guidanceTaskForJourney(getTaskSessionState().tasks, targetConv), true)
+      }
+      return
+    }
     // A live operator task owns this journey until it finishes. New Chat input is
     // guidance for that task, not a second memory/model turn running beside it.
     if (!regen && targetConv && !opts?.imageRequest) {
@@ -1531,16 +1547,6 @@ export function MemoryChat({
           return
         }
       }
-    }
-    if (shouldQueue(targetConv, generatingRef.current)) {
-      const item = { text: typed, atts, assistantEnabled: assistantForTurn }
-      queuedRef.current = enqueue(queuedRef.current, targetConv as string, item)
-      setQueuedByConv({ ...queuedRef.current })
-      if (isInput) {
-        draftStore.set('')
-        setAttachments([])
-      }
-      return
     }
     if (isInput) setAttachments([])
 
@@ -1623,9 +1629,10 @@ export function MemoryChat({
         }
       : undefined
 
+    const userMessageId = crypto.randomUUID()
     if (!regen) {
       const userMessage: ChatMessage = {
-        id: crypto.randomUUID(),
+        id: userMessageId,
         role: 'user',
         createdAt: Date.now(),
         content: trimmed,
@@ -1682,12 +1689,14 @@ export function MemoryChat({
           ...(initAttachment ? [initAttachment] : []),
           ...(voiceAttachment ? [voiceAttachment] : [])
         ]
-        await window.api.addRagMessage(
+        const stored = await window.api.addRagMessage(
           convId,
           'user',
           trimmed,
           persisted.length ? { attachments: persisted } : undefined
         )
+        setConvMessages(convId, (previous) => previous.map((message) =>
+          message.id === userMessageId ? { ...message, id: stored.uuid } : message))
       }
     } catch (e) {
       console.error('Failed to persist user message:', e)
@@ -1867,7 +1876,7 @@ export function MemoryChat({
       // active tab's `messages`) — a drained-queue or background send is bound to
       // `convId`, so its history must come from that conversation (D8).
       const fullHistory = buildSendHistory(
-        messagesByConv[convId] ?? EMPTY_MSGS,
+        opts?.history ?? messagesByConv[convId] ?? EMPTY_MSGS,
         !!regen,
         trimmed,
         20,
@@ -1878,16 +1887,19 @@ export function MemoryChat({
       // a streamId placeholder fills in live - thinking, then each tool-call activity
       // step, then the answer - and the stop button aborts it via rag:cancel.
       if (cancelledRef.current.has(convId)) return
-      const toolStreamId = `a-${Date.now()}`
+      const toolStreamId = `a-${crypto.randomUUID()}`
       activeStreamId = toolStreamId
       streamConvRef.current.set(toolStreamId, convId!)
       const toolStreamMessage: ChatMessage = {
         id: toolStreamId,
+        replacementMessageId: opts?.replacementMessageId,
         role: 'assistant',
         content: '',
         reasoning: '',
         reasoningRequested: thinkingEnabled,
-        streaming: true
+        streaming: true,
+        variants: opts?.priorVariants ? [...opts.priorVariants, ''] : undefined,
+        variantIndex: opts?.priorVariants?.length
       }
       seedStreamViewMessage(toolStreamMessage)
       setConvMessages(convId, (prev) => [...prev, toolStreamMessage])
@@ -1997,8 +2009,7 @@ export function MemoryChat({
         return
       }
       const answer = tr?.answer || 'No response returned.'
-      const priorVariants = pendingVariantsRef.current
-      pendingVariantsRef.current = null
+      const priorVariants = opts?.priorVariants
       const allVariants = priorVariants ? [...priorVariants, answer] : undefined
       let imageRequests = tr?.imageRequests ?? []
       if (imageRequests.length === 0 && tr?.imageRequest?.prompt) {
@@ -2056,7 +2067,8 @@ export function MemoryChat({
         reasoning: toolReasoning,
         timeline: toolTimeline,
         metrics: tr?.metrics,
-        cutoff: tr?.cutoff
+        cutoff: tr?.cutoff,
+        variants: allVariants
       })
       const artifact = parseArtifact(answer)
       if (artifact) {
@@ -2353,18 +2365,17 @@ export function MemoryChat({
         return
       }
       try {
-        const stored = await window.api.addRagMessage(
-          convId,
-          'assistant',
-          answer,
-          toolCtxWithReasoning
-        )
+        const stored = opts?.replacementMessageId
+          ? await window.api.updateRagMessage(convId, opts.replacementMessageId, answer, toolCtxWithReasoning)
+          : await window.api.addRagMessage(convId, 'assistant', answer, toolCtxWithReasoning)
+        if (!stored) throw new Error('Saved response was not found')
+        const storedId = stored === true ? opts!.replacementMessageId! : stored.uuid
         setConvMessages(convId, (previous) =>
           previous.map((message) =>
-            message.id === toolStreamId ? { ...message, id: stored.uuid } : message
+            message.id === toolStreamId ? { ...message, id: storedId, replacementMessageId: undefined } : message
           )
         )
-        if (voiceMode) setAutoPlayId(stored.uuid)
+        if (voiceMode) setAutoPlayId(storedId)
       } catch {
         /* ignore */
         if (voiceMode) setAutoPlayId(toolStreamId)
@@ -2394,6 +2405,8 @@ export function MemoryChat({
               ? {
                   ...m,
                   content: errorContent,
+                  variants: opts?.priorVariants ? [...opts.priorVariants, errorContent] : undefined,
+                  variantIndex: opts?.priorVariants?.length,
                   reasoning: failedReasoning,
                   timeline: failedTimeline,
                   toolCalls: failedToolCalls,
@@ -2405,7 +2418,14 @@ export function MemoryChat({
         return [...prev, { id: `a-${Date.now()}`, role: 'assistant', content: errorContent }]
       })
       try {
-        await window.api.addRagMessage(convId, 'assistant', errorContent)
+        const context = buildAssistantContext(undefined, {
+          variants: opts?.priorVariants ? [...opts.priorVariants, errorContent] : undefined
+        })
+        const stored = opts?.replacementMessageId
+          ? await window.api.updateRagMessage(convId, opts.replacementMessageId, errorContent, context)
+          : await window.api.addRagMessage(convId, 'assistant', errorContent, context)
+        if (stored && sid) setConvMessages(convId, (previous) => previous.map((message) =>
+          message.id === sid ? { ...message, id: stored === true ? opts!.replacementMessageId! : stored.uuid, replacementMessageId: undefined } : message))
       } catch {
         /* ignore */
       }
@@ -2432,7 +2452,7 @@ export function MemoryChat({
     setQueuedByConv({ ...next })
     if (item === undefined) return
     setTimeout(() => {
-      void sendMessage(item.text || ' ', {
+      void sendMessageRef.current(item.text || ' ', {
         atts: item.atts,
         conversationId: convId,
         assistantEnabled: item.assistantEnabled
@@ -2548,7 +2568,7 @@ export function MemoryChat({
     ): Promise<void> => {
       if (!streamConvRef.current.has(streamId)) return
       streamConvRef.current.delete(streamId)
-      const current = (messagesByConv[convId] ?? []).find((message) => message.id === streamId)
+      const current = (messagesByConvRef.current[convId] ?? []).find((message) => message.id === streamId)
       const reasoning = reasoningByStream.current[streamId]?.trim() || undefined
       const timeline = timelineByStream.current[streamId] ?? current?.timeline
       const toolCalls =
@@ -2561,6 +2581,7 @@ export function MemoryChat({
       delete answerByStream.current[streamId]
 
       const answer = (settled?.answer ?? streamed).trim()
+      const variants = current?.variants ? [...current.variants.slice(0, -1), answer] : undefined
 
       setConvMessages(convId, (prev) =>
         prev.map((m) =>
@@ -2568,6 +2589,8 @@ export function MemoryChat({
             ? {
                 ...m,
                 content: answer,
+                variants,
+                variantIndex: variants ? variants.length - 1 : undefined,
                 reasoning,
                 timeline,
                 context: settled?.context ?? m.context,
@@ -2582,24 +2605,17 @@ export function MemoryChat({
         )
       )
       try {
-        await window.api.addRagMessage(
-          convId,
-          'assistant',
-          answer,
-          buildAssistantContext(
-            {
-              ...(settled?.persistContext ?? settled?.context),
-              ...(toolCalls?.length ? { toolCalls } : {}),
-              ...(toolsOffered?.length ? { toolsOffered } : {}),
-              status: 'cancelled'
-            },
-            {
-              reasoning,
-              timeline,
-              cutoff: settled?.cutoff
-            }
-          )
-        )
+        const context = buildAssistantContext({
+          ...(settled?.persistContext ?? settled?.context),
+          ...(toolCalls?.length ? { toolCalls } : {}),
+          ...(toolsOffered?.length ? { toolsOffered } : {}),
+          status: 'cancelled'
+        }, { reasoning, timeline, cutoff: settled?.cutoff, variants })
+        const savedId = current?.replacementMessageId ?? streamId
+        const updated = await window.api.updateRagMessage(convId, savedId, answer, context)
+        const storedId = updated ? savedId : (await window.api.addRagMessage(convId, 'assistant', answer, context)).uuid
+        setConvMessages(convId, (previous) => previous.map((message) =>
+          message.id === streamId ? { ...message, id: storedId, context, replacementMessageId: undefined } : message))
       } catch (e) {
         console.error('Failed to persist stopped assistant message:', e)
       }
@@ -2610,7 +2626,8 @@ export function MemoryChat({
   const stopGeneration = useCallback(
     async (
       cid: string | null,
-      task: Pick<TaskSession, 'taskId' | 'journeyId' | 'kind'> | null
+      task: Pick<TaskSession, 'taskId' | 'journeyId' | 'kind'> | null,
+      preserveQueue = false
     ): Promise<void> => {
       const convId = cid ?? activeConversationId
       if (!convId) return
@@ -2636,11 +2653,11 @@ export function MemoryChat({
         window.api.cancelRag(streamingId)
         await finalizeStoppedTurn(convId, streamingId)
       }
-      if (queuedRef.current[convId]?.length) {
+      if (!preserveQueue && queuedRef.current[convId]?.length) {
         queuedRef.current = clearQueue(queuedRef.current, convId)
         setQueuedByConv({ ...queuedRef.current })
       }
-      markGenerating(convId, false)
+      if (!preserveQueue) markGenerating(convId, false)
       // Cancel + clear the image job ONLY if THIS conversation owns it, so stopping
       // one conversation never kills another's in-flight image (D9). imgProgress is a
       // shared stream buffer — clear it too when the owner stops.
@@ -3028,35 +3045,45 @@ export function MemoryChat({
       if (activeConversationId && generatingRef.current.has(activeConversationId)) return
       const idx = messages.findIndex((m) => m.id === messageId)
       if (idx < 0) return
-      // Regenerating an assistant answer keeps prior answers as navigable variants.
-      const target = messages[idx]! // idx >= 0 checked above
-      if (target.role === 'assistant' && target.content.trim()) {
-        pendingVariantsRef.current =
-          target.variants && target.variants.length ? target.variants : [target.content]
-      }
       // Walk back to the user turn that produced this answer.
       for (let i = idx; i >= 0; i--) {
         const mi = messages[i]! // 0 <= i <= idx
         if (mi.role === 'user') {
           const content = mi.content
+          const priorAnswer = messages.slice(i + 1).find((message) => message.role === 'assistant' && !message.notice)
+          const priorVariants = priorAnswer?.variants ?? (priorAnswer?.content ? [priorAnswer.content] : undefined)
           const replacedTaskIds = taskReferencesInMessages(messages.slice(i + 1))
-          // Drop everything after that user turn (the old answer) and re-run in
-          // place — no new user bubble. Also prune the persisted rows so reopening
-          // the chat doesn't show old answers stacked.
+          const cid = activeConversationId
+          if (!cid) return
+          markGenerating(cid, true)
+          // Keep the prior answer in storage until its replacement is saved.
+          // Restarting during generation must not lose response versions.
           void (async () => {
             // Resend replaces this turn immediately. Do this before stopping its
             // operator task, because that stop can publish a terminal preview while
             // the main process is still removing the old durable answer.
             setRemoteWorkPreview(null)
             setMessages((prev) => prev.slice(0, i + 1))
-            await stopLiveWebUseForConversation(activeConversationId)
-            if (activeConversationId)
-              await window.api.truncateRagMessages(activeConversationId, i + 1)
-            if (replacedTaskIds.length) await window.api.tasks?.remove?.(replacedTaskIds)
+            try {
+              await stopLiveWebUseForConversation(cid)
+              await window.api.truncateRagMessages(cid, priorAnswer ? messages.indexOf(priorAnswer) + 1 : i + 1)
+              if (replacedTaskIds.length) await window.api.tasks?.remove?.(replacedTaskIds)
+            } catch (error) {
+              console.error('Failed to prepare the replacement response:', error)
+              markGenerating(cid, false)
+              await refreshConversationMessages(cid)
+              drainQueue(cid)
+              return
+            }
             // The turn's own attachments, not the composer's - the composer was cleared when this
             // turn was first sent, so regenerating without them re-asks the question WITHOUT its image.
             try {
-              await sendMessage(content, { regen: true, atts: attachmentsOf(mi) })
+              await sendMessage(content, {
+                regen: true, atts: attachmentsOf(mi), priorVariants,
+                replacementMessageId: priorAnswer?.id,
+                conversationId: cid,
+                history: messages.slice(0, i + 1)
+              })
             } finally {
               // A stopped task can publish its terminal state while the replacement starts.
               // Delete the same known task ids again so that late terminal write cannot restore them.
@@ -3074,19 +3101,22 @@ export function MemoryChat({
   const saveEdit = (id: string, editedText: string): void => {
     const text = editedText.trim()
     setEditingId(null)
-    if (!text) return
+    if (!text || (activeConversationId && generatingRef.current.has(activeConversationId))) return
     const idx = messages.findIndex((m) => m.id === id)
     if (idx < 0) return
     setMessages((prev) =>
       prev.slice(0, idx + 1).map((m, i) => (i === idx ? { ...m, content: text } : m))
     )
-    // Persist the edit: drop the old user row + everything after, re-add the
-    // edited message, then regenerate the answer onto it.
+    // Update the user row and retain its answer until the replacement is saved.
     //
     // The re-added row carries the ORIGINAL turn's attachments. Editing the words of a message
     // does not detach its image, and rewriting the row without them deleted the only durable
     // record of it - so the chip vanished from the thread and every later regenerate lost it too.
     const cid = activeConversationId
+    if (!cid) return
+    markGenerating(cid, true)
+    const priorAnswer = messages.slice(idx + 1).find((message) => message.role === 'assistant' && !message.notice)
+    const priorVariants = priorAnswer?.variants ?? (priorAnswer?.content ? [priorAnswer.content] : undefined)
     const edited = messages[idx]
     const replacedTaskIds = taskReferencesInMessages(messages.slice(idx + 1))
     const keptAtts = edited
@@ -3110,12 +3140,15 @@ export function MemoryChat({
       await stopLiveWebUseForConversation(cid)
       try {
         if (cid) {
-          await window.api.truncateRagMessages(cid, idx)
-          await window.api.addRagMessage(cid, 'user', text, persisted)
+          const updated = await window.api.updateRagMessage(cid, id, text, { ...edited?.context, ...persisted })
+          if (!updated) throw new Error('Saved user message was not found')
+          await window.api.truncateRagMessages(cid, priorAnswer ? messages.indexOf(priorAnswer) + 1 : idx + 1)
         }
         if (replacedTaskIds.length) await window.api.tasks?.remove?.(replacedTaskIds)
       } catch (error) {
         console.error('Failed to persist the edited user message:', error)
+        markGenerating(cid, false)
+        drainQueue(cid)
         if (cid) {
           try {
             await refreshConversationMessages(cid)
@@ -3126,7 +3159,12 @@ export function MemoryChat({
         return
       }
       try {
-        await sendMessage(text, { regen: true, atts: keptAtts })
+        await sendMessage(text, {
+          regen: true, atts: keptAtts, priorVariants,
+          replacementMessageId: priorAnswer?.id,
+          conversationId: cid,
+          history: messages.slice(0, idx + 1).map((message) => message.id === id ? { ...message, content: text } : message)
+        })
       } catch (error) {
         console.error('Failed to regenerate the edited message:', error)
       } finally {
@@ -3371,14 +3409,30 @@ export function MemoryChat({
     speak: speakMessage,
     voicePlaybackChange: handleVoicePlaybackChange,
     selectVariant: (messageId, direction) => {
-      setMessages((previous) =>
-        previous.map((message) => {
-          if (message.id !== messageId || !message.variants?.length) return message
-          const current = message.variantIndex ?? 0
-          const last = message.variants.length - 1
-          return { ...message, variantIndex: Math.max(0, Math.min(last, current + direction)) }
-        })
-      )
+      const selected = messages.find((message) => message.id === messageId)
+      const cid = activeConversationId
+      if (!selected?.variants?.length || !cid || selected.streaming) return
+      const variantIndex = Math.max(0, Math.min(selected.variants.length - 1, (selected.variantIndex ?? 0) + direction))
+      const context = buildAssistantContext({
+        ...selected.context,
+        ...(selected.toolCalls?.length ? { toolCalls: selected.toolCalls } : {}),
+        ...(selected.toolsOffered?.length ? { toolsOffered: selected.toolsOffered } : {})
+      }, {
+        reasoning: selected.reasoning,
+        timeline: selected.timeline,
+        metrics: selected.metrics,
+        cutoff: selected.cutoff,
+        variants: selected.variants,
+        variantIndex
+      })
+      setMessages((previous) => previous.map((message) => message.id === messageId
+        ? { ...message, variantIndex, context: { ...message.context, ...context } }
+        : message))
+      void window.api.updateRagMessage(cid, messageId, selected.content, context).then((stored) => {
+        if (!stored) throw new Error('Saved response was not found')
+      }).catch((error) => {
+        console.error('Failed to save the selected response:', error)
+      })
     }
   }
   const messageActionsRef = useRef(currentMessageActions)
@@ -4473,6 +4527,8 @@ export function MemoryChat({
                             )}
                             onPaste={handlePaste}
                             onSubmit={() => void sendMessage()}
+                            onSendNow={() => void sendMessage(undefined, { sendNow: true })}
+                            busy={Boolean(activeConversationId && generatingConvs.has(activeConversationId))}
                           />
                         )}
                         <div className="flex flex-wrap items-center justify-between gap-y-2 gap-x-2 px-2.5 pb-2.5 pt-1">
