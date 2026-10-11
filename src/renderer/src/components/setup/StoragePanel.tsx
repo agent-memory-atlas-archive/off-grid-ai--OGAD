@@ -89,7 +89,7 @@ export function StoragePanel(): React.ReactElement {
     refresh()
     api
       .getModelScanFolders?.()
-      .then(setScanFolders)
+      .then((folders: string[] | undefined) => setScanFolders(folders ?? []))
       .catch(() => {})
     const t = setInterval(refresh, 3000)
     return () => {
