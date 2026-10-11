@@ -26,8 +26,11 @@ import {
   boundToolResult,
   callsWithinToolBudget,
   normalizeMaxToolCalls,
+  resolveToolName,
+  toolFailureMessage,
   toolLimitFinalAnswerInstruction,
-  toolResultCharBudget
+  toolResultCharBudget,
+  unknownToolMessage
 } from '@offgrid/models'
 import { toolPromptChars } from './tools/prompt-budget'
 import { ANSWER_NOW_INSTRUCTION, emptyAnswerReason } from '../shared/empty-answer'
@@ -496,27 +499,26 @@ function asToolResult(r: string | ToolResult): ToolResult {
 }
 
 /** Dispatch a tool call UNIFORMLY: a registered extension that owns the name wins,
- *  else the matching built-in. Any throw becomes an error-text result (a single
- *  tool failing never aborts the turn). No name-based special-casing — each tool
- *  owns its own text + side channels (sources / imageRequest) via its ToolResult. */
+ *  else the matching built-in. An unknown name or a throw becomes a recoverable
+ *  error result the model reads and can correct (a single tool failing never aborts
+ *  the turn). `available` names the tools the model may call instead. No name-based
+ *  special-casing — each tool owns its own text + side channels (sources /
+ *  imageRequest) via its ToolResult. */
 export async function runTool(
   name: string,
   args: Record<string, unknown>,
   ctx: ToolContext,
-  exts: ToolExtension[]
+  exts: ToolExtension[],
+  available: readonly string[] = TOOLS.map((t) => t.name)
 ): Promise<ToolResult> {
   try {
     const ext = exts.find((e) => e.canHandle(name))
     if (ext) return asToolResult(await ext.execute(name, args, ctx))
     const tool = TOOLS.find((t) => t.name === name)
-    if (!tool) return { text: `Error: unknown tool ${name}`, status: 'failed', authoritative: true }
+    if (!tool) return { text: unknownToolMessage(name, available), status: 'failed' }
     return asToolResult(await tool.run(args, ctx))
   } catch (e) {
-    return {
-      text: `Error: ${(e as Error).message}`,
-      status: 'failed',
-      authoritative: true
-    }
+    return { text: toolFailureMessage(name, (e as Error).message), status: 'failed' }
   }
 }
 
@@ -1080,19 +1082,24 @@ export async function toolChat(
     // ship) often emit a call as TEXT instead of on the tool_calls channel. When
     // the native channel is empty, recover any text-form call so the turn isn't a
     // dead narration ("I would search for…"). Normalize both into one shape with
-    // args already parsed to an object.
+    // args already parsed to an object. A misnamed call (`search`, `functions.web_search`)
+    // is mapped to the offered tool it meant rather than failing as unknown.
+    const roundToolNames = roundTools.flatMap((tool) => {
+      const name = (tool as { function?: { name?: unknown } }).function?.name
+      return typeof name === 'string' && name ? [name] : []
+    })
     const effective = !roundTools.length
       ? []
       : calls.length > 0
         ? calls.map((c) => ({
             id: c.id,
-            name: c.name,
+            name: resolveToolName(c.name, roundToolNames),
             args: safeParseArgs(c.arguments),
             rawArgs: c.arguments || '{}'
           }))
         : parseToolCallsFromText(content).map((c, i) => ({
             id: `txt-${String(round)}-${String(i)}`,
-            name: c.name,
+            name: resolveToolName(c.name, roundToolNames),
             args: c.args,
             rawArgs: JSON.stringify(c.args)
           }))
@@ -1145,7 +1152,7 @@ export async function toolChat(
         // Uniform dispatch — every tool owns its own result. Merge any structured
         // side channels: sources are deduped into `unified` across rounds; image requests retain
         // call order for deferred generation after the turn.
-        const rawResult = await runTool(c.name, c.args, toolContext, exts)
+        const rawResult = await runTool(c.name, c.args, toolContext, exts, roundToolNames)
         const resultBudget = toolResultCharBudget({
           contextLength: llm.effectiveContextSize(),
           promptChars: toolPromptChars(messages, roundTools),

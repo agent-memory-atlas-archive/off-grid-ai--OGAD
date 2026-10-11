@@ -1016,4 +1016,68 @@ describe('web tools — real parsers over fetch faked at the network boundary', 
     expect(decodeURIComponent(searchedUrl)).toContain('achilles the hero')
     expect(r.toolCalls[0]!.result).toContain('example.com')
   })
+  // --- harness recovery: errors, misnamed tools, repeats, stale results -------------
+  it('feeds an unknown tool back to the model with the real tool names instead of ending the answer', async () => {
+    enqueueReactiveAfterEmptyPlan(
+      { toolCalls: [{ name: 'teleport', args: { to: 'Athens' } }] },
+      { content: 'I cannot teleport, but here is the answer.' }
+    )
+    const r = await toolChat('calculator: what is 2+2', [])
+
+    expect(r.answer).toBe('I cannot teleport, but here is the answer.')
+    expect(r.toolCalls[0]).toMatchObject({ name: 'teleport', status: 'failed' })
+    expect(r.toolCalls[0]!.result).toMatch(/no tool named "teleport"\. Available tools: .*calculator/)
+    expect(JSON.stringify(fake.requests[1])).toContain('no tool named')
+  })
+
+  it('runs the offered tool a small model meant when it calls it by another name', async () => {
+    enqueueReactiveAfterEmptyPlan(
+      { toolCalls: [{ name: 'calculate', args: { expression: '2+3' } }] },
+      { content: 'It is 5.' }
+    )
+    const steps: string[] = []
+    const r = await toolChat('calculator: what is 2+3', [], { onStep: (c) => steps.push(c.name) })
+
+    expect(steps).toEqual(['calculator'])
+    expect(r.toolCalls[0]).toMatchObject({ name: 'calculator', result: '5', status: 'completed' })
+    expect(r.answer).toBe('It is 5.')
+  })
+
+  it('lets the model recover after a tool throws, without claiming the failed call succeeded', async () => {
+    const extension = {
+      id: 'throwing-ext',
+      schemas: () => [
+        {
+          type: 'function',
+          function: {
+            name: 'flaky_lookup',
+            description: 'Look something up',
+            parameters: { type: 'object', properties: { id: { type: 'string' } } }
+          }
+        }
+      ],
+      canHandle: (name: string) => name === 'flaky_lookup',
+      execute: async (_name: string, args: Record<string, unknown>) => {
+        if (args.id === 'bad') throw new Error('record bad was not found')
+        return 'record good: active'
+      }
+    }
+    registerToolExtension(extension)
+    try {
+      enqueueReactiveAfterEmptyPlan(
+        { toolCalls: [{ name: 'flaky_lookup', args: { id: 'bad' } }] },
+        { toolCalls: [{ name: 'flaky_lookup', args: { id: 'good' } }] },
+        { content: 'Record good is active.' }
+      )
+      const r = await toolChat('flaky_lookup: check the record', [], { connectors: true })
+
+      expect(r.answer).toBe('Record good is active.')
+      expect(r.toolCalls.map((c) => c.status)).toEqual(['failed', 'completed'])
+      expect(r.toolCalls[0]!.result).toMatch(/flaky_lookup failed: record bad was not found/)
+      expect(r.toolCalls[0]!.result).toMatch(/do not claim it succeeded/i)
+    } finally {
+      unregisterToolExtension(extension.id, extension)
+    }
+  })
+
 })
