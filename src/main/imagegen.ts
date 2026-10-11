@@ -1,3 +1,5 @@
+import { recordManagedStorageFile } from './managed-storage-files'
+import { withStorageDownload } from './model-storage-guard'
 import { beginRuntimeBackend } from './runtime-backends'
 // On-device image generation via stable-diffusion.cpp (the bundled `sd-cli`).
 // Mirrors the llm.ts pattern: resolve the binary from resources/bin, pick a
@@ -253,6 +255,14 @@ export async function downloadLora(
   filename: string,
   onProgress?: (pct: number) => void
 ): Promise<string> {
+  return withStorageDownload(() => downloadLoraInner(url, filename, onProgress))
+}
+
+async function downloadLoraInner(
+  url: string,
+  filename: string,
+  onProgress?: (pct: number) => void
+): Promise<string> {
   const dir = ensureLoraDir()
   const dest = resolveOwnedDestination(dir, filename)
   if (!dest || !hasCheckpointExt(filename)) throw new Error('Invalid LoRA filename.')
@@ -276,6 +286,7 @@ export async function downloadLora(
     await new Promise<void>((r) => out.end(r))
   }
   fs.renameSync(tmp, dest)
+  recordManagedStorageFile(modelsDir(), `loras/${filename}`)
   return dest
 }
 

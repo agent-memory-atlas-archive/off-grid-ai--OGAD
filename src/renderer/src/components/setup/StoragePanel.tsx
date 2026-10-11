@@ -62,6 +62,7 @@ export function StoragePanel(): React.ReactElement {
   const [directoryError, setDirectoryError] = useState<string | null>(null)
   const [pendingDirectory, setPendingDirectory] = useState<string | null>(null)
   const [movedFiles, setMovedFiles] = useState(false)
+  const [unknownEntriesLeft, setUnknownEntriesLeft] = useState(0)
   const [scanFolders, setScanFolders] = useState<string[]>([])
   const liveProgress = useRef(new Map<string, DownloadEntry>())
 
@@ -192,6 +193,8 @@ export function StoragePanel(): React.ReactElement {
       else if (result.restartRequired && result.directory) {
         setPendingDirectory(result.directory)
         setMovedFiles(Boolean(result.moved))
+        setUnknownEntriesLeft(result.unknownEntriesLeft ?? 0)
+        if (result.moved) await refresh()
         if (result.warning) setDirectoryError(result.warning)
       }
     } catch (error) {
@@ -283,10 +286,10 @@ export function StoragePanel(): React.ReactElement {
           )}
           {pendingDirectory && (
             <div className="mt-2 text-[11px] text-neutral-300">
-              New folder: <span className="break-all">{pendingDirectory}</span>. Restart to use it.
+              New folder: <span className="break-all">{pendingDirectory}</span>.
               {movedFiles
-                ? 'Existing files were moved.'
-                : 'Existing files stay in the current folder.'}
+                ? ` The new folder is active. Old copies are removed after the next restart if verified. ${unknownEntriesLeft} unknown entries were left in place.`
+                : ' Restart to use it. Existing files stay in the current folder.'}
             </div>
           )}
           {directoryError && (

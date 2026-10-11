@@ -1,3 +1,5 @@
+import { withStorageDownload, storageDownloadsActive } from './model-storage-guard'
+import { moveModelStorage } from './model-storage-move'
 import { ipcMain, BrowserWindow, app, clipboard } from 'electron'
 import { listBridgeBrowsers } from './extension-bridge/bridge-electron'
 import { setupAIRequestLogIPC } from './ai-request-log-ipc'
@@ -1610,116 +1612,118 @@ export function setupIPC(): void {
     }
   })
 
-  ipcMain.handle('model:download', async () => {
-    const { llm } = await import('./llm')
-    const modelsDir = llm.getModelsDir()
-    const fs = await import('fs')
-    const path = await import('path')
-    const https = await import('https')
+  ipcMain.handle('model:download', () =>
+    withStorageDownload(async () => {
+      const { llm } = await import('./llm')
+      const modelsDir = llm.getModelsDir()
+      const fs = await import('fs')
+      const path = await import('path')
+      const https = await import('https')
 
-    // Ensure models directory exists
-    if (!fs.existsSync(modelsDir)) {
-      fs.mkdirSync(modelsDir, { recursive: true })
-    }
-
-    const models = [
-      {
-        name: 'Qwen3-VL-4B-Instruct-Q4_K_M.gguf',
-        url: 'https://huggingface.co/bartowski/Qwen_Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen_Qwen3-VL-4B-Instruct-Q4_K_M.gguf'
-      },
-      {
-        name: 'mmproj-Qwen3VL-4B-Instruct-F16.gguf',
-        url: 'https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-4B-Instruct-F16.gguf'
+      // Ensure models directory exists
+      if (!fs.existsSync(modelsDir)) {
+        fs.mkdirSync(modelsDir, { recursive: true })
       }
-    ]
 
-    const downloadFile = (url: string, destPath: string, modelName: string): Promise<void> => {
-      return new Promise((resolve, reject) => {
-        const file = fs.createWriteStream(destPath)
-        let rateSample: ProgressRateSample | undefined
+      const models = [
+        {
+          name: 'Qwen3-VL-4B-Instruct-Q4_K_M.gguf',
+          url: 'https://huggingface.co/bartowski/Qwen_Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen_Qwen3-VL-4B-Instruct-Q4_K_M.gguf'
+        },
+        {
+          name: 'mmproj-Qwen3VL-4B-Instruct-F16.gguf',
+          url: 'https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-4B-Instruct-F16.gguf'
+        }
+      ]
 
-        const request = (redirectUrl: string): void => {
-          https
-            .get(redirectUrl, (response) => {
-              if (
-                response.statusCode &&
-                response.statusCode >= 300 &&
-                response.statusCode < 400 &&
-                response.headers.location
-              ) {
-                request(response.headers.location)
-                return
-              }
+      const downloadFile = (url: string, destPath: string, modelName: string): Promise<void> => {
+        return new Promise((resolve, reject) => {
+          const file = fs.createWriteStream(destPath)
+          let rateSample: ProgressRateSample | undefined
 
-              if (response.statusCode !== 200) {
-                fs.unlink(destPath, () => {})
-                reject(new Error(`HTTP ${response.statusCode}`))
-                return
-              }
+          const request = (redirectUrl: string): void => {
+            https
+              .get(redirectUrl, (response) => {
+                if (
+                  response.statusCode &&
+                  response.statusCode >= 300 &&
+                  response.statusCode < 400 &&
+                  response.headers.location
+                ) {
+                  request(response.headers.location)
+                  return
+                }
 
-              const totalSize = parseInt(response.headers['content-length'] || '0', 10)
-              let downloaded = 0
+                if (response.statusCode !== 200) {
+                  fs.unlink(destPath, () => {})
+                  reject(new Error(`HTTP ${response.statusCode}`))
+                  return
+                }
 
-              response.pipe(file)
+                const totalSize = parseInt(response.headers['content-length'] || '0', 10)
+                let downloaded = 0
 
-              response.on('data', (chunk: Buffer) => {
-                downloaded += chunk.length
-                const percent = totalSize ? Math.round((downloaded / totalSize) * 100) : 0
-                const rate = sampleProgressRate(rateSample, {
-                  currentBytes: downloaded,
-                  sampledAtMs: Date.now()
-                })
-                rateSample = rate.sample
+                response.pipe(file)
 
-                // Send progress to renderer
-                BrowserWindow.getAllWindows().forEach((win) => {
-                  win.webContents.send('model:download-progress', {
-                    modelName,
-                    percent,
-                    downloadedBytes: downloaded,
-                    totalBytes: totalSize || undefined,
-                    bytesPerSecond: rate.bytesPerSecond,
-                    downloadedMB: (downloaded / 1024 / 1024).toFixed(1),
-                    totalMB: totalSize ? (totalSize / 1024 / 1024).toFixed(1) : '?'
+                response.on('data', (chunk: Buffer) => {
+                  downloaded += chunk.length
+                  const percent = totalSize ? Math.round((downloaded / totalSize) * 100) : 0
+                  const rate = sampleProgressRate(rateSample, {
+                    currentBytes: downloaded,
+                    sampledAtMs: Date.now()
+                  })
+                  rateSample = rate.sample
+
+                  // Send progress to renderer
+                  BrowserWindow.getAllWindows().forEach((win) => {
+                    win.webContents.send('model:download-progress', {
+                      modelName,
+                      percent,
+                      downloadedBytes: downloaded,
+                      totalBytes: totalSize || undefined,
+                      bytesPerSecond: rate.bytesPerSecond,
+                      downloadedMB: (downloaded / 1024 / 1024).toFixed(1),
+                      totalMB: totalSize ? (totalSize / 1024 / 1024).toFixed(1) : '?'
+                    })
                   })
                 })
+
+                file.on('finish', () => {
+                  file.close()
+                  resolve()
+                })
               })
-
-              file.on('finish', () => {
-                file.close()
-                resolve()
+              .on('error', (err) => {
+                fs.unlink(destPath, () => {})
+                reject(err)
               })
-            })
-            .on('error', (err) => {
-              fs.unlink(destPath, () => {})
-              reject(err)
-            })
-        }
+          }
 
-        request(url)
-      })
-    }
-
-    try {
-      for (const model of models) {
-        const destPath = path.join(modelsDir, model.name)
-
-        if (fs.existsSync(destPath)) {
-          console.log(`[Model] ${model.name} already exists, skipping`)
-          continue
-        }
-
-        console.log(`[Model] Downloading ${model.name}...`)
-        await downloadFile(model.url, destPath, model.name)
-        console.log(`[Model] ${model.name} downloaded`)
+          request(url)
+        })
       }
 
-      return { success: true }
-    } catch (err: unknown) {
-      console.error('[Model] Download failed:', err)
-      return { success: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
+      try {
+        for (const model of models) {
+          const destPath = path.join(modelsDir, model.name)
+
+          if (fs.existsSync(destPath)) {
+            console.log(`[Model] ${model.name} already exists, skipping`)
+            continue
+          }
+
+          console.log(`[Model] Downloading ${model.name}...`)
+          await downloadFile(model.url, destPath, model.name)
+          console.log(`[Model] ${model.name} downloaded`)
+        }
+
+        return { success: true }
+      } catch (err: unknown) {
+        console.error('[Model] Download failed:', err)
+        return { success: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    })
+  )
 
   // === Off Grid AI MODEL CATALOG (text, vision, image, voice, transcription) ===
 
@@ -1807,8 +1811,12 @@ export function setupIPC(): void {
     })
     if (result.canceled || !result.filePaths[0]) return { canceled: true }
     const directory = result.filePaths[0]
-    const downloads = await import('./models-manager').then((m) => m.listDownloads())
-    if (downloads.some((entry) => entry.status === 'queued' || entry.status === 'downloading')) {
+    const manager = await import('./models-manager')
+    const downloads = manager.listDownloads()
+    if (
+      storageDownloadsActive() ||
+      downloads.some((entry) => entry.status === 'queued' || entry.status === 'downloading')
+    ) {
       return { error: 'Wait for model downloads to finish or cancel them, then try again.' }
     }
     try {
@@ -1818,32 +1826,38 @@ export function setupIPC(): void {
       const sameFolder =
         fs.existsSync(current) && fs.realpathSync(current) === fs.realpathSync(directory)
       let moved = false
-      let warning: string | undefined
+      let unknownEntriesLeft = 0
       if (!sameFolder && currentFiles.length) {
         const choice = await dialog.showMessageBox({
           type: 'question',
           title: 'Existing model files',
           message: 'Move your existing model files to the new folder?',
           detail:
-            'Move keeps your downloaded models in the new folder after restart. Leave keeps them in the old folder and adds it as a folder to scan.',
+            'Move copies Off Grid model files and uses the new folder now. Old copies are removed after the next restart if verified. Unknown files stay in place. Leave adds the old folder as a folder to scan.',
           buttons: ['Move files', 'Leave files', 'Cancel'],
           defaultId: 0,
           cancelId: 2
         })
         if (choice.response === 2) return { canceled: true }
         if (choice.response === 0) {
-          const result = await import('./model-storage-move').then((m) =>
-            m.moveModelStorage(profile, current, directory)
-          )
-          moved = result.moved > 0
-          warning = result.warning
+          const moveResult = await moveModelStorage(profile, current, directory, {
+            ownedFiles: [],
+            loadOwnedFiles: async () =>
+              (await manager.desktopCatalog()).flatMap((model) => model.files),
+            downloadsActive: () =>
+              manager
+                .listDownloads()
+                .some((entry) => entry.status === 'queued' || entry.status === 'downloading')
+          })
+          moved = true
+          unknownEntriesLeft = moveResult.unknownEntriesLeft
         } else {
           const { addModelScanFolder } = await import('./model-storage-choice')
           addModelScanFolder(profile, current)
         }
       }
       if (!moved) saveModelStorageChoice(profile, directory)
-      return { directory, moved, warning, restartRequired: !sameFolder }
+      return { directory, moved, unknownEntriesLeft, restartRequired: !sameFolder }
     } catch (error) {
       return { error: error instanceof Error ? error.message : 'Cannot use this folder.' }
     }

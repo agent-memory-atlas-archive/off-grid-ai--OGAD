@@ -1,3 +1,4 @@
+import { withStorageDownload } from './model-storage-guard'
 import { beginRuntimeBackend } from './runtime-backends'
 // Local text-to-speech through the pinned React Native ExecuTorch Kokoro runtime.
 // The runtime lives in its own repository and runs as a child process, so it does
@@ -117,6 +118,13 @@ export async function prepareVoiceAssets(
   voice: string,
   onProgress?: (progress: DownloadProgress) => void
 ): Promise<void> {
+  return withStorageDownload(() => prepareVoiceAssetsInner(voice, onProgress))
+}
+
+async function prepareVoiceAssetsInner(
+  voice: string,
+  onProgress?: (progress: DownloadProgress) => void
+): Promise<void> {
   if (ONNX_VOICES.has(voice)) {
     try {
       await onnxSpeech.prepare(voice, onProgress)
@@ -130,6 +138,16 @@ export async function prepareVoiceAssets(
 
 /** Synthesize speech for `text`; returns a WAV data URL. */
 export async function synthesize(
+  text: string,
+  voice?: string,
+  onProgress?: (progress: DownloadProgress) => void,
+  options: { readonly local?: boolean } = {}
+): Promise<{ dataUrl: string }> {
+  // First synthesis can download assets even without an explicit Prepare request.
+  return withStorageDownload(() => synthesizeInner(text, voice, onProgress, options))
+}
+
+async function synthesizeInner(
   text: string,
   voice?: string,
   onProgress?: (progress: DownloadProgress) => void,

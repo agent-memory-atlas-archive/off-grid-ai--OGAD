@@ -1,3 +1,4 @@
+import { withStorageDownload } from './model-storage-guard'
 // Central model management — the single source of truth for catalog, install
 // listing, download (pull), delete, and activation. Used by BOTH the desktop IPC
 // handlers (UI) AND the headless gateway HTTP admin endpoints, so the full
@@ -669,6 +670,18 @@ function publishRefusal(
 /** Download a catalog entry or any Hugging Face repo id. Progress via callback
  *  AND a status registry (so a headless poller can read it). */
 export async function downloadModel(
+  modelId: string,
+  onProgress?: ProgressCb,
+  fileName?: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    return await withStorageDownload(() => downloadModelInner(modelId, onProgress, fileName))
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function downloadModelInner(
   modelId: string,
   onProgress?: ProgressCb,
   fileName?: string

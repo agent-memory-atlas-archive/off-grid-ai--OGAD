@@ -1,3 +1,4 @@
+import { withStorageDownload } from './model-storage-guard'
 import { beginRuntimeBackend, providerLabel } from './runtime-backends'
 import path from 'path'
 import { existsSync } from 'fs'
@@ -99,6 +100,11 @@ class EmbeddingService {
   }
 
   async generateEmbedding(text: string): Promise<number[]> {
+    // A cold worker may download its model while handling its first embedding.
+    return withStorageDownload(() => this.generateEmbeddingInner(text))
+  }
+
+  private async generateEmbeddingInner(text: string): Promise<number[]> {
     return recordAIRequest(
       {
         modality: 'embedding',
