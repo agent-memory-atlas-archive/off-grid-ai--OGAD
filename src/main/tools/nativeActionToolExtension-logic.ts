@@ -206,7 +206,7 @@ export const NATIVE_TOOL_SPECS: NativeToolSpec[] = [
   {
     name: 'open_url',
     description:
-      "Open a URL or app scheme in the user's default browser or app (a web page, a mailto: draft, whatsapp://send). It ONLY opens - no searching, clicking, playing, logging in, or submitting. If the goal needs anything DONE on a website, use web_use unless the user explicitly requires their existing default-browser session, cookies, history, cache, or signed-in account. For that case, open the page with open_url, then control the visible browser with computer_use.",
+      "Open a URL or app scheme in the user's default browser or app (a web page, a mailto: draft, whatsapp://send). It ONLY opens - no searching, clicking, playing, logging in, or submitting. If the goal needs anything DONE on a website, use web_use including tasks that need an existing login when a paired browser tab is available. Use computer_use for an existing browser session only when no paired browser is available.",
     parameters: {
       type: 'object',
       properties: {
@@ -223,7 +223,7 @@ export const NATIVE_TOOL_SPECS: NativeToolSpec[] = [
   {
     name: WEB_USE_TOOL_NAME,
     description:
-      "Do a task on a website in Off Grid AI's own built-in browser - playing or watching a video (YouTube, etc.), searching a site and opening a result, checking in for a flight, placing an order, filling a form, or logging in. Use this whenever the goal needs to click, type, or navigate a page, not merely open it, unless the user explicitly requires their existing default-browser session, cookies, history, cache, or signed-in account. That case requires open_url followed by computer_use. For a nearby task, exact coordinates are optional. Use a supplied city, neighborhood, or address, or the website’s own location result. Use get_current_location when useful. Report the location used and ask for a starting location only if none is available. Web Use runs INSIDE Off Grid AI's browser and never touches the user's cursor, keyboard, or their own browser, so the user keeps working while it goes; it hands control back for any sign-in, one-time code, or payment. Use the full conversation. Ask the user before calling this tool only when a material fact is missing. Call it once for the complete goal. Do not call it again while that task runs. Live progress and the final result appear in the chat.",
+      "Do a task on a website in the paired browser tab, or Off Grid AI's built-in browser when no tab was supplied - playing or watching a video (YouTube, etc.), searching a site and opening a result, checking in for a flight, placing an order, filling a form, or logging in. Use this whenever the goal needs to click, type, or navigate a page, not merely open it, including tasks that require the supplied tab's existing login, cookies, or signed-in account. Do not switch a paired browser task to computer_use. For a nearby task, exact coordinates are optional. Use a supplied city, neighborhood, or address, or the website’s own location result. Use get_current_location when useful. Report the location used and ask for a starting location only if none is available. Web Use controls page elements without moving the user's desktop cursor; it hands control back for any sign-in, one-time code, or payment. Use the full conversation. Ask the user before calling this tool only when a material fact is missing. Call it once for the complete goal. Do not call it again while that task runs. Live progress and the final result appear in the chat.",
     parameters: {
       type: 'object',
       properties: {
@@ -235,7 +235,7 @@ export const NATIVE_TOOL_SPECS: NativeToolSpec[] = [
         url: {
           type: 'string',
           description:
-            'The site URL to start on (https://...), e.g. https://youtube.com. Always provide the site the task acts on.'
+            'The site URL to start on (https://...), e.g. https://youtube.com. Omit this when the request supplies an existing browser tab. Do not guess URL paths.'
         }
       },
       required: ['goal']
@@ -252,7 +252,7 @@ export const NATIVE_TOOL_SPECS: NativeToolSpec[] = [
   {
     name: 'computer_use',
     description:
-      "Complete a task by controlling a visible desktop app directly, including the user's default browser when the task explicitly depends on its existing login, cookies, history, cache, recommendations, or signed-in account. The user watches in a supervised overlay and can stop or take over at any time; sign-ins and payments are handed back to them. Prefer web_use for website tasks that do not need the user's existing browser state, and prefer direct tools when they fit. Call computer_use once for the complete goal. Do not call it again while that task runs. Live progress and the final result appear in the chat.",
+      "Complete a task by controlling a visible desktop app directly, including the user's default browser only when no paired browser tab is available. The user watches in a supervised overlay and can stop or take over at any time; sign-ins and payments are handed back to them. Prefer web_use for website tasks, including existing login state in a paired browser tab, and prefer direct tools when they fit. Call computer_use once for the complete goal. Do not call it again while that task runs. Live progress and the final result appear in the chat.",
     parameters: {
       type: 'object',
       properties: {
@@ -399,17 +399,17 @@ export function systemHintForPlatform(
     if (!includeTaskUse) {
       return "You can act on the user's Mac: get their current location for nearby requests (get_current_location), manage calendar events (calendar_create_event, calendar_list_events) and reminders (reminders_create, reminders_list), look up people (contacts_search), and send an iMessage (messages_send) or email (mail_send). Resolve a name to a handle with contacts_search before sending. Open a link or app scheme with open_url; it opens the target without interacting with it. Use ISO 8601 for all times. Actions requested in this Chat run directly; report the real result and never tell the user to approve them."
     }
-    return "You can act on the user's Mac: get their current location for nearby requests (get_current_location), manage calendar events (calendar_create_event, calendar_list_events) and reminders (reminders_create, reminders_list), look up people (contacts_search), and send an iMessage (messages_send) or email (mail_send). Resolve a name to a handle with contacts_search before sending. Open a link or app scheme (like whatsapp://send) with open_url - it ONLY opens, no interaction. Use web_use for normal website tasks; it runs inside Off Grid AI's own built-in browser. When the user explicitly requires their existing default-browser login, cookies, history, cache, recommendations, or signed-in account, call open_url first and then use computer_use on the visible browser. The user watches Computer Use and can take over. Prefer direct tools when they fit. Use ISO 8601 for all times. Actions and tasks requested in this Chat run directly; report the real result and never tell the user to approve them."
+    return "You can act on the user's Mac: get their current location for nearby requests (get_current_location), manage calendar events (calendar_create_event, calendar_list_events) and reminders (reminders_create, reminders_list), look up people (contacts_search), and send an iMessage (messages_send) or email (mail_send). Resolve a name to a handle with contacts_search before sending. Open a link or app scheme (like whatsapp://send) with open_url - it ONLY opens, no interaction. Use web_use for website tasks. A supplied paired browser tab retains its existing login and page state. Only use open_url followed by computer_use for an existing browser session when no paired browser is available. The user watches Computer Use and can take over. Prefer direct tools when they fit. Use ISO 8601 for all times. Actions and tasks requested in this Chat run directly; report the real result and never tell the user to approve them."
   }
   if (platform === 'win32') {
     if (!includeTaskUse) {
       return "You can act on the user's PC: get their current location for nearby requests (get_current_location), and use Outlook to create calendar events (calendar_create_event) and tasks (reminders_create), and send an email (mail_send). Open a link or app with open_url; it opens the target without interacting with it. Use ISO 8601 for all times. There is no message or contact lookup tool on Windows. Actions requested in this Chat run directly; report the real result and never tell the user to approve them."
     }
-    return "You can act on the user's PC: get their current location for nearby requests (get_current_location), and use Outlook to create calendar events (calendar_create_event) and tasks (reminders_create), and send an email (mail_send). Open a link or app with open_url - it ONLY opens, no interaction. Use web_use for normal website tasks; it runs inside Off Grid AI's own built-in browser. When the user explicitly requires their existing default-browser login, cookies, history, cache, recommendations, or signed-in account, call open_url first and then use computer_use on the visible browser. The user watches Computer Use and can take over. Prefer direct tools when they fit. Use ISO 8601 for all times. There is no message or contact lookup tool on Windows. Actions and tasks requested in this Chat run directly; report the real result and never tell the user to approve them."
+    return "You can act on the user's PC: get their current location for nearby requests (get_current_location), and use Outlook to create calendar events (calendar_create_event) and tasks (reminders_create), and send an email (mail_send). Open a link or app with open_url - it ONLY opens, no interaction. Use web_use for website tasks. A supplied paired browser tab retains its existing login and page state. Only use open_url followed by computer_use for an existing browser session when no paired browser is available. The user watches Computer Use and can take over. Prefer direct tools when they fit. Use ISO 8601 for all times. There is no message or contact lookup tool on Windows. Actions and tasks requested in this Chat run directly; report the real result and never tell the user to approve them."
   }
   if (platform === 'linux') {
     if (includeTaskUse && linuxTaskUse) {
-      return "Exact coordinates are optional for nearby tasks. Use a supplied city, neighborhood, or address, or the website’s own location result. Use get_current_location when useful. Report the location used; ask for a starting location only if none is available. Use web_use for website tasks in the built-in browser. Use computer_use for visible desktop apps or the user's existing browser session. Use open_url only to open a link. Linux has no calendar, mail, or contact tools. Report only results observed through the tools."
+      return 'Exact coordinates are optional for nearby tasks. Use a supplied city, neighborhood, or address, or the website’s own location result. Use get_current_location when useful. Report the location used; ask for a starting location only if none is available. Use web_use for website tasks, including a supplied paired browser tab and its existing login. Use computer_use for visible desktop apps or an existing browser session only when no paired browser is available. Use open_url only to open a link. Linux has no calendar, mail, or contact tools. Report only results observed through the tools.'
     }
     return "Use get_current_location to get the user's current device coordinates. If location is unavailable, ask for a starting address or neighborhood. Use open_url to open a link in the user's default browser. You cannot control that browser or desktop apps, or use calendar, mail, or contact tools on Linux."
   }
@@ -436,7 +436,7 @@ export function buildNativeToolSchemas(
  * need their existing session, instead of open_url followed by computer_use.
  */
 export const WEB_USE_IN_DEFAULT_BROWSER_HINT =
-  "Web Use is set to run in the user's own default browser: it opens a tab of its own there, signed in as the user, and never touches their other tabs. Use web_use for website tasks even when they need the user's existing login, cookies or account."
+  "Web Use is set to run in the user's own default browser: it uses the supplied tab when present, or opens a task tab there, signed in as the user. Use web_use for website tasks even when they need the user's existing login, cookies or account."
 
 export function withWebUseTarget(hint: string, inDefaultBrowser: boolean): string {
   return inDefaultBrowser && hint.includes('web_use')

@@ -49,6 +49,7 @@ import { taskLaunchFromActionArgs } from '../tasks/task-launch-identity'
 import { taskKindForActionType } from '../tools/nativeActionToolExtension-logic'
 import { withTaskModelMemory } from '../model-memory'
 import { getComputerUseSettings } from '../computer-use-settings'
+import { isAutomationTaskTerminal } from '@offgrid/automation'
 
 export interface ActionsRuntime {
   propose(
@@ -190,8 +191,11 @@ function recordAcceptedTaskLaunch(
 
 /** Keep the durable task projection aligned with the action engine's terminal decision. */
 function recordTaskActionOutcome(outcome: TickOutcome): void {
+  // The task host already records Stop, failure, or verified completion. A later action
+  // engine outcome must not turn that finished run back into a waiting session.
+  const task = getTaskRun(outcome.id)
+  if (task && isAutomationTaskTerminal(task.status)) return
   if (outcome.outcome === 'poisoned') {
-    const task = getTaskRun(outcome.id)
     if (task) {
       recordTaskRun({
         taskId: task.taskId,

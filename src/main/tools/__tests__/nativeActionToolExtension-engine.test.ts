@@ -131,8 +131,9 @@ describe('the engine path', () => {
       { goal: 'Open Notes' },
       { conversationId: 'browser:chrome-1', startTab: { browserId: 'chrome-1', tabId: 42 } }
     )
-    expect(computer).toMatchObject({ taskId: 'act_1' })
-    expect(startTabFromActionArgs((port.proposed[1] as { args: unknown }).args)).toBeNull()
+    expect(computer).toMatchObject({ status: 'failed', authoritative: true })
+    expect(computer).toMatchObject({ text: expect.stringContaining('Use web_use for this task') })
+    expect(port.proposed).toHaveLength(1)
   })
 
   it('starts the exact Web Use brief selected by the Chat model without a second gate', async () => {
