@@ -2936,7 +2936,9 @@ export function MemoryChat({
         setSpeakError({
           id,
           message:
-            'Speech could not be generated. Check that Text-to-speech is installed in Settings, then try again.'
+            e instanceof Error && e.message.trim()
+              ? e.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
+              : 'Speech could not be generated. Try again.'
         })
       }
     },

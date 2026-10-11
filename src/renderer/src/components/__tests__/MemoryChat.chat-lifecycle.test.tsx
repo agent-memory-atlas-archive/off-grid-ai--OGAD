@@ -707,9 +707,7 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
     await waitFor(() => expect(boundary.speechTurns).toHaveLength(1))
     boundary.speechTurns[0]!.reject(new Error('native worker unavailable'))
 
-    expect((await screen.findByRole('alert')).textContent).toMatch(
-      /speech could not be generated.*text-to-speech is installed in settings/i
-    )
+    expect((await screen.findByRole('alert')).textContent).toBe('native worker unavailable')
     openActionsFor('Conversation B baseline')
     expect(screen.getByRole('menuitem', { name: 'Speak' })).toBeTruthy()
   })
