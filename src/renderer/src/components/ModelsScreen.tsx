@@ -430,11 +430,14 @@ export function ModelsScreen({
     setDetail(m)
   }, [])
 
-  useEffect(() => api.onModelInventoryChanged?.(() => {
-    api.getModelCatalog?.().then((catalog: { models: ModelEntry[] }) => setModels(catalog.models))
-    api.getInstalledModels?.().then(setInstalled)
-    refreshVision()
-  }), [])
+  useEffect(() => {
+    const unsubscribe = api.onModelInventoryChanged?.(() => {
+      api.getModelCatalog?.().then((catalog: { models: ModelEntry[] }) => setModels(catalog.models))
+      api.getInstalledModels?.().then(setInstalled)
+      refreshVision()
+    })
+    return typeof unsubscribe === 'function' ? unsubscribe : undefined
+  }, [])
 
   const closeDetail = useCallback(() => {
     setDetail(null)
