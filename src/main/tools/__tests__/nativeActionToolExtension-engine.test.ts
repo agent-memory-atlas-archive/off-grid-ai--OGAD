@@ -132,7 +132,7 @@ describe('the engine path', () => {
       { conversationId: 'browser:chrome-1', startTab: { browserId: 'chrome-1', tabId: 42 } }
     )
     expect(computer).toMatchObject({ status: 'failed', authoritative: true })
-    expect(computer.text).toContain('Use web_use for this task')
+    expect(computer).toMatchObject({ text: expect.stringContaining('Use web_use for this task') })
     expect(port.proposed).toHaveLength(1)
   })
 
