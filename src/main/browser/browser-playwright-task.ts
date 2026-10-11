@@ -71,7 +71,12 @@ export async function runBrowserPlaywrightTask(
       errorName: error instanceof Error ? error.name : typeof error,
       error: compact(detail)
     })
-    return fallback(`Semantic control was unavailable: ${compact(detail)}`)
+    return {
+      ok: false,
+      fallback: false,
+      summary: `Web Use stopped: ${compact(detail)}`,
+      handoffs: 0
+    }
   }
 }
 
@@ -99,7 +104,11 @@ async function runSemanticLoop(
       isError: observation.isError,
       ...semanticSnapshotDiagnostics(observation.text)
     })
-    return fallback('The page did not expose usable semantic controls.')
+    return fallback(
+      observation.isError
+        ? `The page could not be read: ${compact(observation.text)}`
+        : 'The page did not expose usable semantic controls.'
+    )
   }
   await publishObservation(input, { step: 0, phase: 'observing', summary: 'Initial page' })
 
@@ -375,7 +384,10 @@ async function recoverObservationError(
     await recoverStateAfterCrash(input, state)
     return 'recovered'
   }
-  return fallback('The semantic page snapshot failed after the action.', state.handoffs)
+  return fallback(
+    `The page could not be read after the action: ${compact(state.observation.text)}`,
+    state.handoffs
+  )
 }
 
 async function recoverStateAfterCrash(

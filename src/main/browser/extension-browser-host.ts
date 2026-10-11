@@ -26,7 +26,10 @@ import {
 } from '../vision/vision-controller'
 import { VisionGuard } from '../vision/vision-guard'
 import { BrowserDriver } from './browser-driver'
-import { runBrowserPlaywrightTask } from './browser-playwright-task'
+import {
+  runBrowserPlaywrightTask,
+  type BrowserPlaywrightTaskInput
+} from './browser-playwright-task'
 import type { BrowserRailHost, BrowserTaskRequest, WebTaskResult } from './browser-rail'
 import { ElectronPlaywrightRelay } from './electron-playwright-relay'
 import { createExtensionPageProvider, type ExtensionTabContents } from './extension-tab-pages'
@@ -34,9 +37,8 @@ import { ExtensionSnapshotSession } from './extension-snapshot-session'
 import { PlaywrightMcpSession, type SemanticPageSession } from './playwright-mcp-session'
 
 const START_URL = 'https://www.google.com'
-
-export const NEEDS_IN_APP_BROWSER =
-  'This page needs visual control, which runs in the Off Grid AI browser. Switch Tasks > Web Use to the Off Grid AI browser to finish it.'
+const CROSS_EXTENSION_DEBUGGER_ERROR =
+  'Cannot access a chrome-extension:// URL of different extension'
 
 type PageProvider = ReturnType<typeof createExtensionPageProvider>
 
@@ -58,17 +60,28 @@ export async function openTaskSession(
 ): Promise<TaskSession> {
   const caps = (await link.request('browser.caps')) as { cdp?: unknown } | null
   const current = (): ExtensionTabContents => pages.active() ?? tab
-  if (caps?.cdp !== true) {
-    return {
-      session: new ExtensionSnapshotSession(link, () => current().tabId),
-      driver: () => null,
-      close: async () => undefined
-    }
+  const pageSession: TaskSession = {
+    session: new ExtensionSnapshotSession(link, () => current().tabId),
+    driver: () => null,
+    close: async () => undefined
   }
+  if (caps?.cdp !== true) return pageSession
   const relay = new ElectronPlaywrightRelay(pages)
   const playwright = new PlaywrightMcpSession(relay)
-  tab.debugger.attach()
-  await playwright.connect()
+  try {
+    tab.debugger.attach()
+    // Await Chrome's attachment before starting MCP, including its permission refusal.
+    await tab.debugger.sendCommand('Target.getTargetInfo')
+    await playwright.connect()
+  } catch (error) {
+    await playwright.close().catch(() => undefined)
+    await relay.stop().catch(() => undefined)
+    tab.debugger.detach()
+    if (error instanceof Error && error.message.includes(CROSS_EXTENSION_DEBUGGER_ERROR)) {
+      return pageSession
+    }
+    throw error
+  }
   return {
     session: playwright,
     driver: () => new BrowserDriver(current().transport()),
@@ -166,7 +179,7 @@ async function runInBrowser(
       recordStep(`working in your tab in ${link.browser.name}`)
     }
     const task = await openTaskSession(link, pages, tab)
-    const semantic = await runBrowserPlaywrightTask({
+    const input: BrowserPlaywrightTaskInput = {
       goal,
       plan,
       session: task.session,
@@ -189,11 +202,24 @@ async function runInBrowser(
           currentAction: action
         }),
       signal: controller.signal
-    }).finally(task.close)
+    }
+    let semantic = await runBrowserPlaywrightTask(input).finally(task.close)
+    if (!semantic.ok && semantic.summary.includes(CROSS_EXTENSION_DEBUGGER_ERROR)) {
+      // A password-manager frame can make Chrome detach partway through a task. Keep the
+      // same tab and guard, but re-observe through the existing in-page driver. Never replay
+      // the failed action: the page may already have changed, and its old refs are invalid.
+      recordStep(
+        'Browser debugger access was blocked; continuing with page controls in the same tab.'
+      )
+      semantic = await runBrowserPlaywrightTask({
+        ...input,
+        session: new ExtensionSnapshotSession(link, () => (pages.active() ?? tab).tabId),
+        activeDriver: () => null
+      })
+    }
 
     const finalUrl = (pages.active() ?? tab).getURL()
-    if (semantic.fallback) guard.fail(NEEDS_IN_APP_BROWSER)
-    else if (!semantic.ok && !guard.isHalted) guard.fail(semantic.summary)
+    if ((semantic.fallback || !semantic.ok) && !guard.isHalted) guard.fail(semantic.summary)
     else if (semantic.ok && guard.automationStatus !== 'completed') {
       guard.fail('Web Use ended without a verified completion state.')
     }
