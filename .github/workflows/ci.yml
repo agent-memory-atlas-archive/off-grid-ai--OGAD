@@ -504,13 +504,28 @@ jobs:
             pactl set-default-sink offgrid_test
             pactl set-default-source offgrid_test.monitor
             openbox >/tmp/offgrid-openbox.log 2>&1 &
-            npx vitest run integration-tests/native-desktop-recording.test.ts integration-tests/extension-bridge-native.test.ts --no-file-parallelism --project product-integration
+            npx vitest run integration-tests/native-desktop-recording.test.ts integration-tests/extension-bridge-native.test.ts integration-tests/extension-chat-native.test.ts integration-tests/chat-next-action-native.test.ts integration-tests/task-stop-native.test.ts integration-tests/web-use-failure-native.test.ts integration-tests/web-use-debugger-native.test.ts --no-file-parallelism --project product-integration
           '
       - name: Record on the synthetic Windows desktop
         if: runner.os == 'Windows'
         env:
           OFFGRID_NATIVE_DESKTOP_TEST: '1'
-        run: npx vitest run integration-tests/native-desktop-recording.test.ts integration-tests/extension-bridge-native.test.ts --no-file-parallelism --project product-integration
+        run: npx vitest run integration-tests/native-desktop-recording.test.ts integration-tests/extension-bridge-native.test.ts integration-tests/extension-chat-native.test.ts integration-tests/chat-next-action-native.test.ts integration-tests/task-stop-native.test.ts integration-tests/web-use-failure-native.test.ts integration-tests/web-use-debugger-native.test.ts --no-file-parallelism --project product-integration
+      - name: Verify chat queues and saved replies in Electron
+        if: runner.os == 'Linux'
+        timeout-minutes: 12
+        env:
+          ELECTRON_DISABLE_SANDBOX: '1'
+        # These specs use fresh free profiles and synthetic model executables.
+        # They need neither a license nor the macOS-only Pro capture layer.
+        run: xvfb-run -a npm run test:e2e -- e2e/chat-queue-versions.spec.ts e2e/app093-image-generation-persistence.spec.ts --workers=1
+      - name: Upload chat UI test evidence
+        if: ${{ failure() && runner.os == 'Linux' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-ui-test-results
+          path: test-results/
+          if-no-files-found: ignore
       - name: Convert native source coverage
         run: |
           node scripts/convert-native-coverage.mjs coverage-native-desktop-raw coverage-native-desktop
