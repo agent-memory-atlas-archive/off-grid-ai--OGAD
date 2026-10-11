@@ -23,6 +23,8 @@ export type RagEntity = { id: number; name?: string }
 export type RagEntityFact = { fact?: string } | string
 
 export type RagContext = {
+  variants?: string[]
+  variantIndex?: number
   notice?: boolean
   masterMemory?: string | null
   memories?: RagMemory[]
@@ -72,6 +74,8 @@ export type ImageGenerationMetadata = {
 }
 
 export type ChatMessage = {
+  /** Saved response retained while this fresh stream generates its replacement. */
+  replacementMessageId?: string
   id: string
   role: SyncedMessageRole
   content: string

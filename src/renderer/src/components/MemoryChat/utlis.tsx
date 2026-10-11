@@ -119,7 +119,7 @@ export function isSupportingMessage(message: ChatMessage): boolean {
 }
 
 export function selectedMessageContent(message: ChatMessage): string {
-  if (!message.variants || message.variantIndex == null) return message.content
+  if (message.streaming || !message.variants || message.variantIndex == null) return message.content
   return message.variants[message.variantIndex] ?? message.content
 }
 

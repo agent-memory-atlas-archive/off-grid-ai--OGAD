@@ -109,27 +109,6 @@ export function ChatVoiceComposer({
   return (
     <div className="flex min-h-11 w-full flex-col justify-center gap-1 px-3 py-2">
       <div className="flex min-w-0 items-center gap-2.5">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-sm"
-              onClick={onToggleRecording}
-              aria-label={label}
-              className={`rounded-full ${active ? 'border-red-500/50 text-red-400 hover:bg-red-500/10' : 'border-green-500 text-primary hover:bg-green-500/10'}`}
-            >
-              {transcribing ? (
-                <LoadingDots size="small" />
-              ) : active ? (
-                <Stop className="h-3.5 w-3.5" weight="fill" />
-              ) : (
-                <Microphone className="h-4 w-4" />
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{label}</TooltipContent>
-        </Tooltip>
         <div className="flex min-w-0 items-baseline gap-2">
           {onTurnModeChange ? (
             <TurnModePicker mode={turnMode} onChange={onTurnModeChange} />
@@ -147,9 +126,30 @@ export function ChatVoiceComposer({
             })}
           </span>
         </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              onClick={onToggleRecording}
+              aria-label={label}
+              className={`absolute bottom-2.5 right-2.5 rounded-full ${active ? 'border-red-500/50 text-red-400 hover:bg-red-500/10' : 'border-green-500 text-primary hover:bg-green-500/10'}`}
+            >
+              {transcribing ? (
+                <LoadingDots size="small" />
+              ) : active ? (
+                <Stop className="h-3.5 w-3.5" weight="fill" />
+              ) : (
+                <Microphone className="h-4 w-4" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{label}</TooltipContent>
+        </Tooltip>
       </div>
       {error ? (
-        <p role="alert" className="pl-10 text-[11px] text-amber-500">
+        <p role="alert" className="text-[11px] text-amber-500">
           {visibleError(error)}
         </p>
       ) : null}

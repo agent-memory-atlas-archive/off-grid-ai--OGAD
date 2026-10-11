@@ -19,6 +19,9 @@ export type AssistantTimelineEntry =
 
 /** Extra assistant-turn fields that ride in the persisted `context` blob. */
 export interface AssistantContextExtras {
+  /** Earlier answers and the latest answer for resend, edit, and regenerate. */
+  variants?: string[]
+  variantIndex?: number
   /** The model's reasoning / "Thinking" text for the turn, if any. */
   reasoning?: string
   /** Why the model stopped before completing the response, if applicable. */
@@ -47,7 +50,8 @@ export function buildAssistantContext(
     reasoning === undefined &&
     extras.cutoff === undefined &&
     extras.metrics === undefined &&
-    !extras.timeline?.length
+    !extras.timeline?.length &&
+    !extras.variants?.length
   ) {
     return undefined
   }
@@ -56,6 +60,8 @@ export function buildAssistantContext(
   if (extras.cutoff !== undefined) ctx.cutoff = extras.cutoff
   if (extras.metrics !== undefined) ctx.metrics = extras.metrics
   if (extras.timeline?.length) ctx.timeline = extras.timeline
+  if (extras.variants?.length) ctx.variants = extras.variants
+  if (extras.variantIndex !== undefined) ctx.variantIndex = extras.variantIndex
   return ctx
 }
 
@@ -146,4 +152,15 @@ export function readGenerationMetrics(ctx: unknown): GenerationMetrics | undefin
     metrics.computeBackend = source.computeBackend.trim()
   }
   return Object.keys(metrics).length ? (metrics as GenerationMetrics) : undefined
+}
+
+/** Restore response versions from the existing message context. */
+export function readResponseVariants(ctx: unknown): string[] | undefined {
+  if (!ctx || typeof ctx !== 'object') return undefined
+  const versions = (ctx as { variants?: unknown }).variants
+  return Array.isArray(versions) &&
+    versions.length > 1 &&
+    versions.every((value) => typeof value === 'string')
+    ? versions
+    : undefined
 }
