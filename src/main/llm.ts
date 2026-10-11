@@ -446,6 +446,36 @@ export class LLMService {
     )
   }
 
+  /** True once settings were saved on this install; false on a fresh install. */
+  hasPersistedSettings(): boolean {
+    return fs.existsSync(this.settingsFile)
+  }
+
+  /** File name of the active local chat model, or '' when none is installed. */
+  localModelFile(): string {
+    if (!this.modelsExist()) return ''
+    this.ensureLoaded()
+    this.resolveModel()
+    return this.modelPath ? path.basename(this.modelPath) : ''
+  }
+
+  /** On-disk size of the chat model with its projector and MTP companion, in GB. */
+  localWeightsGb(): number {
+    if (!this.modelsExist()) return 0
+    this.ensureLoaded()
+    this.resolveModel()
+    const files = [this.modelPath, this.mmProjPath, this.mtpModelPath()]
+    const bytes = files.reduce((total, file) => {
+      if (!file) return total
+      try {
+        return total + fs.statSync(file).size
+      } catch {
+        return total
+      }
+    }, 0)
+    return bytes / 1024 ** 3
+  }
+
   private mtpModelPath(): string | undefined {
     const selected = path.basename(this.modelPath)
     const companion = /^Qwen3\.8-27B-(?:UD-)?(?:Q|IQ)[A-Z0-9_]+\.gguf$/i.test(selected)

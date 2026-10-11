@@ -1399,18 +1399,28 @@ export function setupIPC(): void {
   // Per-modality runtime residency (on-demand vs in-memory/resident). The full map
   // drives the queue's mode-aware re-warm and each engine's job path.
   ipcMain.handle('runtime:residency:get', () => getResidency())
-  ipcMain.handle('runtime:residency:set', (_e, modality: Modality, mode: ResidencyMode) =>
-    setResidencyMode(modality, mode)
-  )
+  ipcMain.handle('runtime:residency:set', async (_e, modality: Modality, mode: ResidencyMode) => {
+    ;(await import('./best-settings')).markSpeedSettingsManual()
+    return setResidencyMode(modality, mode)
+  })
   ipcMain.handle('runtime:backend:get', () => getBackendPreferences())
   ipcMain.handle(
     'runtime:backend:set',
     async (_e, modality: BackendModality, preference: BackendPreference) => {
+      ;(await import('./best-settings')).markSpeedSettingsManual()
       const next = setBackendPreference(modality, preference)
       // A loaded engine keeps its present backend until its next load. The UI says so.
       return next
     }
   )
+  ipcMain.handle('runtime:best-settings:apply', async () => {
+    const { applyBestSettings } = await import('./best-settings')
+    return applyBestSettings()
+  })
+  ipcMain.handle('runtime:best-settings:status', async () => {
+    const { bestSettingsStatus } = await import('./best-settings')
+    return bestSettingsStatus()
+  })
   // Unload one modality's model from memory now (the "free RAM" button). Goes through
   // the same evict() seam as residency/shutdown; the engine reloads on next use.
   ipcMain.handle('runtime:unload', async (_e, modality: Modality) => {
@@ -2193,6 +2203,8 @@ export function setupIPC(): void {
   })
   ipcMain.handle('llm:set-settings', async (_e, s: import('./llm').LlmSettings) => {
     const { llm } = await import('./llm')
+    const { isSpeedSettingsPatch } = await import('../shared/best-settings')
+    if (isSpeedSettingsPatch(s)) (await import('./best-settings')).markSpeedSettingsManual()
     await llm.setSettings(s)
     return llm.getSettings()
   })

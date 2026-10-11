@@ -414,6 +414,9 @@ const offGridApi = {
   backendPreferencesGet: () => ipcRenderer.invoke('runtime:backend:get'),
   backendPreferenceSet: (modality: string, preference: string) =>
     ipcRenderer.invoke('runtime:backend:set', modality, preference),
+  // Detect this machine's processors and apply the fastest settings to every modality.
+  applyBestSettings: () => ipcRenderer.invoke('runtime:best-settings:apply'),
+  bestSettingsStatus: () => ipcRenderer.invoke('runtime:best-settings:status'),
   // Unload a modality's model from memory now (free RAM); reloads on next use.
   unloadRuntime: (modality: string) => ipcRenderer.invoke('runtime:unload', modality),
   // Pipeline queue config (serialize heavy jobs; let speech coexist) + live state.

@@ -33,6 +33,7 @@ import {
 import { ImageSettingsTab } from './ImageSettingsTab'
 import { SidePanel } from './SidePanel'
 import { VoiceSettingsTab } from './VoiceSettingsTab'
+import { BestSettingsCard } from './BestSettingsCard'
 import { RemoteVisionSettingsTab } from './RemoteVisionSettingsTab'
 import { SettingsRow as Row } from './SettingsRow'
 import { SettingsSelect } from './SettingsSelect'
@@ -278,6 +279,15 @@ export function SettingsPanel({
   const [dflashModels, setDflashModels] = useState<DraftModelOption[]>([])
   // Default hidden, like mobile: the numbers are for when you go looking, not a permanent fixture.
   const [showGenerationDetails, setShowGenerationDetails] = useState(false)
+  // Remounts the tab content after "Use fastest settings" so every section re-reads its values.
+  const [settingsVersion, setSettingsVersion] = useState(0)
+  const reloadAfterBestSettings = (): void => {
+    ;(window.api as Partial<typeof window.api>)
+      .getLlmSettings?.()
+      .then((v: LlmSettings) => setS(v))
+      .catch(() => {})
+    setSettingsVersion((version) => version + 1)
+  }
   useEffect(() => {
     const syncToolsEnabled = (event: Event): void => {
       setToolsEnabled((event as CustomEvent<boolean>).detail)
@@ -472,6 +482,8 @@ export function SettingsPanel({
         </div>
       ) : null}
 
+      <BestSettingsCard onApplied={reloadAfterBestSettings} />
+
       <div className="flex flex-nowrap items-center gap-1 overflow-x-auto border-b border-neutral-800 px-3 py-2">
         {(
           [
@@ -495,7 +507,10 @@ export function SettingsPanel({
         ))}
       </div>
 
-      <div className={embedded ? 'p-1 pt-4 text-sm' : 'min-h-0 flex-1 overflow-y-auto p-4 text-sm'}>
+      <div
+        key={settingsVersion}
+        className={embedded ? 'p-1 pt-4 text-sm' : 'min-h-0 flex-1 overflow-y-auto p-4 text-sm'}
+      >
         {tab === 'tasks' && TaskSettings ? (
           <>
             {/* The registry returns a stable registered component, not a component factory. */}
