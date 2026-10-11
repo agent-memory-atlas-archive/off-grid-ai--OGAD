@@ -56,7 +56,7 @@ import {
   type TransferredModelManifest
 } from '@offgrid/sync'
 import { sampleProgressRate, type ProgressRateSample } from '@offgrid/ui'
-import type { ModelEntry } from '@offgrid/models'
+import { CATALOG as BASE_CATALOG, type ModelEntry } from '@offgrid/models'
 import {
   parseRemoteVisionModelId,
   remoteVisionInventoryModels,
@@ -74,6 +74,7 @@ import { clearTaskRolesFor, setTaskRoleModel } from './task-role-models'
 import { strategyTaskRoles } from '../shared/computer-use-settings'
 import { binRoots, dataDir, modelStorageError } from './runtime-env'
 import { discoverExternalModels } from './external-models'
+import { resolveModelAsset } from './model-paths'
 import { readModelScanFolders } from './model-storage-choice'
 
 // Desktop ships the Prism llama.cpp engine required by these packed weights.
@@ -433,7 +434,12 @@ function modelFilePath(dir: string, name: string): string {
       return path.join(reusableCheckpoint, name.slice(KEV_CHECKPOINT_PREFIX.length))
     }
   }
-  return managed
+  const mediaFile = BASE_CATALOG.some(
+    (entry) =>
+      ['image', 'speech', 'voice', 'transcription'].includes(entry.kind) &&
+      entry.files.some((file) => file.name === name)
+  )
+  return mediaFile ? (resolveModelAsset(name) ?? managed) : managed
 }
 
 /** Size (bytes) of a file in the models dir; 0 when absent/unreadable. The single
@@ -1127,6 +1133,17 @@ export async function deleteModel(modelId: string): Promise<DeleteModelResult> {
 
   const entry = CATALOG.find((m) => m.id === modelId) ?? (await resolveHuggingFaceModel(modelId))
   if (!entry) return { success: false, error: 'unknown model' }
+  if (
+    entry.files.some((file) => {
+      const external = resolveModelAsset(file.name)
+      return external && !resolveModelAsset(file.name, [dir])
+    })
+  ) {
+    return {
+      success: false,
+      error: 'This model uses files in another model folder. Remove the folder reference to hide it. Files are kept in place.'
+    }
+  }
   let freed = 0
 
   if (entry.runtime === 'mflux') {
