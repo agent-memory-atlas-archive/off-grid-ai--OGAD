@@ -430,6 +430,12 @@ export function ModelsScreen({
     setDetail(m)
   }, [])
 
+  useEffect(() => api.onModelInventoryChanged?.(() => {
+    api.getModelCatalog?.().then((catalog: { models: ModelEntry[] }) => setModels(catalog.models))
+    api.getInstalledModels?.().then(setInstalled)
+    refreshVision()
+  }), [])
+
   const closeDetail = useCallback(() => {
     setDetail(null)
   }, [])
@@ -1053,7 +1059,7 @@ export function ModelsScreen({
                   Settings
                 </button>
               )}
-              {!isRemote && (
+              {!isRemote && !m.id.startsWith('external:') && (
                 <button
                   onClick={() => removeModel(m.id, m.name)}
                   disabled={deleting === m.id || active}
@@ -1647,7 +1653,7 @@ export function ModelsScreen({
                       >
                         Use this model
                       </button>
-                      <button
+                      {!m.id.startsWith('external:') && <button
                         onClick={() => {
                           void removeModel(m.id, m.name)
                           closeDetail()
@@ -1655,7 +1661,7 @@ export function ModelsScreen({
                         className="rounded border border-neutral-800 px-3 py-1.5 text-xs text-neutral-500 transition-all duration-150 hover:border-red-500/60 hover:text-red-400 active:scale-95"
                       >
                         Delete
-                      </button>
+                      </button>}
                     </>
                   ) : downloading ? (
                     <span className="text-xs text-neutral-400">
