@@ -14,9 +14,13 @@ const ALLOWED_TOOLS = new Set([
   'browser_select_option',
   'browser_hover',
   'browser_drag',
-  'browser_navigate'
+  'browser_navigate',
+  // Only for the click fallback (browser-playwright-actions.ts); the model never names it.
+  'browser_evaluate'
 ])
 const CONNECT_TIMEOUT_MS = 20_000
+/** How long Playwright waits for an element to be visible, enabled and stable. */
+const ACTION_WAIT_MS = 10_000
 const ACTION_TIMEOUT_MS = 60_000
 const SNAPSHOT_TIMEOUT_MS = 60_000
 const PAGE_SYNC_TIMEOUT_MS = 5_000
@@ -81,7 +85,9 @@ export class PlaywrightMcpSession implements SemanticPageSession {
             // The semantic loop takes one explicit snapshot after every action.
             // Disable MCP's second automatic full-page snapshot in the action response.
             snapshot: { mode: 'none', boxes: false },
-            timeouts: { action: 45_000, navigation: 45_000, settle: 350 }
+            // Short: a click that cannot prove the element stable falls back to an in-page click
+            // (browser-playwright-actions.ts) instead of waiting 45s per try.
+            timeouts: { action: ACTION_WAIT_MS, navigation: 45_000, settle: 350 }
           })
       })
       console.log('[web-use][playwright-mcp] connection created', {
