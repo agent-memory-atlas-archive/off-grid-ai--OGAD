@@ -74,3 +74,62 @@ describe('tool context origin', () => {
     expect(isToolAllowedForOrigin('computer_use', resolved.origin, resolved)).toBe(computerAllowed)
   })
 })
+
+describe('extension origin rule', () => {
+  it.each(['tool', 'connector', undefined] as const)(
+    'requires a read declaration for category %s',
+    (category) => {
+      const extension = { category, isReadOnlyTool: (name: string) => name === 'read_connector' }
+      expect(isToolAllowedForOrigin('read_connector', 'bridge', { extension })).toBe(true)
+      expect(isToolAllowedForOrigin('write_connector', 'bridge', { extension })).toBe(false)
+      expect(isToolAllowedForOrigin('write_connector', 'bridge', { extension, acting: true })).toBe(
+        true
+      )
+      expect(isToolAllowedForOrigin('write_connector', 'desktop', { extension })).toBe(true)
+      expect(isToolAllowedForOrigin('write_connector', undefined, { extension })).toBe(true)
+    }
+  )
+
+  it('preserves native risk and computer restrictions even with a read declaration', () => {
+    const extension = { isReadOnlyTool: () => true }
+    expect(isToolAllowedForOrigin('web_use', 'bridge', { extension })).toBe(false)
+    expect(isToolAllowedForOrigin('computer_use', 'bridge', { extension, acting: true })).toBe(
+      false
+    )
+    expect(isToolAllowedForOrigin('calendar_list_events', 'bridge', { extension })).toBe(true)
+  })
+
+  it('refuses undeclared extensions and preserves core built-ins', () => {
+    expect(
+      isToolAllowedForOrigin('schedule_task', 'bridge', { extension: { category: 'tool' } })
+    ).toBe(false)
+    expect(isToolAllowedForOrigin('unknown_tool', 'bridge', { extension: {} })).toBe(false)
+    expect(isToolAllowedForOrigin('web_search', 'bridge', { extension: {} })).toBe(true)
+    expect(isToolAllowedForOrigin('web_search', 'bridge')).toBe(true)
+  })
+})
+
+describe('unowned tool admission', () => {
+  it.each([
+    ['offgrid_guide', true],
+    ['web_search', true],
+    ['brave_search', true],
+    ['read_url', true],
+    ['calculator', true],
+    ['read_screen', true],
+    ['search_memory', true],
+    ['search_knowledge_base', true],
+    ['get_datetime', true],
+    ['generate_image', false],
+    ['memory_write', false],
+    ['reminders_create', false],
+    ['unknown_tool', false],
+    [undefined, false]
+  ])('classifies %s and preserves authorized origins', (name, readOnly) => {
+    expect(isToolAllowedForOrigin(name, 'bridge')).toBe(readOnly)
+    expect(isToolAllowedForOrigin(name, 'bridge', { acting: false })).toBe(readOnly)
+    expect(isToolAllowedForOrigin(name, 'bridge', { acting: true })).toBe(true)
+    expect(isToolAllowedForOrigin(name, 'desktop')).toBe(true)
+    expect(isToolAllowedForOrigin(name)).toBe(true)
+  })
+})

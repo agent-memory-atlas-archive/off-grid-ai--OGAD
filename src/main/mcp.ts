@@ -27,6 +27,7 @@ export interface ConnectorToolDefinition {
   name: string
   description?: string
   inputSchema?: unknown
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean }
 }
 
 export interface ConnectorToolCallResult {

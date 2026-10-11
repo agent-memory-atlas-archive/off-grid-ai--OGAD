@@ -5,8 +5,9 @@
 // Reads execute through the connector transport. Chat mutations use the durable
 // action engine. Outside-Chat Actions keeps its separate approval owner.
 
-import type { ToolContext, ToolExtension } from '../tools'
+import type { ToolContext, ToolExtension, ToolResult } from '../tools'
 import { listConnectors, fetchTools, callConnectorTool, setConnectorStatus } from '../mcp'
+import { isToolAllowedForOrigin, toolOriginOf, toolOriginRefusal } from './tool-origin'
 import { shouldGate } from '../actions/approval'
 import { getActionsRuntime } from '../actions/use-runtime'
 import {
@@ -87,12 +88,14 @@ function formatChatConnectorExecution(
 
 export class McpConnectorToolExtension implements ToolExtension {
   id = 'mcp-connectors'
+  private readOnlyNames = new Set<string>()
   private byName = new Map<string, { id: number; tool: string; connector: string }>()
 
   constructor(private readonly boundary: McpConnectorToolBoundary = productionBoundary) {}
 
   async schemas(): Promise<unknown[]> {
     this.byName.clear()
+    this.readOnlyNames.clear()
     const out: unknown[] = []
     try {
       const enabled = listConnectors().filter((c) => c.enabled)
@@ -110,7 +113,7 @@ export class McpConnectorToolExtension implements ToolExtension {
             setConnectorStatus(c.id, 'error', e instanceof Error ? e.message : String(e))
             return {
               c,
-              tools: [] as { name: string; description?: string; inputSchema?: unknown }[]
+              tools: [] as ConnectorToolDefinition[]
             }
           }
         })
@@ -120,6 +123,9 @@ export class McpConnectorToolExtension implements ToolExtension {
           const schema = buildConnectorToolSchema(c, t)
           const fnName = schema.function.name
           this.byName.set(fnName, { id: c.id, tool: t.name, connector: c.name })
+          if (t.annotations?.readOnlyHint === true && t.annotations.destructiveHint !== true) {
+            this.readOnlyNames.add(fnName)
+          }
           out.push(schema)
         }
       }
@@ -133,11 +139,26 @@ export class McpConnectorToolExtension implements ToolExtension {
     return name.startsWith(MCP_TOOL_PREFIX)
   }
 
+  isReadOnlyTool(name: string): boolean {
+    return this.readOnlyNames.has(name)
+  }
+
+  // Calls without a request context retain the existing string-only desktop API.
+  execute(name: string, args: Record<string, unknown>): Promise<string>
+  execute(
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolContext | undefined
+  ): Promise<string | ToolResult>
   async execute(
     name: string,
     args: Record<string, unknown>,
     context?: ToolContext
-  ): Promise<string> {
+  ): Promise<string | ToolResult> {
+    const origin = toolOriginOf(context)
+    if (!isToolAllowedForOrigin(name, origin.origin, { ...origin, extension: this })) {
+      return { text: toolOriginRefusal(name), status: 'failed', authoritative: true }
+    }
     const meta = this.byName.get(name)
     if (!meta) return `Error: unknown connector tool ${name}`
     const risk = riskOf(meta.tool)

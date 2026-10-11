@@ -33,7 +33,7 @@ import { toolPromptChars } from './tools/prompt-budget'
 import { buildPageFence } from './tools/page-fence'
 import {
   isToolAllowedForOrigin,
-  PAIRED_BROWSER_COMPUTER_USE_REFUSAL,
+  toolOriginRefusal,
   toolOriginOf,
   type ToolOrigin
 } from './tools/tool-origin'
@@ -518,17 +518,16 @@ export async function runTool(
   ctx: ToolContext,
   exts: ToolExtension[]
 ): Promise<ToolResult> {
-  const origin = toolOriginOf(ctx)
-  if (!isToolAllowedForOrigin(name, origin.origin, origin)) {
-    return {
-      text:
-        name === 'computer_use' ? PAIRED_BROWSER_COMPUTER_USE_REFUSAL : 'Error: tool_unavailable',
-      status: 'failed',
-      authoritative: true
-    }
-  }
   try {
+    const origin = toolOriginOf(ctx)
     const ext = exts.find((e) => e.canHandle(name))
+    if (!isToolAllowedForOrigin(name, origin.origin, { ...origin, extension: ext })) {
+      return {
+        text: toolOriginRefusal(name),
+        status: 'failed',
+        authoritative: true
+      }
+    }
     if (ext) return asToolResult(await ext.execute(name, args, ctx))
     const tool = TOOLS.find((t) => t.name === name)
     if (!tool) return { text: `Error: unknown tool ${name}`, status: 'failed', authoritative: true }
@@ -563,6 +562,8 @@ export interface ToolExtension {
   schemas(): Promise<unknown[]> | unknown[]
   /** Whether this extension owns a given tool name. */
   canHandle(name: string): boolean
+  /** Trusted side lookup; true only for declared non-destructive reads. Never sent to the model. */
+  isReadOnlyTool?(name: string): boolean
   /** Execute a call this extension owns. Structured results can also carry citations. */
   execute(
     name: string,
@@ -634,7 +635,14 @@ export async function selectChatTools(
       const s = await e.schemas()
       const enabledSchemas = s.filter((schema) => {
         const name = (schema as { function?: { name?: unknown } }).function?.name
-        if (!isToolAllowedForOrigin(name, opts.origin, { acting: opts.assistantOnly })) return false
+        if (
+          !isToolAllowedForOrigin(name, opts.origin, {
+            acting: opts.assistantOnly,
+            extension: e
+          })
+        ) {
+          return false
+        }
         if (opts.assistantOnly && (name === 'web_use' || name === 'computer_use')) return true
         return toolsEnabled && (typeof name !== 'string' || !disabled.has(name))
       })
@@ -661,6 +669,14 @@ export async function selectChatTools(
         imageAvailable,
         { projectActive: !!opts.projectId, allMemory: !!opts.allMemory },
         opts.allTools
+      ).filter((schema) =>
+        isToolAllowedForOrigin(
+          (schema as { function: { name: string } }).function.name,
+          opts.origin,
+          {
+            acting: opts.assistantOnly
+          }
+        )
       )
     : []
   const assistantRequiredTools = opts.assistantOnly
