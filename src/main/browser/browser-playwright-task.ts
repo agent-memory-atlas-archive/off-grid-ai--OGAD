@@ -1,5 +1,5 @@
 import type { PlaywrightToolResult } from './playwright-mcp-session'
-import { NoSupportedActionError } from './semantic-candidates'
+import { InvalidDecisionError, NoSupportedActionError } from './semantic-candidates'
 import {
   completionEvidenceMatches,
   decideBrowserSemanticAction,
@@ -7,6 +7,7 @@ import {
 } from './browser-playwright-policy'
 import {
   executePlaywrightAction,
+  isNavigateToCurrentPage,
   isPrivateSemanticTarget,
   projectPlaywrightPointer
 } from './browser-playwright-actions'
@@ -31,7 +32,15 @@ import {
 } from './browser-playwright-task-support'
 
 const MAX_STEPS = 24
-const MAX_NO_CHANGE = 2
+/**
+ * Steps in a row without progress (no change, a failed or unusable action) before the task
+ * stops. browser-use stops at 5 consecutive failures; 2 stopped tasks a small model would have
+ * finished. From the third, the model is told to change approach.
+ */
+const MAX_NO_CHANGE = 5
+const REPLAN_AFTER = 3
+/** The model's own recent steps and what each did, as browser-use and Nanobrowser show them. */
+const MAX_HISTORY = 8
 
 export type {
   BrowserPlaywrightTaskInput,
@@ -47,6 +56,29 @@ interface SemanticLoopState {
   lastFingerprint: string
   recoveryNote: string
   crashRecoveries: number
+  /** What the last steps did, oldest first: the model's memory of this task. */
+  history: string[]
+  /** Everything the user has told this task: kept for every step, not used once. */
+  guidance: string[]
+}
+
+/** One step's outcome into the model's memory, keeping the newest few. */
+function remember(state: SemanticLoopState, entry: string): void {
+  state.history.push(compact(entry))
+  if (state.history.length > MAX_HISTORY) state.history.shift()
+}
+
+/** The note for a step without progress; from the third, a push to change approach. */
+/** New guidance joins what the user said before; the newest five go to the model. */
+function rememberGuidance(state: SemanticLoopState, fresh: readonly string[]): string[] {
+  state.guidance.push(...fresh)
+  return state.guidance.slice(-5)
+}
+
+function stallNote(state: SemanticLoopState, note: string): string {
+  return state.noChangeCount >= REPLAN_AFTER
+    ? `${note} You have made no progress for ${state.noChangeCount} steps. Do something different from the steps above: another control, scrolling, or human_required if only the user can do it.`
+    : note
 }
 
 interface SemanticLoopContext {
@@ -83,7 +115,7 @@ export async function runBrowserPlaywrightTask(
 async function runSemanticLoop(
   input: BrowserPlaywrightTaskInput
 ): Promise<BrowserPlaywrightTaskResult> {
-  let observation = await observeWithCurrentLease(input)
+  let observation = await observeUntilLoaded(input)
   console.log('[web-use][semantic] initial snapshot', {
     isError: observation.isError,
     ...semanticSnapshotDiagnostics(observation.text)
@@ -119,6 +151,8 @@ async function runSemanticLoop(
     lastActionKey: '',
     lastFingerprint: fingerprint(observation.text),
     recoveryNote: '',
+    history: [],
+    guidance: [],
     crashRecoveries
   }
   const context = { input, state }
@@ -128,6 +162,30 @@ async function runSemanticLoop(
     if (outcome) return outcome
   }
   return fallback('The semantic step limit was reached.', state.handoffs)
+}
+
+/** Reads of a page that shows no controls yet before the task gives up on it. */
+const LOAD_READS = 5
+const LOAD_READ_MS = 1000
+
+/**
+ * The first read of a page still loading shows no controls. Found live: a task gave up at once
+ * with "The page did not expose usable semantic controls" on a page that loaded a second later.
+ * browser-use waits on an empty page before it treats it as a problem.
+ */
+async function observeUntilLoaded(
+  input: BrowserPlaywrightTaskInput
+): Promise<PlaywrightToolResult> {
+  let observation = await observeWithCurrentLease(input)
+  for (
+    let read = 1;
+    read < LOAD_READS && !observation.isError && !hasSemanticReferences(observation.text);
+    read += 1
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, LOAD_READ_MS))
+    observation = await observeWithCurrentLease(input)
+  }
+  return observation
 }
 
 async function runSemanticStep(
@@ -149,10 +207,19 @@ async function runSemanticStep(
       step,
       maxSteps: MAX_STEPS,
       recoveryNote: state.recoveryNote,
-      guidance: input.takeGuidance(),
+      guidance: rememberGuidance(state, input.takeGuidance()),
+      history: state.history,
       signal: combinedSignal(input.signal, modelLease.signal)
     })
   } catch (error) {
+    if (error instanceof InvalidDecisionError) {
+      remember(state, `(your reply could not run: ${error.detail})`)
+      return reobserveForRetry(input, state, {
+        note: `Your last reply was not an action that can run: ${error.detail}. Reply with one valid action for this fresh snapshot.`,
+        step: `re-observed the page after an action that could not run: ${error.detail}`,
+        stop: `Stopped: the model kept proposing actions that cannot run (${error.detail}).`
+      })
+    }
     if (error instanceof NoSupportedActionError) {
       return reobserveForRetry(input, state, {
         note: 'The Decision model rejected every proposed action as unsafe or unsupported. Propose different actions from this fresh snapshot.',
@@ -181,6 +248,9 @@ async function runSemanticStep(
     await performHumanHandoff(context, decision, step)
     return undefined
   }
+  if (isNavigateToCurrentPage(decision, input.activeUrl())) {
+    return stayOnPage(input, state, decision)
+  }
   if (skipUnchangedDuplicate(input, state, decision)) {
     return state.noChangeCount >= MAX_NO_CHANGE
       ? fallback(
@@ -190,6 +260,53 @@ async function runSemanticStep(
       : undefined
   }
   return performSemanticAction(context, decision, step)
+}
+
+/** Not reloading the page the task is on: what was filled stays. Counts as no progress. */
+function stayOnPage(
+  input: BrowserPlaywrightTaskInput,
+  state: SemanticLoopState,
+  decision: SemanticDecision
+): BrowserPlaywrightTaskResult | undefined {
+  state.noChangeCount += 1
+  state.recoveryNote =
+    'You are already on that page. Do not navigate or reload it; act on this snapshot.'
+  input.onStep(`stayed on the page instead of reloading it (${stepLabel(decision)})`)
+  remember(state, `${stepLabel(decision)} -> not done: you are already on that page`)
+  return state.noChangeCount >= MAX_NO_CHANGE
+    ? fallback(
+        'Stopped: the model kept trying to reload the page it is already on.',
+        state.handoffs
+      )
+    : undefined
+}
+
+/**
+ * What the user reads when the task is done: the answer itself. Found live: "Found the title of
+ * the top story" with the title only in the evidence. browser-use's done carries the final
+ * answer; here the proven evidence joins the summary when the summary does not already hold it.
+ */
+/**
+ * Evidence as a person reads it: a snapshot line such as `strong [ref=e2079]: 117.6k` becomes
+ * `117.6k` (found live in an answer).
+ */
+export function readableEvidence(raw: string | null | undefined): string {
+  const text = (raw ?? '').trim()
+  const value = /\[ref=[^\]]+\]\s*:\s*(.+)$/.exec(text)?.[1] ?? text
+  return value
+    .replace(/\s*\[ref=[^\]]+\]/g, '')
+    .replace(/^"(.*)"$/, '$1')
+    .trim()
+}
+
+export function completionSummary(
+  decision: Pick<SemanticDecision, 'summary' | 'evidence_text'>
+): string {
+  const summary = decision.summary.trim() || 'The web task is complete.'
+  const evidence = readableEvidence(decision.evidence_text)
+  return evidence && !summary.toLowerCase().includes(evidence.toLowerCase())
+    ? `${summary}\n"${evidence}"`
+    : summary
 }
 
 function publishPhase(input: BrowserPlaywrightTaskInput, decision: SemanticDecision): void {
@@ -205,7 +322,7 @@ async function terminalDecision(
 ): Promise<BrowserPlaywrightTaskResult | undefined> {
   const { input, state } = context
   if (decision.action === 'done') {
-    const summary = decision.summary.trim() || 'The web task is complete.'
+    const summary = completionSummary(decision)
     if (!input.guard.beginVerification()) return undefined
     const verification = await observeWithCurrentLease(input)
     if (verification.isError) {
@@ -241,6 +358,7 @@ async function performHumanHandoff(
   const { input, state } = context
   const why = decision.reason.trim() || 'This step needs your input in the watched page.'
   input.onStep(`waiting for you: ${why}`)
+  remember(state, `handed to the user: ${why} -> the user has finished; check the page`)
   await input.waitForUser(why, input.signal)
   state.handoffs += 1
   state.observation = await observeWithCurrentLease(input)
@@ -264,9 +382,12 @@ function skipUnchangedDuplicate(
     fingerprint(state.observation.text) === state.lastFingerprint
   if (!duplicate) return false
   state.noChangeCount += 1
-  state.recoveryNote =
+  state.recoveryNote = stallNote(
+    state,
     'The previous action was a duplicate on an unchanged page. Choose a different action.'
+  )
   input.onStep(`no change: skipped duplicate ${actionLabel(decision)}`)
+  remember(state, `${stepLabel(decision)} -> skipped: the same as the last action, page unchanged`)
   return true
 }
 
@@ -310,7 +431,10 @@ async function performSemanticAction(
   }
   const label = stepLabel(decision)
   input.onStep(`${label}: ${result.isError ? 'not completed' : 'completed'}`)
-  if (result.isError) return recoverActionError(input, state, result)
+  if (result.isError) {
+    remember(state, `${label} -> failed: ${result.text}`)
+    return recoverActionError(input, state, result)
+  }
 
   const before = fingerprint(state.observation.text)
   state.observation = await observeWithCurrentLease(input)
@@ -319,8 +443,15 @@ async function performSemanticAction(
   if (recovery) return recovery
   await publishObservation(input, { step, phase: 'checking', summary: actionLabel(decision) })
   updateProgressEvidence(context, { decision, actionKey, before })
+  remember(
+    state,
+    `${label} -> ${fingerprint(state.observation.text) === before ? 'no visible change' : 'the page changed'}`
+  )
   return state.noChangeCount >= MAX_NO_CHANGE
-    ? fallback(`Stopped: the page did not change after "${label}", twice in a row.`, state.handoffs)
+    ? fallback(
+        `Stopped: the page did not change for ${MAX_NO_CHANGE} steps in a row. Last: "${label}".`,
+        state.handoffs
+      )
     : undefined
 }
 
@@ -360,7 +491,7 @@ async function reobserveForRetry(
   if (state.noChangeCount >= MAX_NO_CHANGE) {
     return fallback(why.stop, state.handoffs)
   }
-  state.recoveryNote = why.note
+  state.recoveryNote = stallNote(state, why.note)
   input.onStep(why.step)
   return undefined
 }
@@ -436,7 +567,9 @@ function updateProgressEvidence(
     return
   }
   state.noChangeCount += 1
-  state.recoveryNote =
+  state.recoveryNote = stallNote(
+    state,
     'The last action did not change the page. Verify the goal or choose a different control.'
+  )
   input.onStep(`no visible change after ${actionLabel(decision)}`)
 }
