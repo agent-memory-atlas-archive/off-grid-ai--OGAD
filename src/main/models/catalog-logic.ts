@@ -39,6 +39,20 @@ export interface CatalogEntry {
 // Desktop MTP companions use the existing aux-file download contract. Keep the
 // pinned file identity shared by catalog installation and engine launch.
 export const MTP_COMPANIONS = {
+  'unsloth/gemma-4-E4B-it-GGUF': {
+    name: 'mtp-gemma-4-E4B-it-Q8_0.gguf',
+    url: 'https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/MTP/mtp-gemma-4-E4B-it-Q8_0.gguf',
+    sizeBytes: 98653248,
+    sha256: 'b6a723115efa510d3b3215db1e26790dae84cd08c2134a764f3d194f1f0c3376',
+    role: 'aux' as const
+  },
+  'unsloth/gemma-4-12b-it-GGUF': {
+    name: 'mtp-gemma-4-12b-it-Q8_0.gguf',
+    url: 'https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/fc034cfff751157913579611efad8462ac1be606/MTP/mtp-gemma-4-12b-it-Q8_0.gguf',
+    sizeBytes: 465109248,
+    sha256: '145db9094bc0f85f1701e255a2ed216dcc9800fc8bc8631ad00905b456bd451b',
+    role: 'aux' as const
+  },
   'bartowski/tencent_UI-Mate-9B-GGUF+MTP': {
     name: 'Qwen3.5-9B-MTP-ONLY-Q4_K_M.gguf',
     url: 'https://huggingface.co/a4lg/Qwen3.5-9B-MTP-ONLY-GGUF/resolve/b609b41c40921b0d1912f0d42347e53e28d22731/Qwen3.5-9B-MTP-ONLY-Q4_K_M.gguf',
@@ -65,6 +79,7 @@ export interface LocalModelLike {
   kind: string
   params?: number
   sizeBytes: number
+  source?: string
 }
 export interface DownloadedModelLike {
   id: string
@@ -94,10 +109,13 @@ export function localsForCatalog(locals: LocalModelLike[], present: FilePresent)
       id: lm.id,
       name: lm.name,
       kind: lm.kind,
-      org: 'Local',
+      org: lm.source ?? 'Local',
       params: lm.params,
-      tags: ['Imported'],
-      files: [{ name: lm.primary, url: '', sizeBytes: lm.sizeBytes }]
+      tags: [lm.id.startsWith('external:') ? 'External' : 'Imported'],
+      files: [
+        { name: lm.primary, url: '', sizeBytes: lm.sizeBytes, role: 'primary' },
+        ...(lm.mmproj ? [{ name: lm.mmproj, url: '', role: 'mmproj' }] : [])
+      ]
     }))
 }
 
@@ -302,7 +320,7 @@ export function buildDiskEntry(opts: {
   sizeOf: SizeOf
 }): { id: string; name: string; kind?: string; bytes: number; active: boolean } {
   const { id, sizeOf } = opts
-  const lm = id.startsWith('local:') ? opts.locals.find((m) => m.id === id) : undefined
+  const lm = id.startsWith('local:') || id.startsWith('external:') ? opts.locals.find((m) => m.id === id) : undefined
   if (lm) {
     const bytes = [lm.primary, lm.mmproj]
       .filter(Boolean)
@@ -310,10 +328,10 @@ export function buildDiskEntry(opts: {
     return {
       id,
       name: lm.name,
-      kind: 'local',
+      kind: lm.id.startsWith('external:') ? lm.kind : 'local',
       bytes,
       active: isModelActive({
-        kind: 'local',
+        kind: lm.id.startsWith('external:') ? lm.kind : 'local',
         id,
         activeChatId: opts.activeChatId,
         modals: opts.modals
