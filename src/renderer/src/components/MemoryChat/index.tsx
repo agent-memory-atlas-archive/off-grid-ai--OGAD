@@ -2492,8 +2492,8 @@ export function MemoryChat({
           imageRequests.length === 0 &&
           toolCalls.every((call) => call.status === 'completed')
         ) {
-          void window.api
-            .suggestNextChatMessage(trimmed, answer)
+          void Promise.resolve()
+            .then(() => window.api.suggestNextChatMessage(trimmed, answer))
             .then((text) => {
               const latest = messagesByConvRef.current[convId]?.at(-1)
               if (!text || latest?.id !== storedId || latest.content !== answer) return

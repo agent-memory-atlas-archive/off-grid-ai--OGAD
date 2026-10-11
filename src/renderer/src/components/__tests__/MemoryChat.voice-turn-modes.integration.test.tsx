@@ -297,10 +297,13 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     expect(transcribeAudio).not.toHaveBeenCalled()
   })
 
-  it('keeps Hands-free off during the reply, rearms after playback, and can pause', async () => {
+  it.each(['none', 'failed'] as const)('keeps Hands-free off during the reply with %s suggestions, rearms after playback, and can pause', async (suggestion) => {
     const { getUserMedia } = installMicrophone()
     vi.stubGlobal('Audio', AudioBoundary)
     const boundary = new ChatBoundary()
+    if (suggestion === 'failed') {
+      boundary.api.suggestNextChatMessage = () => { throw new Error('Suggestion unavailable') }
+    }
     Object.assign(boundary.api, {
       getSettings: vi.fn(async () => ({ composerVoiceMode: true })),
       transcribeAudio: vi.fn(async () => 'What is on my schedule?'),

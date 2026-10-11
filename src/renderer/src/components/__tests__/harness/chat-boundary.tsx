@@ -275,6 +275,7 @@ export class ChatBoundary {
     artifactRuntime: async () => ({}),
     createArtifactPreview: async (html: string) => `data:text/html,${encodeURIComponent(html)}`,
     revokeArtifactPreview: async () => true,
+    suggestNextChatMessage: async (): Promise<string | null> => null,
     speak: vi.fn(() => {
       const turn = deferred<{ dataUrl: string }>()
       this.speechTurns.push(turn)
