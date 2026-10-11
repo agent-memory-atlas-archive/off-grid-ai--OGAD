@@ -259,7 +259,7 @@ export class ChatBoundary {
     }),
     addRagMessage: this.addRagMessage,
     updateRagMessage: async (conversationId: string, messageId: string, content: string, context?: unknown) => {
-      const message = this.messages[conversationId]?.find((entry) => entry.id === messageId)
+      const message = this.messages[conversationId]?.find((entry) => String(entry.id) === messageId)
       if (!message) return false
       message.content = content
       if (context !== undefined) message.context = context

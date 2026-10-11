@@ -1136,12 +1136,15 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
       projectId: 'project-alpha',
       conversationId: 'conversation-a'
     })
-    expect(boundary.truncateRagMessages).toHaveBeenCalledWith('conversation-a', 1)
     expect(screen.getAllByText('Explain the release gate')).toHaveLength(1)
 
     boundary.resolve(0, 'Updated explanation')
 
     expect(await screen.findByText('Updated explanation')).toBeTruthy()
+    expect(screen.getByText('2/2')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Previous response' }))
+    expect(await screen.findByText('Original explanation')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Next response' }))
     expect(screen.queryByText('Original explanation')).toBeNull()
     expect(screen.getAllByText('Explain the release gate')).toHaveLength(1)
     await waitFor(() =>
