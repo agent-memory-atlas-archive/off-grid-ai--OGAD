@@ -157,7 +157,7 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
   }
 
   const handlers: Record<RpcMethod, Handler> = {
-    ...chatHandlers(deps.data),
+    ...chatHandlers(deps.data.chat),
     state: async (_p, browser) => ({
       desktopName: deps.data.desktopName(),
       deviceName: browser.name,

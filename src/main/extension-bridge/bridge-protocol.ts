@@ -180,6 +180,8 @@ export const RPC_METHODS = [
   'chat.start',
   'chat.read',
   'chat.stop',
+  'chat.control',
+  'chat.guide',
   'conversations.list',
   'conversations.put',
   'conversations.delete',
