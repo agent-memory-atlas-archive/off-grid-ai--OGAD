@@ -182,7 +182,7 @@ async function createVisibleProject(): Promise<void> {
 
 async function createVisibleChat(): Promise<void> {
   await openSidebar('Chat')
-  const composer = page.getByPlaceholder(/ask anything/i)
+  const composer = page.getByRole('textbox', { name: 'Message', exact: true })
   await expect(composer).toBeVisible()
   await composer.fill(PROMPT)
   await page.keyboard.press('Enter')

@@ -128,7 +128,7 @@ async function gotoChat(): Promise<void> {
   await expect(palette).toBeVisible()
   await palette.getByPlaceholder(/^Search everything/).fill('Chat')
   await page.getByTestId('palette-screen-memory-chat-root').click()
-  await expect(page.getByPlaceholder(/ask anything/i)).toBeVisible()
+  await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeVisible()
 }
 
 async function computerUseSummary(): Promise<string> {
@@ -178,7 +178,7 @@ test('all strategies project their effective roles and Text + Specialist survive
 test('a Chat request runs the hybrid reasoner and specialist through one Computer Use task', async () => {
   await selectStrategy('Text + Specialist')
   await gotoChat()
-  const composer = page.getByPlaceholder(/ask anything/i)
+  const composer = page.getByRole('textbox', { name: 'Message', exact: true })
   await page.getByRole('button', { name: 'Composer options' }).click()
   await page.getByRole('menuitem', { name: /^Tools/ }).click()
   await page.keyboard.press('Escape')
@@ -213,7 +213,7 @@ for (const [strategy, counter] of [
   test(`a Chat request completes a real Computer Use task with ${strategy}`, async () => {
     await selectStrategy(strategy)
     await gotoChat()
-    const composer = page.getByPlaceholder(/ask anything/i)
+    const composer = page.getByRole('textbox', { name: 'Message', exact: true })
     await page.getByRole('button', { name: 'Composer options' }).click()
     await page.getByRole('menuitem', { name: /^Tools/ }).click()
     await page.keyboard.press('Escape')

@@ -102,7 +102,7 @@ test.afterEach(async () => {
 
 test('a chat ask becomes a created, read-back-verified reminder', async () => {
   await page.getByRole('button', { name: 'Chat', exact: true }).click()
-  const composer = page.getByPlaceholder(/ask anything/i)
+  const composer = page.getByRole('textbox', { name: 'Message', exact: true })
   await expect(composer).toBeVisible()
   const captureDismiss = page.getByRole('button', { name: 'Dismiss', exact: true })
   if (await captureDismiss.isVisible().catch(() => false)) {
