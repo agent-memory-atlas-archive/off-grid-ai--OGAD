@@ -662,6 +662,10 @@ app.whenReady().then(async () => {
         // A remote chat model needs no local engine: loading one anyway holds gigabytes of
         // memory for nothing. Chat starts it on demand if the user switches back.
         const { getActiveRemoteVisionServer } = await import('./vision/remote-vision-server')
+        // Before the first launch, so a fresh install starts on its fastest settings.
+        await import('./best-settings')
+          .then((m) => m.prepareBestSettingsOnStartup())
+          .catch((error: unknown) => console.warn('[best-settings] startup check failed', error))
         if (llm.modelsExist() && !getActiveRemoteVisionServer()) await llm.init()
       }
     })

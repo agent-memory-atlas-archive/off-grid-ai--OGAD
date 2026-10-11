@@ -1766,13 +1766,25 @@ export function setupIPC(): void {
     import('./models-manager').then((m) => m.deleteModel(modelId))
   )
 
-  ipcMain.handle('models:set-active', (_, modelId: string) =>
-    import('./models-manager').then((m) => m.setActiveModel(modelId))
-  )
+  // A new chat model can change MTP support and memory needs: refresh auto-managed settings.
+  const refreshBestSettings = (): void => {
+    void import('./best-settings')
+      .then((m) => m.ensureBestSettings())
+      .catch((error: unknown) => console.warn('[best-settings] refresh failed', error))
+  }
+  ipcMain.handle('models:set-active', async (_, modelId: string) => {
+    const result = await import('./models-manager').then((m) => m.setActiveModel(modelId))
+    refreshBestSettings()
+    return result
+  })
   // Single activation seam: route any model to the right backend by its kind.
-  ipcMain.handle('models:activate', (_, modelId: string, requestedKind?: string) =>
-    import('./models-manager').then((m) => m.activateModel(modelId, requestedKind))
-  )
+  ipcMain.handle('models:activate', async (_, modelId: string, requestedKind?: string) => {
+    const result = await import('./models-manager').then((m) =>
+      m.activateModel(modelId, requestedKind)
+    )
+    refreshBestSettings()
+    return result
+  })
   ipcMain.handle('models:get-active', () =>
     import('./models-manager').then((m) => m.getActiveModel())
   )
