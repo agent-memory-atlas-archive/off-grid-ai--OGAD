@@ -299,7 +299,9 @@ test.describe('Desktop queue and saved response versions', () => {
       .toEqual(['Finish while I prepare another chat.', 'Queue this first.'])
     await expect(composer).toHaveValue('Keep this unsent draft in the second chat.')
     await expect(
-      page.getByText('The first queued reply is complete.', { exact: true })
+      page
+        .getByTestId(/^chat-message-/)
+        .getByText('The first queued reply is complete.', { exact: true })
     ).toHaveCount(0)
     await page
       .getByRole('button', { name: /^Finish while I prepare another chat\. Conversation actions/ })
