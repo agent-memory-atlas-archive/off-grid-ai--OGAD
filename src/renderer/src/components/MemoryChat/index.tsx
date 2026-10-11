@@ -1862,6 +1862,7 @@ export function MemoryChat({
           }
         }
       } finally {
+        cancelledRef.current.delete(convId)
         markGenerating(convId, false)
         setLoading(false)
         setImgProgress(null)
@@ -2333,7 +2334,7 @@ export function MemoryChat({
             const stored = retainedId
               ? await window.api.updateRagMessage(
                   convId,
-                  comicReaderMessageId,
+                  retainedId,
                   answer,
                   toolCtxWithReasoning
                 )
