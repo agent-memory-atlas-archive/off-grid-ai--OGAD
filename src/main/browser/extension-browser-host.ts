@@ -59,7 +59,8 @@ export const CONTROL_STEPS: Record<PageControl, string> = {
 /** Attach Chrome's debugger to the task tab and start Playwright MCP over it. */
 async function connectDebugger(
   pages: PageProvider,
-  tab: () => ExtensionTabContents
+  tab: () => ExtensionTabContents,
+  front: boolean
 ): Promise<DebuggerConnection> {
   const relay = new ElectronPlaywrightRelay(pages)
   const playwright = new PlaywrightMcpSession(relay)
@@ -72,8 +73,16 @@ async function connectDebugger(
     target.debugger.attach()
     // Await Chrome's attachment before starting MCP, including its permission refusal.
     await target.debugger.sendCommand('Target.getTargetInfo')
+    // A tab the task opened itself is put in front once, as OpenClaw does. A tab in the
+    // background draws no frames, and every click then waits out its 45s timeout for the
+    // element to be stable (found live). The user's own tab is left where it is.
+    if (front) await target.debugger.sendCommand('Page.bringToFront').catch(() => undefined)
     await playwright.connect()
   } catch (error) {
+    console.warn('[web-use][debugger] attach refused', {
+      tabId: target.tabId,
+      error: error instanceof Error ? error.message : String(error)
+    })
     await close()
     target.debugger.detach()
     throw error
@@ -90,7 +99,9 @@ export async function openTaskSession(
   link: BrowserLink,
   pages: PageProvider,
   tab: ExtensionTabContents,
-  onStep: (note: string) => void = () => undefined
+  onStep: (note: string) => void = () => undefined,
+  /** The task opened this tab itself: bring it in front once. */
+  front = false
 ): Promise<TaskSession> {
   const caps = (await link.request('browser.caps')) as { cdp?: unknown } | null
   const current = (): ExtensionTabContents => pages.active() ?? tab
@@ -99,7 +110,7 @@ export async function openTaskSession(
     return { session: page, driver: () => null, close: async () => undefined }
   }
   const session = new DebuggerFallbackSession({
-    connect: () => connectDebugger(pages, current),
+    connect: () => connectDebugger(pages, current, front),
     page,
     onSwitch: (to) => onStep(CONTROL_STEPS[to])
   })
@@ -108,6 +119,47 @@ export async function openTaskSession(
     driver: () => (session.usesDebugger() ? new BrowserDriver(current().transport()) : null),
     close: () => session.close()
   }
+}
+
+/** The page's content the planner gets, at most: enough for its controls and headings. */
+export const PLAN_SNAPSHOT_CHARS = 4000
+const LOAD_WAITS = 5
+const LOAD_WAIT_MS = 1000
+
+/**
+ * What the planner is told: the page the task starts on, and what that page shows. Found live:
+ * planned from the goal alone, a plan named Name, Company and Website fields on a page with
+ * one email box, and the step model rejected every proposal it then made.
+ */
+export async function startingState(
+  tab: Pick<ExtensionTabContents, 'getURL' | 'getTitle'>,
+  session: Pick<SemanticPageSession, 'snapshot'>,
+  signal?: AbortSignal
+): Promise<string> {
+  const page = startingPage(tab)
+  // A tab just opened may not have loaded: wait for a page with controls, a few seconds at most.
+  // Found live: the planner read an empty page (no refs) and planned blind.
+  let shown = await session.snapshot(signal).catch(() => null)
+  for (
+    let wait = 0;
+    wait < LOAD_WAITS && shown && !shown.isError && !/\[ref=/.test(shown.text);
+    wait += 1
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, LOAD_WAIT_MS))
+    shown = await session.snapshot(signal).catch(() => null)
+  }
+  if (!shown || shown.isError || !shown.text.trim()) return page
+  const text =
+    shown.text.length > PLAN_SNAPSHOT_CHARS
+      ? `${shown.text.slice(0, PLAN_SNAPSHOT_CHARS)}\n(page cut here)`
+      : shown.text
+  return `${page}\n\nWhat the page shows now:\n${text}`
+}
+
+/** What the planner is told about the page the task starts on. */
+export function startingPage(tab: Pick<ExtensionTabContents, 'getURL' | 'getTitle'>): string {
+  const title = tab.getTitle().trim()
+  return `The task starts in the browser tab at ${tab.getURL()}${title ? ` ("${title}")` : ''}. That page is already open: plan from it, with no step to open or reload it.`
 }
 
 /**
@@ -180,12 +232,6 @@ async function runInBrowser(
 
   try {
     setState('running', `Working in ${link.browser.name}`)
-    const plan =
-      checkpoint?.plan ??
-      (await prepareTaskExecutionPlan(
-        { goal: retryPlanningGoal(goal, checkpoint), surface: 'web', signal: controller.signal },
-        recordStep
-      ))
     let tab: ExtensionTabContents
     if (startTabId === undefined) {
       const start = url ?? START_URL
@@ -196,7 +242,32 @@ async function runInBrowser(
       tab = await pages.adopt(startTabId, taskId, url)
       recordStep(`working in your tab in ${link.browser.name}`)
     }
-    const task = await openTaskSession(link, pages, tab, recordStep)
+    const task = await openTaskSession(link, pages, tab, recordStep, startTabId === undefined)
+    // Planning can take half a minute on a local model; say so instead of looking idle.
+    if (!checkpoint?.plan) {
+      reportTaskProgress({
+        taskId,
+        journeyId,
+        kind: 'web_use',
+        title: goal,
+        status: 'running',
+        currentAction: 'Planning the task'
+      })
+    }
+    const plan =
+      checkpoint?.plan ??
+      (await prepareTaskExecutionPlan(
+        {
+          goal: retryPlanningGoal(goal, checkpoint),
+          surface: 'web',
+          // The page the task starts on, so the plan begins from it. Without it a plan opened
+          // with "Navigate to the sign-up page" while the user was on it, and the reload
+          // cleared what was filled.
+          currentState: await startingState(tab, task.session, controller.signal),
+          signal: controller.signal
+        },
+        recordStep
+      ))
     const semantic = await runBrowserPlaywrightTask({
       goal,
       plan,

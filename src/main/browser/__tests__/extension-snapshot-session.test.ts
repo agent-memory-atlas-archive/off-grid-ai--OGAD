@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 import type { BrowserLink } from '../../extension-bridge/bridge-socket'
 import type { SocketOp } from '../../extension-bridge/bridge-socket-protocol'
 import { ExtensionSnapshotSession } from '../extension-snapshot-session'
-import { CONTROL_STEPS, openTaskSession } from '../extension-browser-host'
+import {
+  CONTROL_STEPS,
+  openTaskSession,
+  PLAN_SNAPSHOT_CHARS,
+  startingPage,
+  startingState
+} from '../extension-browser-host'
 import { DEBUGGER_BLOCKED } from '../debugger-fallback-session'
 import { createExtensionPageProvider } from '../extension-tab-pages'
 
@@ -116,5 +122,62 @@ describe('openTaskSession', () => {
       'cdp.detach',
       'page.call'
     ])
+  })
+})
+
+describe('startingPage', () => {
+  it('tells the planner which page is already open, so it plans no step to open it', () => {
+    // Found live: the plan began "Navigate to the sign-up page" while the user was on it.
+    const tab = { getURL: () => 'https://shop.test/signup', getTitle: () => 'Create Your Account' }
+    expect(startingPage(tab)).toBe(
+      'The task starts in the browser tab at https://shop.test/signup ("Create Your Account"). That page is already open: plan from it, with no step to open or reload it.'
+    )
+    expect(startingPage({ ...tab, getTitle: () => '  ' })).toContain(
+      'https://shop.test/signup. That'
+    )
+  })
+})
+
+describe('startingState', () => {
+  const tab = { getURL: () => 'https://shop.test/apply', getTitle: () => 'Apply' }
+  const session = (
+    text: string,
+    isError = false
+  ): { snapshot: () => Promise<{ text: string; isError: boolean }> } => ({
+    snapshot: async () => ({ text, isError })
+  })
+
+  it("gives the planner what the page shows, so the plan names this page's controls", async () => {
+    // Found live: a plan for Name, Company and Website fields on a page with one email box.
+    const state = await startingState(
+      tab,
+      session('- textbox "Email" [ref=e1]\n- button "Sign Up / Login" [ref=e2]')
+    )
+    expect(state).toContain(startingPage(tab))
+    expect(state).toContain('What the page shows now:\n- textbox "Email" [ref=e1]')
+  })
+
+  it('cuts a long page, and plans from the URL alone when the page cannot be read', async () => {
+    const long = await startingState(tab, session('x'.repeat(PLAN_SNAPSHOT_CHARS + 50)))
+    expect(long).toContain('(page cut here)')
+    expect(long.length).toBeLessThan(PLAN_SNAPSHOT_CHARS + 400)
+    expect(await startingState(tab, session('boom', true))).toBe(startingPage(tab))
+    const failing = { snapshot: async () => Promise.reject(new Error('detached')) }
+    expect(await startingState(tab, failing)).toBe(startingPage(tab))
+  })
+})
+
+describe('startingState on a page still loading', () => {
+  it('waits for the page to show controls before the planner reads it', async () => {
+    // Found live: a tab just opened gave the planner an empty page, and it planned blind.
+    const tab = { getURL: () => 'https://news.test/', getTitle: () => 'News' }
+    const reads = ['', '- link "Top story" [ref=e1]']
+    const session = {
+      snapshot: async (): Promise<{ text: string; isError: boolean }> => ({
+        text: reads.length > 1 ? (reads.shift() as string) : reads[0]!,
+        isError: false
+      })
+    }
+    expect(await startingState(tab, session)).toContain('- link "Top story" [ref=e1]')
   })
 })
