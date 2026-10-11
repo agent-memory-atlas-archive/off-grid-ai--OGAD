@@ -1,3 +1,4 @@
+import type { ResponseVersion } from '../../../../shared/chat-versions'
 import type {
   ProjectedSyncedTool,
   RecordProvenance,
@@ -23,7 +24,8 @@ export type RagEntity = { id: number; name?: string }
 export type RagEntityFact = { fact?: string } | string
 
 export type RagContext = {
-  variants?: string[]
+  branches?: { question: string; answers: ResponseVersion[] }[]
+  variants?: ResponseVersion[]
   variantIndex?: number
   notice?: boolean
   masterMemory?: string | null
@@ -114,7 +116,7 @@ export type ChatMessage = {
   streaming?: boolean
   activity?: { kind: string; counts?: Record<string, number>; name?: string }
   attachments?: { name: string; kind: string; text?: string; path?: string }[]
-  variants?: string[]
+  variants?: ResponseVersion[]
   variantIndex?: number
   audioUrl?: string
   audioDuration?: number

@@ -1,3 +1,4 @@
+import { versionContent } from '../../../../shared/chat-versions'
 import {
   isPromptEnhancementReasoningLabel,
   isPromptEnhancementStatus,
@@ -120,12 +121,15 @@ export function isSupportingMessage(message: ChatMessage): boolean {
 
 export function selectedMessageContent(message: ChatMessage): string {
   if (message.streaming || !message.variants || message.variantIndex == null) return message.content
-  return message.variants[message.variantIndex] ?? message.content
+  return versionContent(message.variants[message.variantIndex], message.content)
 }
 
 /** The reply's prose once its artifact code moved into the artifact card. */
 export function withoutArtifactFences(content: string): string {
-  return content.replace(ARTIFACT_FENCE, '').replace(/\n{3,}/g, '\n\n').trim()
+  return content
+    .replace(ARTIFACT_FENCE, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 export function renderedMessageContent(message: ChatMessage): string {

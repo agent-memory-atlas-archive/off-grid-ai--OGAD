@@ -10,7 +10,7 @@ import type {
 
 export type StreamEvent = {
   streamId: string
-  type: 'content' | 'reasoning' | 'step' | 'tool_result'
+  type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'done' | 'error' | 'cancel'
   text?: string
   step?: unknown
   call?: { name: string; result: string; status: 'completed' | 'failed' | 'pending' }
@@ -95,7 +95,7 @@ function deferred<T>(): {
 }
 
 export class ChatBoundary {
-  constructor(private readonly createSplitter?: ThinkSplitterFactory) { }
+  constructor(private readonly createSplitter?: ThinkSplitterFactory) {}
 
   readonly projects = [
     { id: 'project-alpha', name: 'Project Alpha' },
@@ -126,6 +126,7 @@ export class ChatBoundary {
   readonly toolQueries: { query: string; options: Record<string, unknown> }[] = []
 
   readonly speechTurns: ReturnType<typeof deferred<{ dataUrl: string }>>[] = []
+  readonly settings: Record<string, unknown> = {}
   readonly activeRagStreams: ActiveChatStreamContract[] = []
 
   private streamCallback: ((event: StreamEvent) => void) | null = null
@@ -141,6 +142,8 @@ export class ChatBoundary {
   private disposed = false
 
   readonly cancelRag = vi.fn((streamId: string) => {
+    const restored = this.activeRagStreams.findIndex((stream) => stream.streamId === streamId)
+    if (restored >= 0) this.activeRagStreams.splice(restored, 1)
     this.calls.find((call) => call.streamId === streamId)?.turn.reject(new Error('Cancelled'))
   })
   readonly listTasks = vi.fn(async () => [] as TaskSnapshot[])
@@ -198,10 +201,22 @@ export class ChatBoundary {
       })
     },
     vision: { control: this.stopComputerTask },
-    onImageGenProgress: vi.fn(() => () => { }),
-    onImageGenJobState: vi.fn(() => () => { }),
-    onImageGenConversationUpdated: vi.fn(() => () => { }),
-    imageGenJobStatus: vi.fn(async () => ({ id: null, phase: 'idle' as const, conversationId: null, projectId: null, stage: null, enhancedPrompt: '', progress: null, outputPath: null, error: null, startedAt: null, finishedAt: null })),
+    onImageGenProgress: vi.fn(() => () => {}),
+    onImageGenJobState: vi.fn(() => () => {}),
+    onImageGenConversationUpdated: vi.fn(() => () => {}),
+    imageGenJobStatus: vi.fn(async () => ({
+      id: null,
+      phase: 'idle' as const,
+      conversationId: null,
+      projectId: null,
+      stage: null,
+      enhancedPrompt: '',
+      progress: null,
+      outputPath: null,
+      error: null,
+      startedAt: null,
+      finishedAt: null
+    })),
     onRagConversationsChanged: vi.fn(
       (callback: (change: { conversationId: string; projectId?: string | null }) => void) => {
         this.conversationChangedCallback = callback
@@ -224,7 +239,11 @@ export class ChatBoundary {
       async (_projectId?: string | null, _page?: unknown, surface?: 'chat' | 'god') =>
         this.conversations
           .filter((item) =>
-            surface === 'god' ? item.surface === 'god' : surface === 'chat' ? item.surface !== 'god' : true
+            surface === 'god'
+              ? item.surface === 'god'
+              : surface === 'chat'
+                ? item.surface !== 'god'
+                : true
           )
           .map((item) => ({ ...item }))
     ),
@@ -263,7 +282,12 @@ export class ChatBoundary {
       if (conversation) conversation.project_id = projectId
     }),
     addRagMessage: this.addRagMessage,
-    updateRagMessage: async (conversationId: string, messageId: string, content: string, context?: unknown) => {
+    updateRagMessage: async (
+      conversationId: string,
+      messageId: string,
+      content: string,
+      context?: unknown
+    ) => {
       const message = this.messages[conversationId]?.find((entry) => String(entry.id) === messageId)
       if (!message) return false
       message.content = content
@@ -286,10 +310,12 @@ export class ChatBoundary {
       { id: 'bf_emma', label: 'Emma', language: 'en-GB' }
     ]),
     prepareTtsVoice: vi.fn(async () => ({ ready: true })),
-    onTtsVoiceProgress: vi.fn(() => () => { }),
-    getSettings: vi.fn(async () => ({})),
+    onTtsVoiceProgress: vi.fn(() => () => {}),
+    getSettings: vi.fn(async () => structuredClone(this.settings)),
     getLlmSettings: vi.fn(async () => ({})),
-    saveSetting: vi.fn(async () => { }),
+    saveSetting: vi.fn(async (key: string, value: unknown) => {
+      this.settings[key] = structuredClone(value)
+    }),
     listProjects: vi.fn(async () => this.projects.map((item) => ({ ...item }))),
     styleThumbs: vi.fn(async () => ({})),
     listSkills: vi.fn(async (): Promise<{ name: string; description: string }[]> => []),
@@ -365,6 +391,10 @@ export class ChatBoundary {
   releaseConversationRead(conversationId: string): void {
     this.pendingConversationReads.get(conversationId)?.resolve()
     this.pendingConversationReads.delete(conversationId)
+  }
+
+  emitStream(event: StreamEvent): void {
+    this.streamCallback?.(event)
   }
 
   emit(callIndex: number, text: string): void {
@@ -485,7 +515,7 @@ afterEach(async () => {
 
 export function installBoundary(boundary: ChatBoundary): void {
   installedBoundaries.add(boundary)
-  ; (globalThis as unknown as { window: { api: unknown } }).window.api = boundary.api
+  ;(globalThis as unknown as { window: { api: unknown } }).window.api = boundary.api
 }
 
 export function renderChat(target: {

@@ -1,3 +1,4 @@
+import { selectedVersionRepairs, type StoredVersionRow } from '../shared/chat-versions'
 // better-sqlite3-multiple-ciphers is a drop-in superset of better-sqlite3 that
 // adds SQLCipher-style `PRAGMA key` encryption. Same API surface + types.
 import Database from 'better-sqlite3-multiple-ciphers'
@@ -491,6 +492,20 @@ export function getDB(): Database.Database {
   // Unique so a replayed remote op upserts instead of duplicating. SQLite treats NULLs as
   // distinct, so this is safe to create even if a backfill ever misses a row.
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_rag_messages_uuid ON rag_messages(uuid)')
+
+  const versionRepairs = selectedVersionRepairs(
+    db
+      .prepare(
+        `SELECT id, content, context FROM rag_messages WHERE role = 'assistant' AND context LIKE '%"variantIndex"%'`
+      )
+      .all() as StoredVersionRow[]
+  )
+  if (versionRepairs.length) {
+    const update = db.prepare('UPDATE rag_messages SET content = ? WHERE id = ?')
+    db.transaction(() => {
+      for (const row of versionRepairs) update.run(row.content, row.id)
+    })()
+  }
 
   return db
 }

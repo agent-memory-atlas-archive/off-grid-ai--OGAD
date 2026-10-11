@@ -1,3 +1,4 @@
+import { versionContent, type ResponseVersion } from './chat-versions'
 // Pure builder for the model-facing history of a chat send. Kept Electron-free and
 // component-free so it's unit-tested directly — and, more importantly, so the
 // history is a function of the messages you PASS it, forcing the caller to pass the
@@ -12,7 +13,7 @@
 export interface HistoryTurn {
   role: string
   content: string
-  variants?: string[]
+  variants?: ResponseVersion[]
   variantIndex?: number
   context?: {
     taskGuidance?: unknown
@@ -32,7 +33,7 @@ function modelContent(turn: HistoryTurn): string {
       index >= 0
         ? turn.variants?.[index]
         : undefined
-    return typeof selected === 'string' ? selected : turn.content
+    return versionContent(selected, turn.content)
   }
   const attachments = turn.attachments ?? turn.context?.attachments ?? []
   const text = attachments

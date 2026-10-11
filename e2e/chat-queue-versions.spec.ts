@@ -46,7 +46,9 @@ async function launchApp(): Promise<void> {
   await completeOnboarding(page)
   await expect(async () => {
     await page.getByRole('button', { name: 'Chat', exact: true }).click()
-    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeVisible({ timeout: 1_000 })
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeVisible({
+      timeout: 1_000
+    })
   }).toPass({ timeout: 15_000 })
   // These journeys exercise message controls. Keep tool routing out of the
   // synthetic model contract through the same setting a user can change.
@@ -181,7 +183,7 @@ test.describe('Desktop queue and saved response versions', () => {
     ).toEqual(['Hold this reply open.'])
   })
 
-  test('resend, regenerate, and edit retain answers and the selected version after restart', async () => {
+  test('resend and regenerate keep versions; edit starts a new branch after restart', async () => {
     await submit('Keep each response version.')
     await answer('Original answer version 1.')
     await page.getByRole('button', { name: 'Message actions', exact: true }).first().click()
@@ -204,7 +206,7 @@ test.describe('Desktop queue and saved response versions', () => {
     await page.locator('textarea:not([placeholder])').fill('Keep the edited response too.')
     await page.getByRole('button', { name: 'Save & submit', exact: true }).click()
     await answer('Edited answer version 4.')
-    await expect(page.getByText('4/4', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Previous response' })).toHaveCount(0)
     await expect(
       page.getByText('The later answer will be removed by the edit.', { exact: true })
     ).toHaveCount(0)
@@ -213,15 +215,11 @@ test.describe('Desktop queue and saved response versions', () => {
         .filter((entry) => entry.event === 'request')
         .at(-1)?.messages
     ).toEqual([{ role: 'user', content: 'Keep the edited response too.' }])
-    await page.getByRole('button', { name: 'Previous response' }).click()
-    await expect(page.getByText('3/4', { exact: true })).toBeVisible()
     await closeApp()
     await launchApp()
-    await expect(page.getByText('3/4', { exact: true })).toBeVisible()
-    await expect(page.getByText('Original answer version 3.', { exact: true }).last()).toBeVisible()
-    await page.getByRole('button', { name: 'Next response' }).click()
+    await expect(page.getByRole('button', { name: 'Previous response' })).toHaveCount(0)
+    await expect(page.getByText('Original answer version 3.', { exact: true })).toHaveCount(0)
     await expect(page.getByText('Edited answer version 4.', { exact: true }).last()).toBeVisible()
-    await expect(page.getByText('4/4', { exact: true })).toBeVisible()
   })
 
   test('keeps the saved answer when the app closes during resend', async () => {
@@ -273,8 +271,10 @@ test.describe('Desktop queue and saved response versions', () => {
     await answer('The saved answer before failure remains available.')
     await page.getByRole('button', { name: 'Message actions', exact: true }).first().click()
     await page.getByRole('menuitem', { name: 'Resend', exact: true }).click()
-    await expect(page.getByText('2/2', { exact: true })).toBeVisible()
+    await expect(page.getByText('1/2', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeHidden()
+    await page.getByRole('button', { name: 'Next response' }).click()
+    await expect(page.getByText('2/2', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Previous response' }).click()
     await expect(
       page.getByText('The saved answer before failure remains available.', { exact: true }).last()
