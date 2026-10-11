@@ -485,6 +485,38 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
     expect(round1.tool_choice).toBe('auto')
   })
 
+  it('keeps the first message unchanged on the next turn so the engine reuses its prompt cache', async () => {
+    type Round = { tools?: { function?: { name?: string } }[]; messages?: { content?: unknown }[] }
+    const names = (round: Round): string[] => (round.tools ?? []).map((t) => t.function?.name ?? '')
+    const firstQuestion = 'calculator: what is (3+4)*2'
+    fake.enqueue({ content: 'It is 14.' })
+    await toolChat(firstQuestion, [], { conversationId: 'chat-prompt-cache' })
+    const turn1 = fake.requests[0] as Round
+
+    fake.reset()
+    fake.enqueue({ content: 'It is noon.' })
+    await toolChat(
+      'get_datetime: what time is it',
+      [
+        { role: 'user', content: firstQuestion },
+        { role: 'assistant', content: 'It is 14.' }
+      ],
+      { conversationId: 'chat-prompt-cache' }
+    )
+    const turn2 = fake.requests[0] as Round
+
+    // The earlier tools lead in the same order, the new pick follows, and the system text holds.
+    expect(names(turn2).slice(0, names(turn1).length)).toEqual(names(turn1))
+    expect(names(turn2)).toContain('get_datetime')
+    expect(turn2.messages?.[0]?.content).toEqual(turn1.messages?.[0]?.content)
+
+    // Another conversation starts from its own message, not this chat's tools.
+    fake.reset()
+    fake.enqueue({ content: 'It is noon.' })
+    await toolChat('get_datetime: what time is it', [], { conversationId: 'chat-fresh' })
+    expect(names(fake.requests[0] as Round)[0]).toBe('get_datetime')
+  })
+
   it('uses the configured tool-step budget beyond the old five-step cap', async () => {
     await llm.setSettings({ maxToolCalls: 7 })
     try {

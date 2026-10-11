@@ -805,17 +805,6 @@ export async function toolChat(
       )
     }
   }
-  const relevantNames = new Set(
-    relevantTools.flatMap((schema) => {
-      const name = (schema as { function?: { name?: unknown } }).function?.name
-      return typeof name === 'string' ? [name] : []
-    })
-  )
-  hints.push(
-    ...extensionHints
-      .filter((hint) => [...hint.names].some((name) => relevantNames.has(name)))
-      .map((hint) => hint.text)
-  )
   const protectedToolCount =
     explicitlyNamedTools.length +
     assistantRequiredTools.filter((t) => !explicitlyNamedTools.includes(t)).length
@@ -827,7 +816,35 @@ export async function toolChat(
   // large tool payload dominates latency. ~4k keeps a useful connector set while
   // roughly halving per-round prompt cost vs the old 45%-of-a-big-context budget.
   const toolBudget = Math.max(1024, Math.min(Math.floor(ctx * 0.4), MAX_TOOL_TOKENS))
-  const budgeted = budgetTools(relevantTools, toolBudget, protectedToolCount)
+  // Tools sit in the system message, ahead of the history: keep earlier turns' tools in place
+  // so the server reuses its prompt cache. Start fresh only when the kept set no longer fits.
+  const { mergeStickyTools, previousOfferedTools, rememberOfferedTools } =
+    await import('./tools/sticky-tool-set')
+  const stickyTools = mergeStickyTools(
+    previousOfferedTools(opts.conversationId),
+    relevantTools,
+    rawTools
+  )
+  const stickyFits =
+    budgetTools(stickyTools, toolBudget, stickyTools.length).estTokens <= toolBudget
+  if (stickyFits) relevantTools = stickyTools
+  const budgeted = budgetTools(
+    relevantTools,
+    toolBudget,
+    stickyFits ? relevantTools.length : protectedToolCount
+  )
+  rememberOfferedTools(opts.conversationId, budgeted.tools)
+  const relevantNames = new Set(
+    relevantTools.flatMap((schema) => {
+      const name = (schema as { function?: { name?: unknown } }).function?.name
+      return typeof name === 'string' ? [name] : []
+    })
+  )
+  hints.push(
+    ...extensionHints
+      .filter((hint) => [...hint.names].some((name) => relevantNames.has(name)))
+      .map((hint) => hint.text)
+  )
   if (budgeted.pruned || budgeted.droppedCount) {
     console.warn(
       `[tools] context budget ${toolBudget} tok: pruned schemas${budgeted.droppedCount ? `, dropped ${budgeted.droppedCount} connector tool(s)` : ''} to fit (final ~${budgeted.estTokens} tok)`
