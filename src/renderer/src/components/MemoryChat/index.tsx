@@ -2641,8 +2641,12 @@ export function MemoryChat({
         queuedRef.current = clearQueue(queuedRef.current, convId)
         setQueuedByConv({ ...queuedRef.current })
       }
+      let preparing = false
       for (const [streamId, owner] of streamConvRef.current) {
-        if (owner === convId && streamId.startsWith('prepare-')) streamConvRef.current.delete(streamId)
+        if (owner === convId && streamId.startsWith('prepare-')) {
+          preparing = true
+          cancelledRef.current.add(streamId)
+        }
       }
       if (task?.journeyId === convId) {
         try {
@@ -2665,7 +2669,8 @@ export function MemoryChat({
         window.api.cancelRag(streamingId)
         await finalizeStoppedTurn(convId, streamingId)
       }
-      if (!preserveQueue) markGenerating(convId, false)
+      // Preparation keeps its reservation until pending storage writes settle.
+      if (!preserveQueue && !preparing) markGenerating(convId, false)
       // Cancel + clear the image job ONLY if THIS conversation owns it, so stopping
       // one conversation never kills another's in-flight image (D9). imgProgress is a
       // shared stream buffer — clear it too when the owner stops.
@@ -3075,22 +3080,32 @@ export function MemoryChat({
             // the main process is still removing the old durable answer.
             setRemoteWorkPreview(null)
             setMessages((prev) => prev.slice(0, i + 1))
+            let prepared = false
             try {
               await stopLiveWebUseForConversation(cid)
+              if (cancelledRef.current.has(preparationId)) return
               await window.api.truncateRagMessages(cid, priorAnswer ? messages.indexOf(priorAnswer) + 1 : i + 1)
+              if (cancelledRef.current.has(preparationId)) return
               if (replacedTaskIds.length) await window.api.tasks?.remove?.(replacedTaskIds)
+              prepared = !cancelledRef.current.has(preparationId)
             } catch (error) {
-              streamConvRef.current.delete(preparationId)
               console.error('Failed to prepare the replacement response:', error)
-              markGenerating(cid, false)
-              await refreshConversationMessages(cid)
-              drainQueue(cid)
-              return
+            } finally {
+              if (!prepared) {
+                try {
+                  await refreshConversationMessages(cid)
+                } catch (error) {
+                  console.error('Failed to restore the conversation after preparation stopped:', error)
+                } finally {
+                  streamConvRef.current.delete(preparationId)
+                  cancelledRef.current.delete(preparationId)
+                  cancelledRef.current.delete(cid)
+                  markGenerating(cid, false)
+                  drainQueue(cid)
+                }
+              } else streamConvRef.current.delete(preparationId)
             }
-            if (!streamConvRef.current.delete(preparationId)) {
-              await refreshConversationMessages(cid)
-              return
-            }
+            if (!prepared) return
             // The turn's own attachments, not the composer's - the composer was cleared when this
             // turn was first sent, so regenerating without them re-asks the question WITHOUT its image.
             try {
@@ -3156,32 +3171,35 @@ export function MemoryChat({
         }
       : undefined
     void (async () => {
-      await stopLiveWebUseForConversation(cid)
+      let prepared = false
       try {
-        if (cid) {
-          const updated = await window.api.updateRagMessage(cid, id, text, { ...edited?.context, ...persisted })
-          if (!updated) throw new Error('Saved user message was not found')
-          await window.api.truncateRagMessages(cid, priorAnswer ? messages.indexOf(priorAnswer) + 1 : idx + 1)
-        }
+        await stopLiveWebUseForConversation(cid)
+        if (cancelledRef.current.has(preparationId)) return
+        const updated = await window.api.updateRagMessage(cid, id, text, { ...edited?.context, ...persisted })
+        if (!updated) throw new Error('Saved user message was not found')
+        if (cancelledRef.current.has(preparationId)) return
+        await window.api.truncateRagMessages(cid, priorAnswer ? messages.indexOf(priorAnswer) + 1 : idx + 1)
+        if (cancelledRef.current.has(preparationId)) return
         if (replacedTaskIds.length) await window.api.tasks?.remove?.(replacedTaskIds)
+        prepared = !cancelledRef.current.has(preparationId)
       } catch (error) {
-        streamConvRef.current.delete(preparationId)
         console.error('Failed to persist the edited user message:', error)
-        markGenerating(cid, false)
-        drainQueue(cid)
-        if (cid) {
+      } finally {
+        if (!prepared) {
           try {
             await refreshConversationMessages(cid)
           } catch (refreshError) {
             console.error('Failed to restore the conversation after the edit failed:', refreshError)
+          } finally {
+            streamConvRef.current.delete(preparationId)
+            cancelledRef.current.delete(preparationId)
+            cancelledRef.current.delete(cid)
+            markGenerating(cid, false)
+            drainQueue(cid)
           }
-        }
-        return
+        } else streamConvRef.current.delete(preparationId)
       }
-      if (!streamConvRef.current.delete(preparationId)) {
-        await refreshConversationMessages(cid)
-        return
-      }
+      if (!prepared) return
       try {
         await sendMessage(text, {
           regen: true, atts: keptAtts, priorVariants,

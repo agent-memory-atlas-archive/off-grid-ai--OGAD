@@ -1,13 +1,12 @@
 import { parseChatStart, validChatId, type ChatRequest } from './bridge-chat'
-import type { BridgeData, PairedBrowser } from './bridge-service'
 
-type Handler = (params: Record<string, unknown>, browser: PairedBrowser) => Promise<unknown>
-export function chatHandlers(
-  data: BridgeData
-): Record<'chat.start' | 'chat.read' | 'chat.stop', Handler> {
-  const chat = (request: ChatRequest, browser: PairedBrowser): Promise<unknown> => {
-    if (!data.chat) throw new Error('chat_unavailable')
-    return data.chat(request, browser)
+type Handler<Browser> = (params: Record<string, unknown>, browser: Browser) => Promise<unknown>
+export function chatHandlers<Browser>(
+  execute: ((request: ChatRequest, browser: Browser) => Promise<unknown>) | undefined
+): Record<'chat.start' | 'chat.read' | 'chat.stop', Handler<Browser>> {
+  const chat = (request: ChatRequest, browser: Browser): Promise<unknown> => {
+    if (!execute) throw new Error('chat_unavailable')
+    return execute(request, browser)
   }
   return {
     'chat.start': async (p, browser) => {
