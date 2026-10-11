@@ -31,7 +31,12 @@ import {
 } from '@offgrid/models'
 import { toolPromptChars } from './tools/prompt-budget'
 import { buildPageFence } from './tools/page-fence'
-import { isToolAllowedForOrigin, type ToolOrigin } from './tools/tool-origin'
+import {
+  isToolAllowedForOrigin,
+  PAIRED_BROWSER_COMPUTER_USE_REFUSAL,
+  toolOriginOf,
+  type ToolOrigin
+} from './tools/tool-origin'
 import { selectChatToolSchemas } from './tools/chat-tool-selection'
 import { budgetTools } from './tools/tool-budget'
 import { ANSWER_NOW_INSTRUCTION, emptyAnswerReason } from '../shared/empty-answer'
@@ -513,8 +518,14 @@ export async function runTool(
   ctx: ToolContext,
   exts: ToolExtension[]
 ): Promise<ToolResult> {
-  if (!isToolAllowedForOrigin(name, ctx.origin, { acting: ctx.acting })) {
-    return { text: 'Error: tool_unavailable', status: 'failed', authoritative: true }
+  const origin = toolOriginOf(ctx)
+  if (!isToolAllowedForOrigin(name, origin.origin, origin)) {
+    return {
+      text:
+        name === 'computer_use' ? PAIRED_BROWSER_COMPUTER_USE_REFUSAL : 'Error: tool_unavailable',
+      status: 'failed',
+      authoritative: true
+    }
   }
   try {
     const ext = exts.find((e) => e.canHandle(name))
