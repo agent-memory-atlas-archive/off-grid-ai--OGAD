@@ -10,6 +10,8 @@ export interface ChatStart {
   prompt: string
   mode: 'chat' | 'agent' | 'image'
   branch?: boolean | undefined
+  /** Number of Desktop-stored user and assistant turns to keep before the prompt. */
+  branchFrom?: number | undefined
   history?: ChatTurn[] | undefined
   pageText?: string | undefined
   imageDataUrl?: string | undefined
@@ -36,6 +38,7 @@ export type ChatRequest =
 
 export const validChatId = (v: unknown): v is string =>
   typeof v === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(v)
+export const MAX_BRANCH_FROM = 10_000
 const object = (raw: unknown): Record<string, unknown> | null =>
   raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null
 const text = (v: unknown, max: number): v is string => typeof v === 'string' && v.length <= max
@@ -65,6 +68,13 @@ export function parseChatStart(raw: unknown): ChatStart | null {
   if (!r || !validChatId(r.runId) || !validChatId(r.conversationId)) return null
   if (!text(r.prompt, 20000) || !r.prompt.trim()) return null
   if (r.mode !== 'chat' && r.mode !== 'agent' && r.mode !== 'image') return null
+  if (
+    r.branchFrom !== undefined &&
+    (!Number.isSafeInteger(r.branchFrom) ||
+      Number(r.branchFrom) < 0 ||
+      Number(r.branchFrom) > MAX_BRANCH_FROM)
+  )
+    return null
   const turns = history(r.history)
   if (turns === null || !attachmentValid(r)) return null
   // AES-GCM plus base64 must still fit the bridge's 4 MB HTTP body limit.
@@ -75,6 +85,7 @@ export function parseChatStart(raw: unknown): ChatStart | null {
     prompt: r.prompt,
     mode: r.mode,
     branch: r.branch === true,
+    branchFrom: r.branchFrom as number | undefined,
     history: turns,
     pageText: r.pageText as string | undefined,
     imageDataUrl: r.imageDataUrl as string | undefined,

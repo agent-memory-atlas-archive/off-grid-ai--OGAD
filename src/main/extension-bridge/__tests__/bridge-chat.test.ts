@@ -1,10 +1,24 @@
 import { describe, expect, it } from 'vitest'
-import { parseChatRead, parseChatStart } from '../bridge-chat'
+import { MAX_BRANCH_FROM, parseChatRead, parseChatStart } from '../bridge-chat'
 
 const identity = { runId: 'run-00000001', conversationId: 'chat-0000001' }
 const start = { ...identity, prompt: 'Summarize this page', mode: 'chat' }
 
 describe('browser chat request limits', () => {
+  it.each([0, 12, MAX_BRANCH_FROM])('accepts stored turn index %i', (branchFrom) => {
+    expect(parseChatStart({ ...start, branchFrom })?.branchFrom).toBe(branchFrom)
+  })
+
+  it.each([-1, 1.5, '2', NaN, Infinity, MAX_BRANCH_FROM + 1, Number.MAX_SAFE_INTEGER + 1, null])(
+    'rejects invalid stored turn index %s',
+    (branchFrom) => {
+      expect(parseChatStart({ ...start, branchFrom })).toBeNull()
+    }
+  )
+
+  it('leaves an absent stored turn index undefined', () => {
+    expect(parseChatStart(start)?.branchFrom).toBeUndefined()
+  })
   it('retains the branch, selected history, page, image, and source tab', () => {
     const input = {
       ...start,
