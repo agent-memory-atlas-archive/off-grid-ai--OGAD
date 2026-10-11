@@ -11,6 +11,16 @@ vi.mock('electron', () => ({
   shell: { openExternal: async () => {} }
 }))
 import { listBridgeTools } from '../bridge-electron'
+import { createBridgeService } from '../bridge-service'
+import {
+  deriveSessionKey,
+  exportPublicKey,
+  generateKeyPair,
+  open,
+  requestAad,
+  responseAad,
+  seal
+} from '../bridge-protocol'
 import {
   getToolExtensions,
   registerToolExtension,
@@ -58,20 +68,209 @@ afterAll(async () => {
 const names = (tools: unknown[]): unknown[] => tools.map((tool) => (tool as { name: string }).name)
 
 describe('bridge origin with the real tool registry', () => {
-  it.each([undefined, 'computer_use', 'zxqvplmn'])(
-    'lists browser control but never desktop control for %s',
-    async (task) => {
-      const listed = names(await listBridgeTools(task))
-      expect(listed).toContain('web_use')
-      expect(listed).not.toContain('computer_use')
+  it('lists the full enabled catalog, including native and connector tools', async () => {
+    const connector = {
+      id: 'bridge-test-connector',
+      category: 'connector' as const,
+      schemas: () => [
+        {
+          type: 'function',
+          function: { name: 'connector_search', description: 'Search records', parameters: {} }
+        }
+      ],
+      canHandle: (name: string) => name === 'connector_search',
+      execute: () => 'Found'
+    }
+    registerToolExtension(connector)
+    try {
+      const listed = await listBridgeTools()
+      expect(listed.length).toBeGreaterThan(6)
+      expect(names(listed)).toContain('web_search')
+      expect(names(listed)).toContain('contacts_search')
+      expect(names(listed)).toContain('open_url')
+      expect(names(listed)).toContain('web_use')
+      expect(names(listed)).not.toContain('computer_use')
+      expect(listed).toContainEqual(
+        expect.objectContaining({
+          name: 'connector_search',
+          source: 'connector',
+          connector: connector.id
+        })
+      )
+      saveSetting('disabledTools', ['connector_search', 'open_url'])
+      expect(names(await listBridgeTools())).not.toContain('connector_search')
+      expect(names(await listBridgeTools())).not.toContain('open_url')
+    } finally {
+      saveSetting('disabledTools', [])
+      unregisterToolExtension(connector.id, connector)
+    }
+  })
+
+  it.each(['web_search', 'contacts_search', 'open_url', 'web_use'])(
+    'puts the named tool %s first in task selection',
+    async (name) => {
+      const listed = await listBridgeTools(name)
+      expect(listed[0]).toMatchObject({ name, source: 'native' })
+      expect(listed.length).toBeLessThan((await listBridgeTools()).length)
+      expect(names(listed)).not.toContain('computer_use')
+      if (name === 'contacts_search') expect(names(listed)).not.toContain('web_use')
     }
   )
 
-  it('protects web control in the explicit handoff even when chat tools are disabled', async () => {
-    saveSetting('toolsEnabled', false)
-    saveSetting('disabledTools', ['web_use', 'computer_use'])
+  it.each(['', '   ', '\t\n', 'quasar zephyr xylophone'])(
+    'returns no tools for a blank or unmatched offline task %j',
+    async (task) => {
+      expect(await listBridgeTools(task)).toEqual([])
+    }
+  )
+
+  it('bounds task schemas by the effective context size', async () => {
+    const catalog = await listBridgeTools()
+    const task = [...catalog]
+      .sort((a, b) => JSON.stringify(b).length - JSON.stringify(a).length)
+      .slice(0, 6)
+      .map((tool) => (tool as { name: string }).name)
+      .join(' ')
+    const schemas = (tools: unknown[]): unknown[] =>
+      tools.map((tool) => {
+        const { name, description, parameters } = tool as Record<string, unknown>
+        return { type: 'function', function: { name, description, parameters } }
+      })
+    const context = vi.spyOn(llm, 'effectiveContextSize').mockReturnValue(32768)
     try {
-      expect(names(await listBridgeTools('zxqvplmn'))).toEqual(['web_use'])
+      const normal = await listBridgeTools(task)
+      expect(Math.ceil(JSON.stringify(schemas(normal)).length / 4)).toBeGreaterThan(1024)
+      context.mockReturnValue(2048)
+      const budgeted = await listBridgeTools(task)
+      expect(budgeted.length).toBeGreaterThan(0)
+      expect(budgeted.length).toBeLessThanOrEqual(normal.length)
+      expect(Math.ceil(JSON.stringify(schemas(budgeted)).length / 4)).toBeLessThanOrEqual(1024)
+      expect(JSON.stringify(schemas(budgeted)).length).toBeLessThan(
+        JSON.stringify(schemas(normal)).length
+      )
+      expect(new Set(names(budgeted)).size).toBe(budgeted.length)
+      for (const name of names(budgeted)) expect(names(catalog)).toContain(name)
+    } finally {
+      context.mockRestore()
+    }
+  })
+
+  it('fits six large named tools within 1024 tokens at context size 2048', async () => {
+    const schemas = Array.from({ length: 6 }, (_, index) => ({
+      type: 'function',
+      function: {
+        name: `large_fixture_${index}`,
+        description: 'Fixture field details. '.repeat(30),
+        parameters: {
+          type: 'object',
+          properties: Object.fromEntries(
+            Array.from({ length: 10 }, (_, field) => [
+              `field_${field}`,
+              { type: 'string', description: 'Fixture field details. '.repeat(30) }
+            ])
+          )
+        }
+      }
+    }))
+    const connector = {
+      id: 'bridge-budget-fixture',
+      category: 'connector' as const,
+      schemas: () => schemas,
+      canHandle: (name: string) => schemas.some((schema) => schema.function.name === name),
+      execute: () => 'Found'
+    }
+    const context = vi.spyOn(llm, 'effectiveContextSize').mockReturnValue(2048)
+    registerToolExtension(connector)
+    try {
+      const task = schemas.map((schema) => schema.function.name).join(' ')
+      const listed = await listBridgeTools(task)
+      const selectedSchemas = listed.map((tool) => {
+        const { name, description, parameters } = tool as Record<string, unknown>
+        return { type: 'function', function: { name, description, parameters } }
+      })
+      expect(Math.ceil(JSON.stringify(schemas).length / 4)).toBeGreaterThan(1024)
+      expect(listed.length).toBeGreaterThanOrEqual(1)
+      expect(listed.length).toBeLessThanOrEqual(6)
+      expect(Math.ceil(JSON.stringify(selectedSchemas).length / 4)).toBeLessThanOrEqual(1024)
+      for (const tool of listed) {
+        expect(tool).toMatchObject({ source: 'connector', connector: connector.id })
+      }
+    } finally {
+      context.mockRestore()
+      unregisterToolExtension(connector.id, connector)
+    }
+  })
+
+  it.each(['web_search', 'open_url', 'computer_use'])(
+    'checks the catalog for a sealed tools.run request for %s',
+    async (name) => {
+      const desktopKeys = await generateKeyPair()
+      const browserKeys = await generateKeyPair()
+      const browser = {
+        id: 'bridge-tools-browser',
+        name: 'Test browser',
+        publicKey: await exportPublicKey(browserKeys.publicKey),
+        pairedAt: Date.now()
+      }
+      const execute = vi.fn().mockResolvedValue({ ok: true })
+      const bridge = createBridgeService({
+        keys: desktopKeys,
+        store: { list: async () => [browser], save: async () => {} },
+        confirmPairing: async () => true,
+        now: () => Date.now(),
+        newId: () => browser.id,
+        data: {
+          features: () => ({ pro: true, chats: true, tools: true, connectors: true, vault: false }),
+          listTools: listBridgeTools,
+          runTool: execute,
+          desktopName: () => 'Test desktop',
+          listConversations: async () => [],
+          putConversation: async () => {},
+          deleteConversation: async () => {},
+          latestTask: async () => null,
+          stopTask: async () => false,
+          setTaskRole: async () => ({ success: false }),
+          vault: async () => ({}),
+          readSettings: async () => ({}),
+          writeSettings: async () => {}
+        }
+      })
+      const key = await deriveSessionKey(browserKeys.privateKey, desktopKeys.publicKey, browser.id)
+      const id = 'run-native-tool'
+      const request = await seal(key, requestAad(browser.id), {
+        id,
+        ts: Date.now(),
+        method: 'tools.run',
+        params: { name, args: { query: 'test' } }
+      })
+      const reply = await bridge.rpc({ v: 1, d: browser.id, ...request })
+      expect(reply.status).toBe(200)
+      const result = await open(
+        key,
+        responseAad(browser.id, id),
+        reply.body as { n: string; c: string }
+      )
+      if (name === 'computer_use') {
+        expect(result).toMatchObject({ error: 'tool_unavailable' })
+        expect(execute).not.toHaveBeenCalled()
+      } else {
+        expect(result).toMatchObject({ result: { ok: true } })
+        expect(execute).toHaveBeenCalledWith(name, { query: 'test' }, browser, undefined)
+      }
+    }
+  )
+
+  it('uses the per-tool disabled set even when chat tools are disabled', async () => {
+    saveSetting('toolsEnabled', false)
+    saveSetting('disabledTools', ['web_use', 'computer_use', 'contacts_search'])
+    try {
+      const listed = names(await listBridgeTools())
+      expect(listed).toContain('web_search')
+      expect(listed).toContain('open_url')
+      expect(listed).not.toContain('web_use')
+      expect(listed).not.toContain('computer_use')
+      expect(listed).not.toContain('contacts_search')
+      expect(names(await listBridgeTools('contacts_search'))).not.toContain('contacts_search')
       const plain = await selectChatTools('web_use', { origin: 'bridge' })
       expect(plain.tools).toEqual([])
     } finally {

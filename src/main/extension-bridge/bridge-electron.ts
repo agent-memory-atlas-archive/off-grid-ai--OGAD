@@ -23,7 +23,16 @@ import {
   getSettings,
   saveSetting
 } from '../database'
-import { getToolExtensions, runTool, selectChatTools } from '../tools'
+import { enabledToolSchemas, getToolExtensions, runTool } from '../tools'
+import { llm } from '../llm'
+import { selectRelevantTools } from '../tools/tool-ranking'
+import {
+  contextualToolRoutingText,
+  selectRelevantToolsSemantic
+} from '../tools/tool-embedding-ranking'
+import { budgetTools, MAX_TOOL_TOKENS } from '../tools/tool-budget'
+import { embeddings } from '../embeddings'
+import { isToolAllowedForOrigin } from '../tools/tool-origin'
 import { notifyRagConversationChanged } from '../rag-conversation-events'
 import { callHook, callHookAsync, hasHook, HOOKS } from '../bootstrap/hookRegistry'
 import { getSecret } from '../secrets'
@@ -201,29 +210,63 @@ function features(): BridgeFeatures {
 }
 
 export async function listBridgeTools(task?: string): Promise<unknown[]> {
-  const exts = getToolExtensions()
-  const { tools } = await selectChatTools(task, {
-    origin: 'bridge',
-    assistantOnly: true,
-    connectors: true,
-    allMemory: true
-  })
-  return tools.flatMap((schema) => {
+  const out: unknown[] = []
+  const catalog = (await enabledToolSchemas(getToolExtensions())).filter(({ schema }) =>
+    isToolAllowedForOrigin((schema as { function?: { name?: unknown } }).function?.name, 'bridge', {
+      acting: true
+    })
+  )
+  for (const { schema, extension } of catalog) {
     const fn = (
       schema as { function?: { name?: unknown; description?: unknown; parameters?: unknown } }
     ).function
-    if (typeof fn?.name !== 'string') return []
-    const extension = exts.find((ext) => ext.canHandle(String(fn.name)))
-    const source = !extension || extension.category === 'tool' ? 'native' : 'connector'
-    return [
-      {
+    if (typeof fn?.name === 'string') {
+      const source = !extension || extension.category === 'tool' ? 'native' : 'connector'
+      out.push({
         name: fn.name,
         description: typeof fn.description === 'string' ? fn.description : '',
         parameters: fn.parameters ?? { type: 'object', properties: {} },
         source,
         ...(source === 'connector' && extension ? { connector: extension.id } : {})
-      }
-    ]
+      })
+    }
+  }
+  if (task === undefined) return out
+  const schemas = out.map((tool) => {
+    const item = tool as { name: string; description: string; parameters: unknown }
+    return {
+      type: 'function',
+      function: { name: item.name, description: item.description, parameters: item.parameters }
+    }
+  })
+  const direct = selectRelevantTools(task, schemas)
+  let semantic: unknown[] = []
+  const named = schemas.some((schema) =>
+    task.toLowerCase().includes(schema.function.name.toLowerCase())
+  )
+  if (task.trim() && !named && schemas.length) {
+    try {
+      semantic = await selectRelevantToolsSemantic(contextualToolRoutingText(task, []), schemas, {
+        embed: (text) => embeddings.generateEmbedding(text)
+      })
+    } catch {
+      // Keep Desktop's direct-match fallback when the local embedding model cannot load.
+    }
+  }
+  const selected = [...direct, ...semantic.filter((tool) => !direct.includes(tool))]
+  const cap = Math.max(
+    1024,
+    Math.min(Math.floor(llm.effectiveContextSize() * 0.4), MAX_TOOL_TOKENS)
+  )
+  const budgeted = budgetTools(selected, cap, 0)
+  return budgeted.tools.map((tool) => {
+    const fn = (tool as { function: { name: string; description: string; parameters: unknown } })
+      .function
+    const original = out.find((entry) => (entry as { name: string }).name === fn.name) as Record<
+      string,
+      unknown
+    >
+    return { ...original, description: fn.description, parameters: fn.parameters }
   })
 }
 
@@ -278,11 +321,11 @@ const settingsStore = createSettingsStore({
     const status = imageGenStatus()
     return status.active ?? status.models[0] ?? null
   },
-  imageParams: (model, store) =>
-    resolveImageParameters({ id: model }, store as Parameters<typeof resolveImageParameters>[1]),
-  setImageParam: (store, model, key, value) =>
+  imageParams: (model, settings) =>
+    resolveImageParameters({ id: model }, settings as Parameters<typeof resolveImageParameters>[1]),
+  setImageParam: (settings, model, key, value) =>
     setImageParameterOverride(
-      store as Parameters<typeof setImageParameterOverride>[0],
+      settings as Parameters<typeof setImageParameterOverride>[0],
       model,
       key,
       value
