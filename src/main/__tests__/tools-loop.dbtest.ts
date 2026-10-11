@@ -1145,4 +1145,70 @@ describe('web tools — real parsers over fetch faked at the network boundary', 
       unregisterToolExtension(extension.id, extension)
     }
   })
+  it('folds a conversation that fills the window into a structured summary the next round uses', async () => {
+    const history = [
+      { role: 'user', content: 'Plan a trip to Lisbon in May for two' },
+      { role: 'assistant', content: `Four-day plan ${'museum detail '.repeat(1_500)}OLD-PLAN-END` },
+      { role: 'user', content: 'Make it three days' },
+      { role: 'assistant', content: 'Here is the three-day plan.' }
+    ]
+    const summary =
+      '## Goal\nA three-day Lisbon trip in May for two.\n## Where we left off\nThe three-day plan.'
+    const service = llm as unknown as { ctxSize: number }
+    const previousContext = service.ctxSize
+    service.ctxSize = 4_096
+    try {
+      enqueueReactiveAfterEmptyPlan({ content: summary }, { content: 'Added a day trip to Sintra.' })
+      const activities: unknown[] = []
+      const deltas: string[] = []
+      const r = await toolChat('Add a day trip', history, {
+        onActivity: (activity) => activities.push(activity),
+        onDelta: (text, kind) => {
+          if (kind === 'content') deltas.push(text)
+        }
+      })
+
+      expect(r.answer).toBe('Added a day trip to Sintra.')
+      expect(deltas.join('')).toBe('Added a day trip to Sintra.') // the summary never streams
+      expect(activities).toContainEqual({ kind: 'compacted', label: 'Compacted', summary })
+      const summaryRequest = fake.requests[0] as {
+        tools?: unknown[]
+        messages: { role: string; content: string }[]
+      }
+      expect(summaryRequest.tools ?? []).toHaveLength(0)
+      expect(summaryRequest.messages[0]!.content).toContain('## Facts and preferences')
+      expect(summaryRequest.messages[1]!.content).toContain('User: Make it three days')
+      const answerRequest = JSON.stringify(fake.requests[1])
+      expect(answerRequest).toContain('Summary of the earlier conversation')
+      expect(answerRequest).toContain('A three-day Lisbon trip in May for two.')
+      expect(answerRequest).not.toContain('OLD-PLAN-END')
+    } finally {
+      service.ctxSize = previousContext
+    }
+  })
+
+  it('falls back to short excerpts when the summary call returns nothing usable', async () => {
+    const history = [
+      { role: 'user', content: 'Plan a trip to Lisbon' },
+      { role: 'assistant', content: `Plan ${'museum detail '.repeat(1_500)}OLD-PLAN-END` }
+    ]
+    const service = llm as unknown as { ctxSize: number }
+    const previousContext = service.ctxSize
+    service.ctxSize = 4_096
+    try {
+      enqueueReactiveAfterEmptyPlan({ content: '' }, { content: 'Added a day trip.' })
+      const activities: unknown[] = []
+      const r = await toolChat('Add a day trip', history, {
+        onActivity: (activity) => activities.push(activity)
+      })
+
+      expect(r.answer).toBe('Added a day trip.')
+      expect(activities).toContainEqual({ kind: 'compacted', label: 'Compacted' })
+      const answerRequest = JSON.stringify(fake.requests[1])
+      expect(answerRequest).toContain('Earlier chat excerpts')
+      expect(answerRequest).not.toContain('OLD-PLAN-END')
+    } finally {
+      service.ctxSize = previousContext
+    }
+  })
 })

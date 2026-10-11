@@ -23,9 +23,13 @@ import { selectToolExtensions } from './tools/extension-select'
 import { isTaskAction } from './tools/nativeActionToolExtension-logic'
 import { callHookAsync, HOOKS } from './bootstrap/hookRegistry'
 import {
+  CONVERSATION_SUMMARY_MAX_TOKENS,
   boundToolResult,
   callsWithinToolBudget,
+  conversationSummaryRequest,
+  conversationSummaryTurn,
   elideStaleToolResults,
+  normalizeConversationSummary,
   normalizeMaxToolCalls,
   repeatedToolCallDecision,
   repeatedToolCallFinalAnswerInstruction,
@@ -96,7 +100,8 @@ export type ToolCallStatus = 'completed' | 'failed' | 'pending'
 export type ToolActivity =
   | { kind: 'planning'; label: 'Planning next action…' }
   | { kind: 'preparing_tool_calls'; label: 'Preparing actions…'; name?: string }
-  | { kind: 'compacted'; label: 'Compacted' }
+  /** `summary` stands in for every earlier turn; the app keeps it with the conversation. */
+  | { kind: 'compacted'; label: 'Compacted'; summary?: string }
 
 // A tool's structured result. Most tools just return text (a bare string, which the
 // loop normalizes to { text }); a tool may ALSO emit side channels — `sources`
@@ -938,7 +943,19 @@ export async function toolChat(
     }
   ]
   const compactAtChars = Math.floor(ctx * 0.8) * 4
-  if (toolPromptChars(messages, tools) >= compactAtChars && history.length) {
+  // One model call folds every earlier turn into a structured summary that stands in for them
+  // from now on. If it fails, the oldest turns fall back to short excerpts as before.
+  const summary =
+    toolPromptChars(messages, tools) >= compactAtChars && history.length
+      ? await summarizeConversation(history, ctx, opts.signal)
+      : null
+  const summarized = summary
+    ? [messages[0], conversationSummaryTurn(summary), messages[messages.length - 1]]
+    : null
+  if (summarized && toolPromptChars(summarized, tools) < toolPromptChars(messages, tools)) {
+    messages.splice(0, messages.length, ...summarized)
+    opts.onActivity?.({ kind: 'compacted', label: 'Compacted', summary: summary! })
+  } else if (toolPromptChars(messages, tools) >= compactAtChars && history.length) {
     const older: { role: string; content: string }[] = []
     const recent = history.slice()
     let compacted = messages
@@ -1321,6 +1338,31 @@ export async function toolChat(
       ? { cutoff: { reason: 'max_tokens' as const, maxTokens: finalMaxTokens } }
       : {})
   })
+}
+
+/** Summarize the conversation so far in one tool-free call; `null` when no usable summary came back. */
+async function summarizeConversation(
+  history: { role: string; content: string }[],
+  ctx: number,
+  signal?: AbortSignal
+): Promise<string | null> {
+  if (signal?.aborted) return null
+  const maxChars = Math.max(0, ctx - CONVERSATION_SUMMARY_MAX_TOKENS - 256) * 4
+  try {
+    const reply = await llm.streamChat(conversationSummaryRequest(history, maxChars), () => {}, {
+      temperature: 0.2,
+      maxTokens: CONVERSATION_SUMMARY_MAX_TOKENS,
+      thinking: false,
+      signal
+    })
+    if (signal?.aborted) return null
+    return normalizeConversationSummary(
+      stripChatControlTokens(stripQwenToolCallMarkup(reply.content))
+    )
+  } catch (error) {
+    console.warn('[tools] conversation summary failed; keeping excerpts', error)
+    return null
+  }
 }
 
 const TOOL_HISTORY_TURNS = 8
