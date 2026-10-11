@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   MAX_TURNS,
+  BROWSER_ORIGIN_PREFIX,
+  setBrowserConversationOrigin,
   originOf,
   parseBridgeConversation,
   sqlTime,
@@ -168,5 +170,24 @@ describe('newerBrowserTitle', () => {
       newerBrowserTitle(row, pushed('Old name', Date.parse('2026-10-02T10:00:00Z')))
     ).toBeNull()
     expect(newerBrowserTitle(row, pushed('Trip', Date.parse('2026-10-03T10:00:00Z')))).toBeNull()
+  })
+})
+
+describe('setBrowserConversationOrigin', () => {
+  it('stores the browser origin and name for the specified conversation', () => {
+    const run = vi.fn()
+    const prepare = vi.fn(() => ({ run }))
+    setBrowserConversationOrigin({ prepare }, 'conversation-0001', {
+      id: 'browser-0001',
+      name: 'Synthetic browser'
+    })
+    expect(prepare).toHaveBeenCalledWith(
+      'UPDATE rag_conversations SET origin_device_id = ?, origin_device_name = ? WHERE id = ?'
+    )
+    expect(run).toHaveBeenCalledWith(
+      `${BROWSER_ORIGIN_PREFIX}browser-0001`,
+      'Synthetic browser',
+      'conversation-0001'
+    )
   })
 })

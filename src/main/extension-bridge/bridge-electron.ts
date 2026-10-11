@@ -67,6 +67,7 @@ import {
 } from './bridge-service'
 import {
   BROWSER_ORIGIN_PREFIX,
+  setBrowserConversationOrigin,
   MAX_LISTED,
   parseBridgeConversation,
   toBridgeConversation,
@@ -367,11 +368,7 @@ const data: BridgeData = {
     if (existing && historyConflicts(stored, conversation.turns)) throw new Error(HISTORY_CONFLICT)
     if (!existing) {
       createRagConversation(conversation.id, conversation.title)
-      getDB()
-        .prepare(
-          'UPDATE rag_conversations SET origin_device_id = ?, origin_device_name = ? WHERE id = ?'
-        )
-        .run(journeyOf(browser), browser.name, conversation.id)
+      setBrowserConversationOrigin(getDB(), conversation.id, browser)
     } else {
       const title = newerBrowserTitle(existing, conversation)
       if (title) updateRagConversationTitle(conversation.id, title)

@@ -34,6 +34,17 @@ interface MessageRow {
 /** Browser-origin conversations are tagged so their origin survives the round trip. */
 export const BROWSER_ORIGIN_PREFIX = 'browser:'
 
+/** Tag a newly created conversation with the browser that owns it. */
+export function setBrowserConversationOrigin(
+  db: { prepare(sql: string): { run(origin: string, name: string, id: string): unknown } },
+  conversationId: string,
+  browser: { id: string; name: string }
+): void {
+  db.prepare(
+    'UPDATE rag_conversations SET origin_device_id = ?, origin_device_name = ? WHERE id = ?'
+  ).run(`${BROWSER_ORIGIN_PREFIX}${browser.id}`, browser.name, conversationId)
+}
+
 export const MAX_LISTED = 100
 export const MAX_TURNS = 40
 export const MAX_TURN_CHARS = 20_000
