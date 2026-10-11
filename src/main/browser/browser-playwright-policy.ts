@@ -161,6 +161,8 @@ Rules:
 - Keep reason and summary to one short sentence each.
 - Set fields that do not apply to the selected action to null.
 - For element actions, copy the exact ref and human-readable element text from the snapshot.
+- For site navigation, prefer the page's visible links and buttons. Do not guess URL paths.
+- A page-not-found response is not a visual-control problem. Go back and use the site's visible navigation.
 - Use semantic controls first. Use fallback only when needed content is visual and has no usable ref.
 - Use human_required for passwords, one-time codes, CAPTCHA, payment, or irreversible confirmation.
 - Do not repeat an action that made no visible change.

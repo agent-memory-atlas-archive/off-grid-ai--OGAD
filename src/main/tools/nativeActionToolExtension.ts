@@ -224,6 +224,13 @@ export class NativeActionToolExtension implements ToolExtension {
     if (!spec) {
       return `Error: unknown action ${name}`
     }
+    if (name === 'computer_use' && context?.startTab) {
+      return {
+        text: 'This request belongs to a paired browser tab. Use web_use for this task; it retains that tab and its login.',
+        status: 'failed',
+        authoritative: true
+      }
+    }
     if (name === 'computer_use' && args.sessionLimitMinutes === undefined) {
       const sessionLimitMinutes = taskSessionLimitMinutes(context?.userQuery)
       if (sessionLimitMinutes) args = { ...args, sessionLimitMinutes }

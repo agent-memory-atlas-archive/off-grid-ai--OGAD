@@ -689,6 +689,7 @@ export async function toolChat(
       const s = await e.schemas()
       const enabledSchemas = s.filter((schema) => {
         const name = (schema as { function?: { name?: unknown } }).function?.name
+        if (opts.startTab && name === 'computer_use') return false
         if (opts.assistantOnly && (name === 'web_use' || name === 'computer_use')) return true
         return toolsEnabled && (typeof name !== 'string' || !disabled.has(name))
       })
@@ -870,6 +871,9 @@ export async function toolChat(
     (hints.length ? ' ' + hints.join(' ') : '') +
     (typeof opts.context === 'string' && opts.context.trim()
       ? `\n\nWhat you know about the user right now:\n${opts.context.trim().slice(0, 2000)}`
+      : '') +
+    (opts.startTab
+      ? '\nThis request comes from a paired browser tab. Use web_use for requested work on that website, including opening notifications. It will use that tab and its current login. Prefer visible page controls; do not invent URL paths or supply a guessed starting URL.'
       : '')
 
   // Attached images ride on the current user turn so the vision model can read
