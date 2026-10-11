@@ -258,6 +258,8 @@ const offGridApi = {
       thinking,
       images
     ) as Promise<RagChatResultContract>,
+  suggestNextChatMessage: (asked: string, answer: string): Promise<string | null> =>
+    ipcRenderer.invoke('chat:suggest-next', asked, answer),
   // Live token/reasoning/step events for an in-flight ragChat (matched by streamId).
   onRagStream: (
     callback: (data: {
