@@ -4,6 +4,7 @@ import { selectedVersionRepairs, type StoredVersionRow } from '../shared/chat-ve
 import Database from 'better-sqlite3-multiple-ciphers'
 import { safeStorage } from 'electron'
 import path from 'path'
+import { escapeFtsMatch } from './fts-match'
 import { dataDir } from './runtime-env'
 import fs from 'fs'
 import crypto from 'crypto'
@@ -1319,9 +1320,13 @@ export function setRagConversationProject(id: string, projectId: string | null):
  * search-as-you-type behaviour the old LIKE had for the last, partial word.
  */
 export function ragMessageMatchExpression(query: string): string | null {
-  const terms = (query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).slice(0, 6)
-  if (!terms.length) return null
-  return terms.map((term) => `"${term.replace(/"/g, '""')}"*`).join(' AND ')
+  return (
+    escapeFtsMatch(query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [], {
+      join: 'AND',
+      prefix: true,
+      maxTokens: 6
+    }) || null
+  )
 }
 
 /**

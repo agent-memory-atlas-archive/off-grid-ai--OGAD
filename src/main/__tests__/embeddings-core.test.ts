@@ -7,6 +7,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 const host = vi.hoisted(() => ({ pipeline: vi.fn() }))
 vi.mock('@huggingface/transformers', () => ({ pipeline: host.pipeline }))
+vi.mock('../backend-preferences', () => ({ getBackendPreference: () => 'auto' }))
+vi.mock('../runtime-residency', () => ({ getResidencyMode: () => 'resident' }))
 vi.mock('../embeddings-env', () => ({ configureTransformersEnv: vi.fn() }))
 vi.mock('../onnx-device', () => ({
   onnxDeviceCandidates: () => ['cpu'],
@@ -29,6 +31,7 @@ beforeEach(() => {
 afterEach(async () => {
   await disposeEmbeddingModel()
   host.pipeline.mockReset()
+  vi.unstubAllEnvs()
   configureRuntime({ dataDir: undefined, modelsDir: undefined })
   fs.rmSync(profile, { recursive: true, force: true })
 })
@@ -81,5 +84,34 @@ it('refuses an embedding download when no complete package exists and storage is
     'Connect the drive or choose another folder.'
   )
   expect(host.pipeline).not.toHaveBeenCalled()
+  expect(fs.existsSync(selected)).toBe(false)
+})
+
+it.each([undefined, '1'])(
+  'loads from an uncreated default models path (offline=%s)',
+  async (offline) => {
+    configureRuntime({ modelsDir: undefined })
+    fs.rmdirSync(selected)
+    vi.stubEnv('OFFGRID_EMBEDDINGS_OFFLINE', offline)
+    host.pipeline.mockResolvedValue(
+      Object.assign(
+        vi.fn(async () => ({ data: new Float32Array([0.25, 0.5]) })),
+        { dispose: vi.fn() }
+      )
+    )
+    await expect(embedText('query', selected)).resolves.toEqual([0.25, 0.5])
+    expect(host.pipeline).toHaveBeenCalledWith('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+      device: 'cpu'
+    })
+    expect(fs.existsSync(selected)).toBe(false)
+  }
+)
+
+it('attempts local-only resolution without a writable chosen folder', async () => {
+  fs.rmdirSync(selected)
+  vi.stubEnv('OFFGRID_EMBEDDINGS_OFFLINE', '1')
+  host.pipeline.mockRejectedValue(new Error('local model is missing'))
+  await expect(embedText('query', selected)).rejects.toThrow('local model is missing')
+  expect(host.pipeline).toHaveBeenCalledTimes(1)
   expect(fs.existsSync(selected)).toBe(false)
 })

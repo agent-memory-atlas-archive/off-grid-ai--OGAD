@@ -682,6 +682,8 @@ export function setupIPC(): void {
       return stmt.all(vecStr)
     } catch (e) {
       console.error('Vector search failed, falling back to FTS', e)
+      const match = ftsMatchExpression(query)
+      if (!match) return []
       const stmt = db.prepare(`
           SELECT memories.* 
           FROM memories 
@@ -689,7 +691,7 @@ export function setupIPC(): void {
           WHERE memory_fts MATCH ? 
           LIMIT 20
         `)
-      return stmt.all(query)
+      return stmt.all(match)
     }
   })
 
@@ -948,14 +950,16 @@ export function setupIPC(): void {
             JOIN memory_fts ON memories.id = memory_fts.rowid
             WHERE memory_fts MATCH ?
           `
-        params.push(query)
+        params.push(ftsQuery)
         const ftsFilter = appNameLikeClause(appName, 'memories.source_app')
         if (ftsFilter) {
           fallbackQuery += ` AND ${ftsFilter.clause} `
           params.push(ftsFilter.param)
         }
         fallbackQuery += ` LIMIT 12`
-        memories = db.prepare<unknown[], (typeof memories)[number]>(fallbackQuery).all(...params)
+        memories = ftsQuery
+          ? db.prepare<unknown[], (typeof memories)[number]>(fallbackQuery).all(...params)
+          : []
       }
 
       const messageParams: unknown[] = [ftsQuery]
@@ -973,18 +977,20 @@ export function setupIPC(): void {
         messageParams.push(msgFilter.param)
       }
       messageQuery += ` ORDER BY score ASC LIMIT 12`
-      const messages = db
-        .prepare<
-          unknown[],
-          {
-            app_name: string | null
-            title: string | null
-            created_at: string
-            role: string
-            content: string
-          }
-        >(messageQuery)
-        .all(...messageParams)
+      const messages = ftsQuery
+        ? db
+            .prepare<
+              unknown[],
+              {
+                app_name: string | null
+                title: string | null
+                created_at: string
+                role: string
+                content: string
+              }
+            >(messageQuery)
+            .all(...messageParams)
+        : []
 
       const summaryParams: unknown[] = [ftsQuery]
       let summaryQuery = `
@@ -1001,12 +1007,14 @@ export function setupIPC(): void {
         summaryParams.push(sumFilter.param)
       }
       summaryQuery += ` ORDER BY score ASC LIMIT 8`
-      const summaries = db
-        .prepare<
-          unknown[],
-          { app_name: string | null; title: string | null; summary: string }
-        >(summaryQuery)
-        .all(...summaryParams)
+      const summaries = ftsQuery
+        ? db
+            .prepare<
+              unknown[],
+              { app_name: string | null; title: string | null; summary: string }
+            >(summaryQuery)
+            .all(...summaryParams)
+        : []
 
       const entityParams: unknown[] = [ftsQuery]
       let entityQuery = `
@@ -1029,12 +1037,14 @@ export function setupIPC(): void {
         entityParams.push(entFilter.param)
       }
       entityQuery += ` ORDER BY score ASC LIMIT 8`
-      const entities = db
-        .prepare<
-          unknown[],
-          { type: string | null; name: string; summary: string | null }
-        >(entityQuery)
-        .all(...entityParams)
+      const entities = ftsQuery
+        ? db
+            .prepare<
+              unknown[],
+              { type: string | null; name: string; summary: string | null }
+            >(entityQuery)
+            .all(...entityParams)
+        : []
 
       const factParams: unknown[] = [ftsQuery]
       let factQuery = `
@@ -1051,9 +1061,11 @@ export function setupIPC(): void {
         factParams.push(factFilter.param)
       }
       factQuery += ` ORDER BY score ASC LIMIT 8`
-      const entityFacts = db
-        .prepare<unknown[], { type: string | null; name: string; fact: string }>(factQuery)
-        .all(...factParams)
+      const entityFacts = ftsQuery
+        ? db
+            .prepare<unknown[], { type: string | null; name: string; fact: string }>(factQuery)
+            .all(...factParams)
+        : []
 
       // Supplementary context (no bracket labels — the ONLY citeable tags are the
       // numbered [S#] SOURCES below, so the model can't invent uncited labels).

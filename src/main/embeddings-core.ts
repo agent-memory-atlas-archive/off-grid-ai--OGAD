@@ -47,7 +47,9 @@ export async function embedText(
     const id = 'Xenova/all-MiniLM-L6-v2'
     const fp32 = resolveTransformersPackage(id, 'model.onnx', readDirectories)
     const cached = fp32 ?? resolveTransformersPackage(id, 'model_quantized.onnx', readDirectories)
-    if (!cached) requireModelStorage(modelsDir)
+    // Local-only reads must not require writable storage. Guard only an explicit
+    // folder choice when the pipeline can download; default storage is created lazily.
+    if (!cached && process.env.OFFGRID_EMBEDDINGS_OFFLINE !== '1') requireModelStorage()
     configureTransformersEnv(modelsDir, !!cached)
     loading ??= loadWithOnnxFallback(
       (device) =>

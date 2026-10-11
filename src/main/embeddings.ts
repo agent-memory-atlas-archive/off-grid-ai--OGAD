@@ -3,7 +3,7 @@ import { beginRuntimeBackend, providerLabel } from './runtime-backends'
 import path from 'path'
 import { existsSync } from 'fs'
 import { Worker } from 'worker_threads'
-import { modelsDir } from './runtime-env'
+import { chosenModelsDir, modelsDir } from './runtime-env'
 import { modelReadDirectories } from './model-paths'
 import { embedText, embeddingDevice, disposeEmbeddingModel } from './embeddings-core'
 import { getResidencyMode } from './runtime-residency'
@@ -55,6 +55,7 @@ class EmbeddingService {
     const worker = new Worker(entry, {
       workerData: {
         modelsDir: modelsDir(),
+        chosenModelsDir: chosenModelsDir(),
         modelReadDirectories: modelReadDirectories(),
         backendPreference: getBackendPreference('embeddings')
       }

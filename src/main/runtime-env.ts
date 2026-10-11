@@ -86,6 +86,11 @@ export function modelsDir(): string {
   return path.join(dataDir(), 'models')
 }
 
+/** Explicit storage choice; the default models path may be created on first download. */
+export function chosenModelsDir(): string | undefined {
+  return cfg.modelsDir
+}
+
 /** A chosen folder must stay present. Never recreate its path after a drive is removed. */
 export function modelStorageError(directory = cfg.modelsDir): string | null {
   if (!directory) return null
