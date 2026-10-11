@@ -328,8 +328,8 @@ export function StoragePanel(): React.ReactElement {
               Other model folders
             </div>
             <div className="mt-1 text-[10px] text-neutral-500">
-              Do you keep chat or vision models in another folder? Add it to find compatible GGUF
-              files without moving them.
+              Add a folder to reuse compatible chat, image, voice, and transcription models. Files
+              stay in their current folder.
             </div>
           </div>
           <Button
