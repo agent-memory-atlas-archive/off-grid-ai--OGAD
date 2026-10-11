@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { terms, scoreTool, rankConnectorTools, selectRelevantTools } from '../tool-ranking'
-import { budgetTools } from '../tool-budget'
+import { budgetTools, MAX_TOOL_TOKENS } from '../tool-budget'
 
 const tool = (name: string, description: string): unknown => ({
   type: 'function',
@@ -21,6 +21,46 @@ const CALENDAR = tool(
 const SLACK = tool('slack_send_message', 'Send a message to a Slack channel or DM')
 const GITHUB = tool('github_create_issue', 'Open a new issue on a GitHub repository')
 const BUILTIN = tool('web_search', 'Search the web and return results')
+
+describe('browser-sized tool catalogs', () => {
+  it('keeps a relevant tool within the shared budget for a 149-tool catalog', () => {
+    const calendar = {
+      type: 'function',
+      function: {
+        name: 'calendar_list_events',
+        description: 'List calendar meetings',
+        parameters: {
+          type: 'object',
+          properties: Object.fromEntries(
+            Array.from({ length: 10 }, (_, index) => [
+              `field${index}`,
+              {
+                type: 'string',
+                description: 'Calendar field guidance. '.repeat(120)
+              }
+            ])
+          )
+        }
+      }
+    }
+    const catalog = [
+      calendar,
+      ...Array.from({ length: 148 }, (_, index) =>
+        tool(`inventory_${index}`, 'Inventory warehouse stock. '.repeat(100))
+      )
+    ]
+    expect(JSON.stringify(catalog).length).toBeGreaterThan(223_000)
+    const result = budgetTools(
+      selectRelevantTools('List calendar meetings', catalog),
+      MAX_TOOL_TOKENS,
+      0
+    )
+    expect(result.estTokens).toBeLessThanOrEqual(MAX_TOOL_TOKENS)
+    expect(result.tools.map((entry) => (entry as typeof calendar).function.name)).toEqual([
+      'calendar_list_events'
+    ])
+  })
+})
 
 describe('terms', () => {
   it('drops stop words + 1-char noise, lowercases', () => {

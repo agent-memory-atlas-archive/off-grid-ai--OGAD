@@ -24,6 +24,14 @@ import {
   saveSetting
 } from '../database'
 import { enabledToolSchemas, getToolExtensions, runTool } from '../tools'
+import { selectRelevantTools } from '../tools/tool-ranking'
+import {
+  contextualToolRoutingText,
+  selectRelevantToolsSemantic
+} from '../tools/tool-embedding-ranking'
+import { budgetTools, MAX_TOOL_TOKENS } from '../tools/tool-budget'
+import { embeddings } from '../embeddings'
+import { llm } from '../llm'
 import { notifyRagConversationChanged } from '../rag-conversation-events'
 import { callHook, callHookAsync, hasHook, HOOKS } from '../bootstrap/hookRegistry'
 import { getSecret } from '../secrets'
@@ -191,16 +199,16 @@ function features(): BridgeFeatures {
   const exts = getToolExtensions()
   return {
     pro,
-    chats: true,
-    tools: exts.some((e) => e.category === 'tool'),
-    connectors: exts.some((e) => e.category !== 'tool'),
+    chats: pro,
+    tools: pro && exts.some((e) => e.category === 'tool'),
+    connectors: pro && exts.some((e) => e.category !== 'tool'),
     vault: pro && hasHook(HOOKS.extensionVaultRequest),
     // Keep the live socket open only while tasks are set to use the default browser.
-    browserTasks: getWebUseSettings().browserTarget === 'default_browser'
+    browserTasks: pro && getWebUseSettings().browserTarget === 'default_browser'
   }
 }
 
-async function listTools(): Promise<unknown[]> {
+async function listTools(task?: string): Promise<unknown[]> {
   const out: unknown[] = []
   for (const { schema, extension } of await enabledToolSchemas(getToolExtensions())) {
     const fn = (
@@ -217,7 +225,43 @@ async function listTools(): Promise<unknown[]> {
       })
     }
   }
-  return out
+  if (task === undefined) return out
+  const schemas = out.map((tool) => {
+    const item = tool as { name: string; description: string; parameters: unknown }
+    return {
+      type: 'function',
+      function: { name: item.name, description: item.description, parameters: item.parameters }
+    }
+  })
+  const direct = selectRelevantTools(task, schemas)
+  let semantic: unknown[] = []
+  const named = schemas.some((schema) =>
+    task.toLowerCase().includes(schema.function.name.toLowerCase())
+  )
+  if (task.trim() && !named && schemas.length) {
+    try {
+      semantic = await selectRelevantToolsSemantic(contextualToolRoutingText(task, []), schemas, {
+        embed: (text) => embeddings.generateEmbedding(text)
+      })
+    } catch {
+      // Keep Desktop's direct-match fallback when the local embedding model cannot load.
+    }
+  }
+  const selected = [...direct, ...semantic.filter((tool) => !direct.includes(tool))]
+  const cap = Math.max(
+    1024,
+    Math.min(Math.floor(llm.effectiveContextSize() * 0.4), MAX_TOOL_TOKENS)
+  )
+  const budgeted = budgetTools(selected, cap, 0)
+  return budgeted.tools.map((tool) => {
+    const fn = (tool as { function: { name: string; description: string; parameters: unknown } })
+      .function
+    const original = out.find((entry) => (entry as { name: string }).name === fn.name) as Record<
+      string,
+      unknown
+    >
+    return { ...original, description: fn.description, parameters: fn.parameters }
+  })
 }
 
 // The same functions Settings here uses, so a browser and this window always agree.
@@ -290,12 +334,23 @@ const journeyOf = (browser: PairedBrowser): string => `${BROWSER_ORIGIN_PREFIX}$
 const acceptedTasks = createAcceptedTasks()
 
 const data: BridgeData = {
+  chat: async (request, browser) => {
+    if (!hasHook(HOOKS.extensionChatRequest)) {
+      if (request.action === 'disconnect') return true
+      throw new Error('chat_unavailable')
+    }
+    return callHookAsync(HOOKS.extensionChatRequest, request, browser)
+  },
   features,
   desktopName: () => 'Off Grid AI Desktop',
   listConversations: async () =>
-    getRagConversations()
-      .slice(0, MAX_LISTED)
-      .map((row) => toBridgeConversation(row, getRagMessages(row.id))),
+    hasHook(HOOKS.extensionChatRequest)
+      ? ((await callHookAsync<unknown[]>(HOOKS.extensionChatRequest, {
+          action: 'conversations'
+        })) ?? [])
+      : getRagConversations()
+          .slice(0, MAX_LISTED)
+          .map((row) => toBridgeConversation(row, getRagMessages(row.id))),
   putConversation: async (raw, browser) => {
     const conversation = parseBridgeConversation(raw)
     if (!conversation) throw new Error('invalid')
