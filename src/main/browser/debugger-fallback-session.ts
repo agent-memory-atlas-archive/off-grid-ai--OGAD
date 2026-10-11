@@ -41,9 +41,16 @@ export const DEBUGGER_DROPPED_RESULT: PlaywrightToolResult = {
 
 type Run = (session: SemanticPageSession) => Promise<PlaywrightToolResult>
 
+/**
+ * Chrome refusals before the task stays on page controls. Each retry flashes Chrome's debugging
+ * bar on and off, so a page that keeps blocking it is left to the in-page controls.
+ */
+export const MAX_DEBUGGER_REFUSALS = 2
+
 export class DebuggerFallbackSession implements SemanticPageSession {
   private connection: DebuggerConnection | null = null
   private control: PageControl | null = null
+  private refusals = 0
 
   constructor(private readonly options: DebuggerFallbackOptions) {}
 
@@ -85,6 +92,7 @@ export class DebuggerFallbackSession implements SemanticPageSession {
 
   /** Run over the debugger, connecting first when needed. Null while Chrome refuses it. */
   private async viaDebugger(run: Run): Promise<PlaywrightToolResult | null> {
+    if (this.refusals >= MAX_DEBUGGER_REFUSALS) return null
     try {
       this.connection ??= await this.options.connect()
       const result = await run(this.connection.session)
@@ -93,6 +101,7 @@ export class DebuggerFallbackSession implements SemanticPageSession {
       if (!isDebuggerBlocked(error)) throw error
     }
     // A connection Chrome detached from is not reused: the next try starts a fresh one.
+    this.refusals += 1
     await this.close().catch(() => undefined)
     return null
   }

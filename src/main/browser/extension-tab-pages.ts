@@ -36,6 +36,8 @@ const isTabInfo = (v: unknown): v is TabInfo => {
   )
 }
 
+const isExtensionId = (v: unknown): v is string => typeof v === 'string' && /^[a-p]{32}$/.test(v)
+
 /** One browser tab as a relay page. */
 export class ExtensionTabContents implements RelayContents {
   readonly debugger: RelayDebugger
@@ -151,6 +153,14 @@ export class ExtensionTabContents implements RelayContents {
         ...(typeof d.title === 'string' ? { title: d.title } : {})
       }
     } else if (event.event === 'cdp.detached') {
+      // Chrome's own reason: target_closed when another extension's frame blocks it,
+      // canceled_by_user when the user pressed Cancel on the debugging bar.
+      console.warn('[web-use][debugger] Chrome detached the debugger', {
+        tabId: this.tabId,
+        reason: typeof d.reason === 'string' ? d.reason : 'unknown',
+        // Other extensions with a frame in the tab: what Chrome drops the debugger for.
+        extensions: Array.isArray(d.extensions) ? d.extensions.filter(isExtensionId) : []
+      })
       this.attachment = null
       this.fireDetach()
     } else if (event.event === 'tab.removed') {

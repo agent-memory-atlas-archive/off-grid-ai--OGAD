@@ -4,6 +4,7 @@ import {
   DEBUGGER_DROPPED_RESULT,
   DebuggerFallbackSession,
   isDebuggerBlocked,
+  MAX_DEBUGGER_REFUSALS,
   type DebuggerConnection,
   type PageControl
 } from '../debugger-fallback-session'
@@ -123,6 +124,18 @@ describe('DebuggerFallbackSession', () => {
       'page:recover https://shop.test/'
     ])
     expect(switches).toEqual(['page'])
+  })
+
+  it('stays on page controls once Chrome has refused the debugger enough times', async () => {
+    // Each retry flashes Chrome's debugging bar on and off; a page that keeps blocking it
+    // is left to the in-page controls for the rest of the task.
+    const { session, log, frame } = harness()
+    frame.blocked = true
+    for (let i = 0; i < MAX_DEBUGGER_REFUSALS + 2; i += 1) await session.snapshot()
+    expect(log.filter((l) => l === 'connect')).toHaveLength(MAX_DEBUGGER_REFUSALS)
+    frame.blocked = false
+    await session.snapshot()
+    expect(log.at(-1)).toBe('page:snapshot')
   })
 
   it('lets any other debugger failure through', async () => {
