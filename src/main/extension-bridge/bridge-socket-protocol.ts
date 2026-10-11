@@ -210,7 +210,9 @@ export function parseUpstream(raw: unknown): SocketReply | SocketEvent | null {
       ? { id: raw.id as number, ok: false, error: raw.error }
       : null
   }
-  if (raw.event === 'tab.opened' && !isOpenedData(raw.data, raw.tabId)) return null
+  if (raw.event === 'tab.opened' && !isOpenedData(raw.data, raw.tabId)) {
+    return null
+  }
   const events = ['cdp.event', 'cdp.detached', 'tab.removed', 'tab.updated', 'tab.opened', 'ping']
   return events.includes(raw.event as string) && Number.isSafeInteger(raw.tabId) && isObj(raw.data)
     ? { event: raw.event as SocketEvent['event'], tabId: raw.tabId as number, data: raw.data }

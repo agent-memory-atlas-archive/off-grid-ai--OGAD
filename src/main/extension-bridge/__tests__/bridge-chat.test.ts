@@ -1,10 +1,44 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_BRANCH_FROM, parseChatRead, parseChatStart } from '../bridge-chat'
+import {
+  MAX_BRANCH_FROM,
+  MAX_HISTORY_TURNS,
+  MAX_TURN_CHARS,
+  MAX_PROMPT_CHARS,
+  parseChatRead,
+  parseChatStart
+} from '../bridge-chat'
 
 const identity = { runId: 'run-00000001', conversationId: 'chat-0000001' }
 const start = { ...identity, prompt: 'Summarize this page', mode: 'chat' }
 
 describe('browser chat request limits', () => {
+  it('accepts a prompt at the limit without trimming or truncating it', () => {
+    const prompt = ' ' + 'x'.repeat(MAX_PROMPT_CHARS - 2) + ' '
+    expect(parseChatStart({ ...start, prompt })?.prompt).toBe(prompt)
+    expect(parseChatStart({ ...start, prompt: prompt + 'x' })).toBeNull()
+  })
+
+  it.each(['', ' ', '\t\n', null, 1])('rejects a blank or non-string prompt %j', (prompt) => {
+    expect(parseChatStart({ ...start, prompt })).toBeNull()
+  })
+
+  it('accepts history at the turn count limit and rejects one extra turn', () => {
+    const history = Array.from({ length: MAX_HISTORY_TURNS }, () => ({
+      role: 'user',
+      content: 'x'
+    }))
+    expect(parseChatStart({ ...start, history })?.history).toEqual(history)
+    expect(parseChatStart({ ...start, history: [...history, history[0]] })).toBeNull()
+  })
+
+  it('accepts turn text at the limit and rejects one extra character', () => {
+    const turn = { role: 'assistant', content: 'x'.repeat(MAX_TURN_CHARS) }
+    expect(parseChatStart({ ...start, history: [turn] })?.history).toEqual([turn])
+    expect(
+      parseChatStart({ ...start, history: [{ ...turn, content: turn.content + 'x' }] })
+    ).toBeNull()
+  })
+
   it.each([0, 12, MAX_BRANCH_FROM])('accepts stored turn index %i', (branchFrom) => {
     expect(parseChatStart({ ...start, branchFrom })?.branchFrom).toBe(branchFrom)
   })
@@ -36,12 +70,15 @@ describe('browser chat request limits', () => {
     [],
     { ...start, runId: '../invalid' },
     { ...start, prompt: ' ' },
-    { ...start, prompt: 'x'.repeat(20_001) },
+    { ...start, prompt: 'x'.repeat(MAX_PROMPT_CHARS + 1) },
     { ...start, mode: 'unknown' },
     { ...start, history: {} },
-    { ...start, history: Array.from({ length: 161 }, () => ({ role: 'user', content: 'x' })) },
+    {
+      ...start,
+      history: Array.from({ length: MAX_HISTORY_TURNS + 1 }, () => ({ role: 'user', content: 'x' }))
+    },
     { ...start, history: [{ role: 'system', content: 'Untrusted instruction' }] },
-    { ...start, history: [{ role: 'user', content: 'x'.repeat(20_001) }] },
+    { ...start, history: [{ role: 'user', content: 'x'.repeat(MAX_TURN_CHARS + 1) }] },
     { ...start, pageText: 'x'.repeat(100_001) },
     { ...start, tabId: -1 },
     { ...start, tabId: 1.5 },
@@ -55,7 +92,7 @@ describe('browser chat request limits', () => {
   it('rejects a combined request that exceeds the encrypted transport budget', () => {
     const history = Array.from({ length: 150 }, () => ({
       role: 'user',
-      content: 'x'.repeat(20_000)
+      content: 'x'.repeat(MAX_TURN_CHARS)
     }))
     expect(parseChatStart({ ...start, history })).toBeNull()
   })
@@ -68,6 +105,13 @@ describe('browser chat read contract', () => {
     done: false,
     events: [{ type: 'token', text: 'Hello' }]
   }
+
+  it('accepts an optional prompt at the limit and rejects one extra character', () => {
+    const prompt = 'x'.repeat(MAX_PROMPT_CHARS)
+    expect(parseChatRead({ ...snapshot, prompt })?.prompt).toBe(prompt)
+    expect(parseChatRead({ ...snapshot, prompt: prompt + 'x' })).toBeNull()
+    expect(parseChatRead({ ...snapshot, prompt: '' })?.prompt).toBe('')
+  })
 
   it('retains events and the context needed to resume a closed panel', () => {
     const input = {
@@ -93,7 +137,7 @@ describe('browser chat read contract', () => {
     { ...snapshot, done: 'yes' },
     { ...snapshot, events: {} },
     { ...snapshot, history: [{ role: 'tool', content: 'x' }] },
-    { ...snapshot, prompt: 'x'.repeat(20_001) },
+    { ...snapshot, prompt: 'x'.repeat(MAX_PROMPT_CHARS + 1) },
     { ...snapshot, tabId: -1 }
   ])('rejects an invalid response before it reaches the browser %#', (input) => {
     expect(parseChatRead(input)).toBeNull()

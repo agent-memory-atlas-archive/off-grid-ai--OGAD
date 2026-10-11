@@ -22,6 +22,7 @@ import {
   responseAad,
   seal,
   BRIDGE_VERSION,
+  type BridgeFeatures,
   type RpcMethod
 } from './bridge-protocol'
 import { isSettingsSection, parseSettingsPatch, type SettingsSection } from './bridge-settings'
@@ -41,16 +42,7 @@ export interface BridgeStore {
   save(browsers: readonly PairedBrowser[]): Promise<void>
 }
 
-/** What this desktop offers right now, from its real entitlement and registered features. */
-export interface BridgeFeatures {
-  readonly pro: boolean
-  readonly chats: boolean
-  readonly tools: boolean
-  readonly connectors: boolean
-  readonly vault: boolean
-  /** Tasks may drive this browser (web_use in the default browser), so keep the live socket open. */
-  readonly browserTasks?: boolean
-}
+export type { BridgeFeatures } from './bridge-protocol'
 
 /** What a paired browser sees of a web task it started (desktop task-progress.ts). */
 export interface BrowserTaskProgress {

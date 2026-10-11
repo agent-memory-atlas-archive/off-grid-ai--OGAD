@@ -1,5 +1,6 @@
+// SHARED VERBATIM with off-grid-ai/browser-extension src/shared/bridge/chat.ts. Change both.
 // Shared bridge contract. Desktop owns execution; browsers read bounded event pages.
-import type { AutomationTaskControlIntent } from '@offgrid/automation'
+import type { AutomationTaskControlIntent as TaskControlIntent } from '@offgrid/automation'
 export interface ChatTurn {
   role: 'user' | 'assistant'
   content: string
@@ -31,7 +32,7 @@ export type ChatRequest =
   | { action: 'start'; input: ChatStart }
   | { action: 'read'; runId: string; cursor: number }
   | { action: 'stop'; runId: string }
-  | { action: 'control'; runId: string; intent: AutomationTaskControlIntent }
+  | { action: 'control'; runId: string; intent: TaskControlIntent }
   | { action: 'guide'; runId: string; text: string }
   | { action: 'disconnect' }
   | { action: 'conversations' }
@@ -39,25 +40,39 @@ export type ChatRequest =
 export const validChatId = (v: unknown): v is string =>
   typeof v === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(v)
 export const MAX_BRANCH_FROM = 10_000
+export const MAX_HISTORY_TURNS = 160
+export const MAX_TURN_CHARS = 20_000
+export const MAX_PROMPT_CHARS = 20_000
 const object = (raw: unknown): Record<string, unknown> | null =>
   raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null
 const text = (v: unknown, max: number): v is string => typeof v === 'string' && v.length <= max
+const prompt = (v: unknown): v is string => text(v, MAX_PROMPT_CHARS) && !!v.trim()
 const optionalText = (v: unknown, max: number): boolean => v === undefined || text(v, max)
 const tab = (v: unknown): boolean => v === undefined || (Number.isSafeInteger(v) && Number(v) >= 0)
 function history(raw: unknown): ChatTurn[] | undefined | null {
-  if (raw === undefined) return undefined
-  if (!Array.isArray(raw) || raw.length > 160) return null
+  if (raw === undefined) {
+    return undefined
+  }
+  if (!Array.isArray(raw) || raw.length > MAX_HISTORY_TURNS) {
+    return null
+  }
   const turns: ChatTurn[] = []
   for (const value of raw) {
     const t = object(value)
-    if (!t || (t.role !== 'user' && t.role !== 'assistant') || !text(t.content, 20000)) return null
+    if (!t || (t.role !== 'user' && t.role !== 'assistant') || !text(t.content, MAX_TURN_CHARS)) {
+      return null
+    }
     turns.push({ role: t.role, content: t.content })
   }
   return turns
 }
 function attachmentValid(r: Record<string, unknown>): boolean {
-  if (!optionalText(r.pageText, 100000) || !tab(r.tabId)) return false
-  if (r.imageDataUrl === undefined) return true
+  if (!optionalText(r.pageText, 100000) || !tab(r.tabId)) {
+    return false
+  }
+  if (r.imageDataUrl === undefined) {
+    return true
+  }
   return (
     text(r.imageDataUrl, 2500000) &&
     /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/.test(r.imageDataUrl)
@@ -65,20 +80,31 @@ function attachmentValid(r: Record<string, unknown>): boolean {
 }
 export function parseChatStart(raw: unknown): ChatStart | null {
   const r = object(raw)
-  if (!r || !validChatId(r.runId) || !validChatId(r.conversationId)) return null
-  if (!text(r.prompt, 20000) || !r.prompt.trim()) return null
-  if (r.mode !== 'chat' && r.mode !== 'agent' && r.mode !== 'image') return null
+  if (!r || !validChatId(r.runId) || !validChatId(r.conversationId)) {
+    return null
+  }
+  if (!prompt(r.prompt)) {
+    return null
+  }
+  if (r.mode !== 'chat' && r.mode !== 'agent' && r.mode !== 'image') {
+    return null
+  }
   if (
     r.branchFrom !== undefined &&
     (!Number.isSafeInteger(r.branchFrom) ||
       Number(r.branchFrom) < 0 ||
       Number(r.branchFrom) > MAX_BRANCH_FROM)
-  )
+  ) {
     return null
+  }
   const turns = history(r.history)
-  if (turns === null || !attachmentValid(r)) return null
+  if (turns === null || !attachmentValid(r)) {
+    return null
+  }
   // AES-GCM plus base64 must still fit the bridge's 4 MB HTTP body limit.
-  if (JSON.stringify(r).length > 2800000) return null
+  if (JSON.stringify(r).length > 2800000) {
+    return null
+  }
   return {
     runId: r.runId,
     conversationId: r.conversationId,
@@ -94,16 +120,21 @@ export function parseChatStart(raw: unknown): ChatStart | null {
 }
 export function parseChatRead(raw: unknown): ChatRead | null {
   const r = object(raw)
-  if (!r || !validChatId(r.runId) || !validChatId(r.conversationId)) return null
+  if (!r || !validChatId(r.runId) || !validChatId(r.conversationId)) {
+    return null
+  }
   if (
     !Number.isSafeInteger(r.cursor) ||
     Number(r.cursor) < 0 ||
     typeof r.done !== 'boolean' ||
     !Array.isArray(r.events)
-  )
+  ) {
     return null
+  }
   const turns = history(r.history)
-  if (turns === null || !optionalText(r.prompt, 20000) || !tab(r.tabId)) return null
+  if (turns === null || !optionalText(r.prompt, MAX_PROMPT_CHARS) || !tab(r.tabId)) {
+    return null
+  }
   return {
     runId: r.runId,
     conversationId: r.conversationId,

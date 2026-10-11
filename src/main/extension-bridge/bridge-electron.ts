@@ -201,6 +201,7 @@ function features(): BridgeFeatures {
   return {
     pro,
     chats: pro,
+    browserChat: hasHook(HOOKS.extensionChatRequest) ? 2 : 0,
     tools: pro && exts.some((e) => e.category === 'tool'),
     connectors: pro && exts.some((e) => e.category !== 'tool'),
     vault: pro && hasHook(HOOKS.extensionVaultRequest),

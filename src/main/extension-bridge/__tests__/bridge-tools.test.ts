@@ -10,7 +10,7 @@ vi.mock('electron', () => ({
   safeStorage: { isEncryptionAvailable: () => false },
   shell: { openExternal: async () => {} }
 }))
-import { listBridgeTools } from '../bridge-electron'
+import { getBridgeService, listBridgeTools } from '../bridge-electron'
 import { createBridgeService } from '../bridge-service'
 import {
   deriveSessionKey,
@@ -34,6 +34,8 @@ import { NATIVE_TOOL_SPECS } from '../../tools/nativeActionToolExtension-logic'
 import { llm } from '../../llm'
 import { saveSetting, getDB } from '../../database'
 import { configureRuntime } from '../../runtime-env'
+import { HOOKS, registerHook, unregisterHook } from '../../bootstrap/hookRegistry'
+import * as proBootstrap from '../../bootstrap/loadProFeaturesMain'
 
 const extension = new NativeActionToolExtension(
   {
@@ -66,6 +68,58 @@ afterAll(async () => {
 })
 
 const names = (tools: unknown[]): unknown[] => tools.map((tool) => (tool as { name: string }).name)
+
+describe('browser chat capability in the state response', () => {
+  it('tracks registration and removal of the Pro chat hook', async () => {
+    const pro = vi.spyOn(proBootstrap, 'proEnabled').mockReturnValue(true)
+    const desktop = await generateKeyPair(true)
+    const browser = await generateKeyPair()
+    const deviceId = 'capability-browser'
+    fs.writeFileSync(
+      path.join(profile, 'extension-bridge.json'),
+      JSON.stringify({
+        version: 1,
+        key: {
+          enc: 'none',
+          data: JSON.stringify(await crypto.subtle.exportKey('jwk', desktop.privateKey))
+        },
+        browsers: [
+          {
+            id: deviceId,
+            name: 'Synthetic capability browser',
+            publicKey: await exportPublicKey(browser.publicKey),
+            pairedAt: Date.now()
+          }
+        ]
+      })
+    )
+    const bridge = await getBridgeService()
+    const key = await deriveSessionKey(browser.privateKey, desktop.publicKey, deviceId)
+    let requestNumber = 0
+    const state = async (): Promise<unknown> => {
+      const id = `capability-${++requestNumber}`
+      const request = await seal(key, requestAad(deviceId), {
+        id,
+        ts: Date.now(),
+        method: 'state',
+        params: {}
+      })
+      const reply = await bridge.rpc({ v: 1, d: deviceId, ...request })
+      expect(reply.status).toBe(200)
+      return open(key, responseAad(deviceId, id), reply.body as { n: string; c: string })
+    }
+    const chat = async (): Promise<unknown> => ({})
+    expect(await state()).toMatchObject({ result: { features: { browserChat: 0 } } })
+    registerHook(HOOKS.extensionChatRequest, chat)
+    try {
+      expect(await state()).toMatchObject({ result: { features: { browserChat: 2 } } })
+    } finally {
+      unregisterHook(HOOKS.extensionChatRequest, chat)
+    }
+    expect(await state()).toMatchObject({ result: { features: { browserChat: 0 } } })
+    pro.mockRestore()
+  })
+})
 
 describe('bridge origin with the real tool registry', () => {
   it('lists the full enabled catalog, including native and connector tools', async () => {
