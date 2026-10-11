@@ -370,7 +370,7 @@ describe('production workspace bridge', () => {
     expect(await inTranscript('This reply is still in progress.')).toBeTruthy()
   })
 
-  it('shows and saves a compaction notice when the chat reaches 80% of its context', async () => {
+  it('shows and saves a compaction notice with its summary when the chat reaches 80% of its context', async () => {
     const longAnswer = `Stored answer ${'A'.repeat(54_000)}`
     const summary = '## Goal\nStart a long conversation.\n## Where we left off\nA long stored answer.'
     fake.enqueue(
@@ -409,9 +409,9 @@ describe('production workspace bridge', () => {
       ({ title }) => title === 'Start a long conversation'
     )
     expect(conversation).toBeTruthy()
-    expect(getRagMessages(conversation!.id)).toEqual(
-      expect.arrayContaining([expect.objectContaining({ content: '_Compacted_' })])
-    )
+    const notice = getRagMessages(conversation!.id).find(({ content }) => content === '_Compacted_')
+    expect(notice).toBeTruthy()
+    expect(JSON.parse(String(notice!.context))).toEqual({ notice: true, compactionSummary: summary })
   })
 
   it('uses the same chat Thinking control for remote provider requests', async () => {

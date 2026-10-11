@@ -105,6 +105,35 @@ describe('selected answer history', () => {
     expect(history.slice(1)).toEqual([turn('user', 'Current question'), turn('user', 'Follow up')])
   })
 
+  it('sends the saved summary in place of every compacted turn', () => {
+    const history = buildSendHistory(
+      [
+        turn('user', 'Plan a trip to Lisbon'),
+        turn('assistant', 'Here is a long four-day plan with every museum.'),
+        turn('user', 'Make it three days'),
+        {
+          ...turn('assistant', '_Compacted_'),
+          notice: true,
+          context: { notice: true, compactionSummary: '## Goal\nA three-day Lisbon trip.' }
+        },
+        turn('assistant', 'Here is the three-day plan.')
+      ],
+      false,
+      'Add a day trip'
+    )
+
+    expect(history[0]?.role).toBe('user')
+    expect(history[0]?.content).toMatch(/^Summary of the earlier conversation/)
+    expect(history[0]?.content).toContain('## Goal\nA three-day Lisbon trip.')
+    expect(JSON.stringify(history)).not.toContain('every museum')
+    expect(JSON.stringify(history)).not.toContain('Earlier chat excerpts')
+    expect(history.slice(1)).toEqual([
+      turn('user', 'Make it three days'),
+      turn('assistant', 'Here is the three-day plan.'),
+      turn('user', 'Add a day trip')
+    ])
+  })
+
   it('does not replace a user message with an answer version', () => {
     expect(buildSendHistory([{ ...answer, role: 'user' }], false, 'Follow up')).toEqual([
       turn('user', 'Latest answer'),

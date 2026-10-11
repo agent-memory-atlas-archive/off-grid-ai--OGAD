@@ -3143,11 +3143,18 @@ export function MemoryChat({
         data.step.kind === 'compacted'
       ) {
         const noticeId = crypto.randomUUID()
+        const summary = (data.step as { summary?: unknown }).summary
+        // The summary stands in for every earlier turn on later sends, so it is kept on the notice.
+        const noticeContext: RagContext =
+          typeof summary === 'string' && summary
+            ? { notice: true, compactionSummary: summary }
+            : { notice: true }
         const notice: ChatMessage = {
           id: noticeId,
           role: 'assistant',
           content: '_Compacted_',
-          notice: true
+          notice: true,
+          ...(noticeContext.compactionSummary ? { context: noticeContext } : {})
         }
         setConvMessages(cid, (previous) => {
           const streamIndex = previous.findIndex((message) => message.id === data.streamId)
@@ -3155,7 +3162,7 @@ export function MemoryChat({
           return [...previous.slice(0, streamIndex), notice, ...previous.slice(streamIndex)]
         })
         void window.api
-          .addRagMessage(cid, 'assistant', '_Compacted_', { notice: true })
+          .addRagMessage(cid, 'assistant', '_Compacted_', noticeContext)
           .then((stored) =>
             setConvMessages(cid, (previous) =>
               previous.map((message) =>
