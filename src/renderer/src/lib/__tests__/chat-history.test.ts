@@ -100,7 +100,7 @@ describe('selected answer history', () => {
       false,
       'Follow up'
     )
-    expect(history[0].content).toContain('Assistant: Earlier answer')
+    expect(history[0]?.content).toContain('Assistant: Earlier answer')
     expect(JSON.stringify(history)).not.toContain('Latest answer')
     expect(history.slice(1)).toEqual([turn('user', 'Current question'), turn('user', 'Follow up')])
   })
