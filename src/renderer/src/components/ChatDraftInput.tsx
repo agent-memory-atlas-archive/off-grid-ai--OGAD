@@ -146,6 +146,7 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
           onKeyDown={handleKeyDown}
           onPaste={onPaste}
           rows={1}
+          aria-label="Message"
           aria-description={
             busy
               ? 'Enter to queue. Command or Control plus Enter to send now. Shift plus Enter for a new line.'

@@ -62,7 +62,7 @@ const enterChat = async (newChat = false): Promise<void> => {
   if (await dismissSetup.isVisible().catch(() => false)) await dismissSetup.click()
   if (newChat) {
     await page.getByRole('button', { name: 'New chat', exact: true }).click()
-    await expect(page.getByPlaceholder('Ask anything…')).toBeVisible()
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeVisible()
   }
 }
 

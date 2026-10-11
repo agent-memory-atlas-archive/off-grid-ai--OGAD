@@ -46,7 +46,7 @@ async function launchApp(): Promise<void> {
   await completeOnboarding(page)
   await expect(async () => {
     await page.getByRole('button', { name: 'Chat', exact: true }).click()
-    await expect(page.getByPlaceholder(/ask anything/i)).toBeVisible({ timeout: 1_000 })
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeVisible({ timeout: 1_000 })
   }).toPass({ timeout: 15_000 })
   // These journeys exercise message controls. Keep tool routing out of the
   // synthetic model contract through the same setting a user can change.
@@ -71,7 +71,7 @@ const audit = (): Array<{
     : []
 
 async function submit(prompt: string, key = 'Enter'): Promise<void> {
-  const composer = page.getByPlaceholder(/ask anything/i)
+  const composer = page.getByRole('textbox', { name: 'Message', exact: true })
   await composer.fill(prompt)
   await composer.press(key)
   await expect(composer).toHaveValue('')
@@ -288,7 +288,7 @@ test.describe('Desktop queue and saved response versions', () => {
     ).toBeVisible()
     await submit('Queue this first.')
     await page.getByRole('button', { name: 'New chat', exact: true }).click()
-    const composer = page.getByPlaceholder(/ask anything/i)
+    const composer = page.getByRole('textbox', { name: 'Message', exact: true })
     await composer.fill('Keep this unsent draft in the second chat.')
     await expect
       .poll(() =>

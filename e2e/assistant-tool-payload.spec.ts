@@ -59,7 +59,7 @@ test('Assistant sends only tools pertinent to the message', async () => {
   await expect(palette).toBeVisible()
   await palette.getByPlaceholder(/^Search everything/).fill('Chat')
   await page.getByTestId('palette-screen-memory-chat-root').click()
-  const composer = page.getByPlaceholder(/ask anything/i)
+  const composer = page.getByRole('textbox', { name: 'Message', exact: true })
   await expect(composer).toBeVisible()
   const captureDismiss = page.getByRole('button', { name: 'Dismiss', exact: true })
   if (await captureDismiss.isVisible().catch(() => false)) await captureDismiss.click()
