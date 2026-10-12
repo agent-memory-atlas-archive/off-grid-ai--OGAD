@@ -16,6 +16,10 @@ export interface MacAppTrustBoundary {
   readFuses(bundle: string): Promise<Record<number, number>>
 }
 
+export function runTrustCommand(
+  executable: string,
+  args: readonly string[]
+): Promise<{ stdout: string; stderr: string }>
 export function releaseTeamIdForEnvironment(
   environment: Record<string, string | undefined>
 ): string | null

@@ -11,6 +11,7 @@ import {
   OFFGRID_APPLE_TEAM_ID,
   parseCodeSignatureDetails,
   releaseTeamIdForEnvironment,
+  runTrustCommand,
   verifyReleaseAppTrust,
   verifyStrictAppTrust,
   type MacAppTrustBoundary
@@ -204,6 +205,13 @@ describe('macOS application trust', () => {
       ).toThrow('ad-hoc signed')
     }
   )
+
+  it('reports what a failing check printed, not only that it failed', async () => {
+    // stapler validate explains a missing ticket on stdout and exits non-zero.
+    await expect(
+      runTrustCommand('/bin/sh', ['-c', 'echo "does not have a ticket stapled to it"; exit 65'])
+    ).rejects.toThrow(/Command failed[\s\S]*does not have a ticket stapled to it/)
+  })
 
   it('keeps the release workflow behind the explicit trust gate', () => {
     const workflow = fs.readFileSync(path.join(REPO_ROOT, '.github/workflows/release.yml'), 'utf8')
