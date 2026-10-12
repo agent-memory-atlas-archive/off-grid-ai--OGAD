@@ -14,6 +14,8 @@ export interface MacAppTrustBoundary {
     args: readonly string[]
   ): Promise<{ stdout?: string | null; stderr?: string | null }>
   readFuses(bundle: string): Promise<Record<number, number>>
+  /** Pause between retries of Apple's ticket service. Defaults to a real timer. */
+  wait?(ms: number): Promise<void>
 }
 
 export function runTrustCommand(

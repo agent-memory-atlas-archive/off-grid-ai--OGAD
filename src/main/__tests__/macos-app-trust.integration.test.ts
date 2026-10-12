@@ -206,6 +206,57 @@ describe('macOS application trust', () => {
     }
   )
 
+  it("retries the staple check when Apple's ticket service drops the connection", async () => {
+    const { boundary, commands } = trustedBoundary()
+    const waits: number[] = []
+    let dropped = 0
+    const flaky: MacAppTrustBoundary = {
+      ...boundary,
+      async execFile(executable, args) {
+        if (args[0] === 'stapler' && dropped < 2) {
+          dropped += 1
+          commands.push({ executable, args })
+          throw new Error(
+            'Command failed: xcrun stapler validate\nThe network connection was lost.\nThe validate action failed! Error 68.'
+          )
+        }
+        return boundary.execFile(executable, args)
+      },
+      async wait(ms) {
+        waits.push(ms)
+      }
+    }
+
+    await expect(
+      verifyReleaseAppTrust('/tmp/Off Grid AI Desktop.app', TEAM_ID, flaky)
+    ).resolves.toMatchObject({ teamIdentifier: TEAM_ID })
+    expect(commands.filter((command) => command.args[0] === 'stapler')).toHaveLength(3)
+    expect(waits).toEqual([20_000, 20_000])
+  })
+
+  it('does not retry a staple check that found no ticket', async () => {
+    const { boundary } = trustedBoundary()
+    let attempts = 0
+    const unstapled: MacAppTrustBoundary = {
+      ...boundary,
+      async execFile(executable, args) {
+        if (args[0] === 'stapler') {
+          attempts += 1
+          throw new Error(
+            'Command failed: xcrun stapler validate\ndoes not have a ticket stapled to it.'
+          )
+        }
+        return boundary.execFile(executable, args)
+      },
+      async wait() {}
+    }
+
+    await expect(
+      verifyReleaseAppTrust('/tmp/Off Grid AI Desktop.app', TEAM_ID, unstapled)
+    ).rejects.toThrow('does not have a ticket stapled to it')
+    expect(attempts).toBe(1)
+  })
+
   it('reports what a failing check printed, not only that it failed', async () => {
     // stapler validate explains a missing ticket on stdout and exits non-zero.
     await expect(

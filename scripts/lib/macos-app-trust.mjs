@@ -32,8 +32,28 @@ export const CRITICAL_SIGNED_CODE = Object.freeze([
 
 const systemBoundary = Object.freeze({
   execFile: runTrustCommand,
-  readFuses: electronFuses.getCurrentFuseWire
+  readFuses: electronFuses.getCurrentFuseWire,
+  wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 })
+
+// stapler fetches the ticket from Apple's CloudKit ticket service, and connections from CI runners
+// to it drop intermittently ("The network connection was lost", stapler error 68). Retry only those
+// network failures; a missing or invalid ticket still fails on the first answer.
+const APPLE_TICKET_ATTEMPTS = 4
+const APPLE_TICKET_RETRY_MS = 20_000
+const NETWORK_FAILURE = /NSURLErrorDomain|network connection was lost|Error 68/
+
+async function validateStapledTicket(bundle, boundary) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await boundary.execFile('/usr/bin/xcrun', ['stapler', 'validate', bundle])
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (attempt >= APPLE_TICKET_ATTEMPTS || !NETWORK_FAILURE.test(message)) throw error
+      await (boundary.wait ?? systemBoundary.wait)(APPLE_TICKET_RETRY_MS)
+    }
+  }
+}
 
 function commandOutput(result) {
   return `${result.stdout ?? ''}\n${result.stderr ?? ''}`
@@ -161,7 +181,7 @@ export async function verifyReleaseAppTrust(bundle, expectedTeamId, boundary = s
     assertReleaseSignature(details, expectedTeamId)
     if (code === bundle) appDetails = details
   }
-  await boundary.execFile('/usr/bin/xcrun', ['stapler', 'validate', bundle])
+  await validateStapledTicket(bundle, boundary)
   await boundary.execFile('/usr/bin/syspolicy_check', ['distribution', bundle])
   const gatekeeper = await boundary.execFile('/usr/sbin/spctl', [
     '--assess',
