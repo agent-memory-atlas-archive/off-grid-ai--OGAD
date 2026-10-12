@@ -41,7 +41,7 @@ import {
   unknownToolMessage,
   type ToolCallRecord
 } from '@offgrid/models'
-import { toolPromptChars } from './tools/prompt-budget'
+import { toolPromptChars, toolPromptTokens } from './tools/prompt-budget'
 import { buildPageBlock, buildPageFence, pageBudgetChars } from './tools/page-fence'
 import {
   isToolAllowedForOrigin,
@@ -908,11 +908,12 @@ export async function toolChat(
       )
     }
   ]
-  const compactAtChars = Math.floor(ctx * 0.8) * 4
+  // Tokens counted by script: characters / 4 lets a Japanese or Chinese chat overflow first.
+  const compactAtTokens = Math.floor(ctx * 0.8)
   // One model call folds every earlier turn into a structured summary that stands in for them
   // from now on. If it fails, the oldest turns fall back to short excerpts as before.
   const summary =
-    toolPromptChars(messages, tools) >= compactAtChars && history.length
+    toolPromptTokens(messages, tools) >= compactAtTokens && history.length
       ? await summarizeConversation(history, ctx, opts.signal)
       : null
   const summarized = summary
@@ -921,11 +922,11 @@ export async function toolChat(
   if (summarized && toolPromptChars(summarized, tools) < toolPromptChars(messages, tools)) {
     messages.splice(0, messages.length, ...summarized)
     opts.onActivity?.({ kind: 'compacted', label: 'Compacted', summary: summary! })
-  } else if (toolPromptChars(messages, tools) >= compactAtChars && history.length) {
+  } else if (toolPromptTokens(messages, tools) >= compactAtTokens && history.length) {
     const older: { role: string; content: string }[] = []
     const recent = history.slice()
     let compacted = messages
-    while (recent.length && toolPromptChars(compacted, tools) >= compactAtChars) {
+    while (recent.length && toolPromptTokens(compacted, tools) >= compactAtTokens) {
       older.push(recent.shift()!)
       const excerptTurns = [older[0]!, ...older.slice(-3).filter((turn) => turn !== older[0])]
       const excerpts = excerptTurns.map(
@@ -1313,14 +1314,19 @@ async function summarizeConversation(
   signal?: AbortSignal
 ): Promise<string | null> {
   if (signal?.aborted) return null
-  const maxChars = Math.max(0, ctx - CONVERSATION_SUMMARY_MAX_TOKENS - 256) * 4
+  // A budget too small for the request throws inside the try, so excerpts are used instead.
+  const maxTokens = Math.max(0, ctx - CONVERSATION_SUMMARY_MAX_TOKENS - 256)
   try {
-    const reply = await llm.streamChat(conversationSummaryRequest(history, maxChars), () => {}, {
-      temperature: 0.2,
-      maxTokens: CONVERSATION_SUMMARY_MAX_TOKENS,
-      thinking: false,
-      signal
-    })
+    const reply = await llm.streamChat(
+      conversationSummaryRequest(history, { maxTokens }),
+      () => {},
+      {
+        temperature: 0.2,
+        maxTokens: CONVERSATION_SUMMARY_MAX_TOKENS,
+        thinking: false,
+        signal
+      }
+    )
     if (signal?.aborted) return null
     return normalizeConversationSummary(
       stripChatControlTokens(stripQwenToolCallMarkup(reply.content))
