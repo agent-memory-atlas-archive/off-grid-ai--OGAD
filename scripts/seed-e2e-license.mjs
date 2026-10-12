@@ -54,7 +54,21 @@ try {
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
 
-  const before = await page.evaluate(() => window.api.license.status())
+  // A successful activation starts Pro in place, which reloads the window and destroys the page's
+  // execution context mid-call. Wait for the reload and read again rather than treat it as a failure.
+  const evaluateAcrossReload = async (fn, arg) => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await page.evaluate(fn, arg)
+      } catch (error) {
+        const reloaded = /Execution context was destroyed|navigation/i.test(String(error))
+        if (!reloaded || attempt >= 5) throw error
+        await page.waitForLoadState('domcontentloaded')
+      }
+    }
+  }
+
+  const before = await evaluateAcrossReload(() => window.api.license.status())
   console.log(`[seed-license] before: isPro=${before?.isPro}`)
 
   // Activation waits up to 5s for pro's entitlement owner to register and, if it is not there yet,
@@ -63,7 +77,7 @@ try {
   // retries, and treats that particular reason as "not ready yet" rather than as a verdict.
   let result
   for (let attempt = 1; attempt <= 6; attempt += 1) {
-    result = await page.evaluate(async (licenceKey) => {
+    result = await evaluateAcrossReload(async (licenceKey) => {
       try {
         return { ok: true, value: await window.api.license.activate(licenceKey) }
       } catch (error) {
@@ -84,7 +98,7 @@ try {
   // after that returns.
   let status = null
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    status = await page.evaluate(() => window.api.license.status())
+    status = await evaluateAcrossReload(() => window.api.license.status())
     if (status?.isPro) break
     await new Promise((resolve) => setTimeout(resolve, 1000))
   }
