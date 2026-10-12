@@ -32,6 +32,7 @@ import {
 } from '@offgrid/sync'
 import { NodeTcpTransport } from '@offgrid/sync/node'
 import type { KnowledgeDocumentSnapshot } from '../src/main/sync-knowledge-document'
+import type { KeygenPersonalMeshRegistry } from '../pro/main/sync/keygen-personal-mesh-registry'
 
 const PRO_PRESENT = fs.existsSync(path.resolve('pro/package.json'))
 // Pro implementation modules load lazily behind PRO_PRESENT: a static import
@@ -53,6 +54,8 @@ let syntheticPeer: SyncEngine | null = null
 let syntheticState: StateSync | null = null
 let syntheticFiles: FileTransferManager | null = null
 let syntheticClipboard: ClipboardSyncCoordinator | null = null
+let syntheticRegistry: KeygenPersonalMeshRegistry | null = null
+let syntheticInstallationId: string | null = null
 const syntheticClipboardRecords = new Map<string, ClipboardHistoryRecord>()
 /** The peer's pending clipboard deliveries, keyed the way the coordinator keys them: record × device. */
 const syntheticClipboardDeliveries = new Map<string, ClipboardPendingDelivery>()
@@ -85,9 +88,26 @@ const launch = async (pro: '0' | '1'): Promise<void> => {
         }
       ])
     )
+    // Index the received document with the real model, without downloading or copying it per run.
+    const embeddingCache =
+      process.env.OFFGRID_E2E_EMBEDDING_CACHE ??
+      path.join(
+        os.homedir(),
+        'Library/Application Support/Off Grid AI Desktop/models/.cache/Xenova'
+      )
+    if (!fs.existsSync(embeddingCache)) {
+      throw new Error(`Devices sync requires a local embedding cache at ${embeddingCache}`)
+    }
+    fs.mkdirSync(path.join(modelsDir, '.cache'), { recursive: true })
+    fs.symlinkSync(embeddingCache, path.join(modelsDir, '.cache', 'Xenova'), 'dir')
   }
   app = await launchOffGrid({
-    env: { OFFGRID_USER_DATA: userDataDir, OFFGRID_PRO: pro, NODE_ENV: 'production' }
+    env: {
+      OFFGRID_USER_DATA: userDataDir,
+      OFFGRID_PRO: pro,
+      OFFGRID_EMBEDDINGS_OFFLINE: '1',
+      NODE_ENV: 'production'
+    }
   })
   page = await app.firstWindow()
   await page.emulateMedia({ reducedMotion: 'reduce' })
@@ -104,6 +124,11 @@ const launch = async (pro: '0' | '1'): Promise<void> => {
  * Select the sharing view. The app instance is shared across tests in this file.
  */
 const openSyncSettings = async (): Promise<void> => {
+  await page
+    .getByRole('navigation', { name: 'Primary navigation' })
+    .getByRole('button', { name: 'Devices', exact: true })
+    .click()
+  await expect(page.getByRole('heading', { name: 'Devices', exact: true })).toBeVisible()
   const tab = page
     .getByRole('navigation', { name: 'Devices control center' })
     .getByRole('button', { name: 'Sync sharing', exact: true })
@@ -119,6 +144,7 @@ const teardown = async (): Promise<void> => {
   syntheticFiles = null
   syntheticClipboard = null
   syntheticClipboardRecords.clear()
+  syntheticClipboardDeliveries.clear()
   syntheticActiveMemberships.clear()
   syntheticProvisionalMemberships.clear()
   syntheticPendingRevocations.clear()
@@ -126,6 +152,14 @@ const teardown = async (): Promise<void> => {
   syntheticRecords.clear()
   await app?.close().catch(() => {})
   if (userDataDir) fs.rmSync(userDataDir, { recursive: true, force: true })
+  if (syntheticRegistry && syntheticInstallationId) {
+    const installations = await syntheticRegistry.listInstallations()
+    if (installations.some(({ installationId }) => installationId === syntheticInstallationId)) {
+      await syntheticRegistry.deregisterInstallation(syntheticInstallationId)
+    }
+  }
+  syntheticRegistry = null
+  syntheticInstallationId = null
 }
 
 test.describe('Devices surface — unlicensed', () => {
@@ -195,6 +229,14 @@ test.describe('Devices surface — pro tier', () => {
       .getByRole('navigation', { name: 'Devices control center' })
       .getByRole('button', { name: 'Devices', exact: true })
       .click()
+    const saved = page.getByRole('region', { name: 'Saved', exact: true })
+    const initialSeatLabel = await saved
+      .getByLabel(/^\d+ of \d+ licensed devices$/)
+      .getAttribute('aria-label')
+    const [, usedSeats, seatLimit] = initialSeatLabel!.match(/^(\d+) of (\d+) licensed devices$/)!
+    // This fixture must have room for the peer; pairing must not evict another installation.
+    expect(Number(seatLimit)).toBe(5)
+    expect(Number(usedSeats)).toBeLessThan(Number(seatLimit))
     const desktop = await page.evaluate(async () =>
       (
         window as unknown as {
@@ -328,11 +370,25 @@ test.describe('Devices surface — pro tier', () => {
         commitExport: async () => {},
         rollbackExport: async () => {},
         finalizeExport: async () => {},
-        prepareImport: async () => {
+        prepareImport: async (credential, registration) => {
+          // The joining device must register its seat before trust is committed. Since Pro
+          // 73b5cb7, reconciliation retires paired devices missing from the licence registry.
+          // Use the real provider adapter; a successful no-op import loses the peer immediately.
+          const { KeygenPersonalMeshRegistry } =
+            await import('../pro/main/sync/keygen-personal-mesh-registry')
+          syntheticRegistry = new KeygenPersonalMeshRegistry(() => credential)
+          await syntheticRegistry.listInstallations()
+          const installation = await syntheticRegistry.registerInstallation(registration)
+          syntheticInstallationId = installation.installationId
           return { id: 'synthetic-entitlement-import' }
         },
         commitImport: async () => {},
-        rollbackImport: async () => {},
+        rollbackImport: async () => {
+          if (syntheticRegistry && syntheticInstallationId) {
+            await syntheticRegistry.deregisterInstallation(syntheticInstallationId)
+            syntheticInstallationId = null
+          }
+        },
         finalizeImport: async () => {}
       },
       pairingPersistence: {
@@ -618,9 +674,10 @@ test.describe('Devices surface — pro tier', () => {
     ).toBeVisible()
     await page.screenshot({ path: 'e2e/screenshots/devices-state-sync.png' })
 
-    await page.getByTitle('New project').click()
-    await page.getByPlaceholder('Project name…').fill('Created on desktop')
-    await page.getByPlaceholder('Project name…').press('Enter')
+    await page.getByRole('button', { name: 'New project', exact: true }).click()
+    const projectName = page.getByRole('textbox', { name: 'Project name…', exact: true })
+    await projectName.fill('Created on desktop')
+    await projectName.press('Enter')
     await expect(page.getByRole('button', { name: 'Created on desktop' })).toBeVisible()
     await expect
       .poll(() =>
@@ -645,25 +702,27 @@ test.describe('Devices surface — pro tier', () => {
 
     await syntheticPeer.stop()
     syntheticPeer = null
-    await expect(page.getByText('Offline', { exact: true })).toBeVisible()
-    await page.getByRole('button', { name: 'Evict', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Evict Synthetic Android?' })).toBeVisible()
-    await expect(
-      page.getByText(
-        'This removes the pairing from both devices. Either device must pair again before Sync can reconnect.'
-      )
-    ).toBeVisible()
-    await page.getByRole('button', { name: 'Evict device' }).click()
-    const saved = page.getByRole('region', { name: 'Saved', exact: true })
-    await expect(saved.getByText('1 used', { exact: true })).toBeVisible()
-    await expect(saved.getByLabel('1 of 5 licensed devices', { exact: true })).toBeVisible()
-    await expect(page.getByText('Could not reach Synthetic Android')).toBeVisible({
-      timeout: 15_000
+    const peer = page.getByRole('article').filter({
+      has: page.getByText('Synthetic Android', { exact: true })
     })
-    await expect(page.getByRole('button', { name: 'Retry eviction' })).toBeVisible()
-    const dismissEviction = page.getByRole('button', { name: 'Dismiss' })
-    await expect(dismissEviction).toBeVisible()
-    await dismissEviction.click()
+    await expect(peer.getByText('Offline', { exact: true })).toBeVisible()
+    await peer.getByRole('button', { name: 'Evict', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Evict Synthetic Android?' })).toBeVisible()
+    const eviction = page.getByRole('dialog', { name: 'Evict Synthetic Android?', exact: true })
+    // Shared 6b387de distinguishes immediate seat release from queued offline licence removal.
+    await expect(eviction).toContainText(
+      'This removes Synthetic Android from your licensed devices, frees its seat and ends its Sync trust.'
+    )
+    await expect(eviction).toContainText(
+      'Synthetic Android is offline, so removing its saved licence stays queued until it next connects.'
+    )
+    await expect(eviction).toContainText('Either device must pair again before Sync can reconnect.')
+    await page.getByRole('button', { name: 'Evict device' }).click()
+    await expect(saved.getByText(`${usedSeats} used`, { exact: true })).toBeVisible()
+    await expect(saved.getByLabel(initialSeatLabel!, { exact: true })).toBeVisible()
+    // Shared c88ccf0 removed evicted devices from both lists. Offline cleanup stays queued,
+    // but the former error row and its Retry/Dismiss controls no longer exist on this surface.
+    await expect(peer).toHaveCount(0)
     await expect(page.getByText('Could not reach Synthetic Android')).toHaveCount(0)
   })
 
