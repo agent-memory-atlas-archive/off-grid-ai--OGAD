@@ -5,8 +5,17 @@ import { promisify } from 'node:util'
 import electronFuses from '@electron/fuses'
 
 const rawExecFileAsync = promisify(execFile)
-const execFileAsync = (executable, args) =>
-  rawExecFileAsync(executable, args, { timeout: 120_000, killSignal: 'SIGKILL' })
+// A failed check must say why: tools such as `stapler validate` print the reason on stdout, which
+// Node's "Command failed" message leaves out.
+export async function runTrustCommand(executable, args) {
+  try {
+    return await rawExecFileAsync(executable, args, { timeout: 120_000, killSignal: 'SIGKILL' })
+  } catch (error) {
+    const stdout = String(error?.stdout ?? '').trim()
+    if (stdout && error instanceof Error) error.message = `${error.message}\n${stdout}`
+    throw error
+  }
+}
 const ENABLED_FUSE_STATE = '1'.charCodeAt(0)
 const RELEASE_TRUST_ENV = 'OFFGRID_REQUIRE_RELEASE_TRUST'
 const LOCAL_ARTIFACT_ENV = 'OFFGRID_ALLOW_LOCAL_ARTIFACT'
@@ -22,7 +31,7 @@ export const CRITICAL_SIGNED_CODE = Object.freeze([
 ])
 
 const systemBoundary = Object.freeze({
-  execFile: execFileAsync,
+  execFile: runTrustCommand,
   readFuses: electronFuses.getCurrentFuseWire
 })
 
