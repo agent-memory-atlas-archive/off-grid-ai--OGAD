@@ -8,14 +8,20 @@ import { mergeStickyTools, previousOfferedTools, rememberOfferedTools } from './
  */
 export const SEMANTIC_ROUTING_WAIT_MS = 2_000
 
-function withinRoutingWait<T>(work: Promise<T>, waitMs: number): Promise<T> {
-  // A late result or failure is dropped; the turn has already routed by words.
+const ROUTING_MODEL_LOADING = Symbol('routing model loading')
+
+/** The semantic ranking, or ROUTING_MODEL_LOADING when MiniLM is still loading after the wait. */
+function withinRoutingWait<T>(
+  work: Promise<T>,
+  waitMs: number
+): Promise<T | typeof ROUTING_MODEL_LOADING> {
+  // A late result or failure is dropped; the turn has already been routed.
   work.catch(() => {})
   let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error('semantic routing wait elapsed')), waitMs)
+  const loading = new Promise<typeof ROUTING_MODEL_LOADING>((resolve) => {
+    timer = setTimeout(() => resolve(ROUTING_MODEL_LOADING), waitMs)
   })
-  return Promise.race([work, timeout]).finally(() => clearTimeout(timer))
+  return Promise.race([work, loading]).finally(() => clearTimeout(timer))
 }
 
 export async function selectChatToolSchemas(
@@ -70,10 +76,14 @@ export async function selectChatToolSchemas(
         const { contextualToolRoutingText, selectRelevantToolsSemantic } =
           await import('./tool-embedding-ranking')
         const routingText = contextualToolRoutingText(query, history)
-        relevantTools = await withinRoutingWait(
+        const ranked = await withinRoutingWait(
           selectRelevantToolsSemantic(routingText, rawTools, { embed }),
           options.semanticWaitMs ?? SEMANTIC_ROUTING_WAIT_MS
         )
+        // While MiniLM is still loading (a fresh install downloads it first), offer every tool as
+        // 0.0.55-beta.114 did; the budget below still trims the set to fit the context. Words
+        // alone would hide tools a request needs ("remind me" never names reminders_create).
+        relevantTools = ranked === ROUTING_MODEL_LOADING ? rawTools : ranked
       } catch {
         // The direct-match selection below remains available offline, and while MiniLM loads.
       }

@@ -18,7 +18,7 @@ const names = (tools: unknown[]): string[] =>
   tools.map((t) => (t as { function: { name: string } }).function.name)
 
 describe('chat tool selection while the embedding model is unavailable', () => {
-  it('routes by words once the wait elapses instead of waiting for the download', async () => {
+  it('offers the tools a request needs once the wait elapses instead of waiting for the download', async () => {
     const neverLoads = (): Promise<number[]> => new Promise(() => {})
     const started = Date.now()
 
@@ -36,6 +36,25 @@ describe('chat tool selection while the embedding model is unavailable', () => {
 
     expect(Date.now() - started).toBeLessThan(1_000)
     expect(names(result.tools)).toContain('weather_lookup')
+  })
+
+  it('does not hide a needed tool whose name the request never says while MiniLM loads', async () => {
+    const neverLoads = (): Promise<number[]> => new Promise(() => {})
+    const reminders = tool('reminders_create', 'Create a reminder in the Reminders app')
+
+    const result = await selectChatToolSchemas(
+      'nudge me to send the deck at 6pm today',
+      [WEATHER, reminders],
+      [],
+      {
+        contextSize: 16_384,
+        conversationId: 'chat-tool-selection-loading',
+        embed: neverLoads,
+        semanticWaitMs: 50
+      }
+    )
+
+    expect(names(result.tools)).toContain('reminders_create')
   })
 
   it('still ranks by meaning when the embedding model answers in time', async () => {
