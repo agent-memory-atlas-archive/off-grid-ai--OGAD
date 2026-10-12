@@ -3,13 +3,7 @@
  * TTS path, strips markdown for speech, returns playable local WAV audio, and can
  * be stopped. Only the external Kokoro native model is replaced.
  */
-import {
-  _electron as electron,
-  test,
-  expect,
-  type ElectronApplication,
-  type Page
-} from '@playwright/test'
+import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
 import { launchOffGrid, targetIsPackaged } from './helpers/launch'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -48,9 +42,7 @@ test.beforeAll(async () => {
   }
   delete env.ELECTRON_RUN_AS_NODE
   // b7918e7ea moved English speech to the ONNX worker. Its native model is the only fake.
-  app = targetIsPackaged()
-    ? await launchOffGrid({ env })
-    : await electron.launch({ args: [path.resolve('e2e/fixtures/tts-kokoro-boundary.cjs')], env })
+  app = await launchOffGrid({ env, appEntry: 'e2e/fixtures/tts-kokoro-boundary.cjs' })
   page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
   await finishOnboarding()
