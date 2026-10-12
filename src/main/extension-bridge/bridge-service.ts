@@ -1,12 +1,11 @@
+import type { BridgeMediaData } from './bridge-media-handlers'
+import { rpcHandlers } from './bridge-rpc-handlers'
 import {
-  parseConversationParams,
   type ConversationListParams,
   type ConversationSearchParams,
   type ConversationSearchResult,
   type ConversationPage
 } from './bridge-conversations'
-import { isToolAllowedForOrigin } from '../tools/tool-origin'
-import { chatHandlers } from './bridge-chat-handlers'
 import { type ChatRequest } from './bridge-chat'
 // The extension bridge, as pure logic: pairing and the sealed RPC loop. Everything it touches
 // (key storage, the native confirm dialog, the chat database, tools, the vault) is injected,
@@ -29,10 +28,9 @@ import {
   responseAad,
   seal,
   BRIDGE_VERSION,
-  type BridgeFeatures,
-  type RpcMethod
+  type BridgeFeatures
 } from './bridge-protocol'
-import { isSettingsSection, parseSettingsPatch, type SettingsSection } from './bridge-settings'
+import type { SettingsSection } from './bridge-settings'
 
 export interface PairedBrowser {
   readonly id: string
@@ -64,7 +62,7 @@ export interface BrowserTaskProgress {
   readonly action: string
 }
 
-export interface BridgeData {
+export interface BridgeData extends Partial<BridgeMediaData> {
   chat?(request: ChatRequest, browser: PairedBrowser): Promise<unknown>
   features(): BridgeFeatures
   desktopName(): string
@@ -115,11 +113,6 @@ export type BridgeReply = { status: number; body: unknown }
 
 const UNAUTHORIZED: BridgeReply = { status: 401, body: { error: 'unauthorized' } }
 
-const isTaskId = (value: unknown): value is string =>
-  typeof value === 'string' && /^[\w-]{1,128}$/.test(value)
-
-type Handler = (params: Record<string, unknown>, browser: PairedBrowser) => Promise<unknown>
-
 export interface BridgeService {
   info(): Promise<BridgeReply>
   pair(raw: unknown): Promise<BridgeReply>
@@ -151,126 +144,7 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
     return derived
   }
 
-  const requireFeature = (feature: keyof BridgeFeatures): void => {
-    const features = deps.data.features()
-    if (features[feature]) return
-    const proOnly = feature === 'vault' || feature === 'tools'
-    throw new Error(proOnly && !features.pro ? 'pro_required' : `${feature}_unavailable`)
-  }
-
-  const handlers: Record<RpcMethod, Handler> = {
-    ...chatHandlers(deps.data.chat),
-    state: async (_p, browser) => ({
-      desktopName: deps.data.desktopName(),
-      deviceName: browser.name,
-      features: deps.data.features()
-    }),
-    'conversations.list': async (p) => {
-      const params = parseConversationParams(p, false)
-      if (!Object.keys(p).length) return deps.data.listConversations()
-      if (!deps.data.listConversationPage) throw new Error('chats_unavailable')
-      return deps.data.listConversationPage(params)
-    },
-    'conversations.search': async (p) => {
-      const params = parseConversationParams(p, true) as ConversationSearchParams
-      if (!deps.data.searchConversations) throw new Error('chats_unavailable')
-      return deps.data.searchConversations(params)
-    },
-    'conversations.put': async (p, browser) => {
-      await deps.data.putConversation(p.conversation, browser)
-      return true
-    },
-    'conversations.delete': async (p) => {
-      if (typeof p.id !== 'string' || !p.id) {
-        throw new Error('invalid')
-      }
-      await deps.data.deleteConversation(p.id)
-      return true
-    },
-    'tools.list': async (p) => {
-      if (p.task !== undefined && (typeof p.task !== 'string' || p.task.length > 32_000)) {
-        throw new Error('invalid')
-      }
-      return (await deps.data.listTools(typeof p.task === 'string' ? p.task : undefined)).filter(
-        (tool) =>
-          isToolAllowedForOrigin((tool as { name?: unknown }).name, 'bridge', { acting: true })
-      )
-    },
-    'tools.run': async (p, browser) => {
-      if (typeof p.name !== 'string' || typeof p.args !== 'object' || p.args === null) {
-        throw new Error('invalid')
-      }
-      const tabId = p.tabId
-      if (tabId !== undefined && !(Number.isSafeInteger(tabId) && Number(tabId) >= 0)) {
-        throw new Error('invalid')
-      }
-      // What tools.list offers, this runs. A tool turned off since the browser listed it
-      // never runs; Pro access is checked for every protected request below.
-      const name = p.name
-      if (!isToolAllowedForOrigin(name, 'bridge', { acting: true }))
-        throw new Error('tool_unavailable')
-      const listed = (await deps.data.listTools()).some(
-        (tool) => (tool as { name?: unknown }).name === name
-      )
-      if (!listed) {
-        requireFeature('tools')
-        throw new Error('tool_unavailable')
-      }
-      return deps.data.runTool(
-        p.name,
-        p.args as Record<string, unknown>,
-        browser,
-        tabId === undefined ? undefined : Number(tabId)
-      )
-    },
-    'tasks.latest': async (p, browser) => {
-      requireFeature('tools')
-      if (typeof p.since !== 'number' || !Number.isFinite(p.since)) {
-        throw new Error('invalid')
-      }
-      if (p.taskId !== undefined && !isTaskId(p.taskId)) {
-        throw new Error('invalid')
-      }
-      return deps.data.latestTask(browser, p.since, p.taskId)
-    },
-    'tasks.stop': async (p, browser) => {
-      // A browser can still stop its own task after Pro access ends.
-      if (!isTaskId(p.taskId)) {
-        throw new Error('invalid')
-      }
-      return deps.data.stopTask(browser, p.taskId)
-    },
-    'models.setTaskRole': async (p) => {
-      const result = await deps.data.setTaskRole({ task: p.task, role: p.role, modelId: p.modelId })
-      if (!result.success) throw new Error(result.error ?? 'invalid')
-      return result
-    },
-    vault: async (p, browser) => {
-      requireFeature('vault')
-      return deps.data.vault(p.request, browser)
-    },
-    'settings.get': async (p) => {
-      if (!isSettingsSection(p.section)) {
-        throw new Error('invalid')
-      }
-      return deps.data.readSettings(p.section)
-    },
-    'settings.set': async (p) => {
-      const patch = isSettingsSection(p.section) ? parseSettingsPatch(p.section, p.patch) : null
-      if (!patch || !isSettingsSection(p.section)) {
-        throw new Error('invalid')
-      }
-      await deps.data.writeSettings(p.section, patch)
-      return deps.data.readSettings(p.section)
-    },
-    unpair: async (_p, browser) => {
-      await deps.data.chat?.({ action: 'disconnect' }, browser).catch(() => undefined)
-      const all = await deps.store.list()
-      await deps.store.save(all.filter((b) => b.id !== browser.id))
-      sessionKeys.delete(browser.id)
-      return true
-    }
-  }
+  const handlers = rpcHandlers(deps, (id) => void sessionKeys.delete(id))
 
   return {
     /** Unauthenticated: the desktop's public key and protocol version. Nothing private. */
@@ -337,11 +211,8 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
         ) {
           throw new Error('pro_required')
         }
-        reply = {
-          id: request.id,
-          ok: true,
-          result: await handlers[request.method](request.params, browser)
-        }
+        const result = await handlers[request.method](request.params, browser)
+        reply = { id: request.id, ok: true, result }
       } catch (error) {
         // Error text only: no stack, no argument echo.
         reply = {
