@@ -3,6 +3,7 @@ import { writeFile } from 'node:fs/promises'
 import type { DeviceType, ProgressInfo } from '@huggingface/transformers'
 import { KokoroTTS } from 'kokoro-js'
 import { configureTransformersEnv } from './embeddings-env'
+import { resolveModelPackage } from './model-paths'
 import { loadWithOnnxFallback, onnxDeviceCandidates } from './onnx-device'
 import type { BackendPreference } from '../shared/backend-preferences'
 
@@ -10,7 +11,7 @@ const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX'
 
 if (!parentPort) throw new Error('tts-onnx-worker must be started as a worker thread')
 const port = parentPort
-const { modelsDir, backendPreference = 'auto' } = workerData as { modelsDir: string; backendPreference?: BackendPreference }
+const { modelsDir, modelReadDirectories = [modelsDir], backendPreference = 'auto' } = workerData as { modelsDir: string; modelReadDirectories?: string[]; backendPreference?: BackendPreference }
 configureTransformersEnv(modelsDir)
 
 interface TtsWorkerRequest {
@@ -100,10 +101,23 @@ async function runtime(id: number): Promise<{ runtime: KokoroRuntime; device: De
     // kokoro-js predates the newer ONNX Runtime provider names in its declaration
     // file. Its runtime forwards this value to Transformers.js, which supports
     // Core ML, DirectML, CUDA, WebGPU, and CPU.
-    const runtime = await KokoroTTS.from_pretrained(MODEL_ID, {
+    let dtype: 'q8' | 'fp32' | 'fp16' = device === 'cpu' ? 'q8' : device === 'webgpu' || device === 'cuda' ? 'fp32' : 'fp16'
+    let cached: string | null = null
+    // Reuse a complete FP32 package before downloading another precision.
+    for (const candidate of [...new Set([dtype, 'fp32'] as const)]) {
+      const weight = candidate === 'fp32' ? 'model.onnx' : candidate === 'q8' ? 'model_quantized.onnx' : 'model_fp16.onnx'
+      cached = resolveModelPackage(
+        ['config.json', 'tokenizer.json', 'tokenizer_config.json', `onnx/${weight}`],
+        modelReadDirectories.flatMap((root) => [
+          `${root}/${MODEL_ID}`, `${root}/.cache/${MODEL_ID}`
+        ])
+      )
+      if (cached) { dtype = candidate; break }
+    }
+    const runtime = await KokoroTTS.from_pretrained(cached ?? MODEL_ID, {
       // Kokoro's FP16 CUDA graph can return only NaNs on NVIDIA T4. FP32
       // produced finite, audible samples on the packaged Linux test VM.
-      dtype: device === 'cpu' ? 'q8' : device === 'webgpu' || device === 'cuda' ? 'fp32' : 'fp16',
+      dtype,
       device: device as 'cpu',
       progress_callback: (info) => reportProgress(id, info)
     })
