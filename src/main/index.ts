@@ -740,6 +740,12 @@ app.on('before-quit', (event) => {
     } catch {
       /* best-effort — quit regardless so the app never hangs on exit */
     }
+    try {
+      const { embeddings } = await import('./embeddings')
+      await embeddings.shutdown()
+    } catch {
+      /* best-effort — quit even if embedding cleanup fails */
+    }
     engineUnloaded = true
     // Buffered diagnostics are written now rather than lost with the process. Bounded, so a
     // stalled disk delays quit by at most the flush timeout.
