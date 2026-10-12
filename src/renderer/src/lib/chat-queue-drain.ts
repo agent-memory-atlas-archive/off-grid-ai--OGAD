@@ -1,5 +1,5 @@
 import { dequeue } from './chat-queue'
-import type { ChatQueues, QueuedTurn } from './chat-queue-store'
+import type { ChatQueues, QueuedTurn } from './chat-queue-types'
 
 interface QueueDrainDependencies {
   queues: { current: ChatQueues }

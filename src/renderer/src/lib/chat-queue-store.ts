@@ -6,16 +6,9 @@ import {
   type QueueAttachmentLoader
 } from './chat-queue-persistence'
 import { createQueueDrainer } from './chat-queue-drain'
-import type { Attachment, ChatMode } from '../components/MemoryChat/types'
+import type { ChatQueues } from './chat-queue-types'
+export type { ChatQueues, QueuedTurn } from './chat-queue-types'
 export const CHAT_QUEUE_SETTINGS_KEY = 'chatQueuedMessages'
-export interface QueuedTurn {
-  text: string
-  atts: Attachment[]
-  assistantEnabled?: boolean
-  projectId: string | null
-  mode: ChatMode
-}
-export type ChatQueues = Record<string, QueuedTurn[]>
 interface QueueStorage extends QueueAttachmentLoader {
   getSettings(): Promise<Record<string, unknown>>
   saveSetting(key: string, value: unknown): Promise<unknown>

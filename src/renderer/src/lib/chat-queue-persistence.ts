@@ -1,5 +1,5 @@
 import type { Attachment } from '../components/MemoryChat/types'
-import type { ChatQueues, QueuedTurn } from './chat-queue-store'
+import type { ChatQueues, QueuedTurn } from './chat-queue-types'
 
 export const MAX_PERSISTED_QUEUE_BYTES = 256 * 1024
 export const MAX_PASTED_ATTACHMENT_TEXT_CHARS = 16 * 1024

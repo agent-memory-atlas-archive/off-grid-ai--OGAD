@@ -1,12 +1,5 @@
-import type { BridgeMediaData } from './bridge-media-handlers'
 import { rpcHandlers } from './bridge-rpc-handlers'
-import {
-  type ConversationListParams,
-  type ConversationSearchParams,
-  type ConversationSearchResult,
-  type ConversationPage
-} from './bridge-conversations'
-import { type ChatRequest } from './bridge-chat'
+import type { BridgeDeps, BridgeReply, PairedBrowser } from './bridge-types'
 // The extension bridge, as pure logic: pairing and the sealed RPC loop. Everything it touches
 // (key storage, the native confirm dialog, the chat database, tools, the vault) is injected,
 // so this file is unit-tested without Electron. bridge-electron.ts supplies the real ones.
@@ -27,89 +20,22 @@ import {
   requestAad,
   responseAad,
   seal,
-  BRIDGE_VERSION,
-  type BridgeFeatures
+  BRIDGE_VERSION
 } from './bridge-protocol'
-import type { SettingsSection } from './bridge-settings'
 
-export interface PairedBrowser {
-  readonly id: string
-  readonly name: string
-  readonly publicKey: string
-  readonly pairedAt: number
-}
+export type {
+  BridgeData,
+  BridgeDeps,
+  BridgeReply,
+  BridgeStore,
+  BrowserTaskProgress,
+  PairedBrowser
+} from './bridge-types'
 
 /** Browsers kept at most. Separate from, and never counted against, the sync device limit. */
 export const MAX_BROWSERS = 10
 
-export interface BridgeStore {
-  list(): Promise<readonly PairedBrowser[]>
-  save(browsers: readonly PairedBrowser[]): Promise<void>
-}
-
 export type { BridgeFeatures } from './bridge-protocol'
-
-/** What a paired browser sees of a web task it started (desktop task-progress.ts). */
-export interface BrowserTaskProgress {
-  readonly taskId: string
-  readonly status: string
-  readonly summary: string
-  /** Phase titles in order; empty before the plan is made. */
-  readonly plan: readonly string[]
-  /** Index into `plan` of the phase in progress, or -1 with no plan. */
-  readonly phase: number
-  readonly steps: readonly string[]
-  readonly action: string
-}
-
-export interface BridgeData extends Partial<BridgeMediaData> {
-  chat?(request: ChatRequest, browser: PairedBrowser): Promise<unknown>
-  features(): BridgeFeatures
-  desktopName(): string
-  listConversations(): Promise<unknown[]>
-  listConversationPage?(params: ConversationListParams): Promise<ConversationPage<unknown>>
-  searchConversations?(params: ConversationSearchParams): Promise<ConversationSearchResult>
-  putConversation(conversation: unknown, browser: PairedBrowser): Promise<void>
-  deleteConversation(id: string): Promise<void>
-  listTools(task?: string): Promise<unknown[]>
-  /** `tabId`: the browser's tab a web task should start in (browser-start-tab.ts). */
-  runTool(
-    name: string,
-    args: Record<string, unknown>,
-    browser: PairedBrowser,
-    tabId?: number
-  ): Promise<unknown>
-  /** Task progress scoped to the browser and optional task id. */
-  latestTask(
-    browser: PairedBrowser,
-    since: number,
-    taskId?: string
-  ): Promise<BrowserTaskProgress | null>
-  /** Stops a task this browser started (its journey is this browser's). False otherwise. */
-  stopTask(browser: PairedBrowser, taskId: string): Promise<boolean>
-  setTaskRole(request: {
-    task: unknown
-    role: unknown
-    modelId: unknown
-  }): Promise<{ success: boolean; error?: string }>
-  vault(request: unknown, browser: PairedBrowser): Promise<unknown>
-  /** One section of the desktop's settings (settings.ts), as its Settings screen shows it. */
-  readSettings(section: SettingsSection): Promise<unknown>
-  /** Apply an already-validated patch through the desktop's own setters. */
-  writeSettings(section: SettingsSection, patch: Record<string, unknown>): Promise<void>
-}
-
-export interface BridgeDeps {
-  readonly keys: CryptoKeyPair
-  readonly store: BridgeStore
-  /** Show the code and the browser's name in the desktop's own window. True = approved. */
-  confirmPairing(code: string, deviceName: string): Promise<boolean>
-  readonly data: BridgeData
-  now(): number
-  newId(): string
-}
-
-export type BridgeReply = { status: number; body: unknown }
 
 const UNAUTHORIZED: BridgeReply = { status: 401, body: { error: 'unauthorized' } }
 
