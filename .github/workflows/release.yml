@@ -382,9 +382,19 @@ jobs:
             --key-id "$APPLE_API_KEY_ID" \
             --issuer "$APPLE_API_ISSUER" \
             --wait
-          xcrun stapler staple -v "$DMG"
+          # stapler reaches Apple's CloudKit ticket service, whose connections from runners drop
+          # intermittently (stapler error 68). Retry those steps before failing the release.
+          with_ticket_retry() {
+            for attempt in 1 2 3 4; do
+              "$@" && return 0
+              [ "$attempt" = 4 ] && return 1
+              echo "Apple ticket service attempt $attempt failed; retrying in 20s"
+              sleep 20
+            done
+          }
+          with_ticket_retry xcrun stapler staple -v "$DMG"
           codesign --verify --strict --verbose=4 "$DMG"
-          xcrun stapler validate "$DMG"
+          with_ticket_retry xcrun stapler validate "$DMG"
           spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
           # Stapling changes the DMG bytes. Refresh the blockmap and update feed before upload.
           node scripts/refresh-mac-dmg-update-info.mjs "$DMG" dist/latest-mac.yml
