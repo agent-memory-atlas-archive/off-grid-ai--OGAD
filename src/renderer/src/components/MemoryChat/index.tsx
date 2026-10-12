@@ -79,6 +79,8 @@ import {
   type ImageGenerationRequestContract
 } from '../../../../shared/image-generation-contract'
 import { Button } from '@renderer/components/ui/button'
+import { Button as QueueActionButton } from '@offgrid/operator-ui/operator/button'
+import '@offgrid/operator-ui/styles.css'
 import {
   Dialog,
   DialogContent,
@@ -129,7 +131,9 @@ import {
   FolderOpen,
   CaretDown,
   Lightning,
-  WarningCircle
+  WarningCircle,
+  ArrowElbowDownLeft,
+  Trash
 } from '@phosphor-icons/react'
 
 import type { MemoryChatProps } from './interfaces'
@@ -2587,6 +2591,35 @@ export function MemoryChat({
     }, 30)
   }
 
+  const removeQueuedMessage = (
+    conversationId: string,
+    item: (typeof queuedRef.current)[string][number]
+  ): boolean => {
+    const queue = queuedRef.current[conversationId] ?? []
+    if (!queue.includes(item)) return false
+    queuedRef.current = {
+      ...queuedRef.current,
+      [conversationId]: queue.filter((queued) => queued !== item)
+    }
+    setQueuedByConv({ ...queuedRef.current })
+    return true
+  }
+
+  const sendQueuedMessage = (
+    conversationId: string,
+    item: (typeof queuedRef.current)[string][number]
+  ): void => {
+    if (!removeQueuedMessage(conversationId, item)) return
+    void sendMessageRef.current(item.text || ' ', {
+      sendNow: true,
+      atts: item.atts,
+      conversationId,
+      assistantEnabled: item.assistantEnabled,
+      projectIdOverride: item.projectId,
+      modeOverride: item.mode
+    })
+  }
+
   async function settleObservedRun(conversationId: string, snapshot?: ChatMessage[]): Promise<void> {
     // Renderer senders provide their final saved snapshot synchronously. Main-owned
     // runs are read only after the stream registry confirms their saved completion.
@@ -4528,6 +4561,8 @@ export function MemoryChat({
                           ).map((q, i) => (
                             <div
                               key={i}
+                              role="group"
+                              aria-label={`Queued message ${i + 1}`}
                               className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-1.5 text-[11px] text-neutral-400"
                             >
                               <svg
@@ -4588,6 +4623,30 @@ export function MemoryChat({
                                 </svg>
                               </button>
                               <span className="shrink-0 text-neutral-600">queued</span>
+                              <QueueActionButton
+                                variant="ghost"
+                                size="icon"
+                                className="size-6 min-h-6 min-w-6 text-muted-foreground hover:text-primary"
+                                aria-label="Send queued message now"
+                                title="Send now"
+                                onClick={() => {
+                                  if (activeConversationId) sendQueuedMessage(activeConversationId, q)
+                                }}
+                              >
+                                <ArrowElbowDownLeft size={14} aria-hidden="true" />
+                              </QueueActionButton>
+                              <QueueActionButton
+                                variant="ghost"
+                                size="icon"
+                                className="size-6 min-h-6 min-w-6 text-muted-foreground hover:text-destructive"
+                                aria-label="Delete queued message"
+                                title="Delete queued message"
+                                onClick={() => {
+                                  if (activeConversationId) removeQueuedMessage(activeConversationId, q)
+                                }}
+                              >
+                                <Trash size={14} aria-hidden="true" />
+                              </QueueActionButton>
                             </div>
                           ))}
                         </div>
