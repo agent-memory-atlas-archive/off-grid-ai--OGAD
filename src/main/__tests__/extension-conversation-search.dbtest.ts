@@ -131,7 +131,8 @@ describe('bridge saved chat pages, real SQLite', () => {
     expect(listed.turns).toHaveLength(40)
     expect(listed.turns[0]!.content).toHaveLength(20_000)
     expect(listed).not.toHaveProperty('snippet')
-    expect(listed).not.toHaveProperty('turnCount')
+    // Every stored turn is counted, so the browser can number the window it got.
+    expect(listed.turnCount).toBe(turns)
   })
   it('keeps the existing title fallback from the most recent 40 turns', () => {
     const id = 'untitled-search-chat'
