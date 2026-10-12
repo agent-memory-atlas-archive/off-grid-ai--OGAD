@@ -104,17 +104,24 @@ describe('extension origin rule', () => {
       isToolAllowedForOrigin('schedule_task', 'bridge', { extension: { category: 'tool' } })
     ).toBe(false)
     expect(isToolAllowedForOrigin('unknown_tool', 'bridge', { extension: {} })).toBe(false)
-    expect(isToolAllowedForOrigin('web_search', 'bridge', { extension: {} })).toBe(true)
-    expect(isToolAllowedForOrigin('web_search', 'bridge')).toBe(true)
+    expect(isToolAllowedForOrigin('calculator', 'bridge', { extension: {} })).toBe(true)
+    expect(isToolAllowedForOrigin('calculator', 'bridge')).toBe(true)
   })
 })
 
 describe('unowned tool admission', () => {
+  it.each(['web_search', 'brave_search', 'read_url'])(
+    'refuses outbound fetch tool %s for every bridge mode',
+    (name) => {
+      for (const acting of [undefined, false, true]) {
+        expect(isToolAllowedForOrigin(name, 'bridge', { acting })).toBe(false)
+        expect(isToolAllowedForOrigin(name, 'desktop', { acting })).toBe(true)
+      }
+    }
+  )
+
   it.each([
     ['offgrid_guide', true],
-    ['web_search', true],
-    ['brave_search', true],
-    ['read_url', true],
     ['calculator', true],
     ['read_screen', true],
     ['search_memory', true],

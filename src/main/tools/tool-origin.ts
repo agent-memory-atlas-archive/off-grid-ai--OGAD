@@ -9,9 +9,6 @@ interface OriginExtension {
 /** Builtins whose implementations only retrieve data or compute a result. */
 const READ_ONLY_BUILTINS: ReadonlySet<string> = new Set([
   'offgrid_guide',
-  'web_search',
-  'brave_search',
-  'read_url',
   'calculator',
   'read_screen',
   'search_memory',
@@ -55,7 +52,8 @@ export function isToolAllowedForOrigin(
   if (origin !== 'bridge') {
     return true
   }
-  if (name === 'computer_use') {
+  // Page text can turn outbound fetch URLs into a channel for private data.
+  if (['computer_use', 'web_search', 'brave_search', 'read_url'].includes(String(name))) {
     return false
   }
   const spec = typeof name === 'string' ? findNativeToolSpec(name) : undefined

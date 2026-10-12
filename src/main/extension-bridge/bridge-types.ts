@@ -78,7 +78,7 @@ export interface BridgeDeps {
   readonly keys: CryptoKeyPair
   readonly store: BridgeStore
   /** Show the code and the browser's name in the desktop's own window. True = approved. */
-  confirmPairing(code: string, deviceName: string): Promise<boolean>
+  confirmPairing(code: string, deviceName: string, peerAddress: string): Promise<boolean>
   readonly data: BridgeData
   now(): number
   newId(): string
