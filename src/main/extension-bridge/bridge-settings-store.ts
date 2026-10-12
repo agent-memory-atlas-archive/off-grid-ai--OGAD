@@ -7,6 +7,7 @@ import {
   type DraftCatalogModel,
   type DraftCompanionStatus
 } from '../../shared/text-settings-rules'
+import { playbackSpeed } from '../../shared/voice-speed'
 import {
   TASK_CONTEXTS,
   SCREENSHOT_SIZES,
@@ -258,7 +259,8 @@ export function createSettingsStore(deps: SettingsStoreDeps): {
       const settings = deps.appSettings()
       return {
         ttsEnabled: settings.ttsEnabled !== false,
-        voice: str(settings.ttsVoice, 'af_heart')
+        voice: str(settings.ttsVoice, 'af_heart'),
+        speed: playbackSpeed(settings.ttsSpeed)
       }
     }
   }
@@ -343,6 +345,7 @@ export function createSettingsStore(deps: SettingsStoreDeps): {
     voice: (p) => {
       if (typeof p.ttsEnabled === 'boolean') deps.saveSetting('ttsEnabled', p.ttsEnabled)
       if (typeof p.voice === 'string') deps.saveSetting('ttsVoice', p.voice)
+      if (typeof p.speed === 'number') deps.saveSetting('ttsSpeed', p.speed)
     }
   }
 

@@ -181,6 +181,7 @@ export interface TranscriptionSettings {
 export interface VoiceSettings {
   readonly ttsEnabled: boolean
   readonly voice: string
+  readonly speed: number // Playback rate, 0.5 to 2, as on the desktop's Voice tab.
 }
 
 export interface SettingsBySection {
@@ -331,7 +332,7 @@ const SECTION_RULES: Record<SettingsSection, Record<string, Rule>> = {
     enhance: bool
   },
   transcription: { language: text(12, /^(auto|[a-z]{2,3}(-[A-Za-z]{2,4})?)$/) },
-  voice: { ttsEnabled: bool, voice: text(64, /^[\w.-]+$/) }
+  voice: { ttsEnabled: bool, voice: text(64, /^[\w.-]+$/), speed: num(0.5, 2) }
 }
 
 /**

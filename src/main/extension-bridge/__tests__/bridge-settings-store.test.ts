@@ -269,8 +269,8 @@ describe('a paired browser’s view of the desktop settings', () => {
     await store.write('transcription', { language: 'auto' })
     expect(state.app.sttLanguage).toBe('auto')
 
-    await store.write('voice', { voice: 'bm_george', ttsEnabled: false })
-    expect(await store.read('voice')).toEqual({ ttsEnabled: false, voice: 'bm_george' })
+    await store.write('voice', { voice: 'bm_george', ttsEnabled: false, speed: 1.5 })
+    expect(await store.read('voice')).toEqual({ ttsEnabled: false, voice: 'bm_george', speed: 1.5 })
   })
   it('returns Desktop text options and corrected settings after a write', async () => {
     const { deps, store } = fakeDesktop()
