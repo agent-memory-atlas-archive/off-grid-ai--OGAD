@@ -95,9 +95,10 @@ const launch = async (pro: '0' | '1'): Promise<void> => {
         os.homedir(),
         'Library/Application Support/Off Grid AI Desktop/models/.cache/Xenova'
       )
-    if (!fs.existsSync(embeddingCache)) {
-      throw new Error(`Devices sync requires a local embedding cache at ${embeddingCache}`)
-    }
+    test.skip(
+      !fs.existsSync(embeddingCache),
+      `Devices sync requires a local embedding cache at ${embeddingCache}`
+    )
     fs.mkdirSync(path.join(modelsDir, '.cache'), { recursive: true })
     fs.symlinkSync(embeddingCache, path.join(modelsDir, '.cache', 'Xenova'), 'dir')
   }

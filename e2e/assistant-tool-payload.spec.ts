@@ -47,11 +47,10 @@ test.beforeEach(async () => {
     '.cache',
     'Xenova'
   )
-  if (!fs.existsSync(embeddingCache)) {
-    throw new Error(
-      `This journey requires the installed local embedding cache at ${embeddingCache}`
-    )
-  }
+  test.skip(
+    !fs.existsSync(embeddingCache),
+    `This journey requires the installed local embedding cache at ${embeddingCache}`
+  )
   fs.mkdirSync(path.join(modelsDir, '.cache'), { recursive: true })
   fs.symlinkSync(embeddingCache, path.join(modelsDir, '.cache', 'Xenova'), 'dir')
   const executable = path.join(llamaDir, 'llama-server')
