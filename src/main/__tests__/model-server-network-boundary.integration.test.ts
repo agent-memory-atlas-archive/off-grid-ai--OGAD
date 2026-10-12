@@ -93,7 +93,10 @@ describe('model gateway network boundary', () => {
       headers: origin ? { origin } : {}
     })
     expect(response.status).toBe(200)
-    expect(response.headers.get('access-control-allow-origin')).toBe(origin ?? null)
+    // Only a trusted origin is echoed; any other browser origin gets the wildcard.
+    expect(response.headers.get('access-control-allow-origin')).toBe(
+      origin === undefined ? null : origin === 'file://' ? origin : '*'
+    )
     expect(response.headers.get('access-control-allow-private-network')).toBe(
       origin ? 'true' : null
     )
@@ -114,7 +117,7 @@ describe('model gateway network boundary', () => {
           headers: { origin }
         })
         expect(response.status).toBe(200)
-        expect(response.headers.get('access-control-allow-origin')).toBe(origin)
+        expect(response.headers.get('access-control-allow-origin')).toBe('*')
         expect(response.headers.get('access-control-allow-credentials')).toBeNull()
       }
       for (const [method, route] of [

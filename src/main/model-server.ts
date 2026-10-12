@@ -1299,7 +1299,9 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
         json(res, 403, errBody('Origin is not allowed.', 'forbidden'))
         return
       }
-      res.setHeader('Access-Control-Allow-Origin', origin)
+      // Trusted origins get their own origin back; any other origin gets the wildcard 0.0.54 sent,
+      // which opens the inference routes without reflecting an arbitrary origin.
+      res.setHeader('Access-Control-Allow-Origin', trusted ? origin : '*')
       res.setHeader('Vary', 'Origin')
       res.setHeader('Access-Control-Allow-Private-Network', 'true')
     }
