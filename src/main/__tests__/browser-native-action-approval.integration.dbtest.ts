@@ -96,6 +96,8 @@ describe('browser native action approval with the real engine', () => {
       db.close()
       fs.rmSync(root, { recursive: true, force: true })
     }
-    expect(executed).toEqual([])
+    // A declined action never runs; the browser's own task and link run without asking.
+    if (waits) expect(executed).toEqual([])
+    else expect(executed).not.toEqual([])
   })
 })
