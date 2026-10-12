@@ -1,7 +1,7 @@
 /** Escape every '<' that starts a page tag, closed or not. A page can leave its tag unfinished,
  *  and the length cap can cut one before its '>'; either would otherwise end the fence early.
  *  Match only the '<' so tags inside attributes are also escaped independently. */
-const escapePageTags = (text: string): string => text.replace(/<(?=\s*\/?\s*page\b)/gi, '&lt;')
+const escapePageTags = (text: string): string => text.replace(/<(?=\s*(?:\/\s*)?page\b)/gi, '&lt;')
 
 /** Fence untrusted page text without letting its tags change the fence boundary. */
 export function buildPageFence(pageText?: string): string {
