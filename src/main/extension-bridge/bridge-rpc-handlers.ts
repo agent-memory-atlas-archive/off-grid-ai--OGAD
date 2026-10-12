@@ -57,7 +57,7 @@ export function rpcHandlers(
       }
       return (await deps.data.listTools(typeof p.task === 'string' ? p.task : undefined)).filter(
         (tool) =>
-          isToolAllowedForOrigin((tool as { name?: unknown }).name, 'bridge', { acting: true })
+          isToolAllowedForOrigin((tool as { name?: unknown }).name, 'bridge', { acting: false })
       )
     },
     'tools.run': async (p, browser) => {
@@ -68,10 +68,10 @@ export function rpcHandlers(
       if (tabId !== undefined && !(Number.isSafeInteger(tabId) && Number(tabId) >= 0)) {
         throw new Error('invalid')
       }
-      // What tools.list offers, this runs. A tool turned off since the browser listed it
-      // never runs; Pro access is checked for every protected request below.
+      // Direct tool calls from a paired browser are read-only. Acting tools run only
+      // inside a Desktop-owned chat run. Tools turned off since listing never run.
       const name = p.name
-      if (!isToolAllowedForOrigin(name, 'bridge', { acting: true }))
+      if (!isToolAllowedForOrigin(name, 'bridge', { acting: false }))
         throw new Error('tool_unavailable')
       const listed = (await deps.data.listTools()).some(
         (tool) => (tool as { name?: unknown }).name === name

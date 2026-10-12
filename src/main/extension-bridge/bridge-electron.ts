@@ -460,7 +460,7 @@ const data: BridgeData = {
       {
         conversationId: journeyId,
         origin: 'bridge',
-        acting: true,
+        acting: false,
         ...(tabId === undefined ? {} : { startTab: { browserId: browser.id, tabId } })
       },
       getToolExtensions()

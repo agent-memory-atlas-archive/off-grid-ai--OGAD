@@ -107,6 +107,7 @@ async function setup(
     listTools: async () =>
       (opts.features ?? PRO).tools
         ? [
+            { name: 'web_search' },
             { name: 'notion_search' },
             { name: 'mail_send' },
             { name: 'web_use' },
@@ -206,7 +207,8 @@ describe('pairing', () => {
       expect((reply.body as { result: unknown[] }).result).not.toContainEqual({
         name: 'computer_use'
       })
-      expect((reply.body as { result: unknown[] }).result).toContainEqual({ name: 'web_use' })
+      expect((reply.body as { result: unknown[] }).result).not.toContainEqual({ name: 'web_use' })
+      expect((reply.body as { result: unknown[] }).result).toContainEqual({ name: 'web_search' })
     }
   })
 
@@ -362,7 +364,7 @@ describe('sealed rpc', () => {
       result: [{ id: 'c1' }]
     })
     expect((await s.call('device000001', 'tools.list')).body).toMatchObject({
-      result: [{ name: 'notion_search' }, { name: 'mail_send' }, { name: 'web_use' }]
+      result: [{ name: 'web_search' }]
     })
     await s.call('device000001', 'conversations.put', { conversation: {} })
     await s.call('device000001', 'conversations.delete', { id: 'c1' })
@@ -398,6 +400,9 @@ describe('sealed rpc', () => {
     })
     expect(
       (await stale.call('device000001', 'tools.run', { name: 'mail_send', args: {} })).body
+    ).toMatchObject({ ok: false, error: 'tool_unavailable' })
+    expect(
+      (await stale.call('device000001', 'tools.run', { name: 'web_search', args: {} })).body
     ).toMatchObject({ ok: false, error: 'tools_unavailable' })
 
     const pro = await setup({ features: PRO })
@@ -408,7 +413,10 @@ describe('sealed rpc', () => {
     })
     expect(
       (await pro.call('device000001', 'tools.run', { name: 'mail_send', args: {} })).body
-    ).toMatchObject({ ok: true, result: { output: 'ran mail_send' } })
+    ).toMatchObject({ ok: false, error: 'tool_unavailable' })
+    expect(
+      (await pro.call('device000001', 'tools.run', { name: 'web_search', args: {} })).body
+    ).toMatchObject({ ok: true, result: { ok: true, output: 'ran web_search' } })
     expect((await pro.call('device000001', 'tools.run', { name: 'x' })).body).toMatchObject({
       ok: false,
       error: 'invalid'
@@ -417,10 +425,10 @@ describe('sealed rpc', () => {
     expect(
       (await pro.call('device000001', 'tools.run', { name: 'calendar_delete', args: {} })).body
     ).toMatchObject({ ok: false, error: 'tool_unavailable' })
-    // A web task can name the chat's tab to start in; anything but a tab id is refused.
+    // A tab id does not permit acting tools; invalid tab ids are still refused.
     expect(
       (await pro.call('device000001', 'tools.run', { name: 'web_use', args: {}, tabId: 42 })).body
-    ).toMatchObject({ ok: true, result: { output: 'ran web_use in tab 42' } })
+    ).toMatchObject({ ok: false, error: 'tool_unavailable' })
     for (const tabId of [-1, 1.5, '42', null]) {
       expect(
         (await pro.call('device000001', 'tools.run', { name: 'web_use', args: {}, tabId })).body

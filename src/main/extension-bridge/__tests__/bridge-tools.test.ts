@@ -304,8 +304,8 @@ describe('bridge origin with the real tool registry', () => {
         responseAad(browser.id, id),
         reply.body as { n: string; c: string }
       )
-      if (name === 'computer_use') {
-        expect(result).toMatchObject({ error: 'tool_unavailable' })
+      if (name !== 'web_search') {
+        expect(result).toMatchObject({ ok: false, error: 'tool_unavailable' })
         expect(execute).not.toHaveBeenCalled()
       } else {
         expect(result).toMatchObject({ result: { ok: true } })
