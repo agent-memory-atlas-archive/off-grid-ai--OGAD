@@ -919,7 +919,7 @@ export async function toolChat(
   const summarized = summary
     ? [messages[0], conversationSummaryTurn(summary), messages[messages.length - 1]]
     : null
-  if (summarized && toolPromptChars(summarized, tools) < toolPromptChars(messages, tools)) {
+  if (summarized && toolPromptTokens(summarized, tools) < toolPromptTokens(messages, tools)) {
     messages.splice(0, messages.length, ...summarized)
     opts.onActivity?.({ kind: 'compacted', label: 'Compacted', summary: summary! })
   } else if (toolPromptTokens(messages, tools) >= compactAtTokens && history.length) {
@@ -943,7 +943,7 @@ export async function toolChat(
       }
       compacted = [messages[0], excerpt, ...recent, messages[messages.length - 1]]
     }
-    if (toolPromptChars(compacted, tools) < toolPromptChars(messages, tools)) {
+    if (toolPromptTokens(compacted, tools) < toolPromptTokens(messages, tools)) {
       messages.splice(0, messages.length, ...compacted)
       opts.onActivity?.({ kind: 'compacted', label: 'Compacted' })
     }
