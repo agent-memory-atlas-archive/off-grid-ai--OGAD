@@ -64,6 +64,82 @@ afterAll(() => {
 })
 
 describe('model gateway network boundary', () => {
+  it.each(['/v1/models/pull', '/mcp'])(
+    'refuses website requests and preflight before handling %s',
+    async (route) => {
+      await waitForLoopbackGateway()
+      for (const method of ['POST', 'OPTIONS']) {
+        const response = await fetch(`http://127.0.0.1:${gatewayPort}${route}`, {
+          method,
+          headers: { origin: 'https://evil.example', 'content-type': 'application/json' },
+          body: method === 'POST' ? '{invalid json' : undefined
+        })
+        expect(response.status).toBe(403)
+        expect(response.headers.get('access-control-allow-origin')).toBeNull()
+        expect(response.headers.get('access-control-allow-private-network')).toBeNull()
+        expect(await response.json()).toMatchObject({ error: { type: 'forbidden' } })
+      }
+    }
+  )
+
+  it.each([
+    undefined,
+    'chrome-extension://abcdefghijklmnopabcdefghijklmnop',
+    'moz-extension://test-browser',
+    'file://'
+  ])('serves native and permitted browser clients with origin %s', async (origin) => {
+    await waitForLoopbackGateway()
+    const response = await fetch(`http://127.0.0.1:${gatewayPort}/v1`, {
+      headers: origin ? { origin } : {}
+    })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('access-control-allow-origin')).toBe(origin ?? null)
+    expect(response.headers.get('access-control-allow-private-network')).toBe(
+      origin ? 'true' : null
+    )
+  })
+
+  it('lets an opaque null origin reach only the explore app routes', async () => {
+    await waitForLoopbackGateway()
+    // A sandboxed frame on any website sends Origin: null, so it gets the read routes only.
+    for (const route of ['/health', '/v1/models']) {
+      const response = await fetch(`http://127.0.0.1:${gatewayPort}${route}`, {
+        headers: { origin: 'null' }
+      })
+      expect(response.status).toBe(200)
+      expect(response.headers.get('access-control-allow-origin')).toBe('null')
+    }
+    for (const [method, route] of [
+      ['POST', '/v1/models/pull'],
+      ['POST', '/mcp'],
+      ['DELETE', '/v1/models/anything'],
+      ['GET', '/v1']
+    ] as const) {
+      const response = await fetch(`http://127.0.0.1:${gatewayPort}${route}`, {
+        method,
+        headers: { origin: 'null', 'content-type': 'application/json' },
+        body: method === 'POST' ? '{}' : undefined
+      })
+      expect(response.status).toBe(403)
+      expect(response.headers.get('access-control-allow-origin')).toBeNull()
+    }
+  })
+
+  it('allows the local gateway documentation page and extension preflight', async () => {
+    await waitForLoopbackGateway()
+    for (const origin of [
+      `http://127.0.0.1:${gatewayPort}`,
+      'chrome-extension://abcdefghijklmnopabcdefghijklmnop'
+    ]) {
+      const response = await fetch(`http://127.0.0.1:${gatewayPort}/mcp`, {
+        method: 'OPTIONS',
+        headers: { origin }
+      })
+      expect(response.status).toBe(204)
+      expect(response.headers.get('access-control-allow-origin')).toBe(origin)
+    }
+  })
+
   it('serves the production gateway over IPv4 loopback', async () => {
     const response = await waitForLoopbackGateway()
 

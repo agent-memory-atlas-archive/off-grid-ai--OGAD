@@ -38,6 +38,7 @@ import { whisperModel } from './rag/extractors'
 import { getActiveModal } from './active-models'
 import { embeddings } from './embeddings'
 import { docsText, docsHtml, openApiSpec } from './api-docs'
+import { isExtensionOrigin } from './extension-bridge/bridge-protocol'
 import { handleMcpRequest } from './mcp-server'
 import { logActionTokenForDev } from './mcp-auth'
 import { llm, type LlmSettings } from './llm'
@@ -1236,6 +1237,18 @@ function isLocalCaller(req: http.IncomingMessage): boolean {
   return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
 }
 
+/** Routes an opaque-origin (sandboxed explore app) request may use: health, model and voice lists,
+ *  and speech. The preflight for those is allowed too. */
+export function nullOriginRoute(method: string | undefined, url: string | undefined): boolean {
+  const pathname = new URL(url ?? '/', 'http://localhost').pathname
+  const reads = ['/health', '/v1/models', '/v1/audio/voices']
+  if (method === 'GET') return reads.includes(pathname)
+  if (method === 'POST' || method === 'OPTIONS') {
+    return pathname === '/v1/audio/speech' || (method === 'OPTIONS' && reads.includes(pathname))
+  }
+  return false
+}
+
 /** Start the unified local model gateway. Bound to loopback (local-only). Async because it scans
  *  for a free port when the preferred one is taken. */
 export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
@@ -1253,10 +1266,38 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
   }
 
   server = http.createServer(async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*')
+    const origin = req.headers.origin
+    if (origin !== undefined) {
+      // Packaged renderers use file://; dev uses electron-vite. Any web page can send an opaque
+      // 'null' origin from a sandboxed frame, so 'null' (Desktop's explore apps) reaches only the
+      // read and speech routes those apps call, never downloads, deletes or /mcp.
+      let allowed =
+        isExtensionOrigin(origin) ||
+        origin === 'file://' ||
+        (origin === 'null' && nullOriginRoute(req.method, req.url))
+      try {
+        const page = new URL(origin)
+        const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(page.hostname)
+        const renderer = process.env['ELECTRON_RENDERER_URL']
+        const devOrigin = renderer ? new URL(renderer).origin : undefined
+        allowed ||=
+          page.origin === origin &&
+          loopback &&
+          page.protocol === 'http:' &&
+          (page.port === String(boundGatewayPort) || origin === devOrigin)
+      } catch {
+        // Unknown or malformed origins are refused before any handler runs.
+      }
+      if (!allowed) {
+        json(res, 403, errBody('Origin is not allowed.', 'forbidden'))
+        return
+      }
+      res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Vary', 'Origin')
+      res.setHeader('Access-Control-Allow-Private-Network', 'true')
+    }
     res.setHeader('Access-Control-Allow-Headers', '*')
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
-    res.setHeader('Access-Control-Allow-Private-Network', 'true')
     if (req.method === 'OPTIONS') {
       res.writeHead(204)
       res.end()
