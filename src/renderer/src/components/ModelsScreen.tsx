@@ -28,7 +28,7 @@ import { companionDownloadLabel } from '@renderer/lib/download-label'
 import { formatTransferSpeed } from '@offgrid/sync'
 import { projectProgress } from '@offgrid/ui'
 import { downloadTimeRemaining } from '@renderer/lib/download-progress'
-import { formatParams, modelFileGuidance } from '@renderer/lib/model-summary'
+import { formatParams, isModelWeightFile, modelFileGuidance } from '@renderer/lib/model-summary'
 import {
   modelSettingsTabForKind,
   openModelSettingsPanel,
@@ -417,6 +417,7 @@ export function ModelsScreen({
   const [variantError, setVariantError] = useState<string | null>(null)
   const variantGuidance = useMemo(() => modelFileGuidance(variants, ramGb), [variants, ramGb])
   const [detailFiles, setDetailFiles] = useState<DownloadableModelFile[]>([])
+  const detailFileGuidance = useMemo(() => modelFileGuidance(detailFiles, ramGb), [detailFiles, ramGb])
   const [detailFilesLoading, setDetailFilesLoading] = useState(false)
   const [detailFilesError, setDetailFilesError] = useState<string | null>(null)
   const [chosenVariants, setChosenVariants] = useState<Record<string, string>>({})
@@ -471,7 +472,7 @@ export function ModelsScreen({
     setDetailFilesLoading(true)
     void Promise.resolve(api.getModelFiles?.(detail.id))
       .then((files: DownloadableModelFile[] | undefined) => {
-        if (!cancelled) setDetailFiles(files ?? [])
+        if (!cancelled) setDetailFiles((files ?? []).filter(isModelWeightFile))
       })
       .catch((error: unknown) => {
         if (!cancelled)
@@ -589,7 +590,7 @@ export function ModelsScreen({
     setVariantError(null)
     setVariants([])
     try {
-      const files = await api.getModelFiles?.(model.id)
+      const files = (await api.getModelFiles?.(model.id))?.filter(isModelWeightFile)
       if (!files?.length) throw new Error('No GGUF files found in this repository.')
       setVariants(files)
     } catch (error) {
@@ -982,7 +983,7 @@ export function ModelsScreen({
             // The percent is NOT in the button: a control whose meaning is "Cancel" is the one place
             // the card's main number should not live.
             <>
-              <div className="flex min-w-0 items-baseline gap-1.5 text-[10px] text-neutral-500">
+              <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[10px] text-neutral-500">
                 <span className="text-neutral-300">
                   {prog.status === 'queued'
                     ? 'Queued'
@@ -1591,7 +1592,7 @@ export function ModelsScreen({
                       >
                         <h3 className="mb-2 text-[10px] uppercase tracking-wide text-neutral-400">
                           Available GGUF files
-                          {detailFiles.length > 0 ? ` · ${detailFiles.length}` : ''}
+                          {detailFileGuidance.size > 0 ? ` · ${detailFileGuidance.size}` : ''}
                         </h3>
                         {detailFilesLoading && (
                           <p className="text-xs text-neutral-500">Loading available files…</p>
@@ -1601,36 +1602,86 @@ export function ModelsScreen({
                             {detailFilesError}
                           </p>
                         )}
-                        {!detailFilesLoading && !detailFilesError && detailFiles.length === 0 && (
-                          <p className="text-xs text-neutral-500">
-                            No GGUF files found in this repository.
-                          </p>
-                        )}
+                        {!detailFilesLoading &&
+                          !detailFilesError &&
+                          detailFileGuidance.size === 0 && (
+                            <p className="text-xs text-neutral-500">
+                              No GGUF files found in this repository.
+                            </p>
+                          )}
                         <div className="space-y-2">
-                          {detailFiles.map((file) => (
-                            <div
-                              key={file.fileName}
-                              className="flex items-start justify-between gap-2 rounded border border-neutral-800 px-3 py-2"
-                            >
-                              <div className="min-w-0">
-                                <p className="break-all text-[11px] text-neutral-200">
-                                  {file.fileName}
-                                </p>
-                                <p className="mt-1 text-[10px] text-neutral-500">
-                                  {file.quant} · {formatSize(file.sizeBytes)}
-                                  {file.mmproj ? ` · includes ${file.mmproj.fileName}` : ''}
-                                </p>
-                              </div>
-                              <button
-                                onClick={() => download(m.id, file.fileName)}
-                                disabled={comingSoon || !!downloading || !!detailFilesError}
-                                aria-label={`Download ${file.fileName}`}
-                                className="shrink-0 rounded border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 hover:border-green-500 hover:text-green-500 disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                Download
-                              </button>
-                            </div>
-                          ))}
+                          {detailFiles
+                            .filter(isModelWeightFile)
+                            .sort(
+                              (a, b) =>
+                                Number(!!detailFileGuidance.get(b.fileName)?.labels.length) -
+                                Number(!!detailFileGuidance.get(a.fileName)?.labels.length)
+                            )
+                            .map((file) => {
+                              const guidance = detailFileGuidance.get(file.fileName)
+                              return (
+                                <div
+                                  key={file.fileName}
+                                  className="flex items-start justify-between gap-2 rounded border border-neutral-800 px-3 py-2"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="break-all text-[11px] text-neutral-200">
+                                      {file.fileName}
+                                    </p>
+                                    {guidance && guidance.labels.length > 0 && (
+                                      <div className="mt-1 flex flex-wrap gap-1">
+                                        {guidance.labels.map((label) => (
+                                          <span
+                                            key={label}
+                                            title={
+                                              label === 'Best balance'
+                                                ? 'Balances file size and precision within your estimated RAM budget.'
+                                                : label === 'Highest precision'
+                                                  ? 'Keeps the most weight precision among these files.'
+                                                  : 'The smallest complete model download, including its vision file.'
+                                            }
+                                            className={`rounded-sm border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${label.startsWith('Best balance') ? 'border-green-500 bg-green-500/10 text-green-500' : 'border-neutral-700 text-neutral-300'}`}
+                                          >
+                                            {label}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+                                    <p className="mt-1 text-[10px] text-neutral-500">
+                                      {guidance?.quant ?? file.quant} · {formatSize(file.sizeBytes)}
+                                      {file.mmproj ? ` · includes ${file.mmproj.fileName}` : ''}
+                                    </p>
+                                    {guidance?.fit === 'risky' && (
+                                      <p
+                                        className="mt-1 text-[10px] text-neutral-400"
+                                        title="Estimated from system RAM and file size. GPU memory and context size also affect memory use."
+                                      >
+                                        Large for this device
+                                      </p>
+                                    )}
+                                    {guidance?.split && (
+                                      <p
+                                        className="mt-1 text-[10px] text-neutral-400"
+                                        title="All model parts are required."
+                                      >
+                                        Split model /{' '}
+                                        {guidance.weightBytes !== null
+                                          ? `${formatSize(guidance.weightBytes)} total`
+                                          : 'Total size unavailable'}
+                                      </p>
+                                    )}
+                                  </div>
+                                  <button
+                                    onClick={() => download(m.id, file.fileName)}
+                                    disabled={comingSoon || !!downloading || !!detailFilesError}
+                                    aria-label={`Download ${file.fileName}`}
+                                    className="shrink-0 rounded border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 hover:border-green-500 hover:text-green-500 disabled:cursor-not-allowed disabled:opacity-40"
+                                  >
+                                    Download
+                                  </button>
+                                </div>
+                              )
+                            })}
                         </div>
                       </section>
                     )}
@@ -1731,71 +1782,72 @@ export function ModelsScreen({
                 </p>
               )}
               <div className="space-y-2">
-                {variants.length > 0 && (
-                  <p className="text-[10px] text-neutral-400">
-                    Fastest: requires a benchmark on your device. Highest precision does not
-                    guarantee correct answers. Balance uses{' '}
-                    {ramGb ? `${ramGb} GB system RAM` : 'system RAM (unknown)'}; GPU memory and
-                    context size can change the fit.
-                  </p>
-                )}
-                {variants.map((variant) => {
-                  const guidance = variantGuidance.get(variant.fileName)
-                  return (
-                    <Button
-                      variant="outline"
-                      key={variant.fileName}
-                      onClick={() => {
-                        setChosenVariants((current) => ({
-                          ...current,
-                          [variantModel.id]: variant.fileName
-                        }))
-                        download(variantModel.id, variant.fileName)
-                        setVariantModel(null)
-                      }}
-                      className="h-auto w-full flex-col items-start gap-1 whitespace-normal rounded px-3 py-2 text-left leading-normal shadow-none"
-                    >
-                      <span className="break-all text-[11px] text-neutral-200">
-                        {variant.fileName}
-                      </span>
-                      <span className="text-[10px] text-neutral-400">
-                        {formatSize(variant.sizeBytes)}
-                      </span>
-                      {guidance && (
-                        <>
-                          {guidance.labels.length > 0 && (
-                            <span className="text-[10px] uppercase tracking-wide text-neutral-200">
-                              {guidance.labels.join(' / ')}
-                            </span>
-                          )}
-                          <span className="text-[10px] text-neutral-400">
-                            {guidance.quant} /{' '}
-                            {guidance.fit === 'ok'
-                              ? 'RAM headroom (estimate)'
-                              : guidance.fit === 'tight'
-                                ? 'Limited RAM headroom'
-                                : guidance.fit === 'risky'
-                                  ? 'High RAM use: may be slow or fail to load'
-                                  : 'RAM fit unknown'}
-                          </span>
-                          {guidance.split && (
-                            <span className="text-[10px] text-neutral-400">
-                              Requires all parts /{' '}
-                              {guidance.weightBytes !== null
-                                ? `${formatSize(guidance.weightBytes)} total weights`
-                                : 'Total weight size unknown'}
-                            </span>
-                          )}
-                        </>
-                      )}
-                      {variant.mmproj && (
-                        <span className="break-all text-[9px] text-neutral-500">
-                          Includes {variant.mmproj.fileName}
-                        </span>
-                      )}
-                    </Button>
+                {variants
+                  .filter(isModelWeightFile)
+                  .sort(
+                    (a, b) =>
+                      Number(!!variantGuidance.get(b.fileName)?.labels.length) -
+                      Number(!!variantGuidance.get(a.fileName)?.labels.length)
                   )
-                })}
+                  .map((variant) => {
+                    const guidance = variantGuidance.get(variant.fileName)
+                    return (
+                      <Button
+                        variant="outline"
+                        key={variant.fileName}
+                        onClick={() => {
+                          setChosenVariants((current) => ({
+                            ...current,
+                            [variantModel.id]: variant.fileName
+                          }))
+                          download(variantModel.id, variant.fileName)
+                          setVariantModel(null)
+                        }}
+                        className="h-auto w-full flex-col items-start gap-1 whitespace-normal rounded px-3 py-2 text-left leading-normal shadow-none"
+                      >
+                        <span className="break-all text-[11px] text-neutral-200">
+                          {variant.fileName}
+                        </span>
+                        <span className="text-[10px] text-neutral-400">
+                          {formatSize(variant.sizeBytes)}
+                        </span>
+                        {guidance && (
+                          <>
+                            {guidance.labels.length > 0 && (
+                              <span className="text-[10px] uppercase tracking-wide text-neutral-200">
+                                {guidance.labels.join(' / ')}
+                              </span>
+                            )}
+                            <span className="text-[10px] text-neutral-400">{guidance.quant}</span>
+                            {guidance.fit === 'risky' && (
+                              <span
+                                className="text-[10px] text-neutral-400"
+                                title="Estimated from system RAM and file size. GPU memory and context size also affect memory use."
+                              >
+                                Large for this device
+                              </span>
+                            )}
+                            {guidance.split && (
+                              <span
+                                className="text-[10px] text-neutral-400"
+                                title="All model parts are required."
+                              >
+                                Split model /{' '}
+                                {guidance.weightBytes !== null
+                                  ? `${formatSize(guidance.weightBytes)} total`
+                                  : 'Total size unavailable'}
+                              </span>
+                            )}
+                          </>
+                        )}
+                        {variant.mmproj && (
+                          <span className="break-all text-[9px] text-neutral-500">
+                            Includes {variant.mmproj.fileName}
+                          </span>
+                        )}
+                      </Button>
+                    )
+                  })}
               </div>
             </div>
           </SidePanel>

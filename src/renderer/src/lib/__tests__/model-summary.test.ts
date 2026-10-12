@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   formatContextWindow,
   formatParams,
+  isModelWeightFile,
   modelFileGuidance,
   modelNameForFile,
   resolveActiveTextModel,
@@ -30,14 +31,35 @@ describe('model file guidance', () => {
     file('Q8_K_XL', 39.1)
   ] as const
 
+  it('excludes support files from the picker and recommends the smallest runnable model', () => {
+    const supportFiles = [
+      'imatrix_unsloth.gguf',
+      'Qwen-imatrix.gguf',
+      'importance_matrix.gguf',
+      'mmproj-F16.gguf'
+    ].map((fileName) => ({ ...file('Q4_K_M', 0.014), fileName, quant: 'Unknown' }))
+    const listed = [...variants, ...supportFiles].filter(isModelWeightFile)
+    expect(listed.map((entry) => entry.fileName)).toEqual(variants.map((entry) => entry.fileName))
+    const guidance = modelFileGuidance([...variants, ...supportFiles], 64)
+    for (const support of supportFiles) expect(guidance.has(support.fileName)).toBe(false)
+    expect(guidance.get(variants[0].fileName)?.labels).toContain('Smallest download')
+  })
+
+  it('keeps custom model filenames but does not rank unknown precision as the smallest model', () => {
+    const custom = { ...file('Q4_K_M', 0.014), fileName: 'my-model.gguf', quant: 'Unknown' }
+    expect(isModelWeightFile(custom)).toBe(true)
+    expect(isModelWeightFile({ fileName: 'config.json' })).toBe(false)
+    const guidance = modelFileGuidance([...variants, custom], 64)
+    expect(guidance.get(custom.fileName)?.labels).toEqual([])
+    expect(guidance.get(variants[0].fileName)?.labels).toContain('Smallest download')
+  })
+
   it('changes the balance choice with reported RAM, without an OS assumption', () => {
     const smallerDevice = modelFileGuidance(variants, 48)
     const largerDevice = modelFileGuidance(variants, 64)
-    expect(smallerDevice.get(variants[1].fileName)?.labels).toContain('Best balance (RAM estimate)')
-    expect(largerDevice.get(variants[2].fileName)?.labels).toContain('Best balance (RAM estimate)')
-    expect(smallerDevice.get(variants[2].fileName)?.labels).not.toContain(
-      'Best balance (RAM estimate)'
-    )
+    expect(smallerDevice.get(variants[1].fileName)?.labels).toContain('Best balance')
+    expect(largerDevice.get(variants[2].fileName)?.labels).toContain('Best balance')
+    expect(smallerDevice.get(variants[2].fileName)?.labels).not.toContain('Best balance')
     expect(largerDevice.get(variants[3].fileName)?.labels).toContain('Highest precision')
     expect(largerDevice.get(variants[0].fileName)?.labels).toContain('Smallest download')
   })
@@ -45,9 +67,7 @@ describe('model file guidance', () => {
   it('does not recommend a file when RAM is unknown or no moderate-precision file fits', () => {
     for (const ram of [null, 0, NaN, 16]) {
       const guidance = modelFileGuidance(variants, ram)
-      expect([...guidance.values()].flatMap((row) => row.labels)).not.toContain(
-        'Best balance (RAM estimate)'
-      )
+      expect([...guidance.values()].flatMap((row) => row.labels)).not.toContain('Best balance')
     }
     expect(modelFileGuidance(variants, 16).get(variants[2].fileName)?.fit).toBe('risky')
   })
@@ -74,7 +94,7 @@ describe('model file guidance', () => {
     ]) {
       const guidance = modelFileGuidance([variant], 64).get(variant.fileName)
       expect(guidance?.fit).toBeNull()
-      expect(guidance?.labels).not.toContain('Best balance (RAM estimate)')
+      expect(guidance?.labels).not.toContain('Best balance')
       expect(guidance?.labels).not.toContain('Smallest download')
     }
     expect(modelFileGuidance([], 64).size).toBe(0)

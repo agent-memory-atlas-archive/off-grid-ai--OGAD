@@ -2,9 +2,18 @@
 // without the app: format the running context window and resolve a model id to its
 // display name. The hook (useActiveModelSummary) does the IPC and delegates here.
 
-import { CATALOG } from '@offgrid/models'
+import { CATALOG, isMMProjFile } from '@offgrid/models'
 import { parseRemoteVisionModelId } from '../../../shared/remote-vision-server'
 import { fitLevel } from '../../../shared/model-fit'
+
+/** Support GGUFs are not runnable model choices. */
+export function isModelWeightFile(file: { fileName: string }): boolean {
+  return (
+    file.fileName.toLowerCase().endsWith('.gguf') &&
+    !isMMProjFile(file.fileName) &&
+    !/(?:^|[/_.-])(?:imatrix|importance[_-]?matrix)(?:[_.-]|$)/i.test(file.fileName)
+  )
+}
 
 /** File-picker guidance, based on the reported system RAM on every OS.
  * Precision is a format property, not an accuracy benchmark. Never infer speed
@@ -30,7 +39,7 @@ export function modelFileGuidance(
     labels: string[]
   }
 > {
-  const rows = files.map((file) => {
+  const rows = files.filter(isModelWeightFile).map((file) => {
     // Parse the full filename: the provider parser can truncate IQ/XL/BF16 names.
     const quant =
       file.fileName
@@ -83,7 +92,7 @@ export function modelFileGuidance(
       a.totalBytes! - b.totalBytes!
   )[0]
   const smallest = rows
-    .filter((row) => !row.split && row.totalBytes !== null)
+    .filter((row) => !row.split && row.totalBytes !== null && row.bits !== null)
     .sort((a, b) => a.totalBytes! - b.totalBytes!)[0]
   const highestBits = Math.max(0, ...rows.map((row) => row.bits ?? 0))
   return new Map(
@@ -92,7 +101,7 @@ export function modelFileGuidance(
       {
         ...row,
         labels: [
-          ...(row.fileName === balanced?.fileName ? ['Best balance (RAM estimate)'] : []),
+          ...(row.fileName === balanced?.fileName ? ['Best balance'] : []),
           ...(row.bits === highestBits ? ['Highest precision'] : []),
           ...(row.fileName === smallest?.fileName ? ['Smallest download'] : [])
         ]
