@@ -259,7 +259,10 @@ test.describe('Vault item kinds with demo data', () => {
     await expect(detailRow('Folder')).toContainText('Work')
     await expect(detailRow('Favorite')).toContainText('Yes')
     await expect(detailRow('Username / Email')).toContainText(LOGIN.username)
-    await expect(detailRow('URL 2')).toContainText(LOGIN.urls[1])
+    await expect(detailRow('Websites').getByRole('link')).toHaveCount(2)
+    await expect(
+      detailRow('Websites').getByRole('link', { name: LOGIN.urls[1], exact: true })
+    ).toBeVisible()
     await expect(page.getByRole('link', { name: LOGIN.urls[0], exact: true })).toBeVisible()
     await expect(page.getByRole('status', { name: 'Authenticator code', exact: true })).toHaveText(
       /^\d{6}$/
