@@ -95,16 +95,18 @@ const launch = async (pro: '0' | '1'): Promise<void> => {
   await completeOnboarding(page)
   const dismissSetup = page.getByRole('button', { name: 'Dismiss' })
   if (await dismissSetup.isVisible().catch(() => false)) await dismissSetup.click()
-  const expand = page.getByRole('button', { name: 'Expand sidebar' })
-  if (await expand.isVisible().catch(() => false)) await expand.click()
+  const navigation = page.getByRole('navigation', { name: 'Primary navigation' })
+  await navigation.hover()
+  await navigation.getByRole('button', { name: 'Pin sidebar', exact: true }).click()
 }
 
 /**
- * Open the sync-settings panel IDEMPOTENTLY. The header control is a toggle and the app instance is
- * shared across tests in this file, so a blind click can CLOSE a panel a previous test left open.
+ * Select the sharing view. The app instance is shared across tests in this file.
  */
 const openSyncSettings = async (): Promise<void> => {
-  const tab = page.getByRole('button', { name: 'Sync sharing' })
+  const tab = page
+    .getByRole('navigation', { name: 'Devices control center' })
+    .getByRole('button', { name: 'Sync sharing', exact: true })
   if ((await tab.getAttribute('aria-current')) !== 'page') await tab.click()
   await expect(tab).toHaveAttribute('aria-current', 'page')
 }
@@ -150,15 +152,23 @@ test.describe('Devices surface — pro tier', () => {
   test('renders the real Devices screen with live sync status', async () => {
     await navButton(page, 'Devices').click()
     await expect(page.getByRole('heading', { name: 'Devices', exact: true })).toBeVisible()
-    // Per-ROUTE state, which is how the screen actually reports itself: one chip per transport reading
-    // "LAN: ready" or "LAN: <listen>/<advertise>/<browse>" (syncRouteDisplay + DevicesScreen). This asserted
-    // 'LAN + nearby ready' and 'Personal mesh', and neither string exists anywhere in the app - the first was
-    // never shipped and the second is now 'Licensed devices'. The spec was failing on its own stale copy, in
-    // CI and locally both, while the screen underneath was fine.
-    await expect(page.getByText(/^LAN:/)).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByText(/\d+ nearby/)).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Licensed devices' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Available on this network' })).toBeVisible()
+    // Pro a29f7a0 removed the per-route health chips. Discovery and the port remain visible.
+    await expect(page.getByRole('button', { name: 'Find nearby devices' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    await expect(page.getByRole('heading', { name: 'Pairing code', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Saved', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Available', exact: true })).toBeVisible()
+    await expect(
+      page.getByRole('region', { name: 'Available', exact: true }).getByText(/^\d+$/)
+    ).toBeVisible()
+    await page.getByRole('button', { name: /^Connection settings\. Sync port \d+$/ }).click()
+    const connectionSettings = page.getByRole('dialog', { name: 'Connection settings' })
+    await expect(connectionSettings.getByRole('textbox', { name: 'Sync port' })).toHaveValue(
+      '37878'
+    )
+    await connectionSettings.getByRole('button', { name: 'Cancel', exact: true }).click()
     await page.screenshot({ path: 'e2e/screenshots/devices-pro.png' })
   })
 
@@ -166,15 +176,10 @@ test.describe('Devices surface — pro tier', () => {
     await navButton(page, 'Devices').click()
     await openSyncSettings()
 
-    await expect(page.getByRole('heading', { name: 'Data sent from this device' })).toBeVisible()
-    // One switch per user-facing category, plus the master switch.
-    await expect(page.getByRole('switch', { name: 'Sync enabled' })).toBeVisible()
-    for (const label of [
-      'Sync Chats',
-      'Sync Projects',
-      'Sync Model settings',
-      'Sync Copied text'
-    ]) {
+    await expect(page.getByRole('heading', { name: 'Sending', exact: true })).toBeVisible()
+    // Pro e58db26 removed Chats and Projects switches; those records always sync.
+    await expect(page.getByRole('switch', { name: 'Optional sending enabled' })).toBeVisible()
+    for (const label of ['Sync Model settings', 'Sync Copied text']) {
       await expect(page.getByRole('switch', { name: label })).toBeVisible()
     }
     await expect(page.getByRole('switch', { name: 'Sync Copied text' })).toHaveAttribute(
@@ -204,12 +209,17 @@ test.describe('Devices surface — pro tier', () => {
       ).api.proInvoke('pro:sync:status')
     )
     expect(desktop.port).toBeGreaterThan(0)
-    // The code this Mac is SHOWING, not one the harness made up. A joining device is told the code by a
-    // person reading the other screen, and the engine refuses an attempt whose passphrase it cannot
-    // resolve - so an invented code is rejected before the prompt is ever raised, which is what made this
-    // spec look like a broken pairing flow.
+    // Open the code a person would read to the joining device.
     const desktopCode = desktop.pairingCode?.code
     expect(desktopCode, 'the desktop has to be showing a pairing code to pair against').toBeTruthy()
+    await page.getByRole('button', { name: 'Show QR Code', exact: true }).click()
+    const pairingCode = page.getByRole('dialog', { name: 'Pair a device', exact: true })
+    await expect(
+      pairingCode.getByText(
+        new RegExp(`^${desktopCode!.slice(0, 4)}[- ]?${desktopCode!.slice(4)}$`)
+      )
+    ).toBeVisible()
+    await pairingCode.getByRole('button', { name: 'Close pairing code' }).click()
     // A different REAL code for the refusal case: 8 characters from the same confusable-free alphabet, so
     // it fails for being wrong rather than for being malformed.
     const wrongCode = desktopCode === 'WRNGC2DE' ? 'WRNGC2DF' : 'WRNGC2DE'
@@ -468,14 +478,12 @@ test.describe('Devices surface — pro tier', () => {
       .toBe(true)
     releaseSecureStore?.()
     await pairing
-    // What the screen can honestly show for THIS peer. The Devices list renders two groups - devices in
-    // the licence registry, and devices discovered on the network - and the synthetic peer is in neither:
-    // its entitlement adapter is a stub, so no machine is ever registered for it, where a real phone is
-    // registered as part of pairing. Asserting a device ROW here would be asserting a registry
-    // side effect the harness deliberately does not have.
-    //
-    // The connection itself is what this step is about, and that IS visible: the header counts it.
-    await expect(page.getByText('1 connected', { exact: true })).toBeVisible()
+    // The Devices tab now carries the live connection count.
+    await expect(
+      page
+        .getByRole('navigation', { name: 'Devices control center' })
+        .getByRole('button', { name: 'Devices · 1 connected', exact: true })
+    ).toBeVisible()
     await page.screenshot({ path: 'e2e/screenshots/devices-after-pairing.png' })
     // And the facts underneath, from the app's own state rather than a label.
     const paired = await page.evaluate(async () => {
@@ -512,7 +520,7 @@ test.describe('Devices surface — pro tier', () => {
     await page.getByRole('switch', { name: 'Sync Copied text' }).click()
     await page
       .getByRole('navigation', { name: 'Devices control center' })
-      .getByRole('button', { name: 'Devices', exact: true })
+      .getByRole('button', { name: 'Devices · 1 connected', exact: true })
       .click()
     await page.getByRole('button', { name: 'Rescan network' }).click()
     await expect(page.getByRole('button', { name: 'Rescan network' })).toBeEnabled()
@@ -630,7 +638,10 @@ test.describe('Devices surface — pro tier', () => {
     await expect(page.getByText('Synthetic Transfer Model')).toBeVisible()
     await expect(page.getByText('synthetic-transfer-q4.gguf')).toBeVisible()
     await page.screenshot({ path: 'e2e/screenshots/devices-model-transfer.png' })
-    await page.getByRole('button', { name: 'Close', exact: true }).first().click()
+    await page
+      .getByRole('dialog', { name: 'Send a model to Synthetic Android' })
+      .getByRole('button', { name: 'Close model transfer', exact: true })
+      .click()
 
     await syntheticPeer.stop()
     syntheticPeer = null
@@ -643,9 +654,9 @@ test.describe('Devices surface — pro tier', () => {
       )
     ).toBeVisible()
     await page.getByRole('button', { name: 'Evict device' }).click()
-    await expect(
-      page.getByRole('button', { name: 'Manage devices, 1 of 5 slots used' })
-    ).toBeVisible()
+    const saved = page.getByRole('region', { name: 'Saved', exact: true })
+    await expect(saved.getByText('1 used', { exact: true })).toBeVisible()
+    await expect(saved.getByLabel('1 of 5 licensed devices', { exact: true })).toBeVisible()
     await expect(page.getByText('Could not reach Synthetic Android')).toBeVisible({
       timeout: 15_000
     })
@@ -659,20 +670,23 @@ test.describe('Devices surface — pro tier', () => {
   test('turning a category off persists across a screen change', async () => {
     await navButton(page, 'Devices').click()
     await openSyncSettings()
-    const chats = page.getByRole('switch', { name: 'Sync Chats' })
+    const modelSettings = page.getByRole('switch', { name: 'Sync Model settings' })
     const clipboard = page.getByRole('switch', { name: 'Sync Copied text' })
-    await expect(chats).toHaveAttribute('aria-checked', 'true')
+    // Model settings are optional and start off. Enable them before testing off-state persistence.
+    await expect(modelSettings).toHaveAttribute('aria-checked', 'false')
+    await modelSettings.click()
+    await expect(modelSettings).toHaveAttribute('aria-checked', 'true')
     await expect(clipboard).toHaveAttribute('aria-checked', 'false')
-    await chats.click()
+    await modelSettings.click()
     await clipboard.click()
-    await expect(chats).toHaveAttribute('aria-checked', 'false')
+    await expect(modelSettings).toHaveAttribute('aria-checked', 'false')
     await expect(clipboard).toHaveAttribute('aria-checked', 'true')
 
     // Leave and come back: the preference is persisted in main, not just React state.
     await navButton(page, 'Models').click()
     await navButton(page, 'Devices').click()
     await openSyncSettings()
-    await expect(page.getByRole('switch', { name: 'Sync Chats' })).toHaveAttribute(
+    await expect(page.getByRole('switch', { name: 'Sync Model settings' })).toHaveAttribute(
       'aria-checked',
       'false'
     )
