@@ -1,5 +1,10 @@
-import type { ToolExtension } from '../tools'
 import { findNativeToolSpec } from './nativeActionToolExtension-logic'
+
+/** What the origin rule reads from a tool extension (tools.ts ToolExtension). */
+interface OriginExtension {
+  category?: 'tool' | 'connector'
+  isReadOnlyTool?(name: string): boolean
+}
 
 /** Builtins whose implementations only retrieve data or compute a result. */
 const READ_ONLY_BUILTINS: ReadonlySet<string> = new Set([
@@ -45,7 +50,7 @@ export function toolOriginOf(context?: {
 export function isToolAllowedForOrigin(
   name: unknown,
   origin?: ToolOrigin,
-  options: { acting?: boolean; extension?: Pick<ToolExtension, 'category' | 'isReadOnlyTool'> } = {}
+  options: { acting?: boolean; extension?: OriginExtension } = {}
 ): boolean {
   if (origin !== 'bridge') {
     return true

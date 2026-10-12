@@ -4,7 +4,7 @@ import { bridgeMediaData, mediaHandlers } from './bridge-media-handlers'
 import { parseConversationParams, type ConversationSearchParams } from './bridge-conversations'
 import { isSettingsSection, parseSettingsPatch } from './bridge-settings'
 import type { BridgeFeatures, RpcMethod } from './bridge-protocol'
-import type { BridgeDeps, PairedBrowser } from './bridge-service'
+import type { BridgeDeps, PairedBrowser } from './bridge-types'
 
 const isTaskId = (value: unknown): value is string =>
   typeof value === 'string' && /^[\w-]{1,128}$/.test(value)
