@@ -1,3 +1,4 @@
+import { isUncertainPageResult } from '../extension-bridge/bridge-socket-protocol'
 import type { PlaywrightToolResult } from './playwright-mcp-session'
 import { NoSupportedActionError } from './semantic-candidates'
 import {
@@ -24,6 +25,10 @@ import {
   hasSemanticReferences,
   isCrashedTarget,
   isStaleReference,
+  isInputAction,
+  isUncertainActionTimeout,
+  UNCERTAIN_ACTION_NOTE,
+  uncertainActionKey,
   observeWithCurrentLease,
   recoverCrashedTarget,
   semanticSnapshotDiagnostics,
@@ -47,6 +52,8 @@ interface SemanticLoopState {
   lastFingerprint: string
   recoveryNote: string
   crashRecoveries: number
+  uncertainCount: number
+  uncertainActions: Set<string>
 }
 
 interface SemanticLoopContext {
@@ -119,7 +126,9 @@ async function runSemanticLoop(
     lastActionKey: '',
     lastFingerprint: fingerprint(observation.text),
     recoveryNote: '',
-    crashRecoveries
+    crashRecoveries,
+    uncertainCount: 0,
+    uncertainActions: new Set()
   }
   const context = { input, state }
 
@@ -178,6 +187,11 @@ async function runSemanticStep(
     isPrivateSemanticTarget(decision, state.observation.text)
   ) {
     await performHumanHandoff(context, decision, step)
+    return undefined
+  }
+  if (state.uncertainActions.has(uncertainActionKey(decision))) {
+    state.recoveryNote = `${UNCERTAIN_ACTION_NOTE} Do not repeat that action; it may have run.`
+    input.onStep('Skipped an action that the page did not confirm.')
     return undefined
   }
   if (skipUnchangedDuplicate(input, state, decision)) {
@@ -294,16 +308,29 @@ async function performSemanticAction(
       combinedSignal(input.signal, lease.signal)
     )
   } catch (error) {
-    if (!lease.signal.aborted) throw error
-    input.onStep('cancelled an in-flight action after input control changed')
-    state.observation = await observeWithCurrentLease(input)
-    return undefined
+    const text = error instanceof Error ? error.message : String(error)
+    if (!lease.signal.aborted && isUncertainActionTimeout(decision, text)) {
+      result = { text, isError: false, uncertain: true }
+    } else {
+      if (!lease.signal.aborted) throw error
+      input.onStep('cancelled an in-flight action after input control changed')
+      state.observation = await observeWithCurrentLease(input)
+      return undefined
+    }
   }
   if (!input.guard.ownsActionLease(lease.epoch)) {
     input.onStep('discarded a late action result after input control changed')
     state.observation = await observeWithCurrentLease(input)
     return undefined
   }
+  if (
+    isUncertainPageResult(result) ||
+    (result.isError && isUncertainActionTimeout(decision, result.text))
+  ) {
+    await handleUncertainAction(context, decision, step)
+    return undefined
+  }
+  state.uncertainCount = 0
   // The model writes its summary as a sentence; drop its full stop before the status joins it.
   const label = actionLabel(decision).replace(/[.!]+$/, '')
   input.onStep(`${label}: ${result.isError ? 'not completed' : 'completed'}`)
@@ -319,6 +346,36 @@ async function performSemanticAction(
   return state.noChangeCount >= MAX_NO_CHANGE
     ? fallback('Semantic control made no visible progress.', state.handoffs)
     : undefined
+}
+
+async function handleUncertainAction(
+  context: SemanticLoopContext,
+  decision: SemanticDecision,
+  step: number
+): Promise<void> {
+  const { input, state } = context
+  state.uncertainActions.add(uncertainActionKey(decision))
+  state.uncertainCount = isInputAction(decision) ? state.uncertainCount + 1 : 0
+  input.onStep(UNCERTAIN_ACTION_NOTE)
+  state.observation = await observeWithCurrentLease(input)
+  if (state.observation.isError) {
+    throw new Error(
+      `The page could not be checked after an uncertain action: ${compact(state.observation.text)}`
+    )
+  }
+  await publishObservation(input, { step, phase: 'checking', summary: UNCERTAIN_ACTION_NOTE })
+  if (state.uncertainCount >= 2) {
+    await performHumanHandoff(
+      context,
+      {
+        ...decision,
+        reason: 'The page did not confirm two actions. Check the page and tell me how to continue.'
+      },
+      step
+    )
+    state.uncertainCount = 0
+  }
+  state.recoveryNote = `${UNCERTAIN_ACTION_NOTE} Do not repeat the action; it may have run.`
 }
 
 async function publishObservation(

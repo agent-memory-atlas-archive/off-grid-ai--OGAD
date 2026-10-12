@@ -168,6 +168,15 @@ export type PageTool = (typeof PAGE_TOOLS)[number]
 export interface PageToolResult {
   readonly text: string
   readonly isError: boolean
+  /** The action may have run. Observe the page; do not repeat the action. */
+  readonly uncertain?: true
+}
+
+export const LEGACY_PAGE_NO_ANSWER = 'The page did not answer.'
+
+/** Includes the no-answer result sent by older extensions. */
+export function isUncertainPageResult(result: PageToolResult): boolean {
+  return result.uncertain === true || (result.isError && result.text === LEGACY_PAGE_NO_ANSWER)
 }
 
 export type SocketReply =

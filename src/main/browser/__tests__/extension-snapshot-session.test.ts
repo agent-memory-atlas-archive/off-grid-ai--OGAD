@@ -36,6 +36,21 @@ function fakeLink(reply: (op: SocketOp, args: Record<string, unknown>) => unknow
 const SNAPSHOT = '### Page state\n- Page Snapshot:\n```yaml\n- button "Go" [ref=e1]\n```'
 
 describe('ExtensionSnapshotSession', () => {
+  it.each([
+    { text: 'The action may have run.', isError: false, uncertain: true as const },
+    { text: 'The page did not answer.', isError: true }
+  ])('preserves an uncertain result from new and older extensions: %s', async (result) => {
+    const session = new ExtensionSnapshotSession(
+      fakeLink(() => result),
+      () => 1
+    )
+    expect(await session.call('browser_click', { target: 'e1' })).toEqual({
+      text: result.text,
+      isError: false,
+      uncertain: true
+    })
+  })
+
   it('sends the loop’s Playwright tools to the task tab and returns their answers', async () => {
     const link = fakeLink((_op, args) =>
       args.tool === 'browser_snapshot'

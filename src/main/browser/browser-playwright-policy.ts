@@ -166,6 +166,7 @@ Rules:
 - Use semantic controls first. Use fallback only when needed content is visual and has no usable ref.
 - Use human_required for passwords, one-time codes, CAPTCHA, payment, or irreversible confirmation.
 - Do not repeat an action that made no visible change.
+- If the page did not confirm an action, it may have run. Do not repeat it. Check the fresh page first.
 - Return done only when the latest snapshot visibly proves the goal. Copy the exact proving text
   into evidence_text, or its exact Playwright reference into evidence_ref. A completion claim without
   current-page evidence is invalid.

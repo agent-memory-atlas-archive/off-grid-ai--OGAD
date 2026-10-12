@@ -6,16 +6,22 @@
 // tool names and arguments. The loop, guard and evidence checks run unchanged.
 
 import type { BrowserLink } from '../extension-bridge/bridge-socket'
-import type { PageToolResult } from '../extension-bridge/bridge-socket-protocol'
+import {
+  isUncertainPageResult,
+  type PageToolResult
+} from '../extension-bridge/bridge-socket-protocol'
 import type { PlaywrightToolResult, SemanticPageSession } from './playwright-mcp-session'
 
 const CALL_TIMEOUT_MS = 60_000
 
 function asResult(raw: unknown): PlaywrightToolResult {
   const r = raw as Partial<PageToolResult> | null
-  return typeof r?.text === 'string' && typeof r.isError === 'boolean'
-    ? { text: r.text, isError: r.isError }
-    : { text: 'The browser sent an unreadable answer.', isError: true }
+  if (typeof r?.text !== 'string' || typeof r.isError !== 'boolean') {
+    return { text: 'The browser sent an unreadable answer.', isError: true }
+  }
+  return isUncertainPageResult(r as PageToolResult)
+    ? { text: r.text, isError: false, uncertain: true }
+    : { text: r.text, isError: r.isError }
 }
 
 export class ExtensionSnapshotSession implements SemanticPageSession {

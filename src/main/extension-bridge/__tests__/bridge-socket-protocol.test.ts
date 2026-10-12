@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { deriveSessionKey, generateKeyPair, open, seal } from '../bridge-protocol'
 import {
   createChannel,
+  isUncertainPageResult,
+  LEGACY_PAGE_NO_ANSWER,
   helloAad,
   linkName,
   newNonce,
@@ -144,5 +146,20 @@ describe('message shapes', () => {
     expect(parseUpstream({ event: 'ping', tabId: 0, data: {} })).toMatchObject({ event: 'ping' })
     expect(parseUpstream({ event: 'shell', tabId: 4, data: {} })).toBeNull()
     expect(parseUpstream('x')).toBeNull()
+  })
+})
+
+describe('uncertain page results', () => {
+  it('preserves the explicit outcome in a socket reply', () => {
+    const result = { text: 'The action may have run.', isError: false, uncertain: true as const }
+    expect(parseUpstream({ id: 1, ok: true, result })).toEqual({ id: 1, ok: true, result })
+    expect(isUncertainPageResult(result)).toBe(true)
+  })
+
+  it('recognizes the legacy no-answer error only', () => {
+    expect(LEGACY_PAGE_NO_ANSWER).toBe('The page did not answer.')
+    expect(isUncertainPageResult({ text: LEGACY_PAGE_NO_ANSWER, isError: true })).toBe(true)
+    expect(isUncertainPageResult({ text: 'Permission denied', isError: true })).toBe(false)
+    expect(isUncertainPageResult({ text: 'Clicked', isError: false })).toBe(false)
   })
 })

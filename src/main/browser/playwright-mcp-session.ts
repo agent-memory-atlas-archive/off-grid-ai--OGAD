@@ -27,6 +27,7 @@ const CLOSE_TIMEOUT_MS = 5_000
 export interface PlaywrightToolResult {
   text: string
   isError: boolean
+  uncertain?: true
 }
 
 /**
