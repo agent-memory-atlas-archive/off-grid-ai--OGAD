@@ -38,7 +38,6 @@ import { whisperModel } from './rag/extractors'
 import { getActiveModal } from './active-models'
 import { embeddings } from './embeddings'
 import { docsText, docsHtml, openApiSpec } from './api-docs'
-import { isExtensionOrigin } from './extension-bridge/bridge-protocol'
 import { handleMcpRequest } from './mcp-server'
 import { logActionTokenForDev } from './mcp-auth'
 import { llm, type LlmSettings } from './llm'
@@ -1279,7 +1278,7 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
     if (origin !== undefined) {
       // Packaged renderers use file://; dev uses electron-vite. Other origins, including the
       // opaque 'null' a sandboxed frame on any website sends, get the inference routes only.
-      let trusted = isExtensionOrigin(origin) || origin === 'file://'
+      let trusted = origin === 'file://'
       try {
         const page = new URL(origin)
         const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(page.hostname)

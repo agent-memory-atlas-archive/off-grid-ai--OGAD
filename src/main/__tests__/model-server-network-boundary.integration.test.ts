@@ -99,7 +99,13 @@ describe('model gateway network boundary', () => {
     )
   })
 
-  it.each(['null', 'https://evil.example', 'app://obsidian.md'])(
+  it.each([
+    'null',
+    'https://evil.example',
+    'app://obsidian.md',
+    'chrome-extension://abcdefghijklmnopabcdefghijklmnop',
+    'moz-extension://test-browser'
+  ])(
     'keeps the inference routes open to origin %s, as 0.0.54 did, but never the protected ones',
     async (origin) => {
       await waitForLoopbackGateway()
@@ -108,6 +114,8 @@ describe('model gateway network boundary', () => {
           headers: { origin }
         })
         expect(response.status).toBe(200)
+        expect(response.headers.get('access-control-allow-origin')).toBe(origin)
+        expect(response.headers.get('access-control-allow-credentials')).toBeNull()
       }
       for (const [method, route] of [
         ['POST', '/v1/models/pull'],
@@ -133,12 +141,9 @@ describe('model gateway network boundary', () => {
     }
   )
 
-  it('allows the local gateway documentation page and extension preflight', async () => {
+  it('allows the local gateway documentation page preflight', async () => {
     await waitForLoopbackGateway()
-    for (const origin of [
-      `http://127.0.0.1:${gatewayPort}`,
-      'chrome-extension://abcdefghijklmnopabcdefghijklmnop'
-    ]) {
+    for (const origin of [`http://127.0.0.1:${gatewayPort}`]) {
       const response = await fetch(`http://127.0.0.1:${gatewayPort}/mcp`, {
         method: 'OPTIONS',
         headers: { origin }
