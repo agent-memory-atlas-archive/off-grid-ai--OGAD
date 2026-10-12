@@ -181,27 +181,27 @@ const KEV_4B: ModelEntry = {
   tags: ['Decision', 'Decider', 'Fast'],
   grounder: false,
   isNew: true,
-  releaseDate: '2026-09-21',
+  releaseDate: '2026-10-01',
   files: [
     {
-      name: 'kev-4b/checkpoint/head.pt',
-      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/485ace8703592fcf405488b262449990824cfed1/head.pt',
-      sizeBytes: 5248767,
-      sha256: 'd8f796da36ff7bd7c0fb9496b452139bb7851af4fc82b07b500b682d3f721d6a',
+      name: 'kev-4b/checkpoint-v1.0/head.pt',
+      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/591dcb5bd6d05eb0b5131ea6608f93f10243335c/head.pt',
+      sizeBytes: 5249791,
+      sha256: 'dd633435998ecc751ac538717a3742e32149500fabf7d7276287dbf0693f347c',
       role: 'primary'
     },
     {
-      name: 'kev-4b/checkpoint/adapter_config.json',
-      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/485ace8703592fcf405488b262449990824cfed1/adapter_config.json',
+      name: 'kev-4b/checkpoint-v1.0/adapter_config.json',
+      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/591dcb5bd6d05eb0b5131ea6608f93f10243335c/adapter_config.json',
       sizeBytes: 1271,
       sha256: '8a05dfd6c5e7f61a62e6db5d8de8093a8dbbd105aa7ee7b5e7b73f6249f45617',
       role: 'aux'
     },
     {
-      name: 'kev-4b/checkpoint/adapter_model.safetensors',
-      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/485ace8703592fcf405488b262449990824cfed1/adapter_model.safetensors',
+      name: 'kev-4b/checkpoint-v1.0/adapter_model.safetensors',
+      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/591dcb5bd6d05eb0b5131ea6608f93f10243335c/adapter_model.safetensors',
       sizeBytes: 129924032,
-      sha256: '9797de69a42188e411b17b7b4fcb66a23374dcebc21d71a7a66f836b5d34df2b',
+      sha256: '90e817356246e7f18bfa7ca3d31794cd4fbeb3332a66a84cb51d9ceae925f2b2',
       role: 'aux'
     },
     {
@@ -282,8 +282,7 @@ export function resolveKevRuntimeArtifact(): KevRuntimeArtifact | null {
     return null
   }
   const modelRoot = path.join(llm.getModelsDir(), 'kev-4b')
-  const checkpoint =
-    reusableKevCheckpointDir(llm.getModelsDir()) ?? path.join(modelRoot, 'checkpoint')
+  const checkpoint = path.join(llm.getModelsDir(), KEV_CHECKPOINT_PREFIX)
   const base = reusableKevBaseDir(llm.getModelsDir()) ?? path.join(modelRoot, 'base')
   const pythonRelative =
     process.platform === 'win32'
@@ -382,16 +381,11 @@ function activeModelFile(): string {
 }
 
 const KEV_BASE_PREFIX = 'kev-4b/base/'
-const KEV_CHECKPOINT_PREFIX = 'kev-4b/checkpoint/'
+export const KEV_CHECKPOINT_PREFIX = 'kev-4b/checkpoint-v1.0/'
 const KEV_BASE_FILE_SIZES = new Map(
   KEV_4B.files
     .filter((file) => file.name.startsWith(KEV_BASE_PREFIX))
     .map((file) => [file.name.slice(KEV_BASE_PREFIX.length), file.sizeBytes ?? 0])
-)
-const KEV_CHECKPOINT_FILE_SIZES = new Map(
-  KEV_4B.files
-    .filter((file) => file.name.startsWith(KEV_CHECKPOINT_PREFIX))
-    .map((file) => [file.name.slice(KEV_CHECKPOINT_PREFIX.length), file.sizeBytes ?? 0])
 )
 
 function directoryHasExpectedFiles(directory: string, files: ReadonlyMap<string, number>): boolean {
@@ -413,12 +407,6 @@ function reusableKevBaseDir(modelsDirectory: string): string | null {
   return directoryHasExpectedFiles(candidate, KEV_BASE_FILE_SIZES) ? candidate : null
 }
 
-/** Preserve installs made before Kev moved into the Models catalog. */
-function reusableKevCheckpointDir(modelsDirectory: string): string | null {
-  const candidate = path.join(path.dirname(modelsDirectory), 'decision-models', 'kev-4b-qwen3.5')
-  return directoryHasExpectedFiles(candidate, KEV_CHECKPOINT_FILE_SIZES) ? candidate : null
-}
-
 function modelFilePath(dir: string, name: string): string {
   if (path.isAbsolute(name)) return name
   const managed = path.join(dir, name)
@@ -426,12 +414,6 @@ function modelFilePath(dir: string, name: string): string {
   if (name.startsWith(KEV_BASE_PREFIX)) {
     const reusableBase = reusableKevBaseDir(dir)
     if (reusableBase) return path.join(reusableBase, name.slice(KEV_BASE_PREFIX.length))
-  }
-  if (name.startsWith(KEV_CHECKPOINT_PREFIX)) {
-    const reusableCheckpoint = reusableKevCheckpointDir(dir)
-    if (reusableCheckpoint) {
-      return path.join(reusableCheckpoint, name.slice(KEV_CHECKPOINT_PREFIX.length))
-    }
   }
   return managed
 }
@@ -966,6 +948,9 @@ export async function downloadModel(
         // If this download added the projector for the active chat model, turn its
         // vision on now (main-side, so it works even when no Models screen is open).
         await reconcileActiveModelProjector().catch(() => false)
+        if (modelId === KEV_4B_ID) {
+          fs.rmSync(path.join(dir, 'kev-4b', 'checkpoint'), { recursive: true, force: true })
+        }
         send({ percent: 100, status: 'completed' })
         return { success: true }
       } catch (err) {
