@@ -16,6 +16,8 @@ export interface BridgeConversation {
   readonly updatedAt: number
   readonly origin: 'browser' | 'desktop' | 'mobile'
   readonly turns: readonly BridgeTurn[]
+  /** Every stored turn, so a browser can number a window of the latest turns. */
+  readonly turnCount?: number
 }
 
 interface ConversationRow {
@@ -67,8 +69,10 @@ export function toBridgeConversation(
   row: ConversationRow,
   messages: readonly MessageRow[]
 ): BridgeConversation {
-  const turns = messages
-    .filter((m): m is BridgeTurn => m.role === 'user' || m.role === 'assistant')
+  const stored = messages.filter(
+    (m): m is BridgeTurn => m.role === 'user' || m.role === 'assistant'
+  )
+  const turns = stored
     .slice(-MAX_TURNS)
     .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_TURN_CHARS) }))
   return {
@@ -77,7 +81,8 @@ export function toBridgeConversation(
     createdAt: sqlTime(row.created_at),
     updatedAt: sqlTime(row.updated_at),
     origin: originOf(row),
-    turns
+    turns,
+    turnCount: stored.length
   }
 }
 

@@ -45,6 +45,8 @@ export const MAX_HISTORY_TURNS = 160
 export const MAX_TURN_CHARS = 20_000
 export const MAX_PROMPT_CHARS = 20_000
 export const MAX_PAGE_TEXT_CHARS = 100_000
+export const MAX_PAGE_TITLE_CHARS = 500
+export const MAX_PAGE_URL_CHARS = 2000
 const object = (raw: unknown): Record<string, unknown> | null =>
   raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null
 const text = (v: unknown, max: number): v is string => typeof v === 'string' && v.length <= max
@@ -80,8 +82,8 @@ function page(raw: unknown): ChatStart['page'] | null {
     !Object.hasOwn(p, 'title') ||
     !Object.hasOwn(p, 'url') ||
     !Object.hasOwn(p, 'text') ||
-    !text(p.title, 500) ||
-    !text(p.url, 2000) ||
+    !text(p.title, MAX_PAGE_TITLE_CHARS) ||
+    !text(p.url, MAX_PAGE_URL_CHARS) ||
     !text(p.text, MAX_PAGE_TEXT_CHARS)
   ) {
     return null
