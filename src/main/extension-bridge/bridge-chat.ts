@@ -96,6 +96,7 @@ function page(raw: unknown): ChatStart['page'] | null {
   }
   return { title: p.title, url: p.url, text: p.text }
 }
+export { page as parseChatPage }
 function attachmentValid(r: Record<string, unknown>): boolean {
   if (!optionalText(r.pageText, MAX_PAGE_TEXT_CHARS) || !tab(r.tabId)) {
     return false
