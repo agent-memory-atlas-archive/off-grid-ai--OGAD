@@ -1221,6 +1221,23 @@ async function handleImageEdit(
 }
 
 // ─── Server ──────────────────────────────────────────────────────────────────
+/** Origins trusted with protected gateway routes: the packaged renderer, the gateway's own
+ *  loopback pages and, in development, electron-vite's loopback renderer. */
+function trustedGatewayOrigins(port: number): string[] {
+  const loopback = ['localhost', '127.0.0.1', '[::1]']
+  const origins = ['file://', ...loopback.map((host) => `http://${host}:${port}`)]
+  const renderer = process.env['ELECTRON_RENDERER_URL']
+  if (renderer) {
+    try {
+      const dev = new URL(renderer)
+      if (dev.protocol === 'http:' && loopback.includes(dev.hostname)) origins.push(dev.origin)
+    } catch {
+      // A malformed dev renderer URL adds no trusted origin.
+    }
+  }
+  return origins
+}
+
 /** The port the gateway actually bound. Falls back off GATEWAY_PORT when it's taken (a 2nd Off Grid AI Desktop
  *  instance); consumers (setup health ping, the Gateway UI) must read this LIVE value. */
 let boundGatewayPort = GATEWAY_PORT
@@ -1278,20 +1295,9 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
     if (origin !== undefined) {
       // Packaged renderers use file://; dev uses electron-vite. Other origins, including the
       // opaque 'null' a sandboxed frame on any website sends, get the inference routes only.
-      let trusted = origin === 'file://'
-      try {
-        const page = new URL(origin)
-        const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(page.hostname)
-        const renderer = process.env['ELECTRON_RENDERER_URL']
-        const devOrigin = renderer ? new URL(renderer).origin : undefined
-        trusted ||=
-          page.origin === origin &&
-          loopback &&
-          page.protocol === 'http:' &&
-          (page.port === String(boundGatewayPort) || origin === devOrigin)
-      } catch {
-        // Unknown or malformed origins are not trusted.
-      }
+      const trustedOrigins = trustedGatewayOrigins(boundGatewayPort)
+      const trustedIndex = trustedOrigins.indexOf(origin)
+      const trusted = trustedIndex >= 0
       if (
         !trusted &&
         protectedGatewayRoute(req.method, req.url, req.headers['access-control-request-method'])
@@ -1301,7 +1307,7 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
       }
       // Trusted origins get their own origin back; any other origin gets the wildcard 0.0.54 sent,
       // which opens the inference routes without reflecting an arbitrary origin.
-      res.setHeader('Access-Control-Allow-Origin', trusted ? origin : '*')
+      res.setHeader('Access-Control-Allow-Origin', trusted ? trustedOrigins[trustedIndex]! : '*')
       res.setHeader('Vary', 'Origin')
       res.setHeader('Access-Control-Allow-Private-Network', 'true')
     }
