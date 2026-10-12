@@ -1,3 +1,4 @@
+import { budgetChange, speculativePatch, speculativeOptions } from '../shared/text-settings-rules'
 import type { RuntimeBackend } from '../shared/runtime-backends'
 import { parseNativeBackend } from './runtime-backends'
 import { spawn, execSync, ChildProcess } from 'child_process'
@@ -482,11 +483,14 @@ export class LLMService {
   }
 
   private speculativeModeSupported(mode: SpeculativeDecodingMode, draftModel: string): boolean {
-    if (mode === 'off' || mode === 'ngram') return true
-    if (mode === 'mtp') return this.supportsMtp()
+    const capabilities = { ...this.speculativeModelCapabilities(), supportsMtp: this.supportsMtp() }
+    if (
+      speculativeOptions(capabilities).find((option) => option.value === mode)?.disabled !== false
+    )
+      return false
+    if (mode !== 'draft' && mode !== 'dflash') return true
     const candidate = path.basename(draftModel)
     if (!candidate || candidate !== draftModel) return false
-    const capabilities = this.speculativeModelCapabilities()
     return (
       mode === 'dflash' ? capabilities.compatibleDflashModels : capabilities.compatibleDraftModels
     ).includes(candidate)
@@ -670,13 +674,11 @@ export class LLMService {
     }
     this.ensureLoaded()
     this.resolveModel()
-    const requestedMode = s.speculativeDecoding ?? this.speculativeDecoding
-    const requestedDraft =
-      typeof s.draftModel === 'string' ? path.basename(s.draftModel) : this.draftModel
-    const compatibleSettings = this.speculativeModeSupported(requestedMode, requestedDraft)
-      ? s
-      : { ...s, speculativeDecoding: 'off' as const }
     const priorSettings = this.getSettings()
+    const compatibleSettings = {
+      ...s,
+      ...speculativePatch(priorSettings, s)
+    }
     const priorExplicit = new Set(this.userExplicit)
     const before = options.emitSync === false ? undefined : priorSettings
     // Granular launch-time fields the user sets in THIS patch become pinned: a mode
@@ -768,6 +770,12 @@ export class LLMService {
       this.draftModel = path.basename(compatibleSettings.draftModel)
     if (typeof compatibleSettings.speculativeDraftMax === 'number')
       this.speculativeDraftMax = compatibleSettings.speculativeDraftMax
+    const budgets = budgetChange(
+      { ctxSize: this.ctxSize, maxTokens: this.maxTokens, reasoningBudget: this.reasoningBudget },
+      {}
+    )
+    this.maxTokens = budgets.maxTokens ?? this.maxTokens
+    this.reasoningBudget = budgets.reasoningBudget ?? this.reasoningBudget
     // Quantized KV cache requires FlashAttention — auto-enable it so the pair is valid.
     if (this.kvCacheType !== 'f16' && !this.flashAttn) this.flashAttn = true
     const restorePrior = (

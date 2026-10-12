@@ -8,13 +8,7 @@ import {
   MIN_MAX_TOOL_CALLS,
   MIN_CAPTURE_CTX_SIZE
 } from '@offgrid/core/shared/llm-defaults'
-import {
-  REASONING_BUDGET_AUTO,
-  REASONING_BUDGET_OPTIONS,
-  reasoningBudgetLabel,
-  optionsWithinCeiling,
-  reconcileBudgets
-} from '@offgrid/models'
+import { REASONING_BUDGET_AUTO, reasoningBudgetLabel, optionsWithinCeiling } from '@offgrid/models'
 import { gpuLayersHint, type EngineAccelerator } from '@offgrid/core/shared/engine-accelerator'
 import {
   contextWindowOptions,
@@ -45,44 +39,20 @@ import type { SpeechLanguage } from '@offgrid/speech'
 import { CaretRight, X } from '@phosphor-icons/react'
 import { getSlot, SLOTS } from '@renderer/bootstrap/slotRegistry'
 
+import {
+  budgetChange,
+  thinkingBudgetOptions,
+  speculativeOptions,
+  speculativePatch,
+  type SpeculativeMode,
+  installedDraftModels,
+  type DraftModelOption
+} from '../../../shared/text-settings-rules'
+
 const MAX_OUTPUT_AUTO = MAX_TOKENS_AUTO
 // The values THIS picker offers. The nesting rule they obey is shared (@offgrid/models); which
 // discrete steps to show is a desktop rendering choice, and OGAM uses sliders instead.
 const MAX_OUTPUT_OPTIONS = [2048, 4096, 8192, 16384, 32768]
-
-/** The ceiling on thinking: the response length it must fit inside, which for an auto output cap
- *  is the context window. Mirrors reconcileBudgets so the options offered match what is kept. */
-function thinkingCeiling(s: LlmSettings): number {
-  const maxOutput = s.maxTokens ?? MAX_OUTPUT_AUTO
-  const ctx = s.ctxSize ?? DEFAULT_CTX_SIZE
-  return maxOutput === MAX_OUTPUT_AUTO ? ctx : maxOutput
-}
-
-/**
- * Apply one budget edit and pull the inner budgets back under it.
- *
- * Filtering the option lists stops a user PICKING an impossible combination; this stops an already
- * stored one surviving a change to an outer limit. Both read the same rule from @offgrid/models,
- * so the picker and the persisted value cannot disagree. Only genuinely changed fields are
- * returned, so an unrelated edit does not rewrite the other two.
- */
-function budgetChange(s: LlmSettings, patch: LlmSettings): LlmSettings {
-  const next = { ...s, ...patch }
-  const reconciled = reconcileBudgets({
-    contextWindow: next.ctxSize ?? DEFAULT_CTX_SIZE,
-    maxOutput: next.maxTokens ?? MAX_OUTPUT_AUTO,
-    thinkingBudget: next.reasoningBudget ?? REASONING_BUDGET_AUTO
-  })
-  return {
-    ...patch,
-    ...(reconciled.maxOutput !== (next.maxTokens ?? MAX_OUTPUT_AUTO)
-      ? { maxTokens: reconciled.maxOutput }
-      : {}),
-    ...(reconciled.thinkingBudget !== (next.reasoningBudget ?? REASONING_BUDGET_AUTO)
-      ? { reasoningBudget: reconciled.thinkingBudget }
-      : {})
-  }
-}
 
 // Right-side Settings panel (same pattern as SkillsPanel/ArtifactCanvas).
 // Tabs: Model (inference params), Image, Voice (Kokoro TTS), Tools (built-in, read-only),
@@ -175,51 +145,6 @@ function groupTools(tools: ToolSetting[]): { label: string; tools: ToolSetting[]
   const known = new Set(groups.flatMap((group) => group.tools.map((tool) => tool.name)))
   const other = tools.filter((tool) => !known.has(tool.name))
   return other.length > 0 ? [...groups, { label: 'Other', tools: other }] : groups
-}
-
-type DraftModelOption = { value: string; label: string }
-type DraftCatalogModel = {
-  id: string
-  name: string
-  kind?: string
-  tags?: string[]
-  files?: Array<{ name: string; role?: string }>
-}
-type DraftCompanionStatus = Record<string, { dflashInstalled?: boolean; dflashFile?: string }>
-
-function installedDraftModels(
-  models: readonly DraftCatalogModel[],
-  activeModelId: string | null,
-  companionStatus: DraftCompanionStatus,
-  compatibleDraftFiles: readonly string[],
-  compatibleDflashFiles: readonly string[]
-): { draft: DraftModelOption[]; dflash: DraftModelOption[] } {
-  const draftFiles = new Set(compatibleDraftFiles)
-  const dflashFiles = new Set(compatibleDflashFiles)
-  const draft = new Map<string, DraftModelOption>()
-  const dflashOptions = new Map<string, DraftModelOption>()
-  for (const model of models) {
-    const dflash = companionStatus[model.id]
-    if (dflash?.dflashInstalled && dflash.dflashFile && dflashFiles.has(dflash.dflashFile)) {
-      dflashOptions.set(dflash.dflashFile, {
-        value: dflash.dflashFile,
-        label: `${model.name} · DFlash`
-      })
-    }
-    if (model.id === activeModelId) continue
-    if (!model.tags?.some((tag) => tag === 'Imported' || tag === 'Downloaded')) continue
-    if (model.kind && !['text', 'vision', 'local'].includes(model.kind)) continue
-    const primary = model.files?.find(
-      (file) =>
-        file.name.toLowerCase().endsWith('.gguf') &&
-        file.role !== 'mmproj' &&
-        !/(?:^|[-_.])(mmproj|projector)(?:[-_.]|$)/i.test(file.name)
-    )?.name
-    if (primary && draftFiles.has(primary)) {
-      draft.set(primary, { value: primary, label: model.name })
-    }
-  }
-  return { draft: [...draft.values()], dflash: [...dflashOptions.values()] }
 }
 
 type TranscriptionInfo = {
@@ -611,10 +536,10 @@ export function SettingsPanel({
                   onValueChange={(value) =>
                     set(budgetChange(s, { reasoningBudget: Number(value) }))
                   }
-                  options={[
-                    REASONING_BUDGET_AUTO,
-                    ...optionsWithinCeiling(REASONING_BUDGET_OPTIONS, thinkingCeiling(s))
-                  ].map((value) => ({ value: String(value), label: reasoningBudgetLabel(value) }))}
+                  options={thinkingBudgetOptions(s).map((value) => ({
+                    value: String(value),
+                    label: reasoningBudgetLabel(value)
+                  }))}
                 />
               </Row>
             </SettingsSection>
@@ -849,30 +774,9 @@ export function SettingsPanel({
                   label="Speculative decoding"
                   value={s.speculativeDecoding ?? 'off'}
                   onValueChange={(value) =>
-                    set({
-                      speculativeDecoding: value,
-                      ...(value === 'draft' && !draftModels.some((m) => m.value === s.draftModel)
-                        ? { draftModel: draftModels[0]?.value ?? '' }
-                        : value === 'dflash' && !dflashModels.some((m) => m.value === s.draftModel)
-                          ? { draftModel: dflashModels[0]?.value ?? '' }
-                          : {})
-                    })
+                    set(speculativePatch(s, { speculativeDecoding: value as SpeculativeMode }))
                   }
-                  options={[
-                    { value: 'off', label: 'Off' },
-                    { value: 'ngram', label: 'N-gram' },
-                    {
-                      value: 'mtp',
-                      label: s.supportsMtp === false ? 'MTP · Not supported by this model' : 'MTP',
-                      disabled: s.supportsMtp === false
-                    },
-                    {
-                      value: 'draft',
-                      label: 'Draft model',
-                      disabled: draftModels.length === 0
-                    },
-                    { value: 'dflash', label: 'DFlash', disabled: dflashModels.length === 0 }
-                  ]}
+                  options={speculativeOptions(s)}
                 />
               </Row>
               {['mtp', 'draft', 'dflash'].includes(s.speculativeDecoding ?? 'off') && (
@@ -889,7 +793,9 @@ export function SettingsPanel({
                   >
                     <option value={0}>Auto</option>
                     {Array.from({ length: 16 }, (_, index) => index + 1).map((limit) => (
-                      <option key={limit} value={limit}>{limit} tokens</option>
+                      <option key={limit} value={limit}>
+                        {limit} tokens
+                      </option>
                     ))}
                   </NativeSelect>
                 </Row>

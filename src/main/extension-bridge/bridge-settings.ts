@@ -1,7 +1,7 @@
 // SHARED VERBATIM with off-grid-ai/browser-extension src/shared/bridge/settings.ts. Change both.
 // Off Grid AI Desktop's settings, as a paired browser sees and changes them (sealed RPC
 // `settings.get` / `settings.set`). The panel's Settings tabs mirror the desktop's: Tasks,
-// Tools, Connectors, Image, Transcription and Voice. Text stays on the gateway's /v1/settings.
+// Tools, Connectors, Image, Transcription and Voice. Text is also available through sealed settings RPC.
 //
 // THIS FILE IS SHARED VERBATIM with the desktop (src/main/extension-bridge/bridge-settings.ts).
 // Change both, or neither.
@@ -12,6 +12,7 @@
 // reachable from here.
 
 export const SETTINGS_SECTIONS = [
+  'text',
   'remote',
   'tasks',
   'tools',
@@ -32,6 +33,56 @@ export interface ModelChoice {
   readonly label: string
 }
 
+/** Desktop's text settings and derived choices. No runtime paths leave Desktop. */
+export interface TextSettings {
+  readonly temperature?: number
+  readonly ctxSize?: number
+  readonly topP?: number
+  readonly topK?: number
+  readonly minP?: number
+  readonly repeatPenalty?: number
+  readonly maxTokens?: number
+  readonly maxToolCalls?: number
+  readonly reasoningBudget?: number
+  readonly systemPrompt?: string
+  readonly kvCacheType?: 'f16' | 'q8_0' | 'q4_0'
+  readonly flashAttn?: boolean
+  readonly gpuLayers?: number
+  readonly threads?: number
+  readonly batchSize?: number
+  readonly speculativeDecoding?: 'off' | 'ngram' | 'mtp' | 'draft' | 'dflash'
+  readonly speculativeDraftMax?: number
+  readonly draftModel?: string
+  readonly options?: {
+    readonly thinkingBudgets: readonly number[]
+    readonly speculativeModes: readonly {
+      readonly value: 'off' | 'ngram' | 'mtp' | 'draft' | 'dflash'
+      readonly label: string
+      readonly disabled: boolean
+    }[]
+    readonly draftModels: readonly ModelChoice[]
+    readonly dflashModels: readonly ModelChoice[]
+  }
+  readonly activeModelId?: string | null
+  readonly availability?: {
+    readonly vision: boolean
+    readonly agent: boolean
+    readonly reasonIfNot?: string
+  }
+  readonly modelsByTab?: Readonly<
+    Record<string, readonly (ModelChoice & { readonly active: boolean })[]>
+  >
+}
+
+export interface TaskStrategyOption {
+  readonly value: string
+  readonly available: boolean
+  readonly reasonIfNot?: string
+  readonly decision: readonly ModelChoice[]
+  readonly grounding: readonly ModelChoice[]
+  readonly reasoner: readonly ModelChoice[]
+}
+
 /** Saved remote servers, by name and host only: endpoints' paths and API keys stay put. */
 export interface RemoteSettings {
   /** Chat runs on the active remote server rather than this machine. */
@@ -43,6 +94,8 @@ export interface RemoteSettings {
     readonly host: string
     /** The server's text model, by name. Empty when none is chosen on the desktop. */
     readonly model: string
+    readonly available?: boolean
+    readonly reasonIfNot?: string
   }[]
 }
 
@@ -56,6 +109,15 @@ export interface TaskOptions {
 }
 
 export interface TasksSettings {
+  readonly strategies?: readonly TaskStrategyOption[]
+  readonly options?: {
+    readonly contexts: readonly string[]
+    readonly screenshotSizes: readonly string[]
+    readonly visualHistory: readonly number[]
+    readonly checkpoints: readonly number[]
+    readonly rails: readonly string[]
+    readonly browserTargets: readonly string[]
+  }
   /** Shared by Web Use and Computer Use. Empty when none is chosen. */
   readonly grounding: string
   readonly groundingChoices: readonly ModelChoice[]
@@ -122,6 +184,7 @@ export interface VoiceSettings {
 }
 
 export interface SettingsBySection {
+  text?: TextSettings
   remote: RemoteSettings
   tasks: TasksSettings
   tools: ToolsSettings
@@ -215,6 +278,26 @@ const yes: Rule = (v) => (v === true ? v : undefined)
 
 const SECTION_RULES: Record<SettingsSection, Record<string, Rule>> = {
   // Only switching between saved servers: adding one, its models and keys stay on the desktop.
+  text: {
+    temperature: num(0, 2),
+    ctxSize: int(1, 1048576),
+    topP: num(0, 1),
+    topK: int(0, 1000),
+    minP: num(0, 1),
+    repeatPenalty: num(0, 10),
+    maxTokens: int(0, 1048576),
+    maxToolCalls: int(0, 1000),
+    reasoningBudget: int(0, 1048576),
+    systemPrompt: text(32000),
+    kvCacheType: oneOf(['f16', 'q8_0', 'q4_0']),
+    flashAttn: bool,
+    gpuLayers: int(-1, 1000),
+    threads: int(0, 1024),
+    batchSize: int(1, 65536),
+    speculativeDecoding: oneOf(['off', 'ngram', 'mtp', 'draft', 'dflash']),
+    speculativeDraftMax: int(0, 16),
+    draftModel: text(400, /^[^/\\]*$/)
+  },
   remote: { use: text(200, /^\S+$/), off: yes },
   tasks: {
     grounding: text(400, /^\S+$/),

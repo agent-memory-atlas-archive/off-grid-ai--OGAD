@@ -1,3 +1,6 @@
+import { remoteVisionModelId } from '../../shared/remote-vision-server'
+import { activeTextAvailability, remoteTextVision } from '../../shared/model-settings-rules'
+import type { TextSettings } from './bridge-settings'
 import { plainConversationPage, plainConversationSearchPage } from './bridge-conversation-pages'
 import type {
   ConversationPage,
@@ -55,10 +58,14 @@ import { createSettingsStore } from './bridge-settings-store'
 import {
   activateRemoteVisionModel,
   deactivateRemoteVisionModel,
-  getRemoteVisionServerSettings
+  getRemoteVisionServerSettings,
+  getActiveRemoteVisionServer
 } from '../vision/remote-vision-server'
 import { remoteModelSelected } from '../active-models'
 import {
+  getActiveModel,
+  getVisionStatuses,
+  getActiveModelIds,
   getActiveModalities,
   getCatalog,
   listInstalled,
@@ -281,6 +288,31 @@ export async function listBridgeTools(task?: string): Promise<unknown[]> {
 
 // The same functions Settings here uses, so a browser and this window always agree.
 const settingsStore = createSettingsStore({
+  text: async () => {
+    const remote = getActiveRemoteVisionServer()
+    const local = remote ? null : llm.activeModelInfo()
+    const active = remote
+      ? {
+          vision: remoteTextVision(remote.modelCatalog?.find((model) => model.id === remote.model))
+        }
+      : local
+    const activeModelId = remote
+      ? remoteVisionModelId(remote.id, remote.model)
+      : (local?.id ?? null)
+    return {
+      ...llm.getSettings(),
+      activeModelId,
+      availability: activeTextAvailability(
+        active,
+        active ? await llm.toolPlannerPreflight() : null,
+        getSettings().toolsEnabled !== false
+      )
+    }
+  },
+  setText: async (patch: TextSettings) => {
+    await llm.setSettings(patch)
+  },
+  activeIds: getActiveModelIds,
   web: getWebUseSettings,
   setWeb: (next) => void setWebUseSettings(next),
   computer: getComputerUseSettings,
@@ -299,12 +331,18 @@ const settingsStore = createSettingsStore({
   },
   remoteOff: deactivateRemoteVisionModel,
   taskModels: async () => {
-    const [catalog, installed] = await Promise.all([getCatalog(), listInstalled()])
+    const [catalog, installed, companionStatus] = await Promise.all([
+      getCatalog(),
+      listInstalled(),
+      getVisionStatuses()
+    ])
     const active = (getActiveModalities() as Record<string, string | null>).computer_use
     return {
       catalog: catalog.models as Record<string, unknown>[],
       installed,
-      activeGrounder: active ?? null
+      activeGrounder: active ?? null,
+      activeChatId: getActiveModel(),
+      companionStatus
     }
   },
   setLocalGrounder: async (modelId) => {

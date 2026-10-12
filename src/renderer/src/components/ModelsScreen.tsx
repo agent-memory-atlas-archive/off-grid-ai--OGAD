@@ -1,3 +1,4 @@
+import { modelShowsOnTab } from '../../../shared/model-settings-rules'
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { isDecisionModel, useTaskRoles } from '../lib/task-roles'
 import { AnimatePresence } from 'motion/react'
@@ -44,7 +45,6 @@ import {
   determineCredibility,
   hasActiveFilters,
   initialFilterState,
-  modelSupportsKind,
   recommendedImageModelId,
   type FilterState,
   type Credibility,
@@ -671,15 +671,7 @@ export function ModelsScreen({
   }, [deferredQuery, activeKind, searchEnabled])
 
   const list = useMemo(
-    () =>
-      models.filter(
-        (model) =>
-          (!model.id.endsWith('+MTP') &&
-            modelSupportsKind(model, activeKind as Parameters<typeof modelSupportsKind>[1])) ||
-          (activeKind === 'text' &&
-            !model.id.endsWith('+MTP') &&
-            modelSupportsKind(model, 'vision'))
-      ),
+    () => models.filter((model) => modelShowsOnTab(model, activeKind)),
     [models, activeKind]
   )
 
