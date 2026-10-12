@@ -2,11 +2,23 @@ import { budgetTools, MAX_TOOL_TOKENS } from './tool-budget'
 import { mergeStickyTools, previousOfferedTools, rememberOfferedTools } from './sticky-tool-set'
 
 /**
- * How long a chat turn waits for MiniLM before routing by words. A fresh install has to download
- * the model (~23MB) first, and offline it may never arrive; the turn must not stall on either.
+ * How long a chat turn waits for MiniLM to download before offering every tool. A fresh install
+ * has to fetch the model (~23MB) first, and offline it may never arrive; the turn must not stall.
  * The load keeps going in the background, so later turns route semantically.
  */
 export const SEMANTIC_ROUTING_WAIT_MS = 2_000
+/** When MiniLM is already on disk the wait is only its load (a few seconds on a cold start). */
+export const LOCAL_ROUTING_MODEL_WAIT_MS = 20_000
+
+// The routing model embeddings-core loads (Xenova/all-MiniLM-L6-v2, fp32 or quantized).
+async function routingModelOnDisk(): Promise<boolean> {
+  const { resolveTransformersPackage } = await import('../model-paths')
+  const id = 'Xenova/all-MiniLM-L6-v2'
+  return Boolean(
+    resolveTransformersPackage(id, 'model.onnx') ??
+    resolveTransformersPackage(id, 'model_quantized.onnx')
+  )
+}
 
 const ROUTING_MODEL_LOADING = Symbol('routing model loading')
 
@@ -78,7 +90,8 @@ export async function selectChatToolSchemas(
         const routingText = contextualToolRoutingText(query, history)
         const ranked = await withinRoutingWait(
           selectRelevantToolsSemantic(routingText, rawTools, { embed }),
-          options.semanticWaitMs ?? SEMANTIC_ROUTING_WAIT_MS
+          options.semanticWaitMs ??
+            ((await routingModelOnDisk()) ? LOCAL_ROUTING_MODEL_WAIT_MS : SEMANTIC_ROUTING_WAIT_MS)
         )
         // While MiniLM is still loading (a fresh install downloads it first), offer every tool as
         // 0.0.55-beta.114 did; the budget below still trims the set to fit the context. Words
