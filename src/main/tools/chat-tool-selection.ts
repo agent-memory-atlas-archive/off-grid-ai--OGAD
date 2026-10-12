@@ -1,6 +1,23 @@
 import { budgetTools, MAX_TOOL_TOKENS } from './tool-budget'
 import { mergeStickyTools, previousOfferedTools, rememberOfferedTools } from './sticky-tool-set'
 
+/**
+ * How long a chat turn waits for MiniLM before routing by words. A fresh install has to download
+ * the model (~23MB) first, and offline it may never arrive; the turn must not stall on either.
+ * The load keeps going in the background, so later turns route semantically.
+ */
+export const SEMANTIC_ROUTING_WAIT_MS = 2_000
+
+function withinRoutingWait<T>(work: Promise<T>, waitMs: number): Promise<T> {
+  // A late result or failure is dropped; the turn has already routed by words.
+  work.catch(() => {})
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('semantic routing wait elapsed')), waitMs)
+  })
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer))
+}
+
 export async function selectChatToolSchemas(
   query: string | undefined,
   rawTools: unknown[],
@@ -12,6 +29,9 @@ export async function selectChatToolSchemas(
     allMemory?: boolean
     imageAvailable?: boolean
     history?: { role: string; content: string }[]
+    /** The embedding model boundary; defaults to the app's local MiniLM. */
+    embed?: (text: string) => Promise<number[]>
+    semanticWaitMs?: number
   }
 ): Promise<{ tools: unknown[]; protectedToolCount: number; droppedCount: number }> {
   if (query === undefined) {
@@ -42,15 +62,20 @@ export async function selectChatToolSchemas(
     const unavailableImageTool = !imageAvailable && /\bgenerate_image\b/i.test(query)
     if (!namedTool && !unavailableImageTool) {
       try {
-        const { embeddings } = await import('../embeddings')
+        let embed = options.embed
+        if (!embed) {
+          const { embeddings } = await import('../embeddings')
+          embed = (t: string): Promise<number[]> => embeddings.generateEmbedding(t)
+        }
         const { contextualToolRoutingText, selectRelevantToolsSemantic } =
           await import('./tool-embedding-ranking')
         const routingText = contextualToolRoutingText(query, history)
-        relevantTools = await selectRelevantToolsSemantic(routingText, rawTools, {
-          embed: (t) => embeddings.generateEmbedding(t)
-        })
+        relevantTools = await withinRoutingWait(
+          selectRelevantToolsSemantic(routingText, rawTools, { embed }),
+          options.semanticWaitMs ?? SEMANTIC_ROUTING_WAIT_MS
+        )
       } catch {
-        // The direct-match selection below remains available offline.
+        // The direct-match selection below remains available offline, and while MiniLM loads.
       }
     }
     // A semantic score must not hide a direct name or description match. This
