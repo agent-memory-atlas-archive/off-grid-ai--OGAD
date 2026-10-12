@@ -13,6 +13,35 @@ import { setRemoteVisionServerSettings } from '../vision/remote-vision-server'
 import { getTaskRun } from '../tasks/task-history'
 import { getDB } from '../database'
 
+function decision(action: string, ref: string | null): Record<string, unknown> {
+  return {
+    action,
+    phase_id: null,
+    element: ref ? 'Place order' : null,
+    ref,
+    text: null,
+    key: null,
+    values: null,
+    start_element: null,
+    start_ref: null,
+    end_element: null,
+    end_ref: null,
+    url: null,
+    evidence_ref: null,
+    evidence_text: null,
+    reason: '',
+    summary: `${action} ${ref ?? ''}`.trim()
+  }
+}
+const done = { ...decision('done', null), phase_id: 'read', evidence_text: 'Order placed' }
+
+async function until(check: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !check(); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  assert.ok(check(), 'Timed out waiting for the synthetic browser')
+}
+
 void app.whenReady().then(async () => {
   let window: BrowserWindow | undefined
   let holdModel = false
@@ -22,6 +51,11 @@ void app.whenReady().then(async () => {
   })
   let modelRequests = 0
   let modelFails = true
+  // Queued decisions for the uncertain-action runs; empty means the visual fallback reply.
+  const replies: Array<Record<string, unknown>> = []
+  // What the synthetic extension answers for an input action, and the inputs it received.
+  let actionResult: Record<string, unknown> | null = null
+  const actions: string[] = []
   const server = createServer((req, res) => {
     req.resume()
     if (req.method === 'GET') {
@@ -39,24 +73,26 @@ void app.whenReady().then(async () => {
       res.end(JSON.stringify({ error: { message: 'Insufficient credits' } }))
       return
     }
-    const content = JSON.stringify({
-      action: 'fallback',
-      phase_id: null,
-      element: null,
-      ref: null,
-      text: null,
-      key: null,
-      values: null,
-      start_element: null,
-      start_ref: null,
-      end_element: null,
-      end_ref: null,
-      url: null,
-      evidence_ref: null,
-      evidence_text: null,
-      reason: 'The notification content is drawn on a canvas with no readable controls.',
-      summary: ''
-    })
+    const content = JSON.stringify(
+      replies.shift() ?? {
+        action: 'fallback',
+        phase_id: null,
+        element: null,
+        ref: null,
+        text: null,
+        key: null,
+        values: null,
+        start_element: null,
+        start_ref: null,
+        end_element: null,
+        end_ref: null,
+        url: null,
+        evidence_ref: null,
+        evidence_text: null,
+        reason: 'The notification content is drawn on a canvas with no readable controls.',
+        summary: ''
+      }
+    )
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     res.end(
       `data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`
@@ -73,6 +109,13 @@ void app.whenReady().then(async () => {
       if (op === 'browser.caps') return { cdp: false }
       if (op === 'tab.adopt')
         return { tabId: args.tabId, url: 'https://synthetic.test/', title: 'Synthetic page' }
+      if (op === 'page.call' && actionResult && args.tool !== 'browser_snapshot') {
+        actions.push(String(args.tool))
+        return actionResult
+      }
+      if (op === 'page.call' && actionResult) {
+        return { text: '- button "Place order" [ref=e1]\n- text "Order placed"', isError: false }
+      }
       if (op === 'page.call') return { text: '- button "Notifications" [ref=e1]', isError: false }
       if (op === 'cdp.detach') return {}
       throw new Error(`Unexpected browser operation: ${op}`)
@@ -112,6 +155,34 @@ void app.whenReady().then(async () => {
     assert.equal(visual.ok, false)
     assert.match(visual.summary, /canvas with no readable controls/)
     assert.equal(modelRequests, 2)
+
+    // An action the page did not confirm may have run: it is never sent again, also when the
+    // next snapshot gives the same control a new reference, and also from an older extension.
+    for (const result of [
+      { text: 'The action may have run.', isError: false, uncertain: true },
+      { text: 'The page did not answer.', isError: true }
+    ]) {
+      actionResult = result
+      actions.length = 0
+      replies.push(decision('click', 'e1'), decision('click', 'e2'), done)
+      const uncertain = await run(`uncertain-${result.isError ? 'legacy' : 'flag'}`)
+      assert.equal(uncertain.ok, true, uncertain.summary)
+      assert.deepEqual(actions, ['browser_click'])
+    }
+
+    // Two unconfirmed inputs in a row: the task waits for the user before the next decision.
+    actionResult = { text: 'The action may have run.', isError: false, uncertain: true }
+    actions.length = 0
+    replies.push(decision('click', 'e1'), { ...decision('press_key', null), key: 'Enter' }, done)
+    const requestsBefore = modelRequests
+    const paused = run('uncertain-twice')
+    await until(() => actions.length === 2)
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    assert.equal(modelRequests, requestsBefore + 2, 'No decision while waiting for the user')
+    assert.equal(controlVisionTask('resume', 'uncertain-twice'), true)
+    assert.equal((await paused).ok, true)
+    assert.deepEqual(actions, ['browser_click', 'browser_press_key'])
+    actionResult = null
     holdModel = true
     const running = run('external-active')
     await pendingModel
