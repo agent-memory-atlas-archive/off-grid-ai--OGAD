@@ -492,8 +492,9 @@ function AppContent(): React.JSX.Element {
   // Handle browser URL changes
   useEffect(() => {
     const path = appLocationPath()
+    // A bare launch ('/', or an empty hash in the built app) keeps landingView: a free install
+    // must open on Models, never on a locked Day screen.
     const viewMap: Record<string, ViewMode> = {
-      '/': 'day',
       '/explore': 'explore',
       '/god': 'explore',
       '/day': 'day',
