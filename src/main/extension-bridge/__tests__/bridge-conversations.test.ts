@@ -38,7 +38,8 @@ describe('toBridgeConversation', () => {
       turns: [
         { role: 'user', content: 'hi' },
         { role: 'assistant', content: 'hello' }
-      ]
+      ],
+      turnCount: 2
     })
   })
 
@@ -50,6 +51,19 @@ describe('toBridgeConversation', () => {
     const c = toBridgeConversation({ id: 'conv-12345678' }, many)
     expect(c.title).toBe('q5')
     expect(c.turns).toHaveLength(MAX_TURNS)
+  })
+
+  it('counts every stored turn, so the window of latest turns can be numbered', () => {
+    const many = Array.from({ length: MAX_TURNS + 7 }, (_, i) => ({
+      role: i % 2 ? 'assistant' : 'user',
+      content: `t${i}`
+    }))
+    const c = toBridgeConversation({ id: 'conv-12345678' }, [
+      ...many,
+      { role: 'tool', content: 'not a turn' }
+    ])
+    expect(c.turnCount).toBe(MAX_TURNS + 7)
+    expect(c.turns[0]?.content).toBe('t7')
   })
 })
 
