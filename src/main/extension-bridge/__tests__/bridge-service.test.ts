@@ -1,3 +1,4 @@
+import { conversationSnippet } from '../bridge-conversations'
 import { describe, expect, it } from 'vitest'
 import {
   deriveSessionKey,
@@ -64,7 +65,9 @@ interface Setup {
   sealedFor: { browser: CryptoKeyPair }
 }
 
-async function setup(opts: { approve?: boolean; features?: BridgeFeatures } = {}): Promise<Setup> {
+async function setup(
+  opts: { approve?: boolean; features?: BridgeFeatures; chat?: BridgeData['chat'] } = {}
+): Promise<Setup> {
   const desk = await generateKeyPair()
   let saved: PairedBrowser[] = []
   let now = 1_000_000
@@ -72,9 +75,28 @@ async function setup(opts: { approve?: boolean; features?: BridgeFeatures } = {}
   const prompts: string[] = []
   const calls: string[] = []
   const data: BridgeData = {
-    features: () => opts.features ?? FREE,
+    chat: opts.chat,
+    features: () => opts.features ?? PRO,
     desktopName: () => 'Off Grid AI Desktop',
     listConversations: async () => [{ id: 'c1' }],
+    listConversationPage: async (params) => ({ conversations: [{ id: 'c1', ...params }] }),
+    searchConversations: async (params) => {
+      calls.push(`search:${JSON.stringify(params)}`)
+      return {
+        conversations: [
+          {
+            id: 'c1',
+            title: 'Chat',
+            createdAt: 1,
+            updatedAt: 2,
+            origin: 'desktop',
+            snippet: 'match',
+            turnCount: 3
+          }
+        ],
+        nextCursor: 'next'
+      }
+    },
     putConversation: async () => {
       calls.push('put')
     },
@@ -83,8 +105,13 @@ async function setup(opts: { approve?: boolean; features?: BridgeFeatures } = {}
     },
     // As the desktop lists them: connector tools always, its own tools only when it has them.
     listTools: async () =>
-      (opts.features ?? FREE).tools
-        ? [{ name: 'notion_search' }, { name: 'mail_send' }, { name: 'web_use' }]
+      (opts.features ?? PRO).tools
+        ? [
+            { name: 'notion_search' },
+            { name: 'mail_send' },
+            { name: 'web_use' },
+            { name: 'computer_use' }
+          ]
         : [{ name: 'notion_search' }],
     runTool: async (name, _args, _browser, tabId) => ({
       ok: true,
@@ -163,6 +190,26 @@ async function setup(opts: { approve?: boolean; features?: BridgeFeatures } = {}
 }
 
 describe('pairing', () => {
+  it('refuses desktop control from the bridge with no tab metadata', async () => {
+    const pro = await setup()
+    await pro.pair()
+    expect(
+      (
+        await pro.call('device000001', 'tools.run', {
+          name: 'computer_use',
+          args: {}
+        })
+      ).body
+    ).toMatchObject({ error: 'tool_unavailable' })
+    for (const params of [{}, { task: 'computer_use' }]) {
+      const reply = await pro.call('device000001', 'tools.list', params)
+      expect((reply.body as { result: unknown[] }).result).not.toContainEqual({
+        name: 'computer_use'
+      })
+      expect((reply.body as { result: unknown[] }).result).toContainEqual({ name: 'web_use' })
+    }
+  })
+
   it('shows the user the code both sides compute, and stores the browser on approval', async () => {
     const s = await setup()
     const reply = await s.pair()
@@ -201,6 +248,36 @@ describe('pairing', () => {
 })
 
 describe('sealed rpc', () => {
+  it('keeps setup and cleanup available, but refuses every feature without Pro', async () => {
+    const s = await setup({ features: FREE })
+    await s.pair()
+    expect((await s.call('device000001', 'state')).body).toMatchObject({ ok: true })
+    for (const [method, params] of [
+      ['conversations.list', {}],
+      ['conversations.search', { query: 'match' }],
+      ['conversations.put', { conversation: {} }],
+      ['conversations.delete', { id: 'c1' }],
+      ['tools.list', {}],
+      ['tools.run', { name: 'notion_search', args: {} }],
+      ['settings.get', { section: 'voice' }],
+      ['settings.set', { section: 'voice', patch: { voice: 'af_heart' } }],
+      ['models.setTaskRole', { task: 'web_use', role: 'grounding', modelId: 'grounder-1' }]
+    ] as const) {
+      expect((await s.call('device000001', method, params)).body).toMatchObject({
+        ok: false,
+        error: 'pro_required'
+      })
+    }
+    expect(s.calls).toEqual([])
+    expect(await s.bridge.linkKey('device000001')).toBeNull()
+    expect((await s.call('device000001', 'tasks.stop', { taskId: 'task-1' })).body).toMatchObject({
+      ok: true,
+      result: true
+    })
+    expect((await s.call('device000001', 'unpair')).body).toMatchObject({ ok: true })
+    expect(s.saved()).toEqual([])
+  })
+
   it('answers a paired browser, sealed so only it can read the reply', async () => {
     const s = await setup()
     await s.pair()
@@ -210,7 +287,7 @@ describe('sealed rpc', () => {
       result: {
         desktopName: 'Off Grid AI Desktop',
         deviceName: 'Chrome on this Mac',
-        features: FREE
+        features: PRO
       }
     })
     expect(JSON.stringify(r.raw)).not.toContain('Off Grid AI Desktop')
@@ -285,7 +362,7 @@ describe('sealed rpc', () => {
       result: [{ id: 'c1' }]
     })
     expect((await s.call('device000001', 'tools.list')).body).toMatchObject({
-      result: [{ name: 'notion_search' }]
+      result: [{ name: 'notion_search' }, { name: 'mail_send' }, { name: 'web_use' }]
     })
     await s.call('device000001', 'conversations.put', { conversation: {} })
     await s.call('device000001', 'conversations.delete', { id: 'c1' })
@@ -307,11 +384,10 @@ describe('sealed rpc', () => {
       (await free.call('device000001', 'tools.run', { name: 'mail_send', args: {} })).body
     ).toMatchObject({ ok: false, error: 'pro_required' })
 
-    // A connector tool the desktop lists runs on a free desktop too (review finding: it was
-    // listed, then refused as Pro-only).
+    // Connector tools are also part of the Pro browser extension.
     expect(
       (await free.call('device000001', 'tools.run', { name: 'notion_search', args: {} })).body
-    ).toMatchObject({ ok: true, result: { output: 'ran notion_search' } })
+    ).toMatchObject({ ok: false, error: 'pro_required' })
 
     // Pro, but this desktop cannot answer for the vault or tools yet: never "upgrade".
     const stale = await setup({ features: { ...PRO, vault: false, tools: false } })
@@ -385,7 +461,7 @@ describe('sealed rpc', () => {
       ok: false,
       error: 'invalid'
     })
-    const free = await setup()
+    const free = await setup({ features: FREE })
     await free.pair()
     expect((await free.call('device000001', 'tasks.latest', { since: 1 })).body).toMatchObject({
       ok: false,
@@ -408,11 +484,24 @@ describe('sealed rpc', () => {
         error: 'invalid'
       })
     }
-    const free = await setup()
+    const free = await setup({ features: FREE })
     await free.pair()
     expect(
       (await free.call('device000001', 'tasks.stop', { taskId: 'task-1' })).body
-    ).toMatchObject({ ok: false, error: 'pro_required' })
+    ).toMatchObject({ ok: true, result: true })
+  })
+
+  it('unpairs after Pro ends even when chat cleanup is unavailable', async () => {
+    const s = await setup({
+      features: FREE,
+      chat: async () => {
+        throw new Error('chat_unavailable')
+      }
+    })
+    await s.pair()
+    expect((await s.call('device000001', 'unpair')).body).toMatchObject({ ok: true })
+    expect(s.saved()).toEqual([])
+    expect((await s.call('device000001', 'state')).status).toBe(401)
   })
 
   it('unpair removes the browser; its key stops working', async () => {
@@ -440,4 +529,95 @@ describe('live socket support', () => {
     expect(s.bridge.acceptNonce('device000001', 'n1')).toBe(false)
     expect(s.bridge.acceptNonce('device000002', 'n1')).toBe(true)
   })
+})
+
+describe('sealed conversation search and list parameters', () => {
+  it('trims queries, supplies defaults, and returns the page through the sealed RPC', async () => {
+    const s = await setup()
+    await s.pair()
+    const reply = (await s.call('device000001', 'conversations.search', { query: '  match  ' }))
+      .body
+    expect(reply).toMatchObject({
+      ok: true,
+      result: {
+        conversations: [{ snippet: 'match', turnCount: 3 }],
+        nextCursor: 'next'
+      }
+    })
+    expect(
+      (
+        await s.call('device000001', 'conversations.search', {
+          query: 'match',
+          limit: 50,
+          cursor: 'cursor'
+        })
+      ).body
+    ).toMatchObject({ ok: true, result: { conversations: [{ snippet: 'match', turnCount: 3 }] } })
+    expect(s.calls).toEqual([
+      'search:{"limit":30,"query":"match"}',
+      'search:{"limit":50,"cursor":"cursor","query":"match"}'
+    ])
+    const hit = (reply as { result: { conversations: Record<string, unknown>[] } }).result
+      .conversations[0]!
+    expect(hit).not.toHaveProperty('turns')
+    expect(Object.keys(hit).sort()).toEqual(
+      ['id', 'title', 'createdAt', 'updatedAt', 'origin', 'snippet', 'turnCount'].sort()
+    )
+    expect((await s.call('device000001', 'conversations.list')).body).toMatchObject({
+      ok: true,
+      result: [{ id: 'c1' }]
+    })
+    expect(
+      (await s.call('device000001', 'conversations.list', { limit: 100, cursor: 'cursor' })).body
+    ).toMatchObject({ ok: true, result: { conversations: [{ limit: 100, cursor: 'cursor' }] } })
+  })
+  it('rejects invalid query, limit, cursor and unknown keys', async () => {
+    const s = await setup()
+    await s.pair()
+    for (const params of [
+      {},
+      { query: '' },
+      { query: '   ' },
+      { query: 3 },
+      { query: 'x'.repeat(501) },
+      ...[0, -1, 51, 1.5, '30', null].map((limit) => ({ query: 'match', limit })),
+      { query: 'match', cursor: 3 },
+      { query: 'match', extra: true }
+    ]) {
+      expect((await s.call('device000001', 'conversations.search', params)).body).toMatchObject({
+        ok: false,
+        error: 'invalid'
+      })
+    }
+    for (const params of [
+      { limit: 0 },
+      { limit: 101 },
+      { limit: 1.5 },
+      { cursor: 3 },
+      { extra: true }
+    ]) {
+      expect((await s.call('device000001', 'conversations.list', params)).body).toMatchObject({
+        ok: false,
+        error: 'invalid'
+      })
+    }
+  })
+})
+
+it('caps a plain snippet around a late match', () => {
+  const snippet = conversationSnippet(
+    'prefix '.repeat(100) + '**needle** ' + 'suffix '.repeat(100),
+    'needle'
+  )
+  expect(snippet.length).toBeLessThanOrEqual(200)
+  expect(snippet.length).toBeGreaterThan(190)
+  expect(snippet).toContain('needle')
+  expect(snippet).not.toContain('*')
+})
+
+it('leaves no tag in a snippet built from nested tags', () => {
+  const snippet = conversationSnippet('<scr<b>ipt>alert(1)</scr</b>ipt> needle', 'needle')
+  expect(snippet).not.toMatch(/[<>]/)
+  expect(snippet).not.toContain('script')
+  expect(snippet).toContain('needle')
 })

@@ -1,3 +1,13 @@
+import { remoteVisionModelId } from '../../shared/remote-vision-server'
+import { activeTextAvailability, remoteTextVision } from '../../shared/model-settings-rules'
+import type { TextSettings } from './bridge-settings'
+import { plainConversationPage, plainConversationSearchPage } from './bridge-conversation-pages'
+import type {
+  ConversationPage,
+  ConversationSearchResult,
+  ConversationListParams,
+  ConversationSearchParams
+} from './bridge-conversations'
 // The real dependencies for the extension bridge: key storage (encrypted at rest by the OS),
 // the native confirm dialog, OGAD's chat tables, the live tool registry, and Pro gating.
 //
@@ -24,6 +34,15 @@ import {
   saveSetting
 } from '../database'
 import { enabledToolSchemas, getToolExtensions, runTool } from '../tools'
+import { llm } from '../llm'
+import { selectRelevantTools } from '../tools/tool-ranking'
+import {
+  contextualToolRoutingText,
+  selectRelevantToolsSemantic
+} from '../tools/tool-embedding-ranking'
+import { budgetTools, MAX_TOOL_TOKENS } from '../tools/tool-budget'
+import { embeddings } from '../embeddings'
+import { isToolAllowedForOrigin } from '../tools/tool-origin'
 import { notifyRagConversationChanged } from '../rag-conversation-events'
 import { callHook, callHookAsync, hasHook, HOOKS } from '../bootstrap/hookRegistry'
 import { getSecret } from '../secrets'
@@ -39,10 +58,14 @@ import { createSettingsStore } from './bridge-settings-store'
 import {
   activateRemoteVisionModel,
   deactivateRemoteVisionModel,
-  getRemoteVisionServerSettings
+  getRemoteVisionServerSettings,
+  getActiveRemoteVisionServer
 } from '../vision/remote-vision-server'
 import { remoteModelSelected } from '../active-models'
 import {
+  getActiveModel,
+  getVisionStatuses,
+  getActiveModelIds,
   getActiveModalities,
   getCatalog,
   listInstalled,
@@ -58,6 +81,7 @@ import {
 } from './bridge-service'
 import {
   BROWSER_ORIGIN_PREFIX,
+  setBrowserConversationOrigin,
   MAX_LISTED,
   parseBridgeConversation,
   toBridgeConversation,
@@ -191,18 +215,24 @@ function features(): BridgeFeatures {
   const exts = getToolExtensions()
   return {
     pro,
-    chats: true,
-    tools: exts.some((e) => e.category === 'tool'),
-    connectors: exts.some((e) => e.category !== 'tool'),
+    chats: pro,
+    browserChat: hasHook(HOOKS.extensionChatRequest) ? 2 : 0,
+    tools: pro && exts.some((e) => e.category === 'tool'),
+    connectors: pro && exts.some((e) => e.category !== 'tool'),
     vault: pro && hasHook(HOOKS.extensionVaultRequest),
     // Keep the live socket open only while tasks are set to use the default browser.
-    browserTasks: getWebUseSettings().browserTarget === 'default_browser'
+    browserTasks: pro && getWebUseSettings().browserTarget === 'default_browser'
   }
 }
 
-async function listTools(): Promise<unknown[]> {
+export async function listBridgeTools(task?: string): Promise<unknown[]> {
   const out: unknown[] = []
-  for (const { schema, extension } of await enabledToolSchemas(getToolExtensions())) {
+  const catalog = (await enabledToolSchemas(getToolExtensions())).filter(({ schema }) =>
+    isToolAllowedForOrigin((schema as { function?: { name?: unknown } }).function?.name, 'bridge', {
+      acting: true
+    })
+  )
+  for (const { schema, extension } of catalog) {
     const fn = (
       schema as { function?: { name?: unknown; description?: unknown; parameters?: unknown } }
     ).function
@@ -217,11 +247,72 @@ async function listTools(): Promise<unknown[]> {
       })
     }
   }
-  return out
+  if (task === undefined) return out
+  const schemas = out.map((tool) => {
+    const item = tool as { name: string; description: string; parameters: unknown }
+    return {
+      type: 'function',
+      function: { name: item.name, description: item.description, parameters: item.parameters }
+    }
+  })
+  const direct = selectRelevantTools(task, schemas)
+  let semantic: unknown[] = []
+  const named = schemas.some((schema) =>
+    task.toLowerCase().includes(schema.function.name.toLowerCase())
+  )
+  if (task.trim() && !named && schemas.length) {
+    try {
+      semantic = await selectRelevantToolsSemantic(contextualToolRoutingText(task, []), schemas, {
+        embed: (text) => embeddings.generateEmbedding(text)
+      })
+    } catch {
+      // Keep Desktop's direct-match fallback when the local embedding model cannot load.
+    }
+  }
+  const selected = [...direct, ...semantic.filter((tool) => !direct.includes(tool))]
+  const cap = Math.max(
+    1024,
+    Math.min(Math.floor(llm.effectiveContextSize() * 0.4), MAX_TOOL_TOKENS)
+  )
+  const budgeted = budgetTools(selected, cap, 0)
+  return budgeted.tools.map((tool) => {
+    const fn = (tool as { function: { name: string; description: string; parameters: unknown } })
+      .function
+    const original = out.find((entry) => (entry as { name: string }).name === fn.name) as Record<
+      string,
+      unknown
+    >
+    return { ...original, description: fn.description, parameters: fn.parameters }
+  })
 }
 
 // The same functions Settings here uses, so a browser and this window always agree.
 const settingsStore = createSettingsStore({
+  text: async () => {
+    const remote = getActiveRemoteVisionServer()
+    const local = remote ? null : llm.activeModelInfo()
+    const active = remote
+      ? {
+          vision: remoteTextVision(remote.modelCatalog?.find((model) => model.id === remote.model))
+        }
+      : local
+    const activeModelId = remote
+      ? remoteVisionModelId(remote.id, remote.model)
+      : (local?.id ?? null)
+    return {
+      ...llm.getSettings(),
+      activeModelId,
+      availability: activeTextAvailability(
+        active,
+        active ? await llm.toolPlannerPreflight() : null,
+        getSettings().toolsEnabled !== false
+      )
+    }
+  },
+  setText: async (patch: TextSettings) => {
+    await llm.setSettings(patch)
+  },
+  activeIds: getActiveModelIds,
   web: getWebUseSettings,
   setWeb: (next) => void setWebUseSettings(next),
   computer: getComputerUseSettings,
@@ -240,12 +331,18 @@ const settingsStore = createSettingsStore({
   },
   remoteOff: deactivateRemoteVisionModel,
   taskModels: async () => {
-    const [catalog, installed] = await Promise.all([getCatalog(), listInstalled()])
+    const [catalog, installed, companionStatus] = await Promise.all([
+      getCatalog(),
+      listInstalled(),
+      getVisionStatuses()
+    ])
     const active = (getActiveModalities() as Record<string, string | null>).computer_use
     return {
       catalog: catalog.models as Record<string, unknown>[],
       installed,
-      activeGrounder: active ?? null
+      activeGrounder: active ?? null,
+      activeChatId: getActiveModel(),
+      companionStatus
     }
   },
   setLocalGrounder: async (modelId) => {
@@ -271,11 +368,11 @@ const settingsStore = createSettingsStore({
     const status = imageGenStatus()
     return status.active ?? status.models[0] ?? null
   },
-  imageParams: (model, store) =>
-    resolveImageParameters({ id: model }, store as Parameters<typeof resolveImageParameters>[1]),
-  setImageParam: (store, model, key, value) =>
+  imageParams: (model, settings) =>
+    resolveImageParameters({ id: model }, settings as Parameters<typeof resolveImageParameters>[1]),
+  setImageParam: (settings, model, key, value) =>
     setImageParameterOverride(
-      store as Parameters<typeof setImageParameterOverride>[0],
+      settings as Parameters<typeof setImageParameterOverride>[0],
       model,
       key,
       value
@@ -289,13 +386,46 @@ const journeyOf = (browser: PairedBrowser): string => `${BROWSER_ORIGIN_PREFIX}$
 /** The task ids each browser was given (bridge-task-progress.ts). */
 const acceptedTasks = createAcceptedTasks()
 
+async function readConversationPage(
+  params: ConversationListParams | ConversationSearchParams
+): Promise<ConversationPage<unknown>> {
+  if (!hasHook(HOOKS.extensionChatRequest)) return plainConversationPage(params)
+  return (
+    (await callHookAsync<ConversationPage<unknown>>(HOOKS.extensionChatRequest, {
+      action: 'conversations',
+      page: params
+    })) ?? { conversations: [] }
+  )
+}
+
 const data: BridgeData = {
+  chat: async (request, browser) => {
+    if (!hasHook(HOOKS.extensionChatRequest)) {
+      if (request.action === 'disconnect') return true
+      throw new Error('chat_unavailable')
+    }
+    return callHookAsync(HOOKS.extensionChatRequest, request, browser)
+  },
   features,
   desktopName: () => 'Off Grid AI Desktop',
   listConversations: async () =>
-    getRagConversations()
-      .slice(0, MAX_LISTED)
-      .map((row) => toBridgeConversation(row, getRagMessages(row.id))),
+    hasHook(HOOKS.extensionChatRequest)
+      ? ((await callHookAsync<unknown[]>(HOOKS.extensionChatRequest, {
+          action: 'conversations'
+        })) ?? [])
+      : getRagConversations()
+          .slice(0, MAX_LISTED)
+          .map((row) => toBridgeConversation(row, getRagMessages(row.id))),
+  listConversationPage: readConversationPage,
+  searchConversations: async (params): Promise<ConversationSearchResult> => {
+    if (!hasHook(HOOKS.extensionChatRequest)) return plainConversationSearchPage(params)
+    return (
+      (await callHookAsync<ConversationSearchResult>(HOOKS.extensionChatRequest, {
+        action: 'conversations',
+        page: params
+      })) ?? { conversations: [] }
+    )
+  },
   putConversation: async (raw, browser) => {
     const conversation = parseBridgeConversation(raw)
     if (!conversation) throw new Error('invalid')
@@ -305,11 +435,7 @@ const data: BridgeData = {
     if (existing && historyConflicts(stored, conversation.turns)) throw new Error(HISTORY_CONFLICT)
     if (!existing) {
       createRagConversation(conversation.id, conversation.title)
-      getDB()
-        .prepare(
-          'UPDATE rag_conversations SET origin_device_id = ?, origin_device_name = ? WHERE id = ?'
-        )
-        .run(journeyOf(browser), browser.name, conversation.id)
+      setBrowserConversationOrigin(getDB(), conversation.id, browser)
     } else {
       const title = newerBrowserTitle(existing, conversation)
       if (title) updateRagConversationTitle(conversation.id, title)
@@ -324,7 +450,7 @@ const data: BridgeData = {
     deleteRagConversation(id)
     notifyRagConversationChanged({ conversationId: id })
   },
-  listTools,
+  listTools: listBridgeTools,
   runTool: async (name, args, browser, tabId) => {
     const journeyId = journeyOf(browser)
     // A web task works in the tab its chat offered: the tab travels with that one task.
@@ -333,6 +459,8 @@ const data: BridgeData = {
       args,
       {
         conversationId: journeyId,
+        origin: 'bridge',
+        acting: true,
         ...(tabId === undefined ? {} : { startTab: { browserId: browser.id, tabId } })
       },
       getToolExtensions()

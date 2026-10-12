@@ -3,6 +3,8 @@ import {
   type DeviceType,
   type FeatureExtractionPipeline
 } from '@huggingface/transformers'
+import { modelReadDirectories, resolveTransformersPackage } from './model-paths'
+import { requireModelStorage } from './runtime-env'
 import { configureTransformersEnv } from './embeddings-env'
 import { loadWithOnnxFallback, onnxDeviceCandidates } from './onnx-device'
 import type { BackendPreference } from '../shared/backend-preferences'
@@ -38,12 +40,23 @@ export async function embedText(
   text: string,
   modelsDir: string,
   onReady?: (device: string, reason?: string) => void,
-  backendPreference: BackendPreference = 'auto'
+  backendPreference: BackendPreference = 'auto',
+  readDirectories = modelReadDirectories()
 ): Promise<number[]> {
   if (!pipe) {
-    configureTransformersEnv(modelsDir)
-    loading ??= loadWithOnnxFallback((device) =>
-      pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { device }),
+    const id = 'Xenova/all-MiniLM-L6-v2'
+    const fp32 = resolveTransformersPackage(id, 'model.onnx', readDirectories)
+    const cached = fp32 ?? resolveTransformersPackage(id, 'model_quantized.onnx', readDirectories)
+    // Local-only reads must not require writable storage. Guard only an explicit
+    // folder choice when the pipeline can download; default storage is created lazily.
+    if (!cached && process.env.OFFGRID_EMBEDDINGS_OFFLINE !== '1') requireModelStorage()
+    configureTransformersEnv(modelsDir, !!cached)
+    loading ??= loadWithOnnxFallback(
+      (device) =>
+        pipeline('feature-extraction', cached ?? 'Xenova/all-MiniLM-L6-v2', {
+          device,
+          ...(cached ? { local_files_only: true, ...(fp32 ? {} : { dtype: 'q8' as const }) } : {})
+        }),
       onnxDeviceCandidates(process.platform, backendPreference)
     )
       .then(({ runtime, device, fallbackReason }) => {

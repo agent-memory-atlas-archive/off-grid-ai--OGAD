@@ -22,6 +22,19 @@
 // Browsers paired this way are NOT sync devices: they live in their own store on the desktop
 // and never count toward the device limit.
 
+/** What this desktop offers right now, from its real entitlement and registered features. */
+export interface BridgeFeatures {
+  readonly pro: boolean
+  readonly chats: boolean
+  readonly tools: boolean
+  readonly connectors: boolean
+  readonly vault: boolean
+  /** Tasks may drive this browser (web_use in the default browser), so keep the live socket open. */
+  readonly browserTasks?: boolean
+  /** 0/absent: unavailable; 2: start/read/stop/control/guide with branchFrom. */
+  readonly browserChat?: number
+}
+
 export const BRIDGE_VERSION = 1
 const HKDF_SALT = 'offgrid-extension-bridge-v1'
 /** How far a request's timestamp may be from the receiver's clock. */
@@ -177,7 +190,13 @@ export interface RpcEnvelope extends Sealed {
 
 export const RPC_METHODS = [
   'state',
+  'chat.start',
+  'chat.read',
+  'chat.stop',
+  'chat.control',
+  'chat.guide',
   'conversations.list',
+  'conversations.search',
   'conversations.put',
   'conversations.delete',
   'tools.list',
@@ -185,6 +204,11 @@ export const RPC_METHODS = [
   'tasks.latest',
   'tasks.stop',
   'models.setTaskRole',
+  'models.inventory',
+  'models.activate',
+  'audio.voices',
+  'audio.transcribe',
+  'audio.speak',
   'vault',
   'settings.get',
   'settings.set',

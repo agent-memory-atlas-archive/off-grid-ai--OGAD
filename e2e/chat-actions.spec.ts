@@ -77,7 +77,7 @@ async function enterChat(): Promise<void> {
     await setupBanner.locator('button').last().click()
   }
   await page.keyboard.press('Escape')
-  await expect(page.getByPlaceholder(/ask anything/i)).toBeVisible()
+  await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeVisible()
 }
 
 async function seedRenameJourney(): Promise<void> {

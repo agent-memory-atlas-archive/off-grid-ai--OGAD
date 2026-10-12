@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSettingsStore, type SettingsStoreDeps } from '../bridge-settings-store'
-import type { ConnectorsSettings } from '../bridge-settings'
+import type { ConnectorsSettings, TextSettings } from '../bridge-settings'
 
 // The desktop's own functions, faked: what a paired browser reads must be what Settings here
 // shows, and what it writes must go through the same setters.
@@ -43,6 +43,7 @@ function fakeDesktop() {
     calls: [] as string[]
   }
   const deps: SettingsStoreDeps = {
+    text: async () => ({ activeModelId: 'chat', availability: { vision: true, agent: true } }),
     web: () => state.web,
     setWeb: (next) => void (state.web = next as typeof state.web),
     computer: () => state.computer,
@@ -153,7 +154,15 @@ describe('a paired browser’s view of the desktop settings', () => {
     expect(await store.read('remote')).toEqual({
       active: false,
       activeServerId: null,
-      servers: [{ id: 'lab', name: 'Lab', host: 'lab.example.test:8443', model: 'Qwen 32B' }]
+      servers: [
+        {
+          id: 'lab',
+          name: 'Lab',
+          host: 'lab.example.test:8443',
+          model: 'Qwen 32B',
+          available: true
+        }
+      ]
     })
     await store.write('remote', { use: 'made-up' })
     expect(state.remote.textOnRemote).toBe(false)
@@ -260,7 +269,50 @@ describe('a paired browser’s view of the desktop settings', () => {
     await store.write('transcription', { language: 'auto' })
     expect(state.app.sttLanguage).toBe('auto')
 
-    await store.write('voice', { voice: 'bm_george', ttsEnabled: false })
-    expect(await store.read('voice')).toEqual({ ttsEnabled: false, voice: 'bm_george' })
+    await store.write('voice', { voice: 'bm_george', ttsEnabled: false, speed: 1.5 })
+    expect(await store.read('voice')).toEqual({ ttsEnabled: false, voice: 'bm_george', speed: 1.5 })
+  })
+  it('returns Desktop text options and corrected settings after a write', async () => {
+    const { deps, store } = fakeDesktop()
+    let settings: TextSettings = { ctxSize: 4096, maxTokens: 0, reasoningBudget: 8192 }
+    deps.text = async () => ({
+      ...settings,
+      supportsMtp: false,
+      compatibleDraftModels: [],
+      compatibleDflashModels: ['draft.gguf']
+    })
+    const taskModels = deps.taskModels
+    deps.taskModels = async () => ({
+      ...(await taskModels()),
+      companionStatus: { chat: { dflashInstalled: true, dflashFile: 'draft.gguf' } }
+    })
+    deps.setText = async (patch) => {
+      settings = { ...settings, ...patch }
+    }
+    await store.write('text', { maxTokens: 1024, reasoningBudget: 32768 })
+    expect(await store.read('text')).toMatchObject({
+      maxTokens: 1024,
+      reasoningBudget: 1024,
+      options: {
+        thinkingBudgets: [0, 512, 1024],
+        draftModels: [],
+        dflashModels: [{ id: 'draft.gguf', label: 'Chat · DFlash' }]
+      }
+    })
+    await store.write('text', { speculativeDecoding: 'dflash', draftModel: 'wrong.gguf' })
+    expect(await store.read('text')).toMatchObject({
+      speculativeDecoding: 'dflash',
+      draftModel: 'draft.gguf'
+    })
+    await store.write('text', { speculativeDecoding: 'draft' })
+    expect(await store.read('text')).toMatchObject({ speculativeDecoding: 'off' })
+  })
+
+  it('keeps the current strategy when the requested strategy has no models', async () => {
+    const { store, deps, state } = fakeDesktop()
+    deps.taskModels = async () => ({ catalog: [], installed: [], activeGrounder: null })
+    deps.remote = () => ({ activeServerId: null, textOnRemote: false, servers: [] })
+    await store.write('tasks', { web: { modelStrategy: 'decision_plus_specialist' } })
+    expect(state.web.modelStrategy).toBe('same_as_chat')
   })
 })

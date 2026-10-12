@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { deriveSessionKey, generateKeyPair, open, seal } from '../bridge-protocol'
 import {
   createChannel,
+  isUncertainPageResult,
+  LEGACY_PAGE_NO_ANSWER,
   helloAad,
   linkName,
   newNonce,
@@ -104,6 +106,21 @@ describe('createChannel', () => {
 })
 
 describe('message shapes', () => {
+  it('validates the child tab event exactly', () => {
+    const data = { tabId: 8, openerTabId: 7, url: '', title: '' }
+    const event = { event: 'tab.opened', tabId: 8, data }
+    expect(parseUpstream(event)).toEqual(event)
+    expect(parseUpstream({ ...event, data: { ...data, tabId: 9 } })).toBeNull()
+    expect(parseUpstream({ ...event, data: { tabId: 8, url: '', title: '' } })).toBeNull()
+    for (const invalid of [
+      { ...data, openerTabId: 1.5 },
+      { ...data, openerTabId: '7' },
+      { ...data, url: null },
+      { ...data, title: undefined }
+    ])
+      expect(parseUpstream({ ...event, data: invalid })).toBeNull()
+  })
+
   it('accepts only known commands', () => {
     expect(parseCommand({ id: 3, op: 'cdp.send', args: { method: 'Page.navigate' } })).toEqual({
       id: 3,
@@ -129,5 +146,20 @@ describe('message shapes', () => {
     expect(parseUpstream({ event: 'ping', tabId: 0, data: {} })).toMatchObject({ event: 'ping' })
     expect(parseUpstream({ event: 'shell', tabId: 4, data: {} })).toBeNull()
     expect(parseUpstream('x')).toBeNull()
+  })
+})
+
+describe('uncertain page results', () => {
+  it('preserves the explicit outcome in a socket reply', () => {
+    const result = { text: 'The action may have run.', isError: false, uncertain: true as const }
+    expect(parseUpstream({ id: 1, ok: true, result })).toEqual({ id: 1, ok: true, result })
+    expect(isUncertainPageResult(result)).toBe(true)
+  })
+
+  it('recognizes the legacy no-answer error only', () => {
+    expect(LEGACY_PAGE_NO_ANSWER).toBe('The page did not answer.')
+    expect(isUncertainPageResult({ text: LEGACY_PAGE_NO_ANSWER, isError: true })).toBe(true)
+    expect(isUncertainPageResult({ text: 'Permission denied', isError: true })).toBe(false)
+    expect(isUncertainPageResult({ text: 'Clicked', isError: false })).toBe(false)
   })
 })

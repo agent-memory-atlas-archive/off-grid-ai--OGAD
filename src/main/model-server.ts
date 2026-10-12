@@ -1518,20 +1518,11 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
             const { id, kind } = await readJson(req)
             if (!id) return json(res, 400, { error: 'id required' })
             const modelId = String(id)
-            const r = await mm.activateModel(modelId, typeof kind === 'string' ? kind : undefined)
-            if (r.success && !parseRemoteVisionModelId(modelId)) {
-              void llm.init().catch((error) => {
-                writeDiagnosticLog(
-                  'gateway',
-                  'model_activation.start_failed',
-                  {
-                    model: modelId,
-                    error: error instanceof Error ? error.message : String(error)
-                  },
-                  'error'
-                )
-              })
-            }
+            const { activateModelFromRequest } = await import('./model-activation-request')
+            const r = await activateModelFromRequest(
+              modelId,
+              typeof kind === 'string' ? kind : undefined
+            )
             return json(res, r.success ? 200 : 400, r)
           }
           // DELETE /v1/models/{id}  (or POST /v1/models/delete {id})

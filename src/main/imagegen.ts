@@ -1,3 +1,5 @@
+import { recordManagedStorageFile } from './managed-storage-files'
+import { withStorageDownload } from './model-storage-guard'
 import { beginRuntimeBackend } from './runtime-backends'
 // On-device image generation via stable-diffusion.cpp (the bundled `sd-cli`).
 // Mirrors the llm.ts pattern: resolve the binary from resources/bin, pick a
@@ -35,7 +37,8 @@ import { getActiveModal } from './active-models'
 import { getActiveRemoteVisionServerForModality } from './vision/remote-vision-server'
 import { generateRemoteImage } from './remote-media-runtime'
 import { remoteVisionModelId } from '../shared/remote-vision-server'
-import { binRoots, dataDir, modelsDir, resourceDirs } from './runtime-env'
+import { binRoots, dataDir, modelsDir, requireModelStorage, resourceDirs } from './runtime-env'
+import { modelEntryNames, resolveModelAsset } from './model-paths'
 import { sdServer } from './sd-server'
 import {
   findSdBinaries,
@@ -109,15 +112,8 @@ function isCoreMLModelDir(p: string): boolean {
 
 /** All image models on disk: GGUFs, custom .safetensors checkpoints, Core ML dirs. */
 export function listImageModels(): string[] {
-  const dir = modelsDir()
-  let files: string[] = []
-  try {
-    files = fs.readdirSync(dir)
-  } catch {
-    return []
-  }
-  const ownedEntries = files
-    .map((name) => ({ name, filePath: resolveExistingOwnedEntry(dir, name) }))
+  const ownedEntries = modelEntryNames()
+    .map((name) => ({ name, filePath: resolveModelAsset(name) }))
     .filter((entry): entry is { name: string; filePath: string } => entry.filePath !== null)
   const coreml = ownedEntries.filter((entry) => isCoreMLModelDir(entry.filePath)).map((e) => e.name)
   const checkpoints = ownedEntries
@@ -247,6 +243,7 @@ export function listLoras(): LoraInfo[] {
 
 /** Absolute path to the LoRA folder (created on demand) — for "reveal in Finder". */
 export function ensureLoraDir(): string {
+  requireModelStorage()
   const dir = loraDir()
   fs.mkdirSync(dir, { recursive: true })
   return dir
@@ -254,6 +251,14 @@ export function ensureLoraDir(): string {
 
 /** Download a LoRA .safetensors into the LoRA folder (HF resolve URLs, follows redirects). */
 export async function downloadLora(
+  url: string,
+  filename: string,
+  onProgress?: (pct: number) => void
+): Promise<string> {
+  return withStorageDownload(() => downloadLoraInner(url, filename, onProgress))
+}
+
+async function downloadLoraInner(
   url: string,
   filename: string,
   onProgress?: (pct: number) => void
@@ -281,6 +286,7 @@ export async function downloadLora(
     await new Promise<void>((r) => out.end(r))
   }
   fs.renameSync(tmp, dest)
+  recordManagedStorageFile(modelsDir(), `loras/${filename}`)
   return dest
 }
 
@@ -288,14 +294,14 @@ export async function downloadLora(
  *  Returns null (so callers just skip taesd) when it isn't — the feature is a
  *  no-op until the tiny decoder is downloaded into the models dir. */
 export function resolveTaesd(base: string): string | null {
-  return resolveExistingOwnedEntry(modelsDir(), taesdFilename(base))
+  return resolveModelAsset(taesdFilename(base))
 }
 
 /** Find a companion file (text encoder / vae) in the models dir by pattern. */
 function findInModels(re: RegExp): string | null {
   try {
-    const f = fs.readdirSync(modelsDir()).find((x) => re.test(x))
-    return f ? resolveExistingOwnedEntry(modelsDir(), f) : null
+    const f = modelEntryNames().find((x) => re.test(x))
+    return f ? resolveModelAsset(f) : null
   } catch {
     return null
   }
@@ -359,7 +365,7 @@ export function activeImageModel(): string | null {
 function resolveModel(preferred?: string): string | null {
   const dir = modelsDir()
   if (preferred) {
-    const preferredPath = resolveExistingOwnedEntry(dir, preferred)
+    const preferredPath = resolveModelAsset(preferred)
     if (preferredPath) return preferredPath
   }
   const sd = listImageModels()
@@ -367,7 +373,7 @@ function resolveModel(preferred?: string): string | null {
   // User-chosen image model is the default when the caller didn't request one.
   const chosen = getActiveModal('image')
   if (chosen) {
-    const chosenPath = resolveExistingOwnedEntry(dir, chosen)
+    const chosenPath = resolveModelAsset(chosen)
     if (chosenPath) return chosenPath
     if (sd.includes(chosen)) return path.join(dir, chosen) // mlx/virtual id
   }
@@ -376,7 +382,7 @@ function resolveModel(preferred?: string): string | null {
   // Only when the user hasn't picked (getActiveModal above). Falls through to the
   // generic heuristic below when no DreamShaper quant is installed.
   const dreamshaper = defaultImageModelFilename(sd, os.totalmem() / 1e9)
-  if (dreamshaper) return path.join(dir, dreamshaper)
+  if (dreamshaper) return resolveModelAsset(dreamshaper)
   // Preference: Juggernaut XL v9 (default photoreal) > Z-Image-Turbo >
   // SDXL-Lightning > SDXL > SD 2.1 > anything else.
   const juggernaut = sd.find((f) => /juggernaut/i.test(f))
@@ -384,7 +390,8 @@ function resolveModel(preferred?: string): string | null {
   const lightning = sd.find((f) => /lightning/i.test(f))
   const xl = sd.find((f) => /sdxl|xl/i.test(f))
   const v21 = sd.find((f) => /v2-1|v2\.1/i.test(f))
-  return path.join(dir, juggernaut ?? zimage ?? lightning ?? xl ?? v21 ?? sd[0]!) // sd.length checked above
+  const pick = juggernaut ?? zimage ?? lightning ?? xl ?? v21 ?? sd[0]!
+  return resolveModelAsset(pick) ?? (pick.startsWith('mlx/') ? path.join(dir, pick) : null) // sd.length checked above
 }
 
 /** Whether image generation is usable right now (binary + at least one model). */

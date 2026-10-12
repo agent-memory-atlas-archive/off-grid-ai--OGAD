@@ -1,5 +1,15 @@
 import { restoreCanonicalProductName } from './bootstrap/user-data'
-import { app, shell, BrowserWindow, Menu, protocol, session, desktopCapturer, screen } from 'electron'
+import { createWindowAndScheduleModelStorageCleanup } from './bootstrap/model-storage-cleanup'
+import {
+  app,
+  shell,
+  BrowserWindow,
+  Menu,
+  protocol,
+  session,
+  desktopCapturer,
+  screen
+} from 'electron'
 import { tmpdir } from 'os'
 
 // Electron 39 needs the portal to register global shortcuts on Wayland.
@@ -108,9 +118,6 @@ registerCoreShutdownOwners(applicationShutdown, {
   stopModelRuntimes: shutdownRuntimes,
   stopModelDownloads: shutdownModelDownloads
 })
-
-// FORCE UPDATE VERIFICATION: 3 - SHELL OVERWRITE
-console.log('MAIN PROCESS: LOADING CUSTOM ENTRY POINT (SHELL OVERWRITE)')
 
 async function createWindow(): Promise<void> {
   // Open filling the screen, because this is a desktop-first, dense app: multi-column grids, master
@@ -325,6 +332,22 @@ if (!windowPresentation.showWindow) {
   })
 }
 
+function startServerOnlyMode(): void {
+  writeDiagnosticLog('gateway', 'server-only.started', { port: 7878 })
+  if (process.platform === 'darwin' && app.dock) {
+    try {
+      app.dock.hide()
+    } catch {
+      /* ignore */
+    }
+  }
+  // These asynchronous starts report failures through their promises.
+  startModelServer().catch((e) => console.error('[gateway] start failed', e))
+  void import('./llm').then(({ llm }) =>
+    llm.init().catch((err) => console.error('[gateway] LLM init failed', err))
+  )
+}
+
 app.whenReady().then(async () => {
   // glibc reads LD_LIBRARY_PATH when Electron starts, before an ONNX worker runs.
   // Restart once with the verified optional libraries if this launch lacks them.
@@ -332,6 +355,8 @@ app.whenReady().then(async () => {
     requestApplicationRelaunch(app)
     return
   }
+  const { cleanupMovedModelStorage } = await import('./model-storage-move')
+  const { modelsDir } = await import('./runtime-env')
   restoreCanonicalProductName()
   initializeAIRequestLogs()
 
@@ -343,24 +368,11 @@ app.whenReady().then(async () => {
   const serverOnly =
     process.argv.includes('--server-only') || process.env.OFFGRID_SERVER_ONLY === '1'
   if (serverOnly) {
-    console.log('[gateway] server-only mode — gateway on :7878, no UI/capture')
-    if (process.platform === 'darwin' && app.dock) {
-      try {
-        app.dock.hide()
-      } catch {
-        /* ignore */
-      }
-    }
-    // startModelServer is async (it scans for a free port); a try/catch can't catch its rejection,
-    // so handle it on the promise itself.
-    startModelServer().catch((e) => console.error('[gateway] start failed', e))
-    void import('./llm').then(({ llm }) =>
-      llm.init().catch((err) => console.error('[gateway] LLM init failed', err))
-    )
+    startServerOnlyMode()
     return // skip window, tray, IPC, capture, connectors — gateway only
   }
 
-  console.log('APP READY: Initializing Services...')
+  writeDiagnosticLog('app', 'services.initializing')
 
   // One-time, idempotent cleanup of the old "My Memories" AI-chat imports.
   try {
@@ -579,7 +591,9 @@ app.whenReady().then(async () => {
     run: () => loadProFeaturesMain()
   })
 
-  await createWindow()
+  await createWindowAndScheduleModelStorageCleanup(createWindow, () =>
+    cleanupMovedModelStorage(app.getPath('userData'), modelsDir())
+  )
 
   // loadURL/loadFile resolves after the renderer finishes loading. Give Electron
   // one more event-loop turn to present that frame before optional main-process
@@ -653,7 +667,9 @@ app.whenReady().then(async () => {
     await new Promise<void>((resolve) => setImmediate(resolve))
     await runStartupStage({
       name: 'models.text.prepare',
-      deadlineMs: 180_000,
+      // A USB model load can stay quiet for ten minutes; allow setup time as well
+      // before the startup notice reports that preparation did not finish.
+      deadlineMs: 900_000,
       lateEffect: 'keep',
       run: async () => {
         const { llm } = await import('./llm')
@@ -662,6 +678,10 @@ app.whenReady().then(async () => {
         // A remote chat model needs no local engine: loading one anyway holds gigabytes of
         // memory for nothing. Chat starts it on demand if the user switches back.
         const { getActiveRemoteVisionServer } = await import('./vision/remote-vision-server')
+        // Before the first launch, so a fresh install starts on its fastest settings.
+        await import('./best-settings')
+          .then((m) => m.prepareBestSettingsOnStartup())
+          .catch((error: unknown) => console.warn('[best-settings] startup check failed', error))
         if (llm.modelsExist() && !getActiveRemoteVisionServer()) await llm.init()
       }
     })

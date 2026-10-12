@@ -1,3 +1,21 @@
+import {
+  thinkingBudgetOptions,
+  speculativeOptions,
+  budgetChange,
+  speculativePatch,
+  installedDraftModels,
+  type DraftCatalogModel,
+  type DraftCompanionStatus
+} from '../../shared/text-settings-rules'
+import { playbackSpeed } from '../../shared/voice-speed'
+import {
+  TASK_CONTEXTS,
+  SCREENSHOT_SIZES,
+  VISUAL_HISTORY,
+  CHECKPOINTS,
+  RAILS,
+  BROWSER_TARGETS
+} from './bridge-settings'
 // A paired browser's view of the desktop's settings (sealed settings.get / settings.set). The
 // browser sees and changes the same values as Settings here, through the same functions:
 // Remote, Tasks, Tools, Connectors, Image, Transcription and Voice. The patch arriving here has
@@ -7,15 +25,36 @@
 // Pure apart from the injected desktop functions (bridge-electron.ts wires the real ones),
 // so it is tested without Electron or a database.
 
-import type { SettingsBySection, SettingsSection, TaskOptions } from './bridge-settings'
+import type {
+  SettingsBySection,
+  SettingsSection,
+  TaskOptions,
+  TextSettings
+} from './bridge-settings'
 import { parseRemoteVisionModelId } from '../../shared/remote-vision-server'
-import { remoteView, taskModelChoices, type SavedServer } from './bridge-task-models'
+import {
+  remoteView,
+  taskModelChoices,
+  taskStrategyOptions,
+  modelsByTab,
+  type SavedServer
+} from './bridge-task-models'
 
 type Patch = Record<string, unknown>
 
 type Decides = { decisionModelId: string | null }
 
 export interface SettingsStoreDeps {
+  text?(): Promise<
+    TextSettings & {
+      supportsMtp?: boolean
+      compatibleDraftModels?: string[]
+      compatibleDflashModels?: string[]
+    }
+  >
+  setText?(patch: TextSettings): Promise<void>
+  activeIds?(): Promise<string[]>
+
   web(): TaskOptions & Decides & { browserTarget: 'in_app' | 'default_browser' }
   setWeb(next: unknown): void
   computer(): TaskOptions &
@@ -34,6 +73,8 @@ export interface SettingsStoreDeps {
     catalog: Record<string, unknown>[]
     installed: string[]
     activeGrounder: string | null
+    activeChatId?: string | null
+    companionStatus?: DraftCompanionStatus
   }>
   setLocalGrounder(modelId: string): Promise<void>
   appSettings(): Record<string, unknown>
@@ -93,6 +134,33 @@ export function createSettingsStore(deps: SettingsStoreDeps): {
   const readers: {
     [S in SettingsSection]: () => Promise<SettingsBySection[S]> | SettingsBySection[S]
   } = {
+    text: async () => {
+      const settings = (await deps.text?.()) ?? {}
+      const models = await deps.taskModels()
+      const {
+        supportsMtp: _supportsMtp,
+        compatibleDraftModels,
+        compatibleDflashModels,
+        ...safe
+      } = settings
+      const drafts = installedDraftModels(
+        models.catalog as unknown as DraftCatalogModel[],
+        models.activeChatId ?? null,
+        models.companionStatus ?? {},
+        compatibleDraftModels ?? [],
+        compatibleDflashModels ?? []
+      )
+      return {
+        ...safe,
+        options: {
+          thinkingBudgets: thinkingBudgetOptions(settings),
+          speculativeModes: speculativeOptions(settings),
+          draftModels: drafts.draft.map((option) => ({ id: option.value, label: option.label })),
+          dflashModels: drafts.dflash.map((option) => ({ id: option.value, label: option.label }))
+        },
+        modelsByTab: modelsByTab(models.catalog, models.installed, (await deps.activeIds?.()) ?? [])
+      }
+    },
     remote: () => {
       const r = deps.remote()
       return remoteView(r.servers, r.activeServerId, r.textOnRemote)
@@ -102,7 +170,20 @@ export function createSettingsStore(deps: SettingsStoreDeps): {
       const computer = deps.computer()
       const models = await deps.taskModels()
       const choices = taskModelChoices({ ...models, servers: deps.remote().servers })
+      const text = await deps.text?.()
+      const reasoners = text?.activeModelId
+        ? [{ id: text.activeModelId, label: text.activeModelId }]
+        : []
       return {
+        strategies: taskStrategyOptions(choices, reasoners),
+        options: {
+          contexts: TASK_CONTEXTS,
+          screenshotSizes: SCREENSHOT_SIZES,
+          visualHistory: VISUAL_HISTORY,
+          checkpoints: CHECKPOINTS,
+          rails: RAILS,
+          browserTargets: BROWSER_TARGETS
+        },
         grounding: computer.groundingModelId ?? models.activeGrounder ?? '',
         groundingChoices: choices.grounding,
         decisionChoices: choices.decision,
@@ -178,12 +259,18 @@ export function createSettingsStore(deps: SettingsStoreDeps): {
       const settings = deps.appSettings()
       return {
         ttsEnabled: settings.ttsEnabled !== false,
-        voice: str(settings.ttsVoice, 'af_heart')
+        voice: str(settings.ttsVoice, 'af_heart'),
+        speed: playbackSpeed(settings.ttsSpeed)
       }
     }
   }
 
   const writers: Record<SettingsSection, (patch: Patch) => Promise<void> | void> = {
+    text: async (p) => {
+      if (!deps.setText) return
+      const settings = (await deps.text?.()) ?? {}
+      await deps.setText({ ...p, ...budgetChange(settings, speculativePatch(settings, p)) })
+    },
     remote: (p) => {
       if (p.off === true) {
         deps.remoteOff()
@@ -194,14 +281,28 @@ export function createSettingsStore(deps: SettingsStoreDeps): {
     tasks: async (p) => {
       const models = await deps.taskModels()
       const choices = taskModelChoices({ ...models, servers: deps.remote().servers })
+      const text = await deps.text?.()
+      const strategies = taskStrategyOptions(
+        choices,
+        text?.activeModelId ? [{ id: text.activeModelId, label: text.activeModelId }] : []
+      )
+      const validTask = (raw: unknown, extra: readonly string[]): Patch => {
+        const patch = pickTask(raw, extra)
+        if (
+          patch.modelStrategy &&
+          !strategies.some((option) => option.value === patch.modelStrategy && option.available)
+        )
+          delete patch.modelStrategy
+        return patch
+      }
       const decider = (raw: unknown): Patch => decisionPatch(raw, choices.decision)
       if (p.web) {
-        deps.setWeb({ ...deps.web(), ...pickTask(p.web, ['browserTarget']), ...decider(p.web) })
+        deps.setWeb({ ...deps.web(), ...validTask(p.web, ['browserTarget']), ...decider(p.web) })
       }
       if (p.computer) {
         deps.setComputer({
           ...deps.computer(),
-          ...pickTask(p.computer, ['showPictureInPicture', 'enabledRails']),
+          ...validTask(p.computer, ['showPictureInPicture', 'enabledRails']),
           ...decider(p.computer)
         })
       }
@@ -244,6 +345,7 @@ export function createSettingsStore(deps: SettingsStoreDeps): {
     voice: (p) => {
       if (typeof p.ttsEnabled === 'boolean') deps.saveSetting('ttsEnabled', p.ttsEnabled)
       if (typeof p.voice === 'string') deps.saveSetting('ttsVoice', p.voice)
+      if (typeof p.speed === 'number') deps.saveSetting('ttsSpeed', p.speed)
     }
   }
 

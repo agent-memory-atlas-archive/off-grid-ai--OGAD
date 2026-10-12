@@ -1,3 +1,4 @@
+import { withStorageDownload } from './model-storage-guard'
 // Central model management — the single source of truth for catalog, install
 // listing, download (pull), delete, and activation. Used by BOTH the desktop IPC
 // handlers (UI) AND the headless gateway HTTP admin endpoints, so the full
@@ -24,6 +25,7 @@ import {
   type Modality
 } from './active-models'
 import {
+  readDownloaded,
   recordDownloaded,
   removeDownloaded,
   findDownloaded,
@@ -56,7 +58,7 @@ import {
   type TransferredModelManifest
 } from '@offgrid/sync'
 import { sampleProgressRate, type ProgressRateSample } from '@offgrid/ui'
-import type { ModelEntry } from '@offgrid/models'
+import { CATALOG as BASE_CATALOG, type ModelEntry } from '@offgrid/models'
 import {
   parseRemoteVisionModelId,
   remoteVisionInventoryModels,
@@ -72,7 +74,15 @@ import { getComputerUseSettings } from './computer-use-settings'
 import { getWebUseSettings } from './web-use-settings'
 import { clearTaskRolesFor, setTaskRoleModel } from './task-role-models'
 import { strategyTaskRoles } from '../shared/computer-use-settings'
-import { binRoots } from './runtime-env'
+import { binRoots, dataDir, modelStorageError, requireModelStorage } from './runtime-env'
+import { discoverExternalModels } from './external-models'
+import {
+  modelMetadataFile,
+  modelReadDirectories,
+  resolveModelAsset,
+  resolveModelReference
+} from './model-paths'
+import { readModelScanFolders } from './model-storage-choice'
 
 // Desktop ships the Prism llama.cpp engine required by these packed weights.
 // Keep this entry here: the shared catalog also feeds Mobile, whose llama.rn
@@ -179,27 +189,27 @@ const KEV_4B: ModelEntry = {
   tags: ['Decision', 'Decider', 'Fast'],
   grounder: false,
   isNew: true,
-  releaseDate: '2026-09-21',
+  releaseDate: '2026-10-01',
   files: [
     {
-      name: 'kev-4b/checkpoint/head.pt',
-      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/485ace8703592fcf405488b262449990824cfed1/head.pt',
-      sizeBytes: 5248767,
-      sha256: 'd8f796da36ff7bd7c0fb9496b452139bb7851af4fc82b07b500b682d3f721d6a',
+      name: 'kev-4b/checkpoint-v1.0/head.pt',
+      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/591dcb5bd6d05eb0b5131ea6608f93f10243335c/head.pt',
+      sizeBytes: 5249791,
+      sha256: 'dd633435998ecc751ac538717a3742e32149500fabf7d7276287dbf0693f347c',
       role: 'primary'
     },
     {
-      name: 'kev-4b/checkpoint/adapter_config.json',
-      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/485ace8703592fcf405488b262449990824cfed1/adapter_config.json',
+      name: 'kev-4b/checkpoint-v1.0/adapter_config.json',
+      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/591dcb5bd6d05eb0b5131ea6608f93f10243335c/adapter_config.json',
       sizeBytes: 1271,
       sha256: '8a05dfd6c5e7f61a62e6db5d8de8093a8dbbd105aa7ee7b5e7b73f6249f45617',
       role: 'aux'
     },
     {
-      name: 'kev-4b/checkpoint/adapter_model.safetensors',
-      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/485ace8703592fcf405488b262449990824cfed1/adapter_model.safetensors',
+      name: 'kev-4b/checkpoint-v1.0/adapter_model.safetensors',
+      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/591dcb5bd6d05eb0b5131ea6608f93f10243335c/adapter_model.safetensors',
       sizeBytes: 129924032,
-      sha256: '9797de69a42188e411b17b7b4fcb66a23374dcebc21d71a7a66f836b5d34df2b',
+      sha256: '90e817356246e7f18bfa7ca3d31794cd4fbeb3332a66a84cb51d9ceae925f2b2',
       role: 'aux'
     },
     {
@@ -280,8 +290,7 @@ export function resolveKevRuntimeArtifact(): KevRuntimeArtifact | null {
     return null
   }
   const modelRoot = path.join(llm.getModelsDir(), 'kev-4b')
-  const checkpoint =
-    reusableKevCheckpointDir(llm.getModelsDir()) ?? path.join(modelRoot, 'checkpoint')
+  const checkpoint = path.join(llm.getModelsDir(), KEV_CHECKPOINT_PREFIX)
   const base = reusableKevBaseDir(llm.getModelsDir()) ?? path.join(modelRoot, 'base')
   const pythonRelative =
     process.platform === 'win32'
@@ -319,6 +328,8 @@ export function resolveKevRuntimeArtifact(): KevRuntimeArtifact | null {
     : null
 }
 
+const DESKTOP_CATALOG = [BONSAI_2, DECIDER_2B, DECIDER_2B_VISION, KEV_4B]
+
 export async function desktopCatalog(): Promise<ModelEntry[]> {
   const { CATALOG } = await import('@offgrid/models')
   const catalog = CATALOG.map((model) => {
@@ -349,7 +360,7 @@ export async function desktopCatalog(): Promise<ModelEntry[]> {
         }
       ]
     : []
-  return [BONSAI_2, DECIDER_2B, DECIDER_2B_VISION, KEV_4B, ...catalog, ...uiMateMtp]
+  return [...DESKTOP_CATALOG, ...catalog, ...uiMateMtp]
 }
 
 export interface DownloadProgress {
@@ -380,16 +391,11 @@ function activeModelFile(): string {
 }
 
 const KEV_BASE_PREFIX = 'kev-4b/base/'
-const KEV_CHECKPOINT_PREFIX = 'kev-4b/checkpoint/'
+export const KEV_CHECKPOINT_PREFIX = 'kev-4b/checkpoint-v1.0/'
 const KEV_BASE_FILE_SIZES = new Map(
   KEV_4B.files
     .filter((file) => file.name.startsWith(KEV_BASE_PREFIX))
     .map((file) => [file.name.slice(KEV_BASE_PREFIX.length), file.sizeBytes ?? 0])
-)
-const KEV_CHECKPOINT_FILE_SIZES = new Map(
-  KEV_4B.files
-    .filter((file) => file.name.startsWith(KEV_CHECKPOINT_PREFIX))
-    .map((file) => [file.name.slice(KEV_CHECKPOINT_PREFIX.length), file.sizeBytes ?? 0])
 )
 
 function directoryHasExpectedFiles(directory: string, files: ReadonlyMap<string, number>): boolean {
@@ -411,26 +417,15 @@ function reusableKevBaseDir(modelsDirectory: string): string | null {
   return directoryHasExpectedFiles(candidate, KEV_BASE_FILE_SIZES) ? candidate : null
 }
 
-/** Preserve installs made before Kev moved into the Models catalog. */
-function reusableKevCheckpointDir(modelsDirectory: string): string | null {
-  const candidate = path.join(path.dirname(modelsDirectory), 'decision-models', 'kev-4b-qwen3.5')
-  return directoryHasExpectedFiles(candidate, KEV_CHECKPOINT_FILE_SIZES) ? candidate : null
-}
-
 function modelFilePath(dir: string, name: string): string {
-  const managed = path.join(dir, name)
-  if (fs.existsSync(managed)) return managed
+  if (path.isAbsolute(name)) return resolveModelReference(name)
+  const managed = resolveModelAsset(name, [dir])
+  if (managed) return managed
   if (name.startsWith(KEV_BASE_PREFIX)) {
     const reusableBase = reusableKevBaseDir(dir)
     if (reusableBase) return path.join(reusableBase, name.slice(KEV_BASE_PREFIX.length))
   }
-  if (name.startsWith(KEV_CHECKPOINT_PREFIX)) {
-    const reusableCheckpoint = reusableKevCheckpointDir(dir)
-    if (reusableCheckpoint) {
-      return path.join(reusableCheckpoint, name.slice(KEV_CHECKPOINT_PREFIX.length))
-    }
-  }
-  return managed
+  return resolveModelReference(name, [dir, ...modelReadDirectories()])
 }
 
 /** Size (bytes) of a file in the models dir; 0 when absent/unreadable. The single
@@ -523,7 +518,7 @@ export async function getVisionStatuses(): Promise<Record<string, VisionStatus>>
   const present = (name: string): boolean => {
     const mtp = Object.values(MTP_COMPANIONS).find((file) => file.name === name)
     return mtp
-      ? readGgufMtpSupport(path.join(dir, name), fs, undefined, mtp.sizeBytes)
+      ? readGgufMtpSupport(modelFilePath(dir, name), fs, undefined, mtp.sizeBytes)
       : fileSizeOf(dir, name) > 0
   }
   const downloaded = reconcileDownloadedModelRegistry(dir, CATALOG as unknown as CatalogEntry[])
@@ -537,7 +532,19 @@ export async function getVisionStatuses(): Promise<Record<string, VisionStatus>>
   const out: Record<string, VisionStatus> = {}
   for (const m of merged) {
     const st = visionStatus(m, present)
-    if (readGgufMtpSupport(path.join(dir, primaryFileName(m) ?? ''), fs)) {
+    const primary = modelFilePath(dir, primaryFileName(m) ?? '')
+    const companion = Object.entries(MTP_COMPANIONS).find(
+      ([id]) => id === m.id || id === m.sourceModelId
+    )?.[1]
+    if (companion) {
+      st.mtpInstalled = readGgufMtpSupport(
+        resolveModelReference(companion.name, [path.dirname(primary)]),
+        fs,
+        undefined,
+        companion.sizeBytes
+      )
+    }
+    if (readGgufMtpSupport(primary, fs)) {
       st.supportsMtp = true
       st.mtpInstalled = true
     }
@@ -591,8 +598,8 @@ export async function resolveComputerUseModelArtifact(
     ) {
       return {
         id: modelId,
-        primaryPath: path.join(directory, primary),
-        ...(projector ? { projectorPath: path.join(directory, projector) } : {})
+        primaryPath: modelFilePath(directory, primary),
+        ...(projector ? { projectorPath: modelFilePath(directory, projector) } : {})
       }
     }
   }
@@ -606,9 +613,9 @@ export async function resolveComputerUseModelArtifact(
   if (!primary || fileSizeOf(directory, primary) <= 0) return null
   return {
     id: downloaded.id,
-    primaryPath: path.join(directory, primary),
+    primaryPath: modelFilePath(directory, primary),
     ...(projector && fileSizeOf(directory, projector) > 0
-      ? { projectorPath: path.join(directory, projector) }
+      ? { projectorPath: modelFilePath(directory, projector) }
       : {})
   }
 }
@@ -660,6 +667,18 @@ function publishRefusal(
 /** Download a catalog entry or any Hugging Face repo id. Progress via callback
  *  AND a status registry (so a headless poller can read it). */
 export async function downloadModel(
+  modelId: string,
+  onProgress?: ProgressCb,
+  fileName?: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    return await withStorageDownload(() => downloadModelInner(modelId, onProgress, fileName))
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function downloadModelInner(
   modelId: string,
   onProgress?: ProgressCb,
   fileName?: string
@@ -738,6 +757,8 @@ export async function downloadModel(
   })
 
   const dir = llm.getModelsDir()
+  const storageError = modelStorageError()
+  if (storageError) return publishRefusal(modelId, storageError, onProgress)
   fs.mkdirSync(dir, { recursive: true })
   ensureRegistryLoaded()
   // Re-entrancy guard (before any status emit / queue registration): a second
@@ -961,6 +982,9 @@ export async function downloadModel(
         // If this download added the projector for the active chat model, turn its
         // vision on now (main-side, so it works even when no Models screen is open).
         await reconcileActiveModelProjector().catch(() => false)
+        if (modelId === KEV_4B_ID) {
+          fs.rmSync(path.join(dir, 'kev-4b', 'checkpoint'), { recursive: true, force: true })
+        }
         send({ percent: 100, status: 'completed' })
         return { success: true }
       } catch (err) {
@@ -1078,6 +1102,7 @@ function deleteTransferredModel(context: TransferredDeletionContext): DeleteMode
 
 /** Delete a model's files from disk. Clears it as active if it was selected. */
 export async function deleteModel(modelId: string): Promise<DeleteModelResult> {
+  if (modelId.startsWith('external:')) return { success: false, error: 'External models are read only.' }
   const dir = llm.getModelsDir()
   // Imported local model: remove its files + registry entry, clear if active.
   if (modelId.startsWith('local:')) {
@@ -1121,6 +1146,17 @@ export async function deleteModel(modelId: string): Promise<DeleteModelResult> {
 
   const entry = CATALOG.find((m) => m.id === modelId) ?? (await resolveHuggingFaceModel(modelId))
   if (!entry) return { success: false, error: 'unknown model' }
+  if (
+    entry.files.some((file) => {
+      const external = resolveModelAsset(file.name)
+      return external && !resolveModelAsset(file.name, [dir])
+    })
+  ) {
+    return {
+      success: false,
+      error: 'This model uses files in another model folder. Remove the folder reference to hide it. Files are kept in place.'
+    }
+  }
   let freed = 0
 
   if (entry.runtime === 'mflux') {
@@ -1184,11 +1220,12 @@ async function setActiveLlamaModel(
       llm.useRuntimeModel(model)
       return
     }
+    requireModelStorage()
     fs.writeFileSync(activeModelFile(), JSON.stringify(model, null, 2))
     llm.restoreSelectedModel()
   }
   // Imported local model: resolve from the local registry (not the catalog).
-  if (modelId.startsWith('local:')) {
+  if (modelId.startsWith('local:') || modelId.startsWith('external:')) {
     const lm = getLocalModels().find((m) => m.id === modelId)
     if (!lm) return { success: false, error: 'unknown local model' }
     if (!acceptsKind(lm.kind)) {
@@ -1255,7 +1292,7 @@ export function loadComputerUseModel(
 
 export function getActiveModel(): string | null {
   try {
-    return JSON.parse(fs.readFileSync(activeModelFile(), 'utf-8')).id ?? null
+    return JSON.parse(fs.readFileSync(modelMetadataFile('active-model.json'), 'utf-8')).id ?? null
   } catch {
     return null
   }
@@ -1272,7 +1309,7 @@ export function getActiveModel(): string | null {
 export async function reconcileActiveModelProjector(): Promise<boolean> {
   let cfg: { id?: string; primary?: string; mmproj?: string | null } | null = null
   try {
-    cfg = JSON.parse(fs.readFileSync(activeModelFile(), 'utf-8'))
+    cfg = JSON.parse(fs.readFileSync(modelMetadataFile('active-model.json'), 'utf-8'))
   } catch {
     return false // no active selection yet
   }
@@ -1423,7 +1460,7 @@ export async function activateModel(
   }
   let kind: string | undefined
   let requestedModal: Modality | null = null
-  if (modelId.startsWith('local:')) {
+  if (modelId.startsWith('local:') || modelId.startsWith('external:')) {
     kind = getLocalModels().find((m) => m.id === modelId)?.kind
   } else {
     const { modelSupportsKind, resolveHuggingFaceModel } = await import('@offgrid/models')
@@ -1547,16 +1584,46 @@ function localRegistryFile(dir = llm.getModelsDir()): string {
 }
 
 export function getLocalModels(dir = llm.getModelsDir()): LocalModel[] {
+  let managed: LocalModel[] = []
   try {
-    const arr = JSON.parse(fs.readFileSync(localRegistryFile(dir), 'utf-8'))
-    return Array.isArray(arr) ? (arr as LocalModel[]) : []
+    const arr = JSON.parse(
+      fs.readFileSync(
+        modelMetadataFile(
+          'local-models.json',
+          dir === llm.getModelsDir() ? modelReadDirectories() : [dir]
+        ),
+        'utf-8'
+      )
+    )
+    managed = Array.isArray(arr) ? (arr as LocalModel[]) : []
   } catch {
-    return []
+    /* no imported models */
   }
+  if (dir !== llm.getModelsDir()) return managed
+  const known = new Set([
+    ...managed.map((model) => resolveModelReference(model.primary)),
+    ...readDownloaded(dir).flatMap((model) =>
+      model.files.map((name) => resolveModelReference(name))
+    ),
+    ...[...DESKTOP_CATALOG, ...BASE_CATALOG].flatMap((model) =>
+      model.files.flatMap((file) =>
+        modelReadDirectories().flatMap((root) => {
+          const asset = resolveModelAsset(file.name, [root])
+          return asset ? [asset] : []
+        })
+      )
+    )
+  ])
+  return [
+    ...managed,
+    ...discoverExternalModels(undefined, undefined, dir, readModelScanFolders(dataDir())).filter(
+      (model) => !known.has(model.primary)
+    )
+  ]
 }
 function saveLocalModels(list: LocalModel[], dir = llm.getModelsDir()): void {
   try {
-    fs.writeFileSync(localRegistryFile(dir), JSON.stringify(list, null, 2))
+    fs.writeFileSync(localRegistryFile(dir), JSON.stringify(list.filter((model) => !model.id.startsWith('external:')), null, 2))
   } catch {
     /* best effort */
   }
@@ -1564,13 +1631,14 @@ function saveLocalModels(list: LocalModel[], dir = llm.getModelsDir()): void {
 
 function transferredFilesOnDisk(
   dir: string,
-  files: Array<{ name: string; sizeBytes: number }>
+  files: Array<{ name: string; sizeBytes: number }>,
+  readPaths?: Map<string, string>
 ): { error?: string; files?: TransferableModelFile[] } {
   const manifestError = modelTransferManifestFileError(files)
   if (manifestError) return { error: manifestError }
   const resolved: TransferableModelFile[] = []
   for (const file of files) {
-    const filePath = path.join(dir, file.name)
+    const filePath = readPaths?.get(file.name) ?? path.join(dir, file.name)
     let actualSize = 0
     try {
       const stat = fs.lstatSync(filePath)
@@ -1622,9 +1690,17 @@ export async function getTransferableModel(
     : downloaded
       ? downloaded.files
       : (catalog?.files.map((file) => file.name) ?? [])
+  // Registry references may point to a folder left in place. Transfer manifests
+  // still use relative filenames, while the read path comes from the shared lookup.
+  const references = names.map((name) => ({
+    name: path.isAbsolute(name) ? path.basename(name) : name,
+    path: modelFilePath(dir, name),
+    sizeBytes: fileSizeOf(dir, name)
+  }))
   const files = transferredFilesOnDisk(
     dir,
-    names.map((name) => ({ name, sizeBytes: fileSizeOf(dir, name) }))
+    references,
+    new Map(references.map((file) => [file.name, file.path]))
   ).files
   if (!files) return null
 
@@ -1754,6 +1830,8 @@ export async function importLocalModel(
     return { success: false, error: 'File is not a valid GGUF model (corrupt or wrong format)' }
 
   const dir = llm.getModelsDir()
+  const storageError = modelStorageError()
+  if (storageError) return { success: false, error: storageError }
   fs.mkdirSync(dir, { recursive: true })
   const fileName = path.basename(srcPath)
   const dest = path.join(dir, fileName)
@@ -1817,6 +1895,7 @@ export interface ModelDiskEntry {
 }
 export interface StorageInfo {
   dir: string
+  unavailable?: string
   totalBytes: number // all model files (incl. orphans + .part) in the models dir
   freeBytes: number // free space on the volume
   models: ModelDiskEntry[]
@@ -1827,6 +1906,8 @@ export interface StorageInfo {
  *  (gguf/.part in the models dir that no catalog entry or active selection claims). */
 export async function getStorageInfo(): Promise<StorageInfo> {
   const dir = llm.getModelsDir()
+  const unavailable = modelStorageError()
+  if (unavailable) return { dir, unavailable, totalBytes: 0, freeBytes: 0, models: [], orphans: [] }
   const CATALOG = await desktopCatalog()
   const catalog = CATALOG as unknown as CatalogEntry[]
   const reconciledDownloaded = reconcileDownloadedModelRegistry(dir, catalog)

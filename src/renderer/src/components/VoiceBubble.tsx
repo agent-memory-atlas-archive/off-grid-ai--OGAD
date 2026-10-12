@@ -326,7 +326,9 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
       setPlaybackError(
         audioUrl
           ? 'Voice note could not be played. Check your audio output, then try again.'
-          : 'Speech could not be generated. Check that Text-to-speech is installed in Settings, then try again.'
+          : e instanceof Error && e.message.trim()
+            ? e.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
+            : 'Speech could not be generated. Try again.'
       )
     }
   }, [status, isUser, audioUrl, readVoice, transcript, synthesize, wire, messageId])

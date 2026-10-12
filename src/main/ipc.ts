@@ -1,6 +1,9 @@
+import { withStorageDownload, storageDownloadsActive } from './model-storage-guard'
+import { moveModelStorage } from './model-storage-move'
 import { ipcMain, BrowserWindow, app, clipboard } from 'electron'
 import { listBridgeBrowsers } from './extension-bridge/bridge-electron'
 import { setupAIRequestLogIPC } from './ai-request-log-ipc'
+import { setupChatNextActionIpc } from './chat-next-action'
 import { setupArtifactPreviewIpc } from './artifact-preview-ipc'
 import {
   getDB,
@@ -594,6 +597,7 @@ export function setupIPC(): void {
   ipcMain.handle('performance-pack:pause', pausePerformancePack)
   ipcMain.handle('performance-pack:restart', () => requestApplicationRelaunch(app))
   setupAIRequestLogIPC()
+  setupChatNextActionIpc()
   setupVoiceTranscriptionIpc()
   const db = getDB()
   setupTtsIpc()
@@ -678,6 +682,8 @@ export function setupIPC(): void {
       return stmt.all(vecStr)
     } catch (e) {
       console.error('Vector search failed, falling back to FTS', e)
+      const match = ftsMatchExpression(query)
+      if (!match) return []
       const stmt = db.prepare(`
           SELECT memories.* 
           FROM memories 
@@ -685,7 +691,7 @@ export function setupIPC(): void {
           WHERE memory_fts MATCH ? 
           LIMIT 20
         `)
-      return stmt.all(query)
+      return stmt.all(match)
     }
   })
 
@@ -944,14 +950,16 @@ export function setupIPC(): void {
             JOIN memory_fts ON memories.id = memory_fts.rowid
             WHERE memory_fts MATCH ?
           `
-        params.push(query)
+        params.push(ftsQuery)
         const ftsFilter = appNameLikeClause(appName, 'memories.source_app')
         if (ftsFilter) {
           fallbackQuery += ` AND ${ftsFilter.clause} `
           params.push(ftsFilter.param)
         }
         fallbackQuery += ` LIMIT 12`
-        memories = db.prepare<unknown[], (typeof memories)[number]>(fallbackQuery).all(...params)
+        memories = ftsQuery
+          ? db.prepare<unknown[], (typeof memories)[number]>(fallbackQuery).all(...params)
+          : []
       }
 
       const messageParams: unknown[] = [ftsQuery]
@@ -969,18 +977,20 @@ export function setupIPC(): void {
         messageParams.push(msgFilter.param)
       }
       messageQuery += ` ORDER BY score ASC LIMIT 12`
-      const messages = db
-        .prepare<
-          unknown[],
-          {
-            app_name: string | null
-            title: string | null
-            created_at: string
-            role: string
-            content: string
-          }
-        >(messageQuery)
-        .all(...messageParams)
+      const messages = ftsQuery
+        ? db
+            .prepare<
+              unknown[],
+              {
+                app_name: string | null
+                title: string | null
+                created_at: string
+                role: string
+                content: string
+              }
+            >(messageQuery)
+            .all(...messageParams)
+        : []
 
       const summaryParams: unknown[] = [ftsQuery]
       let summaryQuery = `
@@ -997,12 +1007,14 @@ export function setupIPC(): void {
         summaryParams.push(sumFilter.param)
       }
       summaryQuery += ` ORDER BY score ASC LIMIT 8`
-      const summaries = db
-        .prepare<
-          unknown[],
-          { app_name: string | null; title: string | null; summary: string }
-        >(summaryQuery)
-        .all(...summaryParams)
+      const summaries = ftsQuery
+        ? db
+            .prepare<
+              unknown[],
+              { app_name: string | null; title: string | null; summary: string }
+            >(summaryQuery)
+            .all(...summaryParams)
+        : []
 
       const entityParams: unknown[] = [ftsQuery]
       let entityQuery = `
@@ -1025,12 +1037,14 @@ export function setupIPC(): void {
         entityParams.push(entFilter.param)
       }
       entityQuery += ` ORDER BY score ASC LIMIT 8`
-      const entities = db
-        .prepare<
-          unknown[],
-          { type: string | null; name: string; summary: string | null }
-        >(entityQuery)
-        .all(...entityParams)
+      const entities = ftsQuery
+        ? db
+            .prepare<
+              unknown[],
+              { type: string | null; name: string; summary: string | null }
+            >(entityQuery)
+            .all(...entityParams)
+        : []
 
       const factParams: unknown[] = [ftsQuery]
       let factQuery = `
@@ -1047,9 +1061,11 @@ export function setupIPC(): void {
         factParams.push(factFilter.param)
       }
       factQuery += ` ORDER BY score ASC LIMIT 8`
-      const entityFacts = db
-        .prepare<unknown[], { type: string | null; name: string; fact: string }>(factQuery)
-        .all(...factParams)
+      const entityFacts = ftsQuery
+        ? db
+            .prepare<unknown[], { type: string | null; name: string; fact: string }>(factQuery)
+            .all(...factParams)
+        : []
 
       // Supplementary context (no bracket labels — the ONLY citeable tags are the
       // numbered [S#] SOURCES below, so the model can't invent uncited labels).
@@ -1399,18 +1415,28 @@ export function setupIPC(): void {
   // Per-modality runtime residency (on-demand vs in-memory/resident). The full map
   // drives the queue's mode-aware re-warm and each engine's job path.
   ipcMain.handle('runtime:residency:get', () => getResidency())
-  ipcMain.handle('runtime:residency:set', (_e, modality: Modality, mode: ResidencyMode) =>
-    setResidencyMode(modality, mode)
-  )
+  ipcMain.handle('runtime:residency:set', async (_e, modality: Modality, mode: ResidencyMode) => {
+    ;(await import('./best-settings')).markSpeedSettingsManual()
+    return setResidencyMode(modality, mode)
+  })
   ipcMain.handle('runtime:backend:get', () => getBackendPreferences())
   ipcMain.handle(
     'runtime:backend:set',
     async (_e, modality: BackendModality, preference: BackendPreference) => {
+      ;(await import('./best-settings')).markSpeedSettingsManual()
       const next = setBackendPreference(modality, preference)
       // A loaded engine keeps its present backend until its next load. The UI says so.
       return next
     }
   )
+  ipcMain.handle('runtime:best-settings:apply', async () => {
+    const { applyBestSettings } = await import('./best-settings')
+    return applyBestSettings()
+  })
+  ipcMain.handle('runtime:best-settings:status', async () => {
+    const { bestSettingsStatus } = await import('./best-settings')
+    return bestSettingsStatus()
+  })
   // Unload one modality's model from memory now (the "free RAM" button). Goes through
   // the same evict() seam as residency/shutdown; the engine reloads on next use.
   ipcMain.handle('runtime:unload', async (_e, modality: Modality) => {
@@ -1608,116 +1634,118 @@ export function setupIPC(): void {
     }
   })
 
-  ipcMain.handle('model:download', async () => {
-    const { llm } = await import('./llm')
-    const modelsDir = llm.getModelsDir()
-    const fs = await import('fs')
-    const path = await import('path')
-    const https = await import('https')
+  ipcMain.handle('model:download', () =>
+    withStorageDownload(async () => {
+      const { llm } = await import('./llm')
+      const modelsDir = llm.getModelsDir()
+      const fs = await import('fs')
+      const path = await import('path')
+      const https = await import('https')
 
-    // Ensure models directory exists
-    if (!fs.existsSync(modelsDir)) {
-      fs.mkdirSync(modelsDir, { recursive: true })
-    }
-
-    const models = [
-      {
-        name: 'Qwen3-VL-4B-Instruct-Q4_K_M.gguf',
-        url: 'https://huggingface.co/bartowski/Qwen_Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen_Qwen3-VL-4B-Instruct-Q4_K_M.gguf'
-      },
-      {
-        name: 'mmproj-Qwen3VL-4B-Instruct-F16.gguf',
-        url: 'https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-4B-Instruct-F16.gguf'
+      // Ensure models directory exists
+      if (!fs.existsSync(modelsDir)) {
+        fs.mkdirSync(modelsDir, { recursive: true })
       }
-    ]
 
-    const downloadFile = (url: string, destPath: string, modelName: string): Promise<void> => {
-      return new Promise((resolve, reject) => {
-        const file = fs.createWriteStream(destPath)
-        let rateSample: ProgressRateSample | undefined
+      const models = [
+        {
+          name: 'Qwen3-VL-4B-Instruct-Q4_K_M.gguf',
+          url: 'https://huggingface.co/bartowski/Qwen_Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen_Qwen3-VL-4B-Instruct-Q4_K_M.gguf'
+        },
+        {
+          name: 'mmproj-Qwen3VL-4B-Instruct-F16.gguf',
+          url: 'https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-4B-Instruct-F16.gguf'
+        }
+      ]
 
-        const request = (redirectUrl: string): void => {
-          https
-            .get(redirectUrl, (response) => {
-              if (
-                response.statusCode &&
-                response.statusCode >= 300 &&
-                response.statusCode < 400 &&
-                response.headers.location
-              ) {
-                request(response.headers.location)
-                return
-              }
+      const downloadFile = (url: string, destPath: string, modelName: string): Promise<void> => {
+        return new Promise((resolve, reject) => {
+          const file = fs.createWriteStream(destPath)
+          let rateSample: ProgressRateSample | undefined
 
-              if (response.statusCode !== 200) {
-                fs.unlink(destPath, () => {})
-                reject(new Error(`HTTP ${response.statusCode}`))
-                return
-              }
+          const request = (redirectUrl: string): void => {
+            https
+              .get(redirectUrl, (response) => {
+                if (
+                  response.statusCode &&
+                  response.statusCode >= 300 &&
+                  response.statusCode < 400 &&
+                  response.headers.location
+                ) {
+                  request(response.headers.location)
+                  return
+                }
 
-              const totalSize = parseInt(response.headers['content-length'] || '0', 10)
-              let downloaded = 0
+                if (response.statusCode !== 200) {
+                  fs.unlink(destPath, () => {})
+                  reject(new Error(`HTTP ${response.statusCode}`))
+                  return
+                }
 
-              response.pipe(file)
+                const totalSize = parseInt(response.headers['content-length'] || '0', 10)
+                let downloaded = 0
 
-              response.on('data', (chunk: Buffer) => {
-                downloaded += chunk.length
-                const percent = totalSize ? Math.round((downloaded / totalSize) * 100) : 0
-                const rate = sampleProgressRate(rateSample, {
-                  currentBytes: downloaded,
-                  sampledAtMs: Date.now()
-                })
-                rateSample = rate.sample
+                response.pipe(file)
 
-                // Send progress to renderer
-                BrowserWindow.getAllWindows().forEach((win) => {
-                  win.webContents.send('model:download-progress', {
-                    modelName,
-                    percent,
-                    downloadedBytes: downloaded,
-                    totalBytes: totalSize || undefined,
-                    bytesPerSecond: rate.bytesPerSecond,
-                    downloadedMB: (downloaded / 1024 / 1024).toFixed(1),
-                    totalMB: totalSize ? (totalSize / 1024 / 1024).toFixed(1) : '?'
+                response.on('data', (chunk: Buffer) => {
+                  downloaded += chunk.length
+                  const percent = totalSize ? Math.round((downloaded / totalSize) * 100) : 0
+                  const rate = sampleProgressRate(rateSample, {
+                    currentBytes: downloaded,
+                    sampledAtMs: Date.now()
+                  })
+                  rateSample = rate.sample
+
+                  // Send progress to renderer
+                  BrowserWindow.getAllWindows().forEach((win) => {
+                    win.webContents.send('model:download-progress', {
+                      modelName,
+                      percent,
+                      downloadedBytes: downloaded,
+                      totalBytes: totalSize || undefined,
+                      bytesPerSecond: rate.bytesPerSecond,
+                      downloadedMB: (downloaded / 1024 / 1024).toFixed(1),
+                      totalMB: totalSize ? (totalSize / 1024 / 1024).toFixed(1) : '?'
+                    })
                   })
                 })
+
+                file.on('finish', () => {
+                  file.close()
+                  resolve()
+                })
               })
-
-              file.on('finish', () => {
-                file.close()
-                resolve()
+              .on('error', (err) => {
+                fs.unlink(destPath, () => {})
+                reject(err)
               })
-            })
-            .on('error', (err) => {
-              fs.unlink(destPath, () => {})
-              reject(err)
-            })
-        }
+          }
 
-        request(url)
-      })
-    }
-
-    try {
-      for (const model of models) {
-        const destPath = path.join(modelsDir, model.name)
-
-        if (fs.existsSync(destPath)) {
-          console.log(`[Model] ${model.name} already exists, skipping`)
-          continue
-        }
-
-        console.log(`[Model] Downloading ${model.name}...`)
-        await downloadFile(model.url, destPath, model.name)
-        console.log(`[Model] ${model.name} downloaded`)
+          request(url)
+        })
       }
 
-      return { success: true }
-    } catch (err: unknown) {
-      console.error('[Model] Download failed:', err)
-      return { success: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
+      try {
+        for (const model of models) {
+          const destPath = path.join(modelsDir, model.name)
+
+          if (fs.existsSync(destPath)) {
+            console.log(`[Model] ${model.name} already exists, skipping`)
+            continue
+          }
+
+          console.log(`[Model] Downloading ${model.name}...`)
+          await downloadFile(model.url, destPath, model.name)
+          console.log(`[Model] ${model.name} downloaded`)
+        }
+
+        return { success: true }
+      } catch (err: unknown) {
+        console.error('[Model] Download failed:', err)
+        return { success: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    })
+  )
 
   // === Off Grid AI MODEL CATALOG (text, vision, image, voice, transcription) ===
 
@@ -1756,13 +1784,25 @@ export function setupIPC(): void {
     import('./models-manager').then((m) => m.deleteModel(modelId))
   )
 
-  ipcMain.handle('models:set-active', (_, modelId: string) =>
-    import('./models-manager').then((m) => m.setActiveModel(modelId))
-  )
+  // A new chat model can change MTP support and memory needs: refresh auto-managed settings.
+  const refreshBestSettings = (): void => {
+    void import('./best-settings')
+      .then((m) => m.ensureBestSettings())
+      .catch((error: unknown) => console.warn('[best-settings] refresh failed', error))
+  }
+  ipcMain.handle('models:set-active', async (_, modelId: string) => {
+    const result = await import('./models-manager').then((m) => m.setActiveModel(modelId))
+    refreshBestSettings()
+    return result
+  })
   // Single activation seam: route any model to the right backend by its kind.
-  ipcMain.handle('models:activate', (_, modelId: string, requestedKind?: string) =>
-    import('./models-manager').then((m) => m.activateModel(modelId, requestedKind))
-  )
+  ipcMain.handle('models:activate', async (_, modelId: string, requestedKind?: string) => {
+    const result = await import('./models-manager').then((m) =>
+      m.activateModel(modelId, requestedKind)
+    )
+    refreshBestSettings()
+    return result
+  })
   ipcMain.handle('models:get-active', () =>
     import('./models-manager').then((m) => m.getActiveModel())
   )
@@ -1794,6 +1834,98 @@ export function setupIPC(): void {
 
   // Storage + download manager
   ipcMain.handle('models:storage', () => import('./models-manager').then((m) => m.getStorageInfo()))
+  ipcMain.handle('models:choose-directory', async () => {
+    const { dialog } = await import('electron')
+    const fs = await import('node:fs')
+    const current = (await import('./runtime-env')).modelsDir()
+    const result = await dialog.showOpenDialog({
+      title: 'Choose model storage folder',
+      defaultPath: current,
+      properties: ['openDirectory', 'createDirectory']
+    })
+    if (result.canceled || !result.filePaths[0]) return { canceled: true }
+    const directory = result.filePaths[0]
+    const manager = await import('./models-manager')
+    const downloads = manager.listDownloads()
+    if (
+      storageDownloadsActive() ||
+      downloads.some((entry) => entry.status === 'queued' || entry.status === 'downloading')
+    ) {
+      return { error: 'Wait for model downloads to finish or cancel them, then try again.' }
+    }
+    try {
+      const { saveModelStorageChoice } = await import('./model-storage-choice')
+      const profile = app.getPath('userData')
+      const currentFiles = fs.existsSync(current) ? fs.readdirSync(current) : []
+      const sameFolder =
+        fs.existsSync(current) && fs.realpathSync(current) === fs.realpathSync(directory)
+      let moved = false
+      let left = false
+      let unknownEntriesLeft = 0
+      if (!sameFolder && currentFiles.length) {
+        const choice = await dialog.showMessageBox({
+          type: 'question',
+          title: 'Existing model files',
+          message: 'Move your existing model files to the new folder?',
+          detail:
+            'Move copies Off Grid model files and uses the new folder now. Old copies are removed after the next restart if verified. Unknown files stay in place. Leave adds the old folder as a folder to scan.',
+          buttons: ['Move files', 'Leave files', 'Cancel'],
+          defaultId: 0,
+          cancelId: 2
+        })
+        if (choice.response === 2) return { canceled: true }
+        if (choice.response === 0) {
+          const moveResult = await moveModelStorage(profile, current, directory, {
+            ownedFiles: [],
+            loadOwnedFiles: async () =>
+              (await manager.desktopCatalog()).flatMap((model) => model.files),
+            downloadsActive: () =>
+              manager
+                .listDownloads()
+                .some((entry) => entry.status === 'queued' || entry.status === 'downloading')
+          })
+          moved = true
+          unknownEntriesLeft = moveResult.unknownEntriesLeft
+        } else {
+          const { leaveModelStorage } = await import('./model-storage-move')
+          leaveModelStorage(profile, current, directory)
+          left = true
+        }
+      }
+      if (!moved && !left) saveModelStorageChoice(profile, directory)
+      return { directory, moved, unknownEntriesLeft, restartRequired: !sameFolder }
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : 'Cannot use this folder.' }
+    }
+  })
+  ipcMain.handle('models:restart-for-directory', () => requestApplicationRelaunch(app))
+  ipcMain.handle('models:scan-folders', () =>
+    import('./model-storage-choice').then((m) => m.readModelScanFolders(app.getPath('userData')))
+  )
+  ipcMain.handle('models:add-scan-folder', async () => {
+    const { dialog } = await import('electron')
+    const result = await dialog.showOpenDialog({
+      title: 'Add a model folder',
+      properties: ['openDirectory']
+    })
+    if (result.canceled || !result.filePaths[0]) return { canceled: true }
+    try {
+      const folders = await import('./model-storage-choice').then((m) =>
+        m.addModelScanFolder(app.getPath('userData'), result.filePaths[0]!)
+      )
+      BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('models:inventory-changed'))
+      return { folders }
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : 'Cannot read this folder.' }
+    }
+  })
+  ipcMain.handle('models:remove-scan-folder', async (_, directory: string) => {
+    const folders = await import('./model-storage-choice').then((m) =>
+      m.removeModelScanFolder(app.getPath('userData'), directory)
+    )
+    BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('models:inventory-changed'))
+    return folders
+  })
   ipcMain.handle('models:delete-orphans', () =>
     import('./models-manager').then((m) => m.deleteOrphans())
   )
@@ -2082,6 +2214,8 @@ export function setupIPC(): void {
         thinking?: boolean
         /** What the user is doing now (God's context), added to the system prompt. */
         context?: string
+        /** God's standing rules, which every reply follows. */
+        rules?: readonly string[]
       }
     ) => {
       const { toolChat } = await import('./tools')
@@ -2193,6 +2327,8 @@ export function setupIPC(): void {
   })
   ipcMain.handle('llm:set-settings', async (_e, s: import('./llm').LlmSettings) => {
     const { llm } = await import('./llm')
+    const { isSpeedSettingsPatch } = await import('../shared/best-settings')
+    if (isSpeedSettingsPatch(s)) (await import('./best-settings')).markSpeedSettingsManual()
     await llm.setSettings(s)
     return llm.getSettings()
   })

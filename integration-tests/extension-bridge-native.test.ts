@@ -23,6 +23,8 @@ it.runIf(process.env.OFFGRID_NATIVE_DESKTOP_TEST === '1')(
       ])
       const env = {
         ...process.env,
+        // Browser pairing is a Pro feature; access denial has its own free-profile journey.
+        OFFGRID_PRO: '1',
         NODE_V8_COVERAGE: output,
         OFFGRID_DATA_DIR: path.join(root, 'data'),
         OFFGRID_NATIVE_PROFILE: root,

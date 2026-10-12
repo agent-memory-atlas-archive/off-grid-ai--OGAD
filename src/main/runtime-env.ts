@@ -25,6 +25,7 @@ function optionalElectronApp(): OptionalElectronApp | undefined {
 
 interface RuntimeConfig {
   dataDir?: string // writable per-user dir (models, caches, generated output)
+  modelsDir?: string // Electron host may place model files outside the profile
   binRoots?: string[] // dirs to search for bundled binaries (llama-server, ffmpeg, …)
   resourceDirs?: string[] // dirs to search for bundled resources (tts-worker.mjs, …)
 }
@@ -80,7 +81,31 @@ export function dataDir(): string {
 
 /** The models directory under the data dir. */
 export function modelsDir(): string {
+  if (cfg.modelsDir) return cfg.modelsDir
+  if (process.env.OFFGRID_MODELS_DIR) return process.env.OFFGRID_MODELS_DIR
   return path.join(dataDir(), 'models')
+}
+
+/** Explicit storage choice; the default models path may be created on first download. */
+export function chosenModelsDir(): string | undefined {
+  return cfg.modelsDir
+}
+
+/** A chosen folder must stay present. Never recreate its path after a drive is removed. */
+export function modelStorageError(directory = cfg.modelsDir): string | null {
+  if (!directory) return null
+  try {
+    if (!fs.statSync(directory).isDirectory()) throw new Error('not a folder')
+    fs.accessSync(directory, fs.constants.R_OK | fs.constants.W_OK)
+    return null
+  } catch {
+    return `The selected model folder is unavailable: ${directory}. Connect the drive or choose another folder.`
+  }
+}
+
+export function requireModelStorage(directory?: string): void {
+  const error = modelStorageError(directory)
+  if (error) throw new Error(error)
 }
 
 /** Dirs to search for bundled binaries (binary lives under one of these). */

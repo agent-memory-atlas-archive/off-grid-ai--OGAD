@@ -20,8 +20,7 @@ import { acceptBrowserSocket } from './bridge-socket'
 import { SOCKET_PATH } from './bridge-socket-protocol'
 import { validatePairingQrRoute } from '@offgrid/sync'
 import { GATEWAY_PORT } from '../../shared/ports'
-
-const MAX_BODY = 4 * 1024 * 1024
+import { MAX_SEALED_REQUEST_BYTES } from './bridge-limits'
 
 function isPrivatePeer(req: http.IncomingMessage): boolean {
   const remote = req.socket.remoteAddress
@@ -48,7 +47,7 @@ function readJson(req: http.IncomingMessage): Promise<unknown> {
     const chunks: Buffer[] = []
     req.on('data', (chunk: Buffer) => {
       size += chunk.length
-      if (size > MAX_BODY) {
+      if (size > MAX_SEALED_REQUEST_BYTES) {
         req.destroy()
         resolve(null)
         return

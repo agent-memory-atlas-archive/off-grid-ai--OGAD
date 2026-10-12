@@ -7,25 +7,11 @@ import type { TaskRolesView } from '../../../shared/task-roles-view'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (): any => (window as any).api
 
-export interface TaskModelChoice {
-  readonly id: string
-  readonly name: string
-  readonly kind: string
-  readonly tags?: readonly string[]
-  readonly grounder?: boolean
-  readonly remoteServerId?: string
-  readonly availability?: string
-}
-
-export function isGroundingSpecialist(model: TaskModelChoice): boolean {
-  return (
-    model.grounder === true || (model.kind === 'computer_use' && !model.tags?.includes('Decision'))
-  )
-}
-
-export function isDecisionModel(model: TaskModelChoice): boolean {
-  return model.kind === 'computer_use' && Boolean(model.tags?.includes('Decision'))
-}
+export {
+  isGroundingSpecialist,
+  isDecisionModel,
+  type TaskModelChoice
+} from '../../../shared/task-model-rules'
 
 /** Main's current task roles view; null when it cannot be read. */
 function fetchTaskRoles(): Promise<TaskRolesView | null> {

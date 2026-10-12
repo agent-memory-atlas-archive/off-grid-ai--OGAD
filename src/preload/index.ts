@@ -258,6 +258,8 @@ const offGridApi = {
       thinking,
       images
     ) as Promise<RagChatResultContract>,
+  suggestNextChatMessage: (asked: string, answer: string): Promise<string | null> =>
+    ipcRenderer.invoke('chat:suggest-next', asked, answer),
   // Live token/reasoning/step events for an in-flight ragChat (matched by streamId).
   onRagStream: (
     callback: (data: {
@@ -414,6 +416,9 @@ const offGridApi = {
   backendPreferencesGet: () => ipcRenderer.invoke('runtime:backend:get'),
   backendPreferenceSet: (modality: string, preference: string) =>
     ipcRenderer.invoke('runtime:backend:set', modality, preference),
+  // Detect this machine's processors and apply the fastest settings to every modality.
+  applyBestSettings: () => ipcRenderer.invoke('runtime:best-settings:apply'),
+  bestSettingsStatus: () => ipcRenderer.invoke('runtime:best-settings:status'),
   // Unload a modality's model from memory now (free RAM); reloads on next use.
   unloadRuntime: (modality: string) => ipcRenderer.invoke('runtime:unload', modality),
   // Pipeline queue config (serialize heavy jobs; let speech coexist) + live state.
@@ -619,6 +624,16 @@ const offGridApi = {
 
   // Storage + download manager
   getStorageInfo: () => ipcRenderer.invoke('models:storage'),
+  chooseModelDirectory: () => ipcRenderer.invoke('models:choose-directory'),
+  restartForModelDirectory: () => ipcRenderer.invoke('models:restart-for-directory'),
+  getModelScanFolders: () => ipcRenderer.invoke('models:scan-folders'),
+  addModelScanFolder: () => ipcRenderer.invoke('models:add-scan-folder'),
+  removeModelScanFolder: (directory: string) => ipcRenderer.invoke('models:remove-scan-folder', directory),
+  onModelInventoryChanged: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('models:inventory-changed', listener)
+    return () => ipcRenderer.removeListener('models:inventory-changed', listener)
+  },
   deleteOrphans: () => ipcRenderer.invoke('models:delete-orphans'),
   listDownloads: () => ipcRenderer.invoke('models:downloads'),
   retryDownload: (modelId: string) => ipcRenderer.invoke('models:retry-download', modelId),
@@ -662,6 +677,7 @@ const offGridApi = {
       streamId?: string
       thinking?: boolean
       context?: string
+      rules?: readonly string[]
     }
   ) => ipcRenderer.invoke('tools:chat', query, history, opts),
 

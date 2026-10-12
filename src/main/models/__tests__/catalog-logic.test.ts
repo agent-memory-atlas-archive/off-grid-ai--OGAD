@@ -81,7 +81,7 @@ describe('localsForCatalog', () => {
         org: 'Local',
         params: undefined,
         tags: ['Imported'],
-        files: [{ name: 'my.gguf', url: '', sizeBytes: 100 }]
+        files: [{ name: 'my.gguf', url: '', sizeBytes: 100, role: 'primary' }]
       }
     ])
   })

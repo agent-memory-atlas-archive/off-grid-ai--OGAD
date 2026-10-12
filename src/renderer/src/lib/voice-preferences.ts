@@ -5,6 +5,7 @@ import {
   SPEAKER_DRAIN_CHOICES_MS,
   type VoiceTurnMode
 } from '@offgrid/speech'
+import { playbackSpeed } from '../../../shared/voice-speed'
 
 export const VOICE_PREFERENCES_CHANGED_EVENT = 'og:voice-preferences-changed'
 
@@ -29,10 +30,6 @@ export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
 
 function oneOf<T>(value: unknown, choices: readonly T[], fallback: T): T {
   return choices.includes(value as T) ? (value as T) : fallback
-}
-
-function playbackSpeed(value: unknown): number {
-  return typeof value === 'number' && value >= 0.5 && value <= 2 ? value : 1
 }
 
 /** Project the settings database into one validated voice preference contract. */

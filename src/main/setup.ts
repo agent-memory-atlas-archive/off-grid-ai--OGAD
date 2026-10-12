@@ -426,6 +426,11 @@ export async function autoConfigure(
     return { success: false, error: act.error, modelId: model.id }
   }
 
+  // A fresh install picks the fastest settings for this hardware before its first launch.
+  await import('./best-settings')
+    .then((m) => m.ensureBestSettings())
+    .catch((error: unknown) => console.warn('[best-settings] setup check failed', error))
+
   emit({
     phase: 'start',
     message: 'Starting the local model server…',

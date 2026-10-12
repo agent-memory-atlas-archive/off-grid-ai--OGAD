@@ -1,8 +1,10 @@
+import { selectedVersionRepairs, type StoredVersionRow } from '../shared/chat-versions'
 // better-sqlite3-multiple-ciphers is a drop-in superset of better-sqlite3 that
 // adds SQLCipher-style `PRAGMA key` encryption. Same API surface + types.
 import Database from 'better-sqlite3-multiple-ciphers'
 import { safeStorage } from 'electron'
 import path from 'path'
+import { escapeFtsMatch } from './fts-match'
 import { dataDir } from './runtime-env'
 import fs from 'fs'
 import crypto from 'crypto'
@@ -491,6 +493,20 @@ export function getDB(): Database.Database {
   // Unique so a replayed remote op upserts instead of duplicating. SQLite treats NULLs as
   // distinct, so this is safe to create even if a backfill ever misses a row.
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_rag_messages_uuid ON rag_messages(uuid)')
+
+  const versionRepairs = selectedVersionRepairs(
+    db
+      .prepare(
+        `SELECT id, content, context FROM rag_messages WHERE role = 'assistant' AND context LIKE '%"variantIndex"%'`
+      )
+      .all() as StoredVersionRow[]
+  )
+  if (versionRepairs.length) {
+    const update = db.prepare('UPDATE rag_messages SET content = ? WHERE id = ?')
+    db.transaction(() => {
+      for (const row of versionRepairs) update.run(row.content, row.id)
+    })()
+  }
 
   return db
 }
@@ -1304,9 +1320,13 @@ export function setRagConversationProject(id: string, projectId: string | null):
  * search-as-you-type behaviour the old LIKE had for the last, partial word.
  */
 export function ragMessageMatchExpression(query: string): string | null {
-  const terms = (query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).slice(0, 6)
-  if (!terms.length) return null
-  return terms.map((term) => `"${term.replace(/"/g, '""')}"*`).join(' AND ')
+  return (
+    escapeFtsMatch(query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [], {
+      join: 'AND',
+      prefix: true,
+      maxTokens: 6
+    }) || null
+  )
 }
 
 /**
@@ -1335,6 +1355,63 @@ export function searchRagConversationIds(query: string, limit?: number): string[
     )
     .all(match, bounded) as { conversation_id: string }[]
   return rows.map((row) => row.conversation_id)
+}
+
+/** Desktop chat search (title substring or the same escaped message FTS), newest first.
+ * Keyset pages have no fixed result cap, so older matches remain accessible.
+ */
+export function searchRagConversationPage(
+  query: string,
+  limit: number,
+  cursor?: { updatedAt: string; id: string }
+): {
+  id: string
+  title: string | null
+  created_at: string
+  updated_at: string
+  origin_device_id: string | null
+  excerpt: string
+  turn_count: number
+  fallback_title: string | null
+}[] {
+  const match = ragMessageMatchExpression(query)
+  return getDB()
+    .prepare(
+      `
+    SELECT rc.id, rc.title, rc.created_at, rc.updated_at, rc.origin_device_id,
+      (SELECT COUNT(*) FROM rag_messages WHERE conversation_id = rc.id
+        AND role IN ('user', 'assistant')) AS turn_count,
+      (SELECT substr(content, 1, 48) FROM (
+        SELECT role, content, created_at, id FROM rag_messages WHERE conversation_id = rc.id
+          AND role IN ('user', 'assistant')
+        ORDER BY julianday(created_at) DESC, id DESC LIMIT 40
+      ) WHERE role = 'user' ORDER BY julianday(created_at) ASC, id ASC LIMIT 1) AS fallback_title,
+      COALESCE((SELECT snippet(rag_message_fts, 0, '', '', '…', 32)
+        FROM rag_message_fts WHERE rag_message_fts MATCH ?
+          AND conversation_id = rc.id ORDER BY rank LIMIT 1), rc.title, '') AS excerpt
+    FROM rag_conversations rc
+    WHERE (instr(lower(COALESCE(rc.title, '')), lower(?)) > 0
+      OR rc.id IN (SELECT conversation_id FROM rag_message_fts WHERE rag_message_fts MATCH ?))
+      ${cursor ? 'AND (rc.updated_at < ? OR (rc.updated_at = ? AND rc.id < ?))' : ''}
+    ORDER BY rc.updated_at DESC, rc.id DESC LIMIT ?
+  `
+    )
+    .all(
+      match ?? '""',
+      query,
+      match ?? '""',
+      ...(cursor ? [cursor.updatedAt, cursor.updatedAt, cursor.id] : []),
+      limit
+    ) as {
+    id: string
+    title: string | null
+    created_at: string
+    updated_at: string
+    origin_device_id: string | null
+    excerpt: string
+    turn_count: number
+    fallback_title: string | null
+  }[]
 }
 
 /**

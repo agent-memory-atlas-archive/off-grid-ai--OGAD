@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { vi } from 'vitest'
+import { afterEach, vi } from 'vitest'
 import { MemoryChat } from '../../MemoryChat'
 import { TooltipProvider } from '../../ui/tooltip'
 import type {
@@ -10,7 +10,7 @@ import type {
 
 export type StreamEvent = {
   streamId: string
-  type: 'content' | 'reasoning' | 'step' | 'tool_result'
+  type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'done' | 'error' | 'cancel'
   text?: string
   step?: unknown
   call?: { name: string; result: string; status: 'completed' | 'failed' | 'pending' }
@@ -95,7 +95,7 @@ function deferred<T>(): {
 }
 
 export class ChatBoundary {
-  constructor(private readonly createSplitter?: ThinkSplitterFactory) { }
+  constructor(private readonly createSplitter?: ThinkSplitterFactory) {}
 
   readonly projects = [
     { id: 'project-alpha', name: 'Project Alpha' },
@@ -126,6 +126,7 @@ export class ChatBoundary {
   readonly toolQueries: { query: string; options: Record<string, unknown> }[] = []
 
   readonly speechTurns: ReturnType<typeof deferred<{ dataUrl: string }>>[] = []
+  readonly settings: Record<string, unknown> = {}
   readonly activeRagStreams: ActiveChatStreamContract[] = []
 
   private streamCallback: ((event: StreamEvent) => void) | null = null
@@ -137,8 +138,14 @@ export class ChatBoundary {
   private readonly pendingConversationReads = new Map<string, ReturnType<typeof deferred<void>>>()
   private nextMessageId = 10
   private pendingUserWrite: ReturnType<typeof deferred<void>> | null = null
+  private readonly heldUserWrites = new Set<ReturnType<typeof deferred<void>>>()
+  private disposed = false
 
-  readonly cancelRag = vi.fn()
+  readonly cancelRag = vi.fn((streamId: string) => {
+    const restored = this.activeRagStreams.findIndex((stream) => stream.streamId === streamId)
+    if (restored >= 0) this.activeRagStreams.splice(restored, 1)
+    this.calls.find((call) => call.streamId === streamId)?.turn.reject(new Error('Cancelled'))
+  })
   readonly listTasks = vi.fn(async () => [] as TaskSnapshot[])
   readonly stopComputerTask = vi.fn(async () => true)
   readonly guideTask = vi.fn(async () => ({ available: true, accepted: true }))
@@ -154,6 +161,7 @@ export class ChatBoundary {
         const gate = this.pendingUserWrite
         this.pendingUserWrite = null
         await gate.promise
+        this.heldUserWrites.delete(gate)
       }
       this.messages[conversationId] ??= []
       const id = this.nextMessageId++
@@ -193,10 +201,22 @@ export class ChatBoundary {
       })
     },
     vision: { control: this.stopComputerTask },
-    onImageGenProgress: vi.fn(() => () => { }),
-    onImageGenJobState: vi.fn(() => () => { }),
-    onImageGenConversationUpdated: vi.fn(() => () => { }),
-    imageGenJobStatus: vi.fn(async () => ({ id: null, phase: 'idle' as const, conversationId: null, projectId: null, stage: null, enhancedPrompt: '', progress: null, outputPath: null, error: null, startedAt: null, finishedAt: null })),
+    onImageGenProgress: vi.fn(() => () => {}),
+    onImageGenJobState: vi.fn(() => () => {}),
+    onImageGenConversationUpdated: vi.fn(() => () => {}),
+    imageGenJobStatus: vi.fn(async () => ({
+      id: null,
+      phase: 'idle' as const,
+      conversationId: null,
+      projectId: null,
+      stage: null,
+      enhancedPrompt: '',
+      progress: null,
+      outputPath: null,
+      error: null,
+      startedAt: null,
+      finishedAt: null
+    })),
     onRagConversationsChanged: vi.fn(
       (callback: (change: { conversationId: string; projectId?: string | null }) => void) => {
         this.conversationChangedCallback = callback
@@ -219,7 +239,11 @@ export class ChatBoundary {
       async (_projectId?: string | null, _page?: unknown, surface?: 'chat' | 'god') =>
         this.conversations
           .filter((item) =>
-            surface === 'god' ? item.surface === 'god' : surface === 'chat' ? item.surface !== 'god' : true
+            surface === 'god'
+              ? item.surface === 'god'
+              : surface === 'chat'
+                ? item.surface !== 'god'
+                : true
           )
           .map((item) => ({ ...item }))
     ),
@@ -258,8 +282,13 @@ export class ChatBoundary {
       if (conversation) conversation.project_id = projectId
     }),
     addRagMessage: this.addRagMessage,
-    updateRagMessage: async (conversationId: string, messageId: string, content: string, context?: unknown) => {
-      const message = this.messages[conversationId]?.find((entry) => entry.id === messageId)
+    updateRagMessage: async (
+      conversationId: string,
+      messageId: string,
+      content: string,
+      context?: unknown
+    ) => {
+      const message = this.messages[conversationId]?.find((entry) => String(entry.id) === messageId)
       if (!message) return false
       message.content = content
       if (context !== undefined) message.context = context
@@ -270,6 +299,7 @@ export class ChatBoundary {
     artifactRuntime: async () => ({}),
     createArtifactPreview: async (html: string) => `data:text/html,${encodeURIComponent(html)}`,
     revokeArtifactPreview: async () => true,
+    suggestNextChatMessage: async (): Promise<string | null> => null,
     speak: vi.fn(() => {
       const turn = deferred<{ dataUrl: string }>()
       this.speechTurns.push(turn)
@@ -280,10 +310,12 @@ export class ChatBoundary {
       { id: 'bf_emma', label: 'Emma', language: 'en-GB' }
     ]),
     prepareTtsVoice: vi.fn(async () => ({ ready: true })),
-    onTtsVoiceProgress: vi.fn(() => () => { }),
-    getSettings: vi.fn(async () => ({})),
+    onTtsVoiceProgress: vi.fn(() => () => {}),
+    getSettings: vi.fn(async () => structuredClone(this.settings)),
     getLlmSettings: vi.fn(async () => ({})),
-    saveSetting: vi.fn(async () => { }),
+    saveSetting: vi.fn(async (key: string, value: unknown) => {
+      this.settings[key] = structuredClone(value)
+    }),
     listProjects: vi.fn(async () => this.projects.map((item) => ({ ...item }))),
     styleThumbs: vi.fn(async () => ({})),
     listSkills: vi.fn(async (): Promise<{ name: string; description: string }[]> => []),
@@ -308,6 +340,7 @@ export class ChatBoundary {
           thinking: thinking ?? false,
           turn
         })
+        if (this.disposed) turn.resolve({ answer: '', context: { unified: [] } })
         return turn.promise
       }
     ),
@@ -324,6 +357,7 @@ export class ChatBoundary {
           thinking: !!options.thinking,
           turn
         })
+        if (this.disposed) turn.resolve({ answer: '', context: { unified: [] } })
         return turn.promise
       }
     )
@@ -331,10 +365,23 @@ export class ChatBoundary {
 
   blockNextUserWrite(): void {
     this.pendingUserWrite = deferred<void>()
+    this.heldUserWrites.add(this.pendingUserWrite)
   }
 
   releaseUserWrite(): void {
-    this.pendingUserWrite?.resolve()
+    for (const write of this.heldUserWrites) write.resolve()
+  }
+
+  /** Finish the boundary work that a production sender can still own after unmount. */
+  dispose(): void {
+    this.disposed = true
+    this.releaseUserWrite()
+    this.pendingUserWrite = null
+    for (const read of this.pendingConversationReads.values()) read.resolve()
+    this.pendingConversationReads.clear()
+    for (const call of this.calls) call.turn.resolve({ answer: '', context: { unified: [] } })
+    for (const speech of this.speechTurns) speech.resolve({ dataUrl: '' })
+    this.activeRagStreams.length = 0
   }
 
   blockConversationRead(conversationId: string): void {
@@ -344,6 +391,10 @@ export class ChatBoundary {
   releaseConversationRead(conversationId: string): void {
     this.pendingConversationReads.get(conversationId)?.resolve()
     this.pendingConversationReads.delete(conversationId)
+  }
+
+  emitStream(event: StreamEvent): void {
+    this.streamCallback?.(event)
   }
 
   emit(callIndex: number, text: string): void {
@@ -438,8 +489,33 @@ export class ChatBoundary {
   }
 }
 
+const installedBoundaries = new Set<ChatBoundary>()
+
+afterEach(async () => {
+  cleanup()
+  // Queued turns can start after a reply settles. Keep the old API installed until
+  // their timers and final storage promises finish, rather than leaking a sender
+  // into the next test's boundary through window.api.
+  let previousCallCount: number
+  let callCount = -1
+  do {
+    previousCallCount = callCount
+    await act(async () => {
+      for (const boundary of installedBoundaries) boundary.dispose()
+      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(50)
+      else await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    callCount = [...installedBoundaries].reduce(
+      (total, boundary) => total + boundary.calls.length,
+      0
+    )
+  } while (callCount !== previousCallCount)
+  installedBoundaries.clear()
+})
+
 export function installBoundary(boundary: ChatBoundary): void {
-  ; (globalThis as unknown as { window: { api: unknown } }).window.api = boundary.api
+  installedBoundaries.add(boundary)
+  ;(globalThis as unknown as { window: { api: unknown } }).window.api = boundary.api
 }
 
 export function renderChat(target: {

@@ -7,6 +7,11 @@
 // owner. Outside-Chat proposals enter the engine through the Actions surface, whose gate
 // remains responsible for approval. Reads and navigation stay inline.
 
+import {
+  isToolAllowedForOrigin,
+  PAIRED_BROWSER_COMPUTER_USE_REFUSAL,
+  toolOriginOf
+} from './tool-origin'
 import { shell } from 'electron'
 import type { ToolCallStatus, ToolContext, ToolExtension, ToolResult } from '../tools'
 import { WEB_USE_ACTION_TYPE, type ProposeOutcome, type TickOutcome } from '@offgrid/use'
@@ -223,6 +228,15 @@ export class NativeActionToolExtension implements ToolExtension {
     const spec = this.canHandle(name) ? findNativeToolSpec(name) : undefined
     if (!spec) {
       return `Error: unknown action ${name}`
+    }
+    const origin = toolOriginOf(context)
+    if (!isToolAllowedForOrigin(name, origin.origin, origin)) {
+      return {
+        text:
+          name === 'computer_use' ? PAIRED_BROWSER_COMPUTER_USE_REFUSAL : 'Error: tool_unavailable',
+        status: 'failed',
+        authoritative: true
+      }
     }
     if (name === 'computer_use' && args.sessionLimitMinutes === undefined) {
       const sessionLimitMinutes = taskSessionLimitMinutes(context?.userQuery)

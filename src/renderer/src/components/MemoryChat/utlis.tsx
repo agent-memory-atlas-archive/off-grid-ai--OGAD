@@ -1,3 +1,4 @@
+import { versionContent } from '../../../../shared/chat-versions'
 import {
   isPromptEnhancementReasoningLabel,
   isPromptEnhancementStatus,
@@ -119,13 +120,16 @@ export function isSupportingMessage(message: ChatMessage): boolean {
 }
 
 export function selectedMessageContent(message: ChatMessage): string {
-  if (!message.variants || message.variantIndex == null) return message.content
-  return message.variants[message.variantIndex] ?? message.content
+  if (message.streaming || !message.variants || message.variantIndex == null) return message.content
+  return versionContent(message.variants[message.variantIndex], message.content)
 }
 
 /** The reply's prose once its artifact code moved into the artifact card. */
 export function withoutArtifactFences(content: string): string {
-  return content.replace(ARTIFACT_FENCE, '').replace(/\n{3,}/g, '\n\n').trim()
+  return content
+    .replace(ARTIFACT_FENCE, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 export function renderedMessageContent(message: ChatMessage): string {
@@ -180,16 +184,7 @@ export function contextResultCount(context: RagContext): number {
   )
 }
 
-/** The main process rethrows the real reason; Electron wraps it as "Error invoking remote method". */
-export function generationErrorContent(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error ?? '')
-  const message = raw
-    .replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 800)
-  return message || 'Sorry, something went wrong while generating a response.'
-}
+export { generationErrorContent } from '../../../../shared/chat-generation-error'
 
 export function nextVoicePlaybackOwner(
   current: string | null,

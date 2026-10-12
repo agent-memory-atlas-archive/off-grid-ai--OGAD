@@ -1,12 +1,12 @@
 /**
  * How long a starting llama-server may stay silent before we treat it as stuck.
- * There is no total deadline: a large model on a slow disk keeps printing load progress and
- * gets all the time it needs, and an engine that crashes fails at once. Only a server that
- * stops writing anything is abandoned, so the next engine can try. CUDA and CLIP setup can sit
- * quiet for over a minute on a cold device, so CUDA engines get longer.
+ * There is no total deadline: each line of load progress starts the quiet period again,
+ * and an engine that crashes fails at once. Mapping a large model from a USB drive can
+ * produce no output for several minutes, so all engines get ten minutes of silence
+ * before the next engine can try.
  */
-export function modelStartupQuietLimit(engineName: string): number {
-  return engineName.endsWith('-cuda') ? 180_000 : 60_000
+export function modelStartupQuietLimit(_engineName: string): number {
+  return 600_000
 }
 
 /** True when the server has written nothing for longer than `quietLimit`. */
