@@ -436,11 +436,36 @@ jobs:
           path: pro
           ref: ${{ github.base_ref || 'main' }}
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - name: Check out the shared monorepo
+        if: ${{ !cancelled() }}
+        id: native_shared_branch
+        continue-on-error: true
+        uses: actions/checkout@v4
         with:
           repository: off-grid-ai/shared
           token: ${{ secrets.CI_CROSS_REPO_TOKEN }}
           path: _shared
+          ref: ${{ github.head_ref || github.ref_name }}
+          persist-credentials: false
+      - name: Fall back to the Shared base branch
+        if: ${{ !cancelled() && steps.native_shared_branch.outcome != 'success' }}
+        id: native_shared_base
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: off-grid-ai/shared
+          token: ${{ secrets.CI_CROSS_REPO_TOKEN }}
+          path: _shared
+          ref: ${{ github.base_ref || 'main' }}
+          persist-credentials: false
+      - name: Fall back to Shared main
+        if: ${{ !cancelled() && steps.native_shared_branch.outcome != 'success' && steps.native_shared_base.outcome != 'success' }}
+        uses: actions/checkout@v4
+        with:
+          repository: off-grid-ai/shared
+          token: ${{ secrets.CI_CROSS_REPO_TOKEN }}
+          path: _shared
+          ref: main
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
