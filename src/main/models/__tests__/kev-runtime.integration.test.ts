@@ -143,25 +143,31 @@ describe('Kev v1.0 catalog and runtime', () => {
     expect(await listInstalled()).not.toContain(KEV_4B_ID)
   })
 
-  it('removes only the stale managed checkpoint when a Kev download completes', async () => {
+  it('keeps both legacy checkpoints, the new checkpoint and the base after a Kev download', async () => {
     await installCheckpoint()
     const legacyCheckpoint = path.join(decisions, 'kev-4b-qwen3.5')
     const baseFiles = fs.readdirSync(base)
     const progress: string[] = []
     // Existing files use the real download skip path; no synthetic bytes can satisfy
-    // the immutable release hashes. The queue must still publish completion and clean up.
+    // the immutable release hashes. The queue must still publish completion and keep the older checkpoint.
     expect(await downloadModel(KEV_4B_ID, (event) => progress.push(event.status ?? ''))).toEqual({
       success: true
     })
     expect(progress).toContain('completed')
-    expect(fs.existsSync(path.join(models, 'kev-4b', 'checkpoint'))).toBe(false)
+    expect(fs.readdirSync(path.join(models, 'kev-4b', 'checkpoint'))).toEqual(
+      Object.keys(LEGACY_CHECKPOINT_SIZES).sort()
+    )
     expect(fs.readdirSync(legacyCheckpoint)).toEqual(Object.keys(LEGACY_CHECKPOINT_SIZES).sort())
     expect(fs.readdirSync(base)).toEqual(baseFiles)
     expect(await listInstalled()).toContain(KEV_4B_ID)
     for (const [name, size] of Object.entries(LEGACY_CHECKPOINT_SIZES)) {
       expect(fs.statSync(path.join(legacyCheckpoint, name)).size).toBe(size)
+      expect(fs.statSync(path.join(models, 'kev-4b', 'checkpoint', name)).size).toBe(size)
     }
     const kev = (await desktopCatalog()).find((model) => model.id === KEV_4B_ID)!
+    for (const file of kev.files.filter((file) => file.name.startsWith(KEV_CHECKPOINT_PREFIX))) {
+      expect(fs.statSync(path.join(models, file.name)).size).toBe(file.sizeBytes)
+    }
     for (const file of kev.files.filter((file) => file.name.startsWith('kev-4b/base/'))) {
       expect(fs.statSync(path.join(base, path.basename(file.name))).size).toBe(file.sizeBytes)
     }
