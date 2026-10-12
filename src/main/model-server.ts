@@ -1237,15 +1237,24 @@ function isLocalCaller(req: http.IncomingMessage): boolean {
   return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
 }
 
-/** Routes an opaque-origin (sandboxed explore app) request may use: health, model and voice lists,
- *  and speech. The preflight for those is allowed too. */
-export function nullOriginRoute(method: string | undefined, url: string | undefined): boolean {
+/** Routes a website must never reach: tool and file access over /mcp, settings writes, and model
+ *  management writes (download, cancel, activate, delete, task roles). The OpenAI-compatible
+ *  inference routes stay open to any origin, as in 0.0.54, so tools that call the gateway from a
+ *  browser or an Electron app keep working. A preflight is judged by the method it asks for. */
+export function protectedGatewayRoute(
+  method: string | undefined,
+  url: string | undefined,
+  requestedMethod?: string | string[]
+): boolean {
+  const effective = (
+    method === 'OPTIONS' && typeof requestedMethod === 'string'
+      ? requestedMethod
+      : (method ?? 'GET')
+  ).toUpperCase()
   const pathname = new URL(url ?? '/', 'http://localhost').pathname
-  const reads = ['/health', '/v1/models', '/v1/audio/voices']
-  if (method === 'GET') return reads.includes(pathname)
-  if (method === 'POST' || method === 'OPTIONS') {
-    return pathname === '/v1/audio/speech' || (method === 'OPTIONS' && reads.includes(pathname))
-  }
+  if (pathname === '/mcp' || pathname.startsWith('/mcp/')) return true
+  if (pathname === '/v1/settings') return effective !== 'GET'
+  if (pathname === '/v1/models' || pathname.startsWith('/v1/models/')) return effective !== 'GET'
   return false
 }
 
@@ -1268,27 +1277,26 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
   server = http.createServer(async (req, res) => {
     const origin = req.headers.origin
     if (origin !== undefined) {
-      // Packaged renderers use file://; dev uses electron-vite. Any web page can send an opaque
-      // 'null' origin from a sandboxed frame, so 'null' (Desktop's explore apps) reaches only the
-      // read and speech routes those apps call, never downloads, deletes or /mcp.
-      let allowed =
-        isExtensionOrigin(origin) ||
-        origin === 'file://' ||
-        (origin === 'null' && nullOriginRoute(req.method, req.url))
+      // Packaged renderers use file://; dev uses electron-vite. Other origins, including the
+      // opaque 'null' a sandboxed frame on any website sends, get the inference routes only.
+      let trusted = isExtensionOrigin(origin) || origin === 'file://'
       try {
         const page = new URL(origin)
         const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(page.hostname)
         const renderer = process.env['ELECTRON_RENDERER_URL']
         const devOrigin = renderer ? new URL(renderer).origin : undefined
-        allowed ||=
+        trusted ||=
           page.origin === origin &&
           loopback &&
           page.protocol === 'http:' &&
           (page.port === String(boundGatewayPort) || origin === devOrigin)
       } catch {
-        // Unknown or malformed origins are refused before any handler runs.
+        // Unknown or malformed origins are not trusted.
       }
-      if (!allowed) {
+      if (
+        !trusted &&
+        protectedGatewayRoute(req.method, req.url, req.headers['access-control-request-method'])
+      ) {
         json(res, 403, errBody('Origin is not allowed.', 'forbidden'))
         return
       }
