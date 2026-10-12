@@ -195,6 +195,11 @@ async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Prom
     fs.rmSync(archive, { force: true })
     installedThisSession = true
     activateInstalledPerformancePack()
+    // The CUDA engine is now available: auto-managed installs move onto it.
+    void import('./best-settings').then((m) => {
+      m.forgetDetectedMachine()
+      return m.ensureBestSettings()
+    }).catch((error: unknown) => console.warn('[best-settings] CUDA refresh failed', error))
   } catch (error) {
     fs.rmSync(staging, { recursive: true, force: true })
     throw error

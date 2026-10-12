@@ -80,10 +80,11 @@ describe('Web Use when the Decision model rejects every proposal', () => {
     expect(policy.notes[1]).toMatch(/rejected every proposed action/)
   })
 
-  it('still stops quickly when it keeps rejecting on an unchanged page', async () => {
-    policy.replies.push('none', 'none', 'none', 'none')
+  it('still stops when it keeps rejecting on an unchanged page', async () => {
+    // Five steps without progress, as browser-use stops at five consecutive failures.
+    policy.replies.push(...Array.from({ length: 8 }, () => 'none' as const))
     const result = await run('web-decision-none-stuck')
     expect(result.ok).toBe(false)
-    expect(policy.notes.length).toBeLessThanOrEqual(2)
+    expect(policy.notes.length).toBeLessThanOrEqual(5)
   })
 })

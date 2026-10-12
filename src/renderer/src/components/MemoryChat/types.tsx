@@ -28,6 +28,8 @@ export type RagContext = {
   variants?: ResponseVersion[]
   variantIndex?: number
   notice?: boolean
+  /** On a compaction notice: the summary that stands in for every turn before it. */
+  compactionSummary?: string
   masterMemory?: string | null
   memories?: RagMemory[]
   messages?: unknown[]

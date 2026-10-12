@@ -9,7 +9,11 @@ import {
   failedAnswerVersion
 } from '@renderer/lib/chat-versions'
 import { replaceChatTurn, type ReplacementDependencies } from '@renderer/lib/chat-turn-replacement'
-import { getChatQueueStore, type ChatQueues } from '@renderer/lib/chat-queue-store'
+import {
+  getChatQueueStore,
+  type ChatQueues,
+  type QueuedTurn
+} from '@renderer/lib/chat-queue-store'
 import {
   captureStopTarget,
   unownedTerminal,
@@ -99,6 +103,8 @@ import {
   type ImageGenerationRequestContract
 } from '../../../../shared/image-generation-contract'
 import { Button } from '@renderer/components/ui/button'
+import { Button as QueueActionButton } from '@offgrid/operator-ui/operator/button'
+import '@offgrid/operator-ui/styles.css'
 import {
   Dialog,
   DialogContent,
@@ -149,7 +155,9 @@ import {
   FolderOpen,
   CaretDown,
   Lightning,
-  WarningCircle
+  WarningCircle,
+  ArrowElbowDownLeft,
+  Trash
 } from '@phosphor-icons/react'
 import type { MemoryChatProps } from './interfaces'
 import { announceAssistantActivity, announceAssistantListening } from '../../lib/assistant-activity'
@@ -165,7 +173,8 @@ import type {
   ImageGenerationMetadata,
   ImageProgress,
   MessageRowActions,
-  ProjectLite
+  ProjectLite,
+  RagContext
 } from './types'
 import {
   announceImageMessagePersisted,
@@ -2135,7 +2144,7 @@ export function MemoryChat({
         projectId: projectId ?? undefined,
         allMemory: god ? true : !projectId && !noMemory,
         // God is set up to do everything: every tool, and the selected model reasoning.
-        ...(god ? { context: god.context(), allTools: true } : {}),
+        ...(god ? { context: god.context(), rules: god.rules?.(), allTools: true } : {}),
         images: imagePaths,
         imageAvailable,
         streamId: toolStreamId,
@@ -2671,6 +2680,29 @@ export function MemoryChat({
         })
     })
 
+  const removeQueuedMessage = (conversationId: string, item: QueuedTurn): boolean => {
+    const queue = queuedRef.current[conversationId] ?? []
+    if (!queue.includes(item)) return false
+    queuedRef.current = {
+      ...queuedRef.current,
+      [conversationId]: queue.filter((queued) => queued !== item)
+    }
+    setQueuedByConv(queuedRef.current)
+    return true
+  }
+
+  const sendQueuedMessage = (conversationId: string, item: QueuedTurn): void => {
+    if (!removeQueuedMessage(conversationId, item)) return
+    void sendMessageRef.current(item.text || ' ', {
+      sendNow: true,
+      atts: item.atts,
+      conversationId,
+      assistantEnabled: item.assistantEnabled,
+      projectIdOverride: item.projectId,
+      modeOverride: item.mode
+    })
+  }
+
   async function settleObservedRun(
     conversationId: string,
     snapshot?: ChatMessage[]
@@ -2789,14 +2821,7 @@ export function MemoryChat({
   const sendMessageRef = useRef(sendMessage)
   sendMessageRef.current = sendMessage
   const godRequest = god?.request
-  useEffect(() => {
-    if (!godRequest || godRequest.count === godRequestCount.current) return
-    godRequestCount.current = godRequest.count
-    if (godRequest.ask?.trim()) void sendMessageRef.current(godRequest.ask, { asUserInput: true })
-    if (godRequest.listen === 'start') voiceTurns.start()
-    else if (godRequest.listen === 'toggle') voiceTurns.toggle()
-    else if (godRequest.listen === 'stop') voiceTurns.cancel()
-  }, [godRequest, voiceTurns])
+
   const onGodStateChange = god?.onStateChange
   const godThinking = Boolean(activeConversationId && generatingConvs.has(activeConversationId))
   const godSpeaking = voicePlaybackOwner !== null
@@ -2872,6 +2897,26 @@ export function MemoryChat({
       preserveQueue,
       requestedTarget
     )
+
+  useEffect(() => {
+    if (!godRequest || godRequest.count === godRequestCount.current) return
+    godRequestCount.current = godRequest.count
+    if (godRequest.ask?.trim()) void sendMessageRef.current(godRequest.ask, { asUserInput: true })
+    if (godRequest.listen === 'start') voiceTurns.start()
+    else if (godRequest.listen === 'toggle') {
+      // The God's Stop button also cancels transcription, the answer and its voice playback.
+      if (godThinking || godSpeaking || voiceTurns.phase === 'transcribing') {
+        voiceTurns.cancel()
+        stopAllVoicePlayback()
+        if (godThinking) {
+          void stopGeneration(
+            activeConversationId,
+            guidanceTaskForJourney(getTaskSessionState().tasks, activeConversationId)
+          )
+        }
+      } else voiceTurns.toggle()
+    } else if (godRequest.listen === 'stop') voiceTurns.cancel()
+  }, [godRequest, voiceTurns, godThinking, godSpeaking, stopGeneration, activeConversationId])
 
   // Voice output: synthesize a message on-device (Kokoro) and play it. Toggling
   // the same message stops playback.
@@ -3132,11 +3177,18 @@ export function MemoryChat({
         data.step.kind === 'compacted'
       ) {
         const noticeId = crypto.randomUUID()
+        const summary = (data.step as { summary?: unknown }).summary
+        // The summary stands in for every earlier turn on later sends, so it is kept on the notice.
+        const noticeContext: RagContext =
+          typeof summary === 'string' && summary
+            ? { notice: true, compactionSummary: summary }
+            : { notice: true }
         const notice: ChatMessage = {
           id: noticeId,
           role: 'assistant',
           content: '_Compacted_',
-          notice: true
+          notice: true,
+          ...(noticeContext.compactionSummary ? { context: noticeContext } : {})
         }
         setConvMessages(cid, (previous) => {
           const streamIndex = previous.findIndex((message) => message.id === data.streamId)
@@ -3144,7 +3196,7 @@ export function MemoryChat({
           return [...previous.slice(0, streamIndex), notice, ...previous.slice(streamIndex)]
         })
         void window.api
-          .addRagMessage(cid, 'assistant', '_Compacted_', { notice: true })
+          .addRagMessage(cid, 'assistant', '_Compacted_', noticeContext)
           .then((stored) =>
             setConvMessages(cid, (previous) =>
               previous.map((message) =>
@@ -4348,6 +4400,8 @@ export function MemoryChat({
                           ).map((q, i) => (
                             <div
                               key={i}
+                              role="group"
+                              aria-label={`Queued message ${i + 1}`}
                               className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-1.5 text-[11px] text-neutral-400"
                             >
                               <svg
@@ -4408,6 +4462,30 @@ export function MemoryChat({
                                 </svg>
                               </button>
                               <span className="shrink-0 text-neutral-600">queued</span>
+                              <QueueActionButton
+                                variant="ghost"
+                                size="icon"
+                                className="size-6 min-h-6 min-w-6 text-muted-foreground hover:text-primary"
+                                aria-label="Send queued message now"
+                                title="Send now"
+                                onClick={() => {
+                                  if (activeConversationId) sendQueuedMessage(activeConversationId, q)
+                                }}
+                              >
+                                <ArrowElbowDownLeft size={14} aria-hidden="true" />
+                              </QueueActionButton>
+                              <QueueActionButton
+                                variant="ghost"
+                                size="icon"
+                                className="size-6 min-h-6 min-w-6 text-muted-foreground hover:text-destructive"
+                                aria-label="Delete queued message"
+                                title="Delete queued message"
+                                onClick={() => {
+                                  if (activeConversationId) removeQueuedMessage(activeConversationId, q)
+                                }}
+                              >
+                                <Trash size={14} aria-hidden="true" />
+                              </QueueActionButton>
                             </div>
                           ))}
                         </div>
@@ -4968,7 +5046,7 @@ export function MemoryChat({
                             )}
                           </div>
 
-                          <div className="flex shrink-0 items-center gap-1.5">
+                          <div className={`flex shrink-0 items-center gap-1.5 ${voiceMode ? 'mr-10' : ''}`}>
                             {!voiceMode && (
                               <Tooltip>
                                 <TooltipTrigger asChild>

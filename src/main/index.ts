@@ -667,7 +667,9 @@ app.whenReady().then(async () => {
     await new Promise<void>((resolve) => setImmediate(resolve))
     await runStartupStage({
       name: 'models.text.prepare',
-      deadlineMs: 180_000,
+      // A USB model load can stay quiet for ten minutes; allow setup time as well
+      // before the startup notice reports that preparation did not finish.
+      deadlineMs: 900_000,
       lateEffect: 'keep',
       run: async () => {
         const { llm } = await import('./llm')
@@ -676,6 +678,10 @@ app.whenReady().then(async () => {
         // A remote chat model needs no local engine: loading one anyway holds gigabytes of
         // memory for nothing. Chat starts it on demand if the user switches back.
         const { getActiveRemoteVisionServer } = await import('./vision/remote-vision-server')
+        // Before the first launch, so a fresh install starts on its fastest settings.
+        await import('./best-settings')
+          .then((m) => m.prepareBestSettingsOnStartup())
+          .catch((error: unknown) => console.warn('[best-settings] startup check failed', error))
         if (llm.modelsExist() && !getActiveRemoteVisionServer()) await llm.init()
       }
     })

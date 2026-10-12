@@ -1,3 +1,4 @@
+import { conversationSummaryTurn } from '@offgrid/models'
 import { versionContent, type ResponseVersion } from './chat-versions'
 // Pure builder for the model-facing history of a chat send. Kept Electron-free and
 // component-free so it's unit-tested directly — and, more importantly, so the
@@ -18,6 +19,8 @@ export interface HistoryTurn {
   context?: {
     taskGuidance?: unknown
     attachments?: { name: string; kind: string; text?: string }[]
+    /** On a compaction notice: the summary that stands in for every turn before it. */
+    compactionSummary?: string
   } | null
   attachments?: { name: string; kind: string; text?: string }[]
   notice?: boolean
@@ -81,19 +84,24 @@ export function buildSendHistory<T extends HistoryTurn>(
     (turn) =>
       `${turn.role === 'assistant' ? 'Assistant' : 'User'}: ${(turn.role === 'assistant' ? modelContent(turn) : turn.content).slice(0, 90)}`
   )
+  // A saved summary stands in for the compacted turns; older notices without one keep excerpts.
+  const compactionSummary =
+    lastCompaction >= 0 ? convMsgs[lastCompaction]!.context?.compactionSummary : undefined
   const flat = [
-    ...(preCompactionLabels.length
-      ? [
-          {
-            role: 'user',
-            content:
-              `${EARLIER_CHAT_EXCERPTS_PREFIX} (${preCompactionTurns.length} turns; some details omitted): ${preCompactionLabels.join(' | ')}`.slice(
-                0,
-                400
-              )
-          }
-        ]
-      : []),
+    ...(compactionSummary && preCompactionTurns.length
+      ? [conversationSummaryTurn(compactionSummary)]
+      : preCompactionLabels.length
+        ? [
+            {
+              role: 'user',
+              content:
+                `${EARLIER_CHAT_EXCERPTS_PREFIX} (${preCompactionTurns.length} turns; some details omitted): ${preCompactionLabels.join(' | ')}`.slice(
+                  0,
+                  400
+                )
+            }
+          ]
+        : []),
     ...(retainedUserTurn ? [retainedUserTurn] : []),
     ...convMsgs
       .slice(lastCompaction + 1)

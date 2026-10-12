@@ -172,7 +172,19 @@ function mapRagMessage(message: RawRagMessage): ChatMessage[] {
     (noticeText(message.content) === 'Compacted' || message.content.startsWith('Model changed: '))
   ) {
     const id = String(message.uuid ?? message.id ?? '')
-    return id ? [{ id, role: 'assistant', content: message.content, notice: true }] : []
+    const compactionSummary =
+      typeof context.compactionSummary === 'string' ? context.compactionSummary : undefined
+    return id
+      ? [
+          {
+            id,
+            role: 'assistant',
+            content: message.content,
+            notice: true,
+            ...(compactionSummary ? { context: { notice: true, compactionSummary } } : {})
+          }
+        ]
+      : []
   }
   const promptEnhancement = promptEnhancementMessage(message, provenance)
   if (promptEnhancement) return [promptEnhancement]

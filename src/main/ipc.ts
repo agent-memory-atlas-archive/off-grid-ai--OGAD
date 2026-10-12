@@ -1415,18 +1415,28 @@ export function setupIPC(): void {
   // Per-modality runtime residency (on-demand vs in-memory/resident). The full map
   // drives the queue's mode-aware re-warm and each engine's job path.
   ipcMain.handle('runtime:residency:get', () => getResidency())
-  ipcMain.handle('runtime:residency:set', (_e, modality: Modality, mode: ResidencyMode) =>
-    setResidencyMode(modality, mode)
-  )
+  ipcMain.handle('runtime:residency:set', async (_e, modality: Modality, mode: ResidencyMode) => {
+    ;(await import('./best-settings')).markSpeedSettingsManual()
+    return setResidencyMode(modality, mode)
+  })
   ipcMain.handle('runtime:backend:get', () => getBackendPreferences())
   ipcMain.handle(
     'runtime:backend:set',
     async (_e, modality: BackendModality, preference: BackendPreference) => {
+      ;(await import('./best-settings')).markSpeedSettingsManual()
       const next = setBackendPreference(modality, preference)
       // A loaded engine keeps its present backend until its next load. The UI says so.
       return next
     }
   )
+  ipcMain.handle('runtime:best-settings:apply', async () => {
+    const { applyBestSettings } = await import('./best-settings')
+    return applyBestSettings()
+  })
+  ipcMain.handle('runtime:best-settings:status', async () => {
+    const { bestSettingsStatus } = await import('./best-settings')
+    return bestSettingsStatus()
+  })
   // Unload one modality's model from memory now (the "free RAM" button). Goes through
   // the same evict() seam as residency/shutdown; the engine reloads on next use.
   ipcMain.handle('runtime:unload', async (_e, modality: Modality) => {
@@ -1774,13 +1784,25 @@ export function setupIPC(): void {
     import('./models-manager').then((m) => m.deleteModel(modelId))
   )
 
-  ipcMain.handle('models:set-active', (_, modelId: string) =>
-    import('./models-manager').then((m) => m.setActiveModel(modelId))
-  )
+  // A new chat model can change MTP support and memory needs: refresh auto-managed settings.
+  const refreshBestSettings = (): void => {
+    void import('./best-settings')
+      .then((m) => m.ensureBestSettings())
+      .catch((error: unknown) => console.warn('[best-settings] refresh failed', error))
+  }
+  ipcMain.handle('models:set-active', async (_, modelId: string) => {
+    const result = await import('./models-manager').then((m) => m.setActiveModel(modelId))
+    refreshBestSettings()
+    return result
+  })
   // Single activation seam: route any model to the right backend by its kind.
-  ipcMain.handle('models:activate', (_, modelId: string, requestedKind?: string) =>
-    import('./models-manager').then((m) => m.activateModel(modelId, requestedKind))
-  )
+  ipcMain.handle('models:activate', async (_, modelId: string, requestedKind?: string) => {
+    const result = await import('./models-manager').then((m) =>
+      m.activateModel(modelId, requestedKind)
+    )
+    refreshBestSettings()
+    return result
+  })
   ipcMain.handle('models:get-active', () =>
     import('./models-manager').then((m) => m.getActiveModel())
   )
@@ -2192,6 +2214,8 @@ export function setupIPC(): void {
         thinking?: boolean
         /** What the user is doing now (God's context), added to the system prompt. */
         context?: string
+        /** God's standing rules, which every reply follows. */
+        rules?: readonly string[]
       }
     ) => {
       const { toolChat } = await import('./tools')
@@ -2303,6 +2327,8 @@ export function setupIPC(): void {
   })
   ipcMain.handle('llm:set-settings', async (_e, s: import('./llm').LlmSettings) => {
     const { llm } = await import('./llm')
+    const { isSpeedSettingsPatch } = await import('../shared/best-settings')
+    if (isSpeedSettingsPatch(s)) (await import('./best-settings')).markSpeedSettingsManual()
     await llm.setSettings(s)
     return llm.getSettings()
   })

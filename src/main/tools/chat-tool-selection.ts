@@ -1,4 +1,5 @@
 import { budgetTools, MAX_TOOL_TOKENS } from './tool-budget'
+import { mergeStickyTools, previousOfferedTools, rememberOfferedTools } from './sticky-tool-set'
 
 export async function selectChatToolSchemas(
   query: string | undefined,
@@ -6,6 +7,7 @@ export async function selectChatToolSchemas(
   assistantRequiredTools: unknown[],
   options: {
     contextSize: number
+    conversationId?: string
     projectId?: string
     allMemory?: boolean
     imageAvailable?: boolean
@@ -105,7 +107,22 @@ export async function selectChatToolSchemas(
   // large tool payload dominates latency. ~4k keeps a useful connector set while
   // roughly halving per-round prompt cost vs the old 45%-of-a-big-context budget.
   const toolBudget = Math.max(1024, Math.min(Math.floor(ctx * 0.4), MAX_TOOL_TOKENS))
-  const budgeted = budgetTools(relevantTools, toolBudget, protectedToolCount)
+  // Tools sit in the system message, ahead of the history: keep earlier turns' tools in place
+  // so the server reuses its prompt cache. Start fresh only when the kept set no longer fits.
+  const stickyTools = mergeStickyTools(
+    previousOfferedTools(options.conversationId),
+    relevantTools,
+    rawTools
+  )
+  const stickyFits =
+    budgetTools(stickyTools, toolBudget, stickyTools.length).estTokens <= toolBudget
+  if (stickyFits) relevantTools = stickyTools
+  const budgeted = budgetTools(
+    relevantTools,
+    toolBudget,
+    stickyFits ? relevantTools.length : protectedToolCount
+  )
+  rememberOfferedTools(options.conversationId, budgeted.tools)
   if (budgeted.pruned || budgeted.droppedCount) {
     console.warn(
       `[tools] context budget ${toolBudget} tok: pruned schemas${budgeted.droppedCount ? `, dropped ${budgeted.droppedCount} connector tool(s)` : ''} to fit (final ~${budgeted.estTokens} tok)`

@@ -30,6 +30,8 @@ export interface GodChatOptions {
   readonly name: string
   /** What God knows right now and how it should answer, added to every turn. */
   readonly context: () => string
+  /** The user's standing rules for God, sent whole with every turn (never cut with the context). */
+  readonly rules?: () => readonly string[]
   /** Voice mode speaks every answer and keeps listening; chat mode only writes. */
   readonly voiceMode: boolean
   readonly request: GodChatRequest

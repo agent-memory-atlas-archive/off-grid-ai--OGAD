@@ -23,11 +23,23 @@ import { selectToolExtensions } from './tools/extension-select'
 import { isTaskAction } from './tools/nativeActionToolExtension-logic'
 import { callHookAsync, HOOKS } from './bootstrap/hookRegistry'
 import {
+  CONVERSATION_SUMMARY_MAX_TOKENS,
   boundToolResult,
   callsWithinToolBudget,
+  conversationSummaryRequest,
+  conversationSummaryTurn,
+  elideStaleToolResults,
+  normalizeConversationSummary,
   normalizeMaxToolCalls,
+  repeatedToolCallDecision,
+  repeatedToolCallFinalAnswerInstruction,
+  resolveToolName,
+  toolCallKey,
+  toolFailureMessage,
   toolLimitFinalAnswerInstruction,
-  toolResultCharBudget
+  toolResultCharBudget,
+  unknownToolMessage,
+  type ToolCallRecord
 } from '@offgrid/models'
 import { toolPromptChars } from './tools/prompt-budget'
 import { buildPageBlock, buildPageFence, pageBudgetChars } from './tools/page-fence'
@@ -101,7 +113,8 @@ export type ToolCallStatus = 'completed' | 'failed' | 'pending'
 export type ToolActivity =
   | { kind: 'planning'; label: 'Planning next action…' }
   | { kind: 'preparing_tool_calls'; label: 'Preparing actions…'; name?: string }
-  | { kind: 'compacted'; label: 'Compacted' }
+  /** `summary` stands in for every earlier turn; the app keeps it with the conversation. */
+  | { kind: 'compacted'; label: 'Compacted'; summary?: string }
 
 // A tool's structured result. Most tools just return text (a bare string, which the
 // loop normalizes to { text }); a tool may ALSO emit side channels — `sources`
@@ -509,14 +522,17 @@ function asToolResult(r: string | ToolResult): ToolResult {
 }
 
 /** Dispatch a tool call UNIFORMLY: a registered extension that owns the name wins,
- *  else the matching built-in. Any throw becomes an error-text result (a single
- *  tool failing never aborts the turn). No name-based special-casing — each tool
- *  owns its own text + side channels (sources / imageRequest) via its ToolResult. */
+ *  else the matching built-in. An unknown name or a throw becomes a recoverable
+ *  error result the model reads and can correct (a single tool failing never aborts
+ *  the turn). `available` names the tools the model may call instead. No name-based
+ *  special-casing — each tool owns its own text + side channels (sources /
+ *  imageRequest) via its ToolResult. */
 export async function runTool(
   name: string,
   args: Record<string, unknown>,
   ctx: ToolContext,
-  exts: ToolExtension[]
+  exts: ToolExtension[],
+  available: readonly string[] = TOOLS.map((t) => t.name)
 ): Promise<ToolResult> {
   try {
     const origin = toolOriginOf(ctx)
@@ -530,14 +546,10 @@ export async function runTool(
     }
     if (ext) return asToolResult(await ext.execute(name, args, ctx))
     const tool = TOOLS.find((t) => t.name === name)
-    if (!tool) return { text: `Error: unknown tool ${name}`, status: 'failed', authoritative: true }
+    if (!tool) return { text: unknownToolMessage(name, available), status: 'failed' }
     return asToolResult(await tool.run(args, ctx))
   } catch (e) {
-    return {
-      text: `Error: ${(e as Error).message}`,
-      status: 'failed',
-      authoritative: true
-    }
+    return { text: toolFailureMessage(name, (e as Error).message), status: 'failed' }
   }
 }
 
@@ -608,6 +620,7 @@ export async function selectChatTools(
     projectId?: string
     allMemory?: boolean
     imageAvailable?: boolean
+    conversationId?: string
   } = {},
   history: { role: string; content: string }[] = []
 ): Promise<{
@@ -723,6 +736,16 @@ export async function selectChatTools(
  * callbacks (e.g. the pro skills-engine caller) and it just buffers - the final answer is
  * always the return value either way. Returns the final answer + the calls made.
  */
+/**
+ * The user's standing rules, last in the system prompt where the model weighs them most. Every
+ * rule is kept: tone and persona rules ("speak like a Greek god") shape every reply.
+ */
+function standingRules(rules: readonly string[] | undefined): string {
+  const kept = (rules ?? []).map((rule) => rule.trim()).filter(Boolean)
+  if (!kept.length) return ''
+  return `\n\nThe user's standing rules. Follow every one in every reply, including how you speak and the persona you take:\n${kept.map((rule) => `- ${rule}`).join('\n')}`
+}
+
 export async function toolChat(
   query: string,
   history: { role: string; content: string }[] = [],
@@ -739,6 +762,8 @@ export async function toolChat(
     actionSource?: 'chat' | 'routine'
     /** What the user is doing now (God's context): added to the system prompt, bounded. */
     context?: string
+    /** God's standing rules: closing the system prompt, kept whole so none is cut away. */
+    rules?: readonly string[]
     connectors?: boolean
     conversationId?: string
     /** Active project — offers search_knowledge_base + scopes it to this project. */
@@ -858,7 +883,8 @@ export async function toolChat(
       : '') +
     (opts.startTab
       ? '\nThis request comes from a paired browser tab. Use web_use for requested work on that website, including opening notifications. It will use that tab and its current login. Prefer visible page controls; do not invent URL paths or supply a guessed starting URL.'
-      : '')
+      : '') +
+    standingRules(opts.rules)
 
   // Attached images ride on the current user turn so the vision model can read
   // them even in tools/connectors mode (otherwise they were silently dropped).
@@ -883,7 +909,19 @@ export async function toolChat(
     }
   ]
   const compactAtChars = Math.floor(ctx * 0.8) * 4
-  if (toolPromptChars(messages, tools) >= compactAtChars && history.length) {
+  // One model call folds every earlier turn into a structured summary that stands in for them
+  // from now on. If it fails, the oldest turns fall back to short excerpts as before.
+  const summary =
+    toolPromptChars(messages, tools) >= compactAtChars && history.length
+      ? await summarizeConversation(history, ctx, opts.signal)
+      : null
+  const summarized = summary
+    ? [messages[0], conversationSummaryTurn(summary), messages[messages.length - 1]]
+    : null
+  if (summarized && toolPromptChars(summarized, tools) < toolPromptChars(messages, tools)) {
+    messages.splice(0, messages.length, ...summarized)
+    opts.onActivity?.({ kind: 'compacted', label: 'Compacted', summary: summary! })
+  } else if (toolPromptChars(messages, tools) >= compactAtChars && history.length) {
     const older: { role: string; content: string }[] = []
     const recent = history.slice()
     let compacted = messages
@@ -984,7 +1022,14 @@ export async function toolChat(
     return stripChatControlTokens(stripQwenToolCallMarkup(content))
   }
   let round = 0
+  // Every call this response made or declined, in order, for repeat detection.
+  const callRecords: ToolCallRecord[] = []
+  let stopInstruction: string | undefined
   while (toolCalls.length < maxToolCalls) {
+    // Past the soft threshold, older bulky tool results become short stubs so a long
+    // tool sequence keeps room to finish instead of ending in "Context is full."
+    const elision = elideStaleToolResults(messages, maxPromptChars)
+    if (elision.elided) messages.splice(0, messages.length, ...elision.messages)
     if (toolPromptChars(messages) > maxPromptChars) {
       return resultWithImages({ answer: 'Context is full.', toolCalls, unified })
     }
@@ -1049,19 +1094,24 @@ export async function toolChat(
     // ship) often emit a call as TEXT instead of on the tool_calls channel. When
     // the native channel is empty, recover any text-form call so the turn isn't a
     // dead narration ("I would search for…"). Normalize both into one shape with
-    // args already parsed to an object.
+    // args already parsed to an object. A misnamed call (`search`, `functions.web_search`)
+    // is mapped to the offered tool it meant rather than failing as unknown.
+    const roundToolNames = roundTools.flatMap((tool) => {
+      const name = (tool as { function?: { name?: unknown } }).function?.name
+      return typeof name === 'string' && name ? [name] : []
+    })
     const effective = !roundTools.length
       ? []
       : calls.length > 0
         ? calls.map((c) => ({
             id: c.id,
-            name: c.name,
+            name: resolveToolName(c.name, roundToolNames),
             args: safeParseArgs(c.arguments),
             rawArgs: c.arguments || '{}'
           }))
         : parseToolCallsFromText(content).map((c, i) => ({
             id: `txt-${String(round)}-${String(i)}`,
-            name: c.name,
+            name: resolveToolName(c.name, roundToolNames),
             args: c.args,
             rawArgs: JSON.stringify(c.args)
           }))
@@ -1110,11 +1160,31 @@ export async function toolChat(
         ) {
           c.args = { ...c.args, query }
         }
+        // A call identical to the one just before it is not run again: the model is told it
+        // already has that result. Repeating after that ends tool use with a forced answer.
+        const key = toolCallKey(c.name, c.args)
+        const repeat = repeatedToolCallDecision(callRecords, c.name, key)
+        if (repeat.action === 'stop') {
+          for (const unrun of callsToRun.slice(callsToRun.indexOf(c))) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: unrun.id,
+              content: 'Not run: tool use has ended because the same call kept repeating.'
+            })
+          }
+          stopInstruction = repeatedToolCallFinalAnswerInstruction(c.name)
+          break
+        }
+        if (repeat.action === 'skip') {
+          callRecords.push({ key, outcome: 'repeated' })
+          messages.push({ role: 'tool', tool_call_id: c.id, content: repeat.note })
+          continue
+        }
         opts.onStep?.({ name: c.name, args: c.args }) // surface the tool activity BEFORE running it
         // Uniform dispatch — every tool owns its own result. Merge any structured
         // side channels: sources are deduped into `unified` across rounds; image requests retain
         // call order for deferred generation after the turn.
-        const rawResult = await runTool(c.name, c.args, toolContext, exts)
+        const rawResult = await runTool(c.name, c.args, toolContext, exts, roundToolNames)
         const resultBudget = toolResultCharBudget({
           contextLength: llm.effectiveContextSize(),
           promptChars: toolPromptChars(messages, roundTools),
@@ -1153,6 +1223,7 @@ export async function toolChat(
           finishAfterDeferredImages = imageRequests.length >= requestedImageCount
         }
         const status = res.status ?? 'completed'
+        callRecords.push({ key, outcome: status })
         toolCalls.push({ name: c.name, args: c.args, result: res.text, status })
         // Surface the COMPLETED call (with its result) live, so the UI can show each
         // tool call + result as it lands, not only in the final batch.
@@ -1166,6 +1237,7 @@ export async function toolChat(
           return resultWithImages({ answer: res.text, toolCalls, unified, metrics })
         }
       }
+      if (stopInstruction) break
       round += 1
       continue // let the model use the results
     }
@@ -1198,14 +1270,14 @@ export async function toolChat(
         : {})
     })
   }
-  // The configured emergency cap was reached with the model still calling tools. Instead of dead-ending
-  // with a canned "stopped" message, FORCE one final answer WITHOUT tools, so the
-  // user gets a real response built from the results gathered so far.
+  // The configured emergency cap was reached, or the model kept repeating one call, with the
+  // model still calling tools. Instead of dead-ending with a canned "stopped" message, FORCE one
+  // final answer WITHOUT tools, so the user gets a real response built from the results gathered so far.
   if (opts.signal?.aborted) {
     return resultWithImages({ answer: '', toolCalls, unified })
   }
   const finalMessages = [
-    { role: 'system', content: toolLimitFinalAnswerInstruction(maxToolCalls) },
+    { role: 'system', content: stopInstruction ?? toolLimitFinalAnswerInstruction(maxToolCalls) },
     ...messages.filter((message) => message.role !== 'system')
   ]
   if (toolPromptChars(finalMessages) > maxPromptChars) {
@@ -1232,6 +1304,31 @@ export async function toolChat(
       ? { cutoff: { reason: 'max_tokens' as const, maxTokens: finalMaxTokens } }
       : {})
   })
+}
+
+/** Summarize the conversation so far in one tool-free call; `null` when no usable summary came back. */
+async function summarizeConversation(
+  history: { role: string; content: string }[],
+  ctx: number,
+  signal?: AbortSignal
+): Promise<string | null> {
+  if (signal?.aborted) return null
+  const maxChars = Math.max(0, ctx - CONVERSATION_SUMMARY_MAX_TOKENS - 256) * 4
+  try {
+    const reply = await llm.streamChat(conversationSummaryRequest(history, maxChars), () => {}, {
+      temperature: 0.2,
+      maxTokens: CONVERSATION_SUMMARY_MAX_TOKENS,
+      thinking: false,
+      signal
+    })
+    if (signal?.aborted) return null
+    return normalizeConversationSummary(
+      stripChatControlTokens(stripQwenToolCallMarkup(reply.content))
+    )
+  } catch (error) {
+    console.warn('[tools] conversation summary failed; keeping excerpts', error)
+    return null
+  }
 }
 
 const TOOL_HISTORY_TURNS = 8

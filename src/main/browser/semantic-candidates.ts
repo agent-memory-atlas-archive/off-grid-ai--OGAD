@@ -23,6 +23,18 @@ export function keepValidCandidates<T>(raw: readonly unknown[], parse: (value: u
   return valid
 }
 
+/**
+ * The model's reply was not an action that can run (a navigate with no URL, a reply cut off).
+ * Found against a real signup page: one such reply ended the whole task. It is a reason to ask
+ * again with what was wrong, not to end the task.
+ */
+export class InvalidDecisionError extends Error {
+  constructor(readonly detail: string) {
+    super(`The text model returned an invalid Web Use action: ${detail}.`)
+    this.name = 'InvalidDecisionError'
+  }
+}
+
 /** The Decision model chose "none of these": a reason to ask again, not to end the task. */
 export class NoSupportedActionError extends Error {
   constructor() {
