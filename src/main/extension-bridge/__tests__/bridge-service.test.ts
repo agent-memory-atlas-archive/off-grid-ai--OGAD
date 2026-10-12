@@ -614,3 +614,10 @@ it('caps a plain snippet around a late match', () => {
   expect(snippet).toContain('needle')
   expect(snippet).not.toContain('*')
 })
+
+it('leaves no tag in a snippet built from nested tags', () => {
+  const snippet = conversationSnippet('<scr<b>ipt>alert(1)</scr</b>ipt> needle', 'needle')
+  expect(snippet).not.toMatch(/[<>]/)
+  expect(snippet).not.toContain('script')
+  expect(snippet).toContain('needle')
+})

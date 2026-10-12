@@ -245,10 +245,20 @@ export function writeConversationCursor(row: ConversationCursor, query: string |
   return Buffer.from(JSON.stringify({ v: 1, query, ...row })).toString('base64url')
 }
 
+/** Strip tags until none is left, so a nested tag such as <scr<b>ipt> cannot rebuild one. */
+function withoutTags(text: string): string {
+  let previous: string
+  let next = text
+  do {
+    previous = next
+    next = next.replace(/<[^>]*>/g, '')
+  } while (next !== previous)
+  return next
+}
+
 /** Remove stored formatting before selecting a small window around a matched term. */
 export function conversationSnippet(excerpt: string, query: string): string {
-  const plain = excerpt
-    .replace(/<[^>]*>/g, '')
+  const plain = withoutTags(excerpt)
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/&(?:lt|gt|amp|quot|apos|#\d+|#x[\da-f]+);/gi, ' ')
     .replace(/[`*_~#><|[\]]/g, ' ')
