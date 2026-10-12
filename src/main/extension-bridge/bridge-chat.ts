@@ -109,6 +109,9 @@ function attachmentValid(r: Record<string, unknown>): boolean {
     /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/.test(r.imageDataUrl)
   )
 }
+const branchFromValid = (v: unknown): boolean =>
+  v === undefined || (Number.isSafeInteger(v) && Number(v) >= 0 && Number(v) <= MAX_BRANCH_FROM)
+
 export function parseChatStart(raw: unknown): ChatStart | null {
   const r = object(raw)
   if (!r || !validChatId(r.runId) || !validChatId(r.conversationId)) {
@@ -120,12 +123,7 @@ export function parseChatStart(raw: unknown): ChatStart | null {
   if (r.mode !== 'chat' && r.mode !== 'agent' && r.mode !== 'image') {
     return null
   }
-  if (
-    r.branchFrom !== undefined &&
-    (!Number.isSafeInteger(r.branchFrom) ||
-      Number(r.branchFrom) < 0 ||
-      Number(r.branchFrom) > MAX_BRANCH_FROM)
-  ) {
+  if (!branchFromValid(r.branchFrom)) {
     return null
   }
   const turns = history(r.history)
