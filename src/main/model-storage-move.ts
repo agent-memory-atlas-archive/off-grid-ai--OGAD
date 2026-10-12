@@ -54,17 +54,20 @@ function safeName(name: string): boolean {
   )
 }
 
-// Never traverse links, including links in parent directories.
-function regularFile(root: string, name: string): fs.Stats | null {
+// Never traverse links in parent directories. Leaf links are copied only when requested.
+function regularFile(root: string, name: string, allowLinks = false): fs.Stats | null {
   if (!safeName(name) || fs.lstatSync(root).isSymbolicLink()) return null
   let current = root
   for (const part of name.split(/[\\/]/)) {
     current = path.join(current, part)
     const stat = fs.lstatSync(current)
-    if (stat.isSymbolicLink()) return null
+    if (stat.isSymbolicLink() && !(allowLinks && current === path.join(root, name))) return null
   }
   const stat = fs.lstatSync(current)
-  return stat.isFile() && stat.nlink === 1 ? stat : null
+  return (stat.isFile() && (allowLinks || stat.nlink === 1)) ||
+    (allowLinks && stat.isSymbolicLink())
+    ? stat
+    : null
 }
 
 export function ownedStorageFiles(source: string, catalog: OwnedModelFile[]): OwnedModelFile[] {
@@ -192,10 +195,18 @@ export async function moveModelStorage(
     if (fs.lstatSync(source).isSymbolicLink())
       throw new Error('The current model folder is a link. Leave its files in place.')
     const ownedFiles = deps.loadOwnedFiles ? await deps.loadOwnedFiles() : deps.ownedFiles
+    const registeredFiles = new Map<string, OwnedModelFile>()
+    addRegisteredFiles(from, registeredFiles)
     const files = ownedStorageFiles(from, ownedFiles).flatMap((file) => {
       try {
-        const stat = regularFile(from, file.name)
-        return stat ? [{ ...file, size: stat.size, sourceStat: stat }] : []
+        const stat = regularFile(from, file.name, true)
+        // A catalog name alone does not claim an unrelated link in a shared folder.
+        if (stat?.isSymbolicLink() && !registeredFiles.has(file.name)) return []
+        const linkTarget = stat?.isSymbolicLink()
+          ? fs.realpathSync(path.join(from, file.name))
+          : undefined
+        if (linkTarget && !fs.statSync(linkTarget).isFile()) return []
+        return stat ? [{ ...file, size: stat.size, sourceStat: stat, linkTarget }] : []
       } catch {
         return []
       }
@@ -237,10 +248,22 @@ export async function moveModelStorage(
       for (const file of files.filter((entry) => !metadata.includes(entry.name))) {
         const target = path.join(to, file.name)
         fs.mkdirSync(path.dirname(target), { recursive: true })
-        await fs.promises.copyFile(path.join(from, file.name), target, fs.constants.COPYFILE_EXCL)
+        if (file.linkTarget) {
+          fs.symlinkSync(file.linkTarget, target)
+        } else {
+          await fs.promises.copyFile(path.join(from, file.name), target, fs.constants.COPYFILE_EXCL)
+        }
         promoted.push(target)
-        const hash = await verifyCopy(from, target, file)
-        assertUnchanged(from, file.name, file.sourceStat)
+        const hash = await verifyCopy(from, target, {
+          ...file,
+          size: file.linkTarget ? fs.statSync(file.linkTarget).size : file.size
+        })
+        assertUnchanged(from, file.name, file.sourceStat, true)
+        if (
+          (file.sourceStat.nlink > 1 && !file.linkTarget) ||
+          files.some((entry) => entry.linkTarget === path.join(from, file.name))
+        )
+          continue
         pending.push({
           source: from,
           destination: to,
@@ -263,7 +286,7 @@ export async function moveModelStorage(
       }
       throw error
     }
-    return { moved: pending.length, unknownEntriesLeft }
+    return { moved: promoted.length, unknownEntriesLeft }
   } finally {
     release()
   }
@@ -348,11 +371,12 @@ function regularFileOrMissing(root: string, name: string): fs.Stats | null {
   }
 }
 
-function assertUnchanged(root: string, name: string, expected: fs.Stats): void {
-  const latest = regularFile(root, name)
+function assertUnchanged(root: string, name: string, expected: fs.Stats, allowLinks = false): void {
+  const latest = regularFile(root, name, allowLinks)
   if (
     !latest ||
     latest.ino !== expected.ino ||
+    latest.nlink !== expected.nlink ||
     latest.size !== expected.size ||
     latest.mtimeMs !== expected.mtimeMs ||
     latest.ctimeMs !== expected.ctimeMs
@@ -379,14 +403,23 @@ export async function cleanupMovedModelStorage(
         record.source === record.destination
       )
         throw new Error('The cleanup destination is not active.')
-      const destination = regularFile(record.destination, record.name)
-      if (!destination || destination.size !== record.size)
+      // Keep settings and registries for builds that still read the old folder.
+      if (record.name.endsWith('.json')) {
+        handled.add(record)
+        continue
+      }
+      const destination = regularFile(record.destination, record.name, true)
+      const linked = destination?.isSymbolicLink() === true
+      if (
+        !destination ||
+        (!linked && (destination.size !== record.size || destination.nlink !== 1))
+      )
         throw new Error('The destination file is missing or has changed size.')
-      // Only an absent file is handled. Permission errors and links retain the record.
+      // Only an absent file is handled. Permission errors retain the record.
       let source: fs.Stats | null
       fs.lstatSync(record.source) // A missing/disconnected root is a failure, not a handled file.
       try {
-        source = regularFile(record.source, record.name)
+        source = regularFile(record.source, record.name, linked)
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
           handled.add(record)
@@ -394,7 +427,14 @@ export async function cleanupMovedModelStorage(
         }
         throw error
       }
-      if (!source) throw new Error('The source is no longer a regular file.')
+      if (
+        !source ||
+        (linked &&
+          (!source.isSymbolicLink() ||
+            fs.realpathSync(path.join(record.source, record.name)) !==
+              fs.realpathSync(path.join(record.destination, record.name))))
+      )
+        throw new Error('The source is no longer the copied file or link.')
       if (
         source.size !== record.size ||
         (record.sourceMtimeMs === undefined
@@ -403,8 +443,8 @@ export async function cleanupMovedModelStorage(
         (await sha256File(path.join(record.destination, record.name))) !== record.sha256
       )
         throw new Error('The source or destination file has changed.')
-      assertUnchanged(record.source, record.name, source)
-      assertUnchanged(record.destination, record.name, destination)
+      assertUnchanged(record.source, record.name, source, linked)
+      assertUnchanged(record.destination, record.name, destination, linked)
       if (readModelStorageChoice(profile) !== record.destination)
         throw new Error('The cleanup destination is no longer active.')
       fs.unlinkSync(path.join(record.source, record.name))
