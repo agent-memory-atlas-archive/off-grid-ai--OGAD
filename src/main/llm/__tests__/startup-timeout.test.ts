@@ -1,11 +1,22 @@
 import { expect, it } from 'vitest'
 import { modelStartupQuietLimit, startupStalled } from '../startup-timeout'
 
-it('allows a cold CUDA load to stay quiet for longer than other engines', () => {
-  expect(modelStartupQuietLimit('llama-cuda')).toBe(180_000)
-  expect(modelStartupQuietLimit('llama-prism-cuda')).toBe(180_000)
-  expect(modelStartupQuietLimit('llama')).toBe(60_000)
-  expect(modelStartupQuietLimit('llama-cpu')).toBe(60_000)
+it.each(['llama', 'llama-cpu', 'llama-cuda', 'llama-prism', 'llama-prism-cuda'])(
+  'allows %s to load from a slow drive without output for several minutes',
+  (engine) => {
+    const quietLimit = modelStartupQuietLimit(engine)
+    expect(startupStalled(61_000, 0, quietLimit)).toBe(false)
+    expect(startupStalled(181_000, 0, quietLimit)).toBe(false)
+    expect(startupStalled(599_000, 0, quietLimit)).toBe(false)
+    expect(startupStalled(600_000, 0, quietLimit)).toBe(false)
+    expect(startupStalled(600_001, 0, quietLimit)).toBe(true)
+  }
+)
+
+it('starts the quiet period again when the engine prints progress', () => {
+  const quietLimit = modelStartupQuietLimit('llama')
+  expect(startupStalled(900_000, 595_000, quietLimit)).toBe(false)
+  expect(startupStalled(1_195_001, 595_000, quietLimit)).toBe(true)
 })
 
 it('keeps waiting on a slow load that still prints progress, however long it takes', () => {

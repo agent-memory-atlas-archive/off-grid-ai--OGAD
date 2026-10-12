@@ -653,7 +653,9 @@ app.whenReady().then(async () => {
     await new Promise<void>((resolve) => setImmediate(resolve))
     await runStartupStage({
       name: 'models.text.prepare',
-      deadlineMs: 180_000,
+      // A USB model load can stay quiet for ten minutes; allow setup time as well
+      // before the startup notice reports that preparation did not finish.
+      deadlineMs: 900_000,
       lateEffect: 'keep',
       run: async () => {
         const { llm } = await import('./llm')

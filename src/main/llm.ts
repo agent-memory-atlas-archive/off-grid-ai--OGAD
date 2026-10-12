@@ -1584,7 +1584,7 @@ export class LLMService {
     }
   }
 
-  private async waitForReady(quietLimit = 60000): Promise<void> {
+  private async waitForReady(quietLimit = modelStartupQuietLimit('llama')): Promise<void> {
     let healthOk = false
     while (!startupStalled(Date.now(), this.lastServerOutputAt, quietLimit)) {
       // The server died during startup (e.g. model load failure) — stop waiting.
