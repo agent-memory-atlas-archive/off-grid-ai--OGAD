@@ -673,6 +673,9 @@ class VisionTaskGraphRuntime {
         this.sessionCycle += 1
         this.policyHistory.length = 0
         this.pendingPolicyHistory = undefined
+        this.previousActionEffect = undefined
+        this.previousExpectedEffect = undefined
+        this.pendingExpectedEffect = undefined
         this.phaseIndex = 0
         const next = this.deps.plan?.phases[0]
         this.continuation = boundedContinuationCapsule(
@@ -704,6 +707,9 @@ class VisionTaskGraphRuntime {
     // completed milestone bias the first decision for the next milestone.
     this.policyHistory.length = 0
     this.pendingPolicyHistory = undefined
+    this.previousActionEffect = undefined
+    this.previousExpectedEffect = undefined
+    this.pendingExpectedEffect = undefined
     this.phaseIndex += 1
     const next = this.deps.plan?.phases[this.phaseIndex]
     this.continuation = boundedContinuationCapsule(
