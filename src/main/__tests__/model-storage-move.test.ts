@@ -87,6 +87,48 @@ describe('verified model storage move', () => {
     expect(fs.existsSync(path.join(f.destination, 'package/photo.jpg'))).toBe(false)
     expect(fs.existsSync(path.join(f.destination, 'linked.gguf'))).toBe(false)
   })
+  it.each(['symbolic', 'hard', 'relative'])(
+    'keeps the active model available after moving a %s link and cleaning up',
+    async (link) => {
+      const f = fixture()
+      const shared = path.join(f.profile, 'shared.gguf')
+      fs.renameSync(path.join(f.source, 'weight.gguf'), shared)
+      const source = path.join(f.source, 'weight.gguf')
+      if (link === 'hard') fs.linkSync(shared, source)
+      else fs.symlinkSync(link === 'relative' ? '../shared.gguf' : shared, source)
+      fs.writeFileSync(path.join(f.source, 'active-model.json'), '{"primary":"weight.gguf"}')
+      await move(f)
+      const target = path.join(f.destination, 'weight.gguf')
+      expect(fs.readFileSync(target, 'utf8')).toBe('weights')
+      expect(fs.lstatSync(target).isSymbolicLink()).toBe(link !== 'hard')
+      if (link !== 'hard') expect(fs.realpathSync(target)).toBe(shared)
+      else
+        expect(readPendingModelCleanup(f.profile).map((entry) => entry.name)).not.toContain(
+          'weight.gguf'
+        )
+      await cleanupMovedModelStorage(f.profile, f.destination)
+      expect(fs.readFileSync(target, 'utf8')).toBe('weights')
+      expect(fs.readFileSync(shared, 'utf8')).toBe('weights')
+      expect(fs.existsSync(source)).toBe(link === 'hard')
+      expect(fs.readFileSync(path.join(f.source, 'active-model.json'), 'utf8')).toBe(
+        '{"primary":"weight.gguf"}'
+      )
+      expect(readPendingModelCleanup(f.profile)).toEqual([])
+    }
+  )
+  it('keeps an old weight that remains the target of a moved model link', async () => {
+    const f = fixture()
+    fs.symlinkSync('weight.gguf', path.join(f.source, 'active.gguf'))
+    fs.writeFileSync(path.join(f.source, 'active-model.json'), '{"primary":"active.gguf"}')
+    await move(f)
+    await cleanupMovedModelStorage(f.profile, f.destination)
+    expect(fs.realpathSync(path.join(f.destination, 'active.gguf'))).toBe(
+      path.join(f.source, 'weight.gguf')
+    )
+    expect(fs.readFileSync(path.join(f.destination, 'active.gguf'), 'utf8')).toBe('weights')
+    expect(fs.readFileSync(path.join(f.source, 'weight.gguf'), 'utf8')).toBe('weights')
+    expect(fs.existsSync(path.join(f.source, 'active.gguf'))).toBe(false)
+  })
   it('uses registries, companions and indexed caches without claiming unknown cache files', async () => {
     const f = fixture()
     const names = [
@@ -201,6 +243,26 @@ describe('verified model storage move', () => {
     f.destination = path.join(f.source, 'nested')
     fs.mkdirSync(f.destination)
     await expect(move(f)).rejects.toThrow('outside')
+  })
+  it('keeps metadata in the old folder after cleanup for older builds', async () => {
+    const f = fixture()
+    const registries = [
+      'active-model.json',
+      'llm-settings.json',
+      'downloaded-models.json',
+      'local-models.json',
+      'downloads.json',
+      'active-modalities.json'
+    ]
+    for (const name of registries) fs.writeFileSync(path.join(f.source, name), '{}')
+    await move(f)
+    await cleanupMovedModelStorage(f.profile, f.destination)
+    for (const name of registries) {
+      expect(fs.readFileSync(path.join(f.source, name), 'utf8')).toBe('{}')
+      expect(fs.readFileSync(path.join(f.destination, name), 'utf8')).toBe('{}')
+    }
+    expect(fs.existsSync(path.join(f.source, 'weight.gguf'))).toBe(false)
+    expect(readPendingModelCleanup(f.profile)).toEqual([])
   })
   it('next-start cleanup removes only verified files and clears only handled records', async () => {
     const f = fixture()

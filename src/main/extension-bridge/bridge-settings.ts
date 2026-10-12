@@ -289,7 +289,6 @@ const SECTION_RULES: Record<SettingsSection, Record<string, Rule>> = {
     maxTokens: int(0, 1048576),
     maxToolCalls: int(0, 1000),
     reasoningBudget: int(0, 1048576),
-    systemPrompt: text(32000),
     kvCacheType: oneOf(['f16', 'q8_0', 'q4_0']),
     flashAttn: bool,
     gpuLayers: int(-1, 1000),

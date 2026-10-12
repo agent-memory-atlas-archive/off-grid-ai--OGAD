@@ -187,6 +187,47 @@ describe('runVisionTaskGraph', () => {
     expect(w.phases).toEqual(['phase-1', 'phase-2'])
   })
 
+  it.each([false, true])(
+    'clears previous action evidence at the next milestone or activity cycle (repeat=%s)',
+    async (repeatUntilSessionLimit) => {
+      const expectedEffect = 'The result panel is visible.'
+      const w = workflow([
+        {
+          kind: 'actions',
+          actionText: 'Click the visible control',
+          actions: [{ type: 'click', point: { x: 100, y: 295 } }],
+          expectedEffect
+        },
+        complete('Site visible.'),
+        complete('Details visible.')
+      ])
+      const inputs: Array<{ expected?: string; effect?: string }> = []
+      const deps: VisionTaskGraphDeps = {
+        ...w.deps,
+        repeatUntilSessionLimit,
+        plan: repeatUntilSessionLimit ? { version: 1, phases: plan.phases.slice(0, 1) } : plan,
+        decide: async (input) => {
+          inputs.push({
+            expected: input.previousExpectedEffect,
+            effect: input.previousActionEffect
+          })
+          if (repeatUntilSessionLimit && inputs.length === 3) w.deps.guard.halt()
+          return { response: 'decision', modelInput: 'one visual request' }
+        }
+      }
+
+      const result = await runVisionTaskGraph('Complete the activity.', deps)
+
+      expect(result.ok).toBe(!repeatUntilSessionLimit)
+      expect(w.actuated).toEqual(['click:100,295'])
+      expect(inputs).toEqual([
+        { expected: undefined, effect: undefined },
+        { expected: expectedEffect, effect: 'unverifiable' },
+        { expected: undefined, effect: undefined }
+      ])
+    }
+  )
+
   it('does not let a model-level done verdict skip remaining execution-plan milestones', async () => {
     const w = workflow([
       done('Everything is complete.'),

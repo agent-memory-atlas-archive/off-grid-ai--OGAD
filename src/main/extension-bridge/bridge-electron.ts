@@ -180,11 +180,18 @@ function store(): BridgeStore {
 
 const PAIR_TIMEOUT_MS = 120_000
 
-async function confirmPairing(code: string, deviceName: string): Promise<boolean> {
+export async function confirmPairing(
+  code: string,
+  deviceName: string,
+  peerAddress: string
+): Promise<boolean> {
   const win = BrowserWindow.getAllWindows()[0]
   win?.show()
   win?.focus()
+  const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peerAddress)
+  const controller = new AbortController()
   const options = {
+    signal: controller.signal,
     type: 'question' as const,
     buttons: ['Pair', "Don't pair"],
     defaultId: 1,
@@ -193,14 +200,19 @@ async function confirmPairing(code: string, deviceName: string): Promise<boolean
     message: `Pair "${deviceName}" with Off Grid AI Desktop?`,
     detail:
       `Only continue if your browser shows these same words:\n\n${code}\n\n` +
-      'The browser can then use your chats, tools and (with Pro) vault through an encrypted, ' +
-      'private link on this computer. It does not count as one of your devices.'
+      `The browser can then use your chats, tools and (with Pro) vault through an encrypted, ${
+        local
+          ? 'private link on this computer. '
+          : `private link. This request comes from another device on the network (${peerAddress}). `
+      }It does not count as one of your devices.`
   }
   const shown = win ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options)
-  const timeout = new Promise<{ response: number }>((resolve) =>
-    setTimeout(() => resolve({ response: 1 }), PAIR_TIMEOUT_MS)
-  )
-  return (await Promise.race([shown, timeout])).response === 0
+  const timeout = setTimeout(() => controller.abort(), PAIR_TIMEOUT_MS)
+  try {
+    return (await shown).response === 0 && !controller.signal.aborted
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 /** Paired browsers and whether each is connected over the live socket now (Tasks > Web Use). */

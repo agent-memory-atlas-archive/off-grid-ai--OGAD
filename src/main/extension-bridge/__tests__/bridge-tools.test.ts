@@ -3,14 +3,22 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+const pairingDialogs: Array<{ detail: string }> = []
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-tools-'))
 process.env.OFFGRID_EMBEDDINGS_OFFLINE = '1'
 vi.mock('electron', () => ({
   app: { getPath: () => profile, isPackaged: false, getAppPath: () => process.cwd() },
   safeStorage: { isEncryptionAvailable: () => false },
-  shell: { openExternal: async () => {} }
+  shell: { openExternal: async () => {} },
+  BrowserWindow: { getAllWindows: () => [] },
+  dialog: {
+    showMessageBox: async (options: { detail: string }) => {
+      pairingDialogs.push(options)
+      return { response: 1 }
+    }
+  }
 }))
-import { getBridgeService, listBridgeTools } from '../bridge-electron'
+import { confirmPairing, getBridgeService, listBridgeTools } from '../bridge-electron'
 import { createBridgeService } from '../bridge-service'
 import {
   deriveSessionKey,
@@ -68,6 +76,21 @@ afterAll(async () => {
 })
 
 const names = (tools: unknown[]): unknown[] => tools.map((tool) => (tool as { name: string }).name)
+
+describe('pairing dialog peer address', () => {
+  it.each(['192.168.1.20', '100.64.0.12'])('identifies the network device %s', async (address) => {
+    await confirmPairing('same words', 'Browser', address)
+    const detail = pairingDialogs.at(-1)!.detail
+    expect(detail).toContain(address)
+    expect(detail).toContain('another device on the network')
+    expect(detail).not.toContain('on this computer')
+  })
+
+  it('identifies a loopback browser as local', async () => {
+    await confirmPairing('same words', 'Browser', '127.0.0.1')
+    expect(pairingDialogs.at(-1)!.detail).toContain('on this computer')
+  })
+})
 
 describe('browser chat capability in the state response', () => {
   it('tracks registration and removal of the Pro chat hook', async () => {
@@ -140,7 +163,10 @@ describe('bridge origin with the real tool registry', () => {
     try {
       const listed = await listBridgeTools()
       expect(listed.length).toBeGreaterThan(6)
-      expect(names(listed)).toContain('web_search')
+      expect(names(listed)).toContain('calculator')
+      for (const name of ['web_search', 'brave_search', 'read_url']) {
+        expect(names(listed)).not.toContain(name)
+      }
       expect(names(listed)).toContain('contacts_search')
       for (const spec of NATIVE_TOOL_SPECS.filter((spec) => spec.risk !== 'read')) {
         expect(names(listed)).not.toContain(spec.name)
@@ -161,7 +187,7 @@ describe('bridge origin with the real tool registry', () => {
     }
   })
 
-  it.each(['web_search', 'contacts_search'])(
+  it.each(['calculator', 'contacts_search'])(
     'puts the named tool %s first in task selection',
     async (name) => {
       const listed = await listBridgeTools(name)
@@ -257,68 +283,74 @@ describe('bridge origin with the real tool registry', () => {
     }
   })
 
-  it.each(['web_search', 'open_url', 'web_use', 'mail_send', 'computer_use'])(
-    'checks the catalog for a sealed tools.run request for %s',
-    async (name) => {
-      const desktopKeys = await generateKeyPair()
-      const browserKeys = await generateKeyPair()
-      const browser = {
-        id: 'bridge-tools-browser',
-        name: 'Test browser',
-        publicKey: await exportPublicKey(browserKeys.publicKey),
-        pairedAt: Date.now()
-      }
-      const bridge = createBridgeService({
-        keys: desktopKeys,
-        store: { list: async () => [browser], save: async () => {} },
-        confirmPairing: async () => true,
-        now: () => Date.now(),
-        newId: () => browser.id,
-        data: {
-          features: () => ({ pro: true, chats: true, tools: true, connectors: true, vault: false }),
-          listTools: listBridgeTools,
-          runTool: async (toolName, args) => ({ ok: true, name: toolName, args }),
-          desktopName: () => 'Test desktop',
-          listConversations: async () => [],
-          putConversation: async () => {},
-          deleteConversation: async () => {},
-          latestTask: async () => null,
-          stopTask: async () => false,
-          setTaskRole: async () => ({ success: false }),
-          vault: async () => ({}),
-          readSettings: async () => ({}),
-          writeSettings: async () => {}
-        }
-      })
-      const key = await deriveSessionKey(browserKeys.privateKey, desktopKeys.publicKey, browser.id)
-      const id = 'run-native-tool'
-      const request = await seal(key, requestAad(browser.id), {
-        id,
-        ts: Date.now(),
-        method: 'tools.run',
-        params: { name, args: { query: 'test' } }
-      })
-      const reply = await bridge.rpc({ v: 1, d: browser.id, ...request })
-      expect(reply.status).toBe(200)
-      const result = await open(
-        key,
-        responseAad(browser.id, id),
-        reply.body as { n: string; c: string }
-      )
-      if (name !== 'web_search') {
-        expect(result).toMatchObject({ ok: false, error: 'tool_unavailable' })
-      } else {
-        expect(result).toMatchObject({ result: { ok: true, name, args: { query: 'test' } } })
-      }
+  it.each([
+    'calculator',
+    'web_search',
+    'brave_search',
+    'read_url',
+    'open_url',
+    'web_use',
+    'mail_send',
+    'computer_use'
+  ])('checks the catalog for a sealed tools.run request for %s', async (name) => {
+    const desktopKeys = await generateKeyPair()
+    const browserKeys = await generateKeyPair()
+    const browser = {
+      id: 'bridge-tools-browser',
+      name: 'Test browser',
+      publicKey: await exportPublicKey(browserKeys.publicKey),
+      pairedAt: Date.now()
     }
-  )
+    const bridge = createBridgeService({
+      keys: desktopKeys,
+      store: { list: async () => [browser], save: async () => {} },
+      confirmPairing: async () => true,
+      now: () => Date.now(),
+      newId: () => browser.id,
+      data: {
+        features: () => ({ pro: true, chats: true, tools: true, connectors: true, vault: false }),
+        listTools: listBridgeTools,
+        runTool: async (toolName, args) => ({ ok: true, name: toolName, args }),
+        desktopName: () => 'Test desktop',
+        listConversations: async () => [],
+        putConversation: async () => {},
+        deleteConversation: async () => {},
+        latestTask: async () => null,
+        stopTask: async () => false,
+        setTaskRole: async () => ({ success: false }),
+        vault: async () => ({}),
+        readSettings: async () => ({}),
+        writeSettings: async () => {}
+      }
+    })
+    const key = await deriveSessionKey(browserKeys.privateKey, desktopKeys.publicKey, browser.id)
+    const id = 'run-native-tool'
+    const request = await seal(key, requestAad(browser.id), {
+      id,
+      ts: Date.now(),
+      method: 'tools.run',
+      params: { name, args: { query: 'test' } }
+    })
+    const reply = await bridge.rpc({ v: 1, d: browser.id, ...request })
+    expect(reply.status).toBe(200)
+    const result = await open(
+      key,
+      responseAad(browser.id, id),
+      reply.body as { n: string; c: string }
+    )
+    if (name !== 'calculator') {
+      expect(result).toMatchObject({ ok: false, error: 'tool_unavailable' })
+    } else {
+      expect(result).toMatchObject({ result: { ok: true, name, args: { query: 'test' } } })
+    }
+  })
 
   it('uses the per-tool disabled set even when chat tools are disabled', async () => {
     saveSetting('toolsEnabled', false)
     saveSetting('disabledTools', ['web_use', 'computer_use', 'contacts_search'])
     try {
       const listed = names(await listBridgeTools())
-      expect(listed).toContain('web_search')
+      expect(listed).toContain('calculator')
       expect(listed).not.toContain('open_url')
       expect(listed).not.toContain('web_use')
       expect(listed).not.toContain('computer_use')

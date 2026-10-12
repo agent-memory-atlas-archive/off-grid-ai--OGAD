@@ -41,7 +41,7 @@ const UNAUTHORIZED: BridgeReply = { status: 401, body: { error: 'unauthorized' }
 
 export interface BridgeService {
   info(): Promise<BridgeReply>
-  pair(raw: unknown): Promise<BridgeReply>
+  pair(raw: unknown, peerAddress?: string): Promise<BridgeReply>
   rpc(raw: unknown): Promise<BridgeReply>
   /** A paired browser and its session key, for the live socket. Null for an unknown device. */
   linkKey(deviceId: string): Promise<{ browser: PairedBrowser; key: CryptoKey } | null>
@@ -53,6 +53,7 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
   const replay = new ReplayGuard()
   const sessionKeys = new Map<string, Promise<CryptoKey>>()
   let pairing = false
+  const declinedPeers = new Map<string, number>()
 
   const sessionKey = (browser: PairedBrowser): Promise<CryptoKey> => {
     const cached = sessionKeys.get(browser.id)
@@ -81,7 +82,7 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
       }
     },
 
-    async pair(raw: unknown): Promise<BridgeReply> {
+    async pair(raw: unknown, peerAddress = '127.0.0.1'): Promise<BridgeReply> {
       const request = parsePairRequest(raw)
       if (!request || !(await importPublicKey(request.publicKey))) {
         return { status: 400, body: { error: 'invalid' } }
@@ -90,13 +91,21 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
       if (pairing) {
         return { status: 409, body: { error: 'busy' } }
       }
+      const address = peerAddress.replace(/^::ffff:/, '')
+      for (const [peer, until] of declinedPeers) {
+        if (until <= deps.now()) declinedPeers.delete(peer)
+      }
+      if (declinedPeers.has(address)) {
+        return { status: 429, body: { error: 'rate_limited' } }
+      }
       pairing = true
       try {
         const code = await pairingCode(
           request.publicKey,
           await exportPublicKey(deps.keys.publicKey)
         )
-        if (!(await deps.confirmPairing(code, request.deviceName))) {
+        if (!(await deps.confirmPairing(code, request.deviceName, address))) {
+          declinedPeers.set(address, deps.now() + 30_000)
           return { status: 403, body: { error: 'declined' } }
         }
         const existing = (await deps.store.list()).filter((b) => b.publicKey !== request.publicKey)

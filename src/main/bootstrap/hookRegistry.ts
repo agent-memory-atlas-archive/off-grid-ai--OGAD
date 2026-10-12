@@ -97,6 +97,9 @@ export const HOOKS = {
   /** (task: TaskRunSnapshot) => void - lets Pro project the normal task outcome onto the
    * approval that started the task. Core task state remains the single source of truth. */
   actionsObserveTaskResult: 'actions:observeTaskResult',
+  /** (conversationId: string, call: { name: string; status: ChatStreamToolResultStatus;
+   * result: string }) => void - lets Pro record an approved connector's Chat outcome. */
+  actionsObserveChatToolResult: 'actions:observeChatToolResult',
   /**
    * (request: unknown, browser: { deviceName: string; deviceId: string }) => Promise<unknown> -
    * one vault request from a paired browser extension (extension-bridge/), answered per the

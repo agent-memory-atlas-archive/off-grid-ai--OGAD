@@ -33,7 +33,7 @@ function isPrivatePeer(req: http.IncomingMessage): boolean {
 }
 
 function send(res: http.ServerResponse, origin: string | undefined, reply: BridgeReply): void {
-  // The gateway answers every route with ACAO *. These routes answer only the extension.
+  // These routes answer only the extension.
   res.removeHeader('Access-Control-Allow-Origin')
   if (isExtensionOrigin(origin)) res.setHeader('Access-Control-Allow-Origin', origin as string)
   res.setHeader('Cache-Control', 'no-store')
@@ -84,7 +84,7 @@ export async function handleExtensionBridge(
       if (!isExtensionOrigin(origin)) {
         return send(res, origin, { status: 403, body: { error: 'forbidden' } })
       }
-      return send(res, origin, await bridge.pair(await readJson(req)))
+      return send(res, origin, await bridge.pair(await readJson(req), req.socket.remoteAddress))
     }
     if (url === '/v1/extension/rpc' && method === 'POST') {
       return send(res, origin, await bridge.rpc(await readJson(req)))

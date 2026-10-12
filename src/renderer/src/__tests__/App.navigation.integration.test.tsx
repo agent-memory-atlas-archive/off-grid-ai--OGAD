@@ -229,7 +229,9 @@ describe('<App/> desktop navigation integration', () => {
     await screen.findByRole('heading', { name: 'Projects' })
     const navigation = screen.getByRole('navigation', { name: 'Primary navigation' })
     expect(navigation.getAttribute('aria-expanded')).toBe('false')
-    expect(screen.queryByText('Menu')).toBeNull()
+    // The Menu label keeps its row at both widths so hovering never shifts the items; it is
+    // hidden from assistive tech (and invisible) while the rail is collapsed.
+    expect(screen.getByText('Menu').getAttribute('aria-hidden')).toBe('true')
     const menu = navigation.querySelector<HTMLElement>('[aria-label="Menu sections"]')!
     const buttonNames = (): string[] =>
       within(menu)
@@ -250,7 +252,7 @@ describe('<App/> desktop navigation integration', () => {
     expect(screen.getByRole('button', { name: 'Mobile app' })).toBeTruthy()
 
     await user.hover(navigation)
-    expect(await screen.findByText('Menu')).toBeTruthy()
+    await waitFor(() => expect(screen.getByText('Menu').getAttribute('aria-hidden')).toBe('false'))
     expect(navigation.getAttribute('aria-expanded')).toBe('true')
     expect(buttonNames()).toEqual(collapsedDestinations)
 
@@ -260,7 +262,7 @@ describe('<App/> desktop navigation integration', () => {
 
     await user.unhover(navigation)
     await waitFor(() => expect(navigation.getAttribute('aria-expanded')).toBe('false'))
-    expect(screen.queryByText('Menu')).toBeNull()
+    expect(screen.getByText('Menu').getAttribute('aria-hidden')).toBe('true')
   })
 
   it('keeps a section toggle and destination order through hover collapse and expansion', async () => {

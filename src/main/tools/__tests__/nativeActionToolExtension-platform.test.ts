@@ -62,7 +62,11 @@ describe('systemHintForPlatform', () => {
   it('the mac hint keeps the full vocabulary; Linux names only its tools', () => {
     const hint = systemHintForPlatform('darwin')
     expect(hint).toMatch(/messages_send/)
-    expect(hint).toMatch(/requested in this Chat run directly/)
+    expect(hint).toMatch(/Desktop Chat actions and tasks run directly/)
+    expect(hint).toMatch(
+      /From a paired browser, sending .* wait for approval in Off Grid AI Desktop/
+    )
+    expect(hint).toMatch(/never claim a pending action has run/)
     expect(hint).not.toMatch(/pending until.*approve/i)
     expect(systemHintForPlatform('linux')).toMatch(/open_url/)
     expect(systemHintForPlatform('linux')).not.toMatch(/web_use/)

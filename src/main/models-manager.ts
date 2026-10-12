@@ -989,9 +989,6 @@ async function downloadModelInner(
         // If this download added the projector for the active chat model, turn its
         // vision on now (main-side, so it works even when no Models screen is open).
         await reconcileActiveModelProjector().catch(() => false)
-        if (modelId === KEV_4B_ID) {
-          fs.rmSync(path.join(dir, 'kev-4b', 'checkpoint'), { recursive: true, force: true })
-        }
         send({ percent: 100, status: 'completed' })
         return { success: true }
       } catch (err) {

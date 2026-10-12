@@ -2,10 +2,10 @@
 // chat tool loop via registerToolExtension. Exposes calendar / reminders / contacts /
 // messages / mail / open_url as model tools that run through the native actions helper.
 //
-// Chat is the source-policy owner for these tools: every mutation becomes a durable
+// Desktop Chat owns its direct actions: every mutation becomes a durable
 // Action through the @offgrid/use engine and runs without creating a second approval
 // owner. Outside-Chat proposals enter the engine through the Actions surface, whose gate
-// remains responsible for approval. Reads and navigation stay inline.
+// remains responsible for approval, including browser-origin actions. Reads stay inline.
 
 import {
   isToolAllowedForOrigin,
@@ -143,6 +143,14 @@ function currentCoordinates(result: unknown): { latitude: number; longitude: num
     : undefined
 }
 
+/** A browser's send, create or delete action waits for approval on Desktop. Its own web task and
+ *  opening a page keep the user-started Chat flow. */
+function browserApprovalFor(context: ToolContext | undefined, actionType: string): boolean {
+  return (
+    toolOriginOf(context).origin === 'bridge' && !isTaskAction(actionType) && actionType !== 'open'
+  )
+}
+
 function needsCurrentLocation(args: Record<string, unknown>, context?: ToolContext): boolean {
   const text = [typeof args.goal === 'string' ? args.goal : '', context?.userQuery ?? ''].join('\n')
   if (
@@ -251,7 +259,14 @@ export class NativeActionToolExtension implements ToolExtension {
         }
       }
     }
-    if (shouldGate(spec.risk)) {
+    // A browser's own task (web_use) and opening a page stay the user-started Chat flow; sending,
+    // creating and deleting from the browser wait for approval on Desktop.
+    const browserApproval =
+      origin.origin === 'bridge' &&
+      spec.risk !== 'read' &&
+      !isTaskAction(name) &&
+      name !== 'open_url'
+    if (shouldGate(spec.risk) || browserApproval) {
       const actionType = actionTypeForTool(name)
       const actions = this.boundary.actions
       // This extension is a Chat surface. Every mapped mutation goes through the
@@ -310,10 +325,13 @@ export class NativeActionToolExtension implements ToolExtension {
           actionArgsWithTaskLaunch(cleanArgs, context?.taskLaunch),
           actionType === WEB_USE_ACTION_TYPE ? context?.startTab : undefined
         ),
-        risk: spec.risk
+        // The engine otherwise auto-runs reversible mutations and navigation.
+        risk: browserApprovalFor(context, actionType) ? 'irreversible' : spec.risk
       },
       {
-        source: context?.actionSource ?? 'chat',
+        source: browserApprovalFor(context, actionType)
+          ? 'routine'
+          : (context?.actionSource ?? 'chat'),
         ...(context?.conversationId ? { sourceRef: context.conversationId } : {}),
         ...(context?.taskLaunch
           ? {
@@ -338,11 +356,12 @@ export class NativeActionToolExtension implements ToolExtension {
       )
     }
     actions.kick()
-    const unattendedRun = context?.actionSource === 'routine'
+    const unattendedRun =
+      context?.actionSource === 'routine' || browserApprovalFor(context, actionType)
     if (isTaskAction(actionType) && unattendedRun) {
       const label = actionType === 'computer_use' ? 'Computer Use' : 'Web Use'
       return taskReply(
-        `${taskReference}${label}: Waiting for the user's approval in Action Approval; it runs once they approve. Tell the user it is waiting for them.`,
+        `${taskReference}${label}: Waiting for the user's approval in Off Grid AI Desktop (Action Approval); it runs once they approve. Tell the user it is waiting for them.`,
         'pending'
       )
     }
@@ -361,7 +380,7 @@ export class NativeActionToolExtension implements ToolExtension {
     ])
     if (raced.kind === 'parked' && unattendedRun) {
       return reply(
-        `${taskReference}"${spec.title(args)}": Waiting for the user's approval in Action Approval; it runs once they approve. Tell the user it is waiting for them.`,
+        `${taskReference}"${spec.title(args)}": Waiting for the user's approval in Off Grid AI Desktop (Action Approval); it runs once they approve. Tell the user it is waiting for them.`,
         'pending'
       )
     }

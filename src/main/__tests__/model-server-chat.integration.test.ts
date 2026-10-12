@@ -556,9 +556,8 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)))`
     try {
       // Conservative still installs the complete lightweight local baseline while
       // avoiding the heavyweight image-runtime download in this deterministic rig.
-      await expect(llm.setSettings({ performanceMode: 'conservative' })).rejects.toThrow(
-        'Models not downloaded'
-      )
+      // No model is downloaded yet, so the mode is saved for the first launch without a relaunch.
+      await expect(llm.setSettings({ performanceMode: 'conservative' })).resolves.toBeUndefined()
       const plan = await setup.getSetupPlan()
       expect(plan.mode).toBe('conservative')
       expect(plan.items.map((item) => item.kind)).toEqual(['chat', 'transcription', 'voice'])

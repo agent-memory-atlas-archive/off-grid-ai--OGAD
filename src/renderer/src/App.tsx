@@ -492,8 +492,9 @@ function AppContent(): React.JSX.Element {
   // Handle browser URL changes
   useEffect(() => {
     const path = appLocationPath()
+    // A bare launch ('/', or an empty hash in the built app) keeps landingView: a free install
+    // must open on Models, never on a locked Day screen.
     const viewMap: Record<string, ViewMode> = {
-      '/': 'day',
       '/explore': 'explore',
       '/god': 'explore',
       '/day': 'day',
@@ -1249,11 +1250,16 @@ function AppContent(): React.JSX.Element {
                   !sidebarOpen && 'sidebar-nav-scroll-collapsed'
                 )}
               >
-                {sidebarOpen && (
-                  <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
-                    Menu
-                  </div>
-                )}
+                {/* Kept at both widths so expanding on hover never shifts the item under the cursor. */}
+                <div
+                  aria-hidden={!sidebarOpen}
+                  className={cn(
+                    'px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500',
+                    !sidebarOpen && 'invisible'
+                  )}
+                >
+                  Menu
+                </div>
                 <SidebarNavigationMenu
                   activeView={viewMode}
                   expanded={sidebarOpen}

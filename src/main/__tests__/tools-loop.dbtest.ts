@@ -37,6 +37,7 @@ import {
   readUrlText
 } from '../tools'
 import { llm } from '../llm'
+import { toolPromptChars, toolPromptTokens } from '../tools/prompt-budget'
 import { HOOKS, registerHook, unregisterHook } from '../bootstrap/hookRegistry'
 import { NativeActionToolExtension, type ActionsPort } from '../tools/nativeActionToolExtension'
 
@@ -1184,6 +1185,42 @@ describe('web tools — real parsers over fetch faked at the network boundary', 
       expect(answerRequest).not.toContain('OLD-PLAN-END')
     } finally {
       service.ctxSize = previousContext
+    }
+  })
+
+  it('accepts an English summary of CJK history with more characters but fewer tokens', async () => {
+    const history = [{ role: 'user', content: '请安排旅行并保留所有偏好。'.repeat(230) }]
+    const summary =
+      `## Goal\nPlan the trip.\n## Facts and preferences\n${'Visit museums and allow time for rest. '.repeat(98)}`.trim()
+    const previousSettings = llm.getSettings()
+    await llm.setSettings({ ctxSize: 2_048 })
+    try {
+      fake.enqueue({ content: summary }, { content: 'The trip plan is ready.' })
+      const activities: unknown[] = []
+      const result = await toolChat('Continue the plan.', history, {
+        onActivity: (activity) => activities.push(activity)
+      })
+
+      expect(result.answer).toBe('The trip plan is ready.')
+      expect(activities).toContainEqual({ kind: 'compacted', label: 'Compacted', summary })
+      expect(fake.requests).toHaveLength(2)
+      const answer = fake.requests[1] as {
+        messages: { role: string; content: string }[]
+        tools?: unknown[]
+      }
+      const original = [answer.messages[0], ...history, answer.messages.at(-1)]
+      expect(toolPromptChars(answer.messages, answer.tools)).toBeGreaterThan(
+        toolPromptChars(original, answer.tools)
+      )
+      expect(toolPromptTokens(answer.messages, answer.tools)).toBeLessThan(
+        toolPromptTokens(original, answer.tools)
+      )
+      expect(toolPromptTokens(original, answer.tools)).toBeGreaterThanOrEqual(2_048 * 0.8)
+      expect(toolPromptTokens(answer.messages, answer.tools)).toBeLessThan(2_048 * 0.8)
+      expect(answer.messages[1]!.content).toContain(summary)
+      expect(answer.messages[1]!.content).not.toContain(history[0]!.content)
+    } finally {
+      await llm.setSettings(previousSettings)
     }
   })
 

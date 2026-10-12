@@ -1764,6 +1764,9 @@ export function MemoryChat({
         : undefined
 
       const userMessageId = crypto.randomUUID()
+      // This turn's own user message (its draft id, then its saved id). It is already in the
+      // conversation by the time history is built, and the request carries it as its own turn.
+      const currentTurnIds = new Set<string>([userMessageId])
       if (!regen) {
         const userMessage: ChatMessage = {
           id: userMessageId,
@@ -1835,6 +1838,7 @@ export function MemoryChat({
             trimmed,
             persisted.length ? { attachments: persisted } : undefined
           )
+          currentTurnIds.add(stored.uuid)
           setConvMessages(convId, (previous) =>
             previous.map((message) =>
               message.id === userMessageId ? { ...message, id: stored.uuid } : message
@@ -2030,7 +2034,9 @@ export function MemoryChat({
       // active tab's `messages`) — a drained-queue or background send is bound to
       // `convId`, so its history must come from that conversation (D8).
       const fullHistory = buildSendHistory(
-        opts?.history ?? messagesByConvRef.current[convId] ?? EMPTY_MSGS,
+        (opts?.history ?? messagesByConvRef.current[convId] ?? EMPTY_MSGS).filter(
+          (message) => !currentTurnIds.has(message.id)
+        ),
         !!regen,
         trimmed,
         20,
