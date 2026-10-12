@@ -4,6 +4,7 @@ import {
   MAX_HISTORY_TURNS,
   MAX_TURN_CHARS,
   MAX_PROMPT_CHARS,
+  MAX_PAGE_TEXT_CHARS,
   parseChatRead,
   parseChatStart
 } from '../bridge-chat'
@@ -141,5 +142,72 @@ describe('browser chat read contract', () => {
     { ...snapshot, tabId: -1 }
   ])('rejects an invalid response before it reaches the browser %#', (input) => {
     expect(parseChatRead(input)).toBeNull()
+  })
+})
+
+describe('structured browser page', () => {
+  const page = { title: 'Example', url: 'https://example.test/path', text: 'Page text' }
+
+  it.each(['http:', 'https:'])('accepts and returns a valid %s page', (protocol) => {
+    const input = { ...page, url: `${protocol}//example.test/path` }
+    expect(parseChatStart({ ...start, page: input })?.page).toEqual(input)
+  })
+
+  it('accepts empty titles and fields at their length limits', () => {
+    expect(parseChatStart({ ...start, page: { ...page, title: '' } })?.page?.title).toBe('')
+    const input = {
+      title: 't'.repeat(500),
+      url: 'https://example.test/' + 'u'.repeat(2000 - 'https://example.test/'.length),
+      text: 'x'.repeat(MAX_PAGE_TEXT_CHARS)
+    }
+    expect(input.url).toHaveLength(2000)
+    expect(parseChatStart({ ...start, page: input })?.page).toEqual(input)
+  })
+
+  it.each([
+    'javascript:alert(1)',
+    'file:///tmp/page',
+    'data:text/plain,hello',
+    'chrome://settings',
+    'not a URL',
+    'https://'
+  ])('rejects unsupported or invalid URL %j', (url) => {
+    expect(parseChatStart({ ...start, page: { ...page, url } })).toBeNull()
+  })
+
+  it.each([
+    { ...page, title: 't'.repeat(501) },
+    { ...page, url: 'https://example.test/' + 'u'.repeat(2001 - 'https://example.test/'.length) },
+    { ...page, text: 'x'.repeat(MAX_PAGE_TEXT_CHARS + 1) },
+    ...['title', 'url', 'text'].flatMap((field) =>
+      [null, 1, {}, [], undefined].map((value) => ({ ...page, [field]: value }))
+    ),
+    { ...page, extra: 'unexpected' },
+    { title: page.title, url: page.url },
+    Object.assign(Object.create({ inherited: true }), page),
+    Object.assign(new Date(), page),
+    Object.assign({ ...page }, { [Symbol('extra')]: 'unexpected' }),
+    null,
+    [],
+    'page'
+  ])('rejects malformed page %#', (input) => {
+    expect(parseChatStart({ ...start, page: input })).toBeNull()
+  })
+
+  it('keeps old pageText unchanged and enforces the same wire cap', () => {
+    const pageText = 'Title: Old\nURL: https://example.test/\n' + 'x'.repeat(100)
+    expect(parseChatStart({ ...start, pageText })?.pageText).toBe(pageText)
+    expect(parseChatStart({ ...start, pageText })?.page).toBeUndefined()
+    expect(
+      parseChatStart({ ...start, pageText: 'x'.repeat(MAX_PAGE_TEXT_CHARS) })?.pageText
+    ).toHaveLength(MAX_PAGE_TEXT_CHARS)
+    expect(parseChatStart({ ...start, pageText: 'x'.repeat(MAX_PAGE_TEXT_CHARS + 1) })).toBeNull()
+  })
+
+  it('returns both page formats when both are provided', () => {
+    expect(parseChatStart({ ...start, page, pageText: 'Legacy' })).toMatchObject({
+      page,
+      pageText: 'Legacy'
+    })
   })
 })

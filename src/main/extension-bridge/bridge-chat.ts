@@ -15,6 +15,7 @@ export interface ChatStart {
   branchFrom?: number | undefined
   history?: ChatTurn[] | undefined
   pageText?: string | undefined
+  page?: { title: string; url: string; text: string } | undefined
   imageDataUrl?: string | undefined
   tabId?: number | undefined
 }
@@ -43,6 +44,7 @@ export const MAX_BRANCH_FROM = 10_000
 export const MAX_HISTORY_TURNS = 160
 export const MAX_TURN_CHARS = 20_000
 export const MAX_PROMPT_CHARS = 20_000
+export const MAX_PAGE_TEXT_CHARS = 100_000
 const object = (raw: unknown): Record<string, unknown> | null =>
   raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null
 const text = (v: unknown, max: number): v is string => typeof v === 'string' && v.length <= max
@@ -66,8 +68,36 @@ function history(raw: unknown): ChatTurn[] | undefined | null {
   }
   return turns
 }
+function page(raw: unknown): ChatStart['page'] | null {
+  if (raw === undefined) {
+    return undefined
+  }
+  const p = object(raw)
+  if (
+    !p ||
+    (Object.getPrototypeOf(p) !== Object.prototype && Object.getPrototypeOf(p) !== null) ||
+    Reflect.ownKeys(p).length !== 3 ||
+    !Object.hasOwn(p, 'title') ||
+    !Object.hasOwn(p, 'url') ||
+    !Object.hasOwn(p, 'text') ||
+    !text(p.title, 500) ||
+    !text(p.url, 2000) ||
+    !text(p.text, MAX_PAGE_TEXT_CHARS)
+  ) {
+    return null
+  }
+  try {
+    const { protocol } = new URL(p.url)
+    if (protocol !== 'http:' && protocol !== 'https:') {
+      return null
+    }
+  } catch {
+    return null
+  }
+  return { title: p.title, url: p.url, text: p.text }
+}
 function attachmentValid(r: Record<string, unknown>): boolean {
-  if (!optionalText(r.pageText, 100000) || !tab(r.tabId)) {
+  if (!optionalText(r.pageText, MAX_PAGE_TEXT_CHARS) || !tab(r.tabId)) {
     return false
   }
   if (r.imageDataUrl === undefined) {
@@ -98,7 +128,8 @@ export function parseChatStart(raw: unknown): ChatStart | null {
     return null
   }
   const turns = history(r.history)
-  if (turns === null || !attachmentValid(r)) {
+  const parsedPage = page(r.page)
+  if (turns === null || parsedPage === null || !attachmentValid(r)) {
     return null
   }
   // AES-GCM plus base64 must still fit the bridge's 4 MB HTTP body limit.
@@ -114,6 +145,7 @@ export function parseChatStart(raw: unknown): ChatStart | null {
     branchFrom: r.branchFrom as number | undefined,
     history: turns,
     pageText: r.pageText as string | undefined,
+    page: parsedPage,
     imageDataUrl: r.imageDataUrl as string | undefined,
     tabId: r.tabId as number | undefined
   }

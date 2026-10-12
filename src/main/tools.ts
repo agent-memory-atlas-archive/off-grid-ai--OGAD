@@ -30,7 +30,7 @@ import {
   toolResultCharBudget
 } from '@offgrid/models'
 import { toolPromptChars } from './tools/prompt-budget'
-import { buildPageFence } from './tools/page-fence'
+import { buildPageBlock, buildPageFence, pageBudgetChars } from './tools/page-fence'
 import {
   isToolAllowedForOrigin,
   toolOriginRefusal,
@@ -728,6 +728,7 @@ export async function toolChat(
   history: { role: string; content: string }[] = [],
   opts: {
     pageText?: string
+    page?: { title: string; url: string; text: string }
     origin?: ToolOrigin
     startTab?: ToolContext['startTab']
     /** Assistant is selected for this turn; always include its browser and desktop tools. */
@@ -872,7 +873,13 @@ export async function toolChat(
     ...history.map((m) => ({ role: m.role, content: m.content })),
     {
       role: 'user',
-      content: buildContentParts(query + buildPageFence(opts.pageText), decodedImages)
+      content: buildContentParts(
+        query +
+          (opts.page
+            ? buildPageBlock(opts.page, pageBudgetChars(ctx))
+            : buildPageFence(opts.pageText)),
+        decodedImages
+      )
     }
   ]
   const compactAtChars = Math.floor(ctx * 0.8) * 4
