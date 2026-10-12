@@ -122,7 +122,7 @@ describe('browser chat capability in the state response', () => {
 })
 
 describe('bridge origin with the real tool registry', () => {
-  it('lists the full enabled catalog, including native and connector tools', async () => {
+  it('lists only enabled read-only tools, including those declared by extensions', async () => {
     const connector = {
       id: 'bridge-test-connector',
       category: 'connector' as const,
@@ -133,6 +133,7 @@ describe('bridge origin with the real tool registry', () => {
         }
       ],
       canHandle: (name: string) => name === 'connector_search',
+      isReadOnlyTool: (name: string) => name === 'connector_search',
       execute: () => 'Found'
     }
     registerToolExtension(connector)
@@ -141,9 +142,9 @@ describe('bridge origin with the real tool registry', () => {
       expect(listed.length).toBeGreaterThan(6)
       expect(names(listed)).toContain('web_search')
       expect(names(listed)).toContain('contacts_search')
-      expect(names(listed)).toContain('open_url')
-      expect(names(listed)).toContain('web_use')
-      expect(names(listed)).not.toContain('computer_use')
+      for (const spec of NATIVE_TOOL_SPECS.filter((spec) => spec.risk !== 'read')) {
+        expect(names(listed)).not.toContain(spec.name)
+      }
       expect(listed).toContainEqual(
         expect.objectContaining({
           name: 'connector_search',
@@ -160,7 +161,7 @@ describe('bridge origin with the real tool registry', () => {
     }
   })
 
-  it.each(['web_search', 'contacts_search', 'open_url', 'web_use'])(
+  it.each(['web_search', 'contacts_search'])(
     'puts the named tool %s first in task selection',
     async (name) => {
       const listed = await listBridgeTools(name)
@@ -193,13 +194,13 @@ describe('bridge origin with the real tool registry', () => {
     const context = vi.spyOn(llm, 'effectiveContextSize').mockReturnValue(32768)
     try {
       const normal = await listBridgeTools(task)
-      expect(Math.ceil(JSON.stringify(schemas(normal)).length / 4)).toBeGreaterThan(1024)
+      expect(normal.length).toBeGreaterThan(0)
       context.mockReturnValue(2048)
       const budgeted = await listBridgeTools(task)
       expect(budgeted.length).toBeGreaterThan(0)
       expect(budgeted.length).toBeLessThanOrEqual(normal.length)
       expect(Math.ceil(JSON.stringify(schemas(budgeted)).length / 4)).toBeLessThanOrEqual(1024)
-      expect(JSON.stringify(schemas(budgeted)).length).toBeLessThan(
+      expect(JSON.stringify(schemas(budgeted)).length).toBeLessThanOrEqual(
         JSON.stringify(schemas(normal)).length
       )
       expect(new Set(names(budgeted)).size).toBe(budgeted.length)
@@ -231,6 +232,7 @@ describe('bridge origin with the real tool registry', () => {
       category: 'connector' as const,
       schemas: () => schemas,
       canHandle: (name: string) => schemas.some((schema) => schema.function.name === name),
+      isReadOnlyTool: (name: string) => schemas.some((schema) => schema.function.name === name),
       execute: () => 'Found'
     }
     const context = vi.spyOn(llm, 'effectiveContextSize').mockReturnValue(2048)
@@ -255,7 +257,7 @@ describe('bridge origin with the real tool registry', () => {
     }
   })
 
-  it.each(['web_search', 'open_url', 'computer_use'])(
+  it.each(['web_search', 'open_url', 'web_use', 'mail_send', 'computer_use'])(
     'checks the catalog for a sealed tools.run request for %s',
     async (name) => {
       const desktopKeys = await generateKeyPair()
@@ -266,7 +268,6 @@ describe('bridge origin with the real tool registry', () => {
         publicKey: await exportPublicKey(browserKeys.publicKey),
         pairedAt: Date.now()
       }
-      const execute = vi.fn().mockResolvedValue({ ok: true })
       const bridge = createBridgeService({
         keys: desktopKeys,
         store: { list: async () => [browser], save: async () => {} },
@@ -276,7 +277,7 @@ describe('bridge origin with the real tool registry', () => {
         data: {
           features: () => ({ pro: true, chats: true, tools: true, connectors: true, vault: false }),
           listTools: listBridgeTools,
-          runTool: execute,
+          runTool: async (toolName, args) => ({ ok: true, name: toolName, args }),
           desktopName: () => 'Test desktop',
           listConversations: async () => [],
           putConversation: async () => {},
@@ -304,12 +305,10 @@ describe('bridge origin with the real tool registry', () => {
         responseAad(browser.id, id),
         reply.body as { n: string; c: string }
       )
-      if (name === 'computer_use') {
-        expect(result).toMatchObject({ error: 'tool_unavailable' })
-        expect(execute).not.toHaveBeenCalled()
+      if (name !== 'web_search') {
+        expect(result).toMatchObject({ ok: false, error: 'tool_unavailable' })
       } else {
-        expect(result).toMatchObject({ result: { ok: true } })
-        expect(execute).toHaveBeenCalledWith(name, { query: 'test' }, browser, undefined)
+        expect(result).toMatchObject({ result: { ok: true, name, args: { query: 'test' } } })
       }
     }
   )
@@ -320,7 +319,7 @@ describe('bridge origin with the real tool registry', () => {
     try {
       const listed = names(await listBridgeTools())
       expect(listed).toContain('web_search')
-      expect(listed).toContain('open_url')
+      expect(listed).not.toContain('open_url')
       expect(listed).not.toContain('web_use')
       expect(listed).not.toContain('computer_use')
       expect(listed).not.toContain('contacts_search')
