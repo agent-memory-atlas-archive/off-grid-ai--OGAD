@@ -411,10 +411,17 @@ function directoryHasExpectedFiles(directory: string, files: ReadonlyMap<string,
 
 /** A pre-catalog Kev install used this directory. Reuse its Qwen base instead of
  * downloading a second 9.34 GB copy. GGUF chat weights are not compatible: Kev
- * needs the original SafeTensors tensors for its LoRA merge. */
+ * needs the original SafeTensors tensors for its LoRA merge.
+ * Check the profile location too because the models folder can move. */
 function reusableKevBaseDir(modelsDirectory: string): string | null {
-  const candidate = path.join(path.dirname(modelsDirectory), 'decision-models', 'qwen3.5-4b-base')
-  return directoryHasExpectedFiles(candidate, KEV_BASE_FILE_SIZES) ? candidate : null
+  const candidates = [
+    path.join(path.dirname(modelsDirectory), 'decision-models', 'qwen3.5-4b-base'),
+    path.join(dataDir(), 'decision-models', 'qwen3.5-4b-base')
+  ]
+  return (
+    candidates.find((candidate) => directoryHasExpectedFiles(candidate, KEV_BASE_FILE_SIZES)) ??
+    null
+  )
 }
 
 function modelFilePath(dir: string, name: string): string {

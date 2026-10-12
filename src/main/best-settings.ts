@@ -165,11 +165,13 @@ export async function ensureBestSettings(): Promise<void> {
   if (fingerprint !== state.fingerprint) await applyBestSettings()
 }
 
-/** A fresh install starts on the fastest settings; an existing one keeps its own. */
+/** A fresh install starts on the fastest settings; an existing one keeps its own. Earlier builds
+ *  wrote llm-settings.json only when a chat setting was changed by hand, so a chat model already
+ *  on disk also marks an existing install. */
 export async function prepareBestSettingsOnStartup(): Promise<void> {
   if (!readState()) {
     saveSetting(STATE_KEY, {
-      mode: llm.hasPersistedSettings() ? 'manual' : 'auto'
+      mode: llm.hasPersistedSettings() || llm.localModelFile() ? 'manual' : 'auto'
     } satisfies BestSettingsState)
   }
   await ensureBestSettings()

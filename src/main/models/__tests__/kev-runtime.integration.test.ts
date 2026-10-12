@@ -63,10 +63,10 @@ const supportedRuntime =
   process.platform === 'win32' ||
   (process.platform === 'linux' && process.arch === 'x64')
 
-async function installCheckpoint(): Promise<void> {
+async function installCheckpoint(modelsDirectory = models): Promise<void> {
   const kev = (await desktopCatalog()).find((model) => model.id === KEV_4B_ID)!
   for (const file of kev.files.filter((file) => file.name.startsWith(KEV_CHECKPOINT_PREFIX))) {
-    sparseFile(path.join(models, file.name), file.sizeBytes ?? 0)
+    sparseFile(path.join(modelsDirectory, file.name), file.sizeBytes ?? 0)
   }
 }
 
@@ -92,6 +92,18 @@ describe('Kev v1.0 catalog and runtime', () => {
   it('counts the managed v1.0 checkpoint with the legacy base as installed', async () => {
     await installCheckpoint()
     expect(await listInstalled()).toContain(KEV_4B_ID)
+  })
+
+  it('counts the managed v1.0 checkpoint with the legacy base as installed after moving models', async () => {
+    const movedModels = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-kev-moved-models-'))
+    try {
+      configureRuntime({ dataDir: root, modelsDir: movedModels, binRoots: [bin] })
+      await installCheckpoint(movedModels)
+      expect(await listInstalled()).toContain(KEV_4B_ID)
+    } finally {
+      configureRuntime({ dataDir: root, modelsDir: undefined, binRoots: [bin] })
+      fs.rmSync(movedModels, { recursive: true, force: true })
+    }
   })
 
   it.runIf(supportedRuntime)('resolves the managed v1.0 checkpoint and legacy base', async () => {
