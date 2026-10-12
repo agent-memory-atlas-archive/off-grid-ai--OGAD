@@ -1,4 +1,3 @@
-import { isToolAllowedForOrigin } from '../tools/tool-origin'
 import { chatHandlers } from './bridge-chat-handlers'
 import { bridgeMediaData, mediaHandlers } from './bridge-media-handlers'
 import { parseConversationParams, type ConversationSearchParams } from './bridge-conversations'
@@ -55,10 +54,7 @@ export function rpcHandlers(
       if (p.task !== undefined && (typeof p.task !== 'string' || p.task.length > 32_000)) {
         throw new Error('invalid')
       }
-      return (await deps.data.listTools(typeof p.task === 'string' ? p.task : undefined)).filter(
-        (tool) =>
-          isToolAllowedForOrigin((tool as { name?: unknown }).name, 'bridge', { acting: false })
-      )
+      return deps.data.listTools(typeof p.task === 'string' ? p.task : undefined)
     },
     'tools.run': async (p, browser) => {
       if (typeof p.name !== 'string' || typeof p.args !== 'object' || p.args === null) {
@@ -68,11 +64,9 @@ export function rpcHandlers(
       if (tabId !== undefined && !(Number.isSafeInteger(tabId) && Number(tabId) >= 0)) {
         throw new Error('invalid')
       }
-      // Direct tool calls from a paired browser are read-only. Acting tools run only
-      // inside a Desktop-owned chat run. Tools turned off since listing never run.
+      // Direct tool calls from a paired browser run only the read-only tools Desktop lists.
+      // Acting tools run only inside a Desktop-owned chat run. Tools turned off since listing never run.
       const name = p.name
-      if (!isToolAllowedForOrigin(name, 'bridge', { acting: false }))
-        throw new Error('tool_unavailable')
       const listed = (await deps.data.listTools()).some(
         (tool) => (tool as { name?: unknown }).name === name
       )

@@ -227,9 +227,11 @@ function features(): BridgeFeatures {
 
 export async function listBridgeTools(task?: string): Promise<unknown[]> {
   const out: unknown[] = []
-  const catalog = (await enabledToolSchemas(getToolExtensions())).filter(({ schema }) =>
+  // Direct browser calls can use only read-only tools, including those declared by extensions.
+  const catalog = (await enabledToolSchemas(getToolExtensions())).filter(({ schema, extension }) =>
     isToolAllowedForOrigin((schema as { function?: { name?: unknown } }).function?.name, 'bridge', {
-      acting: true
+      acting: false,
+      extension
     })
   )
   for (const { schema, extension } of catalog) {

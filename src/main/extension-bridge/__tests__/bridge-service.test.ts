@@ -103,17 +103,8 @@ async function setup(
     deleteConversation: async (id) => {
       calls.push(`delete:${id}`)
     },
-    // As the desktop lists them: connector tools always, its own tools only when it has them.
-    listTools: async () =>
-      (opts.features ?? PRO).tools
-        ? [
-            { name: 'web_search' },
-            { name: 'notion_search' },
-            { name: 'mail_send' },
-            { name: 'web_use' },
-            { name: 'computer_use' }
-          ]
-        : [{ name: 'notion_search' }],
+    // Desktop's bridge list contains only available read-only tools.
+    listTools: async () => ((opts.features ?? PRO).tools ? [{ name: 'web_search' }] : []),
     runTool: async (name, _args, _browser, tabId) => ({
       ok: true,
       output: `ran ${name}${tabId === undefined ? '' : ` in tab ${tabId}`}`
@@ -400,7 +391,7 @@ describe('sealed rpc', () => {
     })
     expect(
       (await stale.call('device000001', 'tools.run', { name: 'mail_send', args: {} })).body
-    ).toMatchObject({ ok: false, error: 'tool_unavailable' })
+    ).toMatchObject({ ok: false, error: 'tools_unavailable' })
     expect(
       (await stale.call('device000001', 'tools.run', { name: 'web_search', args: {} })).body
     ).toMatchObject({ ok: false, error: 'tools_unavailable' })
