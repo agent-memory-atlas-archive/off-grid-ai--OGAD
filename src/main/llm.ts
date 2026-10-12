@@ -850,7 +850,9 @@ export class LLMService {
         this.getSettings() as Record<string, unknown>
       )
     }
-    if (launchChanged && !this.paused) {
+    // With no model on disk there is nothing to relaunch: the saved settings apply to the first
+    // launch. Restarting here would fail and make a successful save look like an error.
+    if (launchChanged && !this.paused && this.modelsExist()) {
       // A running model is only replaced once the new launch succeeds. If it fails, the
       // previous settings are restored and the previous model is relaunched - unless a newer
       // launch change is already queued, which then owns the engine and its settings.
