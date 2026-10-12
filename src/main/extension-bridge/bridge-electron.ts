@@ -1,3 +1,10 @@
+import { plainConversationPage, plainConversationSearchPage } from './bridge-conversation-pages'
+import type {
+  ConversationPage,
+  ConversationSearchResult,
+  ConversationListParams,
+  ConversationSearchParams
+} from './bridge-conversations'
 // The real dependencies for the extension bridge: key storage (encrypted at rest by the OS),
 // the native confirm dialog, OGAD's chat tables, the live tool registry, and Pro gating.
 //
@@ -341,6 +348,18 @@ const journeyOf = (browser: PairedBrowser): string => `${BROWSER_ORIGIN_PREFIX}$
 /** The task ids each browser was given (bridge-task-progress.ts). */
 const acceptedTasks = createAcceptedTasks()
 
+async function readConversationPage(
+  params: ConversationListParams | ConversationSearchParams
+): Promise<ConversationPage<unknown>> {
+  if (!hasHook(HOOKS.extensionChatRequest)) return plainConversationPage(params)
+  return (
+    (await callHookAsync<ConversationPage<unknown>>(HOOKS.extensionChatRequest, {
+      action: 'conversations',
+      page: params
+    })) ?? { conversations: [] }
+  )
+}
+
 const data: BridgeData = {
   chat: async (request, browser) => {
     if (!hasHook(HOOKS.extensionChatRequest)) {
@@ -359,6 +378,16 @@ const data: BridgeData = {
       : getRagConversations()
           .slice(0, MAX_LISTED)
           .map((row) => toBridgeConversation(row, getRagMessages(row.id))),
+  listConversationPage: readConversationPage,
+  searchConversations: async (params): Promise<ConversationSearchResult> => {
+    if (!hasHook(HOOKS.extensionChatRequest)) return plainConversationSearchPage(params)
+    return (
+      (await callHookAsync<ConversationSearchResult>(HOOKS.extensionChatRequest, {
+        action: 'conversations',
+        page: params
+      })) ?? { conversations: [] }
+    )
+  },
   putConversation: async (raw, browser) => {
     const conversation = parseBridgeConversation(raw)
     if (!conversation) throw new Error('invalid')

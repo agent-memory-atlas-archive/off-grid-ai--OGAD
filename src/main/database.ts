@@ -1357,6 +1357,63 @@ export function searchRagConversationIds(query: string, limit?: number): string[
   return rows.map((row) => row.conversation_id)
 }
 
+/** Desktop chat search (title substring or the same escaped message FTS), newest first.
+ * Keyset pages have no fixed result cap, so older matches remain accessible.
+ */
+export function searchRagConversationPage(
+  query: string,
+  limit: number,
+  cursor?: { updatedAt: string; id: string }
+): {
+  id: string
+  title: string | null
+  created_at: string
+  updated_at: string
+  origin_device_id: string | null
+  excerpt: string
+  turn_count: number
+  fallback_title: string | null
+}[] {
+  const match = ragMessageMatchExpression(query)
+  return getDB()
+    .prepare(
+      `
+    SELECT rc.id, rc.title, rc.created_at, rc.updated_at, rc.origin_device_id,
+      (SELECT COUNT(*) FROM rag_messages WHERE conversation_id = rc.id
+        AND role IN ('user', 'assistant')) AS turn_count,
+      (SELECT substr(content, 1, 48) FROM (
+        SELECT role, content, created_at, id FROM rag_messages WHERE conversation_id = rc.id
+          AND role IN ('user', 'assistant')
+        ORDER BY julianday(created_at) DESC, id DESC LIMIT 40
+      ) WHERE role = 'user' ORDER BY julianday(created_at) ASC, id ASC LIMIT 1) AS fallback_title,
+      COALESCE((SELECT snippet(rag_message_fts, 0, '', '', '…', 32)
+        FROM rag_message_fts WHERE rag_message_fts MATCH ?
+          AND conversation_id = rc.id ORDER BY rank LIMIT 1), rc.title, '') AS excerpt
+    FROM rag_conversations rc
+    WHERE (instr(lower(COALESCE(rc.title, '')), lower(?)) > 0
+      OR rc.id IN (SELECT conversation_id FROM rag_message_fts WHERE rag_message_fts MATCH ?))
+      ${cursor ? 'AND (rc.updated_at < ? OR (rc.updated_at = ? AND rc.id < ?))' : ''}
+    ORDER BY rc.updated_at DESC, rc.id DESC LIMIT ?
+  `
+    )
+    .all(
+      match ?? '""',
+      query,
+      match ?? '""',
+      ...(cursor ? [cursor.updatedAt, cursor.updatedAt, cursor.id] : []),
+      limit
+    ) as {
+    id: string
+    title: string | null
+    created_at: string
+    updated_at: string
+    origin_device_id: string | null
+    excerpt: string
+    turn_count: number
+    fallback_title: string | null
+  }[]
+}
+
 /**
  * Recent messages from OTHER chats in the same project — lets a project chat
  * reference what was discussed in sibling conversations. Returns chronological.

@@ -1,3 +1,10 @@
+import {
+  parseConversationParams,
+  type ConversationListParams,
+  type ConversationSearchParams,
+  type ConversationSearchResult,
+  type ConversationPage
+} from './bridge-conversations'
 import { isToolAllowedForOrigin } from '../tools/tool-origin'
 import { chatHandlers } from './bridge-chat-handlers'
 import { type ChatRequest } from './bridge-chat'
@@ -62,6 +69,8 @@ export interface BridgeData {
   features(): BridgeFeatures
   desktopName(): string
   listConversations(): Promise<unknown[]>
+  listConversationPage?(params: ConversationListParams): Promise<ConversationPage<unknown>>
+  searchConversations?(params: ConversationSearchParams): Promise<ConversationSearchResult>
   putConversation(conversation: unknown, browser: PairedBrowser): Promise<void>
   deleteConversation(id: string): Promise<void>
   listTools(task?: string): Promise<unknown[]>
@@ -156,7 +165,17 @@ export function createBridgeService(deps: BridgeDeps): BridgeService {
       deviceName: browser.name,
       features: deps.data.features()
     }),
-    'conversations.list': async () => deps.data.listConversations(),
+    'conversations.list': async (p) => {
+      const params = parseConversationParams(p, false)
+      if (!Object.keys(p).length) return deps.data.listConversations()
+      if (!deps.data.listConversationPage) throw new Error('chats_unavailable')
+      return deps.data.listConversationPage(params)
+    },
+    'conversations.search': async (p) => {
+      const params = parseConversationParams(p, true) as ConversationSearchParams
+      if (!deps.data.searchConversations) throw new Error('chats_unavailable')
+      return deps.data.searchConversations(params)
+    },
     'conversations.put': async (p, browser) => {
       await deps.data.putConversation(p.conversation, browser)
       return true

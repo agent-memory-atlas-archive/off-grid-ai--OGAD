@@ -196,6 +196,7 @@ export const RPC_METHODS = [
   'chat.control',
   'chat.guide',
   'conversations.list',
+  'conversations.search',
   'conversations.put',
   'conversations.delete',
   'tools.list',

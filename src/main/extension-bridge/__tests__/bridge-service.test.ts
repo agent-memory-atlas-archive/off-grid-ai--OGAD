@@ -1,3 +1,4 @@
+import { conversationSnippet } from '../bridge-conversations'
 import { describe, expect, it } from 'vitest'
 import {
   deriveSessionKey,
@@ -78,6 +79,24 @@ async function setup(
     features: () => opts.features ?? PRO,
     desktopName: () => 'Off Grid AI Desktop',
     listConversations: async () => [{ id: 'c1' }],
+    listConversationPage: async (params) => ({ conversations: [{ id: 'c1', ...params }] }),
+    searchConversations: async (params) => {
+      calls.push(`search:${JSON.stringify(params)}`)
+      return {
+        conversations: [
+          {
+            id: 'c1',
+            title: 'Chat',
+            createdAt: 1,
+            updatedAt: 2,
+            origin: 'desktop',
+            snippet: 'match',
+            turnCount: 3
+          }
+        ],
+        nextCursor: 'next'
+      }
+    },
     putConversation: async () => {
       calls.push('put')
     },
@@ -235,6 +254,7 @@ describe('sealed rpc', () => {
     expect((await s.call('device000001', 'state')).body).toMatchObject({ ok: true })
     for (const [method, params] of [
       ['conversations.list', {}],
+      ['conversations.search', { query: 'match' }],
       ['conversations.put', { conversation: {} }],
       ['conversations.delete', { id: 'c1' }],
       ['tools.list', {}],
@@ -509,4 +529,88 @@ describe('live socket support', () => {
     expect(s.bridge.acceptNonce('device000001', 'n1')).toBe(false)
     expect(s.bridge.acceptNonce('device000002', 'n1')).toBe(true)
   })
+})
+
+describe('sealed conversation search and list parameters', () => {
+  it('trims queries, supplies defaults, and returns the page through the sealed RPC', async () => {
+    const s = await setup()
+    await s.pair()
+    const reply = (await s.call('device000001', 'conversations.search', { query: '  match  ' }))
+      .body
+    expect(reply).toMatchObject({
+      ok: true,
+      result: {
+        conversations: [{ snippet: 'match', turnCount: 3 }],
+        nextCursor: 'next'
+      }
+    })
+    expect(
+      (
+        await s.call('device000001', 'conversations.search', {
+          query: 'match',
+          limit: 50,
+          cursor: 'cursor'
+        })
+      ).body
+    ).toMatchObject({ ok: true, result: { conversations: [{ snippet: 'match', turnCount: 3 }] } })
+    expect(s.calls).toEqual([
+      'search:{"limit":30,"query":"match"}',
+      'search:{"limit":50,"cursor":"cursor","query":"match"}'
+    ])
+    const hit = (reply as { result: { conversations: Record<string, unknown>[] } }).result
+      .conversations[0]!
+    expect(hit).not.toHaveProperty('turns')
+    expect(Object.keys(hit).sort()).toEqual(
+      ['id', 'title', 'createdAt', 'updatedAt', 'origin', 'snippet', 'turnCount'].sort()
+    )
+    expect((await s.call('device000001', 'conversations.list')).body).toMatchObject({
+      ok: true,
+      result: [{ id: 'c1' }]
+    })
+    expect(
+      (await s.call('device000001', 'conversations.list', { limit: 100, cursor: 'cursor' })).body
+    ).toMatchObject({ ok: true, result: { conversations: [{ limit: 100, cursor: 'cursor' }] } })
+  })
+  it('rejects invalid query, limit, cursor and unknown keys', async () => {
+    const s = await setup()
+    await s.pair()
+    for (const params of [
+      {},
+      { query: '' },
+      { query: '   ' },
+      { query: 3 },
+      { query: 'x'.repeat(501) },
+      ...[0, -1, 51, 1.5, '30', null].map((limit) => ({ query: 'match', limit })),
+      { query: 'match', cursor: 3 },
+      { query: 'match', extra: true }
+    ]) {
+      expect((await s.call('device000001', 'conversations.search', params)).body).toMatchObject({
+        ok: false,
+        error: 'invalid'
+      })
+    }
+    for (const params of [
+      { limit: 0 },
+      { limit: 101 },
+      { limit: 1.5 },
+      { cursor: 3 },
+      { extra: true }
+    ]) {
+      expect((await s.call('device000001', 'conversations.list', params)).body).toMatchObject({
+        ok: false,
+        error: 'invalid'
+      })
+    }
+  })
+})
+
+it('caps a plain snippet around a late match', () => {
+  const snippet = conversationSnippet(
+    'prefix '.repeat(100) + '**needle** ' + 'suffix '.repeat(100),
+    'needle'
+  )
+  expect(snippet.length).toBeLessThanOrEqual(200)
+  expect(snippet.length).toBeGreaterThan(190)
+  expect(snippet).toContain('needle')
+  expect(snippet).not.toContain('*')
 })

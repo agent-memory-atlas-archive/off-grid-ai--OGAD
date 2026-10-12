@@ -164,3 +164,99 @@ export function newerBrowserTitle(
 /** What a refused browser edit says: the extension keeps an edit whose refusal names a conflict. */
 export const HISTORY_CONFLICT =
   'conflict: this chat changed differently on the desktop, so the edit was kept in the browser'
+
+export type BridgeListedConversation = Omit<BridgeConversation, 'turns'> & {
+  readonly turns: (BridgeTurn & { readonly image?: string })[]
+}
+export type BridgeConversationSearchHit = Omit<BridgeConversation, 'turns'> & {
+  readonly snippet: string
+  readonly turnCount: number
+}
+export type ConversationSearchResult = ConversationPage<BridgeConversationSearchHit>
+
+export interface ConversationListParams {
+  readonly limit?: number
+  readonly cursor?: string
+}
+export interface ConversationSearchParams extends ConversationListParams {
+  readonly query: string
+}
+export interface ConversationPage<T = BridgeConversation> {
+  readonly conversations: T[]
+  readonly nextCursor?: string
+}
+export interface ConversationCursor {
+  readonly updatedAt: string
+  readonly id: string
+}
+
+/** No parameters keeps the original list response. A parameter opts into pages. */
+export function parseConversationParams(
+  params: Record<string, unknown>,
+  search: boolean
+): ConversationSearchParams | ConversationListParams {
+  const allowed = search ? ['query', 'limit', 'cursor'] : ['limit', 'cursor']
+  if (Object.keys(params).some((key) => !allowed.includes(key))) throw new Error('invalid')
+  if (
+    params.limit !== undefined &&
+    (typeof params.limit !== 'number' ||
+      !Number.isInteger(params.limit) ||
+      params.limit < 1 ||
+      params.limit > (search ? 50 : MAX_LISTED))
+  )
+    throw new Error('invalid')
+  if (params.cursor !== undefined && typeof params.cursor !== 'string') throw new Error('invalid')
+  const page = {
+    limit: (params.limit as number | undefined) ?? (search ? 30 : MAX_LISTED),
+    ...(params.cursor !== undefined ? { cursor: params.cursor as string } : {})
+  }
+  if (!search) return page
+  if (typeof params.query !== 'string') throw new Error('invalid')
+  const query = params.query.trim()
+  if (!query || query.length > 500) throw new Error('invalid')
+  return { ...page, query }
+}
+
+/** Bind a keyset cursor to its operation and query, and preserve timestamp ties. */
+export function readConversationCursor(
+  cursor: string | undefined,
+  query: string | null
+): ConversationCursor | undefined {
+  if (cursor === undefined) return undefined
+  try {
+    if (!cursor || cursor.length > 4000) throw new Error('invalid')
+    const value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
+    if (
+      value.v !== 1 ||
+      value.query !== query ||
+      typeof value.updatedAt !== 'string' ||
+      typeof value.id !== 'string' ||
+      !value.id ||
+      !value.updatedAt
+    )
+      throw new Error('invalid')
+    return { updatedAt: value.updatedAt, id: value.id }
+  } catch {
+    throw new Error('invalid')
+  }
+}
+
+export function writeConversationCursor(row: ConversationCursor, query: string | null): string {
+  return Buffer.from(JSON.stringify({ v: 1, query, ...row })).toString('base64url')
+}
+
+/** Remove stored formatting before selecting a small window around a matched term. */
+export function conversationSnippet(excerpt: string, query: string): string {
+  const plain = excerpt
+    .replace(/<[^>]*>/g, '')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/&(?:lt|gt|amp|quot|apos|#\d+|#x[\da-f]+);/gi, ' ')
+    .replace(/[`*_~#><|[\]]/g, ' ')
+    .replace(/\p{Cc}/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const terms = query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+  const positions = terms.map((term) => plain.toLowerCase().indexOf(term)).filter((n) => n >= 0)
+  const start = positions.length ? Math.max(0, Math.min(...positions) - 60) : 0
+  return plain.slice(start, start + 200).trim()
+}
