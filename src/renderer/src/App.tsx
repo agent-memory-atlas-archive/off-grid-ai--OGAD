@@ -72,6 +72,7 @@ import { normalizeProNavigationIntent, type ProNavigationIntent } from './lib/pr
 import { navigateSearchHit } from './lib/search-navigation'
 import { internalTabPaletteScreens } from './lib/paletteScreens'
 import { getSlot, SLOTS } from './bootstrap/slotRegistry'
+import { NavHighlight, ScreenTransition } from '@offgrid/operator-ui/operator/experience'
 import { SidebarNavigationMenu } from './components/navigation/SidebarNavigationMenu'
 import { StartupNotice } from './components/StartupNotice'
 import { CHAT_VIEW, setCurrentView } from './lib/current-view'
@@ -187,7 +188,7 @@ function ReprocessingBanner(): React.JSX.Element | null {
 // text token, so `hover:text-neutral-900` painted the label near-white on a near-white row.
 const navRowClass = (expanded: boolean, active = false): string =>
   cn(
-    'group/nav relative flex items-center gap-3 rounded-lg py-2 text-sm transition-colors',
+    'group/nav relative isolate flex items-center gap-3 rounded-lg py-2 text-sm transition-colors',
     expanded ? 'px-3' : 'justify-center px-0',
     active ? 'text-emerald-400' : 'text-neutral-400 hover:bg-neutral-500/10 hover:text-white'
   )
@@ -1062,20 +1063,7 @@ function AppContent(): React.JSX.Element {
         className={navRowClass(sidebarOpen, active)}
       >
         {/* One highlight across the rail: it glides from the old item to the new one. */}
-        {active && (
-          <motion.span
-            layoutId="nav-active"
-            aria-hidden
-            className="absolute inset-0 rounded-lg"
-            transition={{ type: 'spring', stiffness: 380, damping: 34 }}
-            style={{
-              background:
-                'linear-gradient(90deg, rgb(var(--og-rgb-primary) / 0.12), rgb(var(--og-rgb-text) / 0.02) 70%)',
-              boxShadow:
-                'inset 2px 0 0 rgb(var(--og-rgb-primary) / 0.9), inset 0 0 0 1px rgb(var(--og-rgb-text) / 0.04)'
-            }}
-          />
-        )}
+        <NavHighlight active={active} group="sidebar" />
         <span className="relative z-10 flex shrink-0">{item.icon}</span>
         {sidebarOpen && (
           <span className="relative z-10 flex-1 text-left whitespace-pre">{item.label}</span>
@@ -1328,42 +1316,37 @@ function AppContent(): React.JSX.Element {
             </AnimatePresence>
             {/* Content Area */}
             <div className="flex-1 overflow-hidden">
-              <AnimatePresence mode="wait">
+              <ScreenTransition
+                screenKey={
+                  viewMode === 'chats' && selectedSessionId
+                    ? `chat-detail-${selectedSessionId}`
+                    : viewMode
+                }
+                className={
+                  viewMode === 'chats' && selectedSessionId
+                    ? 'h-full'
+                    : 'h-full overflow-y-auto p-6'
+                }
+              >
                 {viewMode === 'chats' && selectedSessionId ? (
-                  <motion.div
-                    key={`chat-detail-${selectedSessionId}`}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.12, ease: [0.25, 0.46, 0.45, 0.94] }}
-                    className="h-full"
-                  >
-                    <ChatDetail
-                      sessionId={selectedSessionId}
-                      onBack={handleBack}
-                      onSelectEntity={(entityId) => {
-                        navigateTo('entities', () => {
-                          setSelectedEntityId(entityId)
-                          setSelectedSessionId(null)
-                        })
-                      }}
-                      onSelectMemory={(memoryId) => {
-                        navigateTo('memories', () => {
-                          setSelectedMemoryId(memoryId)
-                          setSelectedSessionId(null)
-                        })
-                      }}
-                    />
-                  </motion.div>
+                  <ChatDetail
+                    sessionId={selectedSessionId}
+                    onBack={handleBack}
+                    onSelectEntity={(entityId) => {
+                      navigateTo('entities', () => {
+                        setSelectedEntityId(entityId)
+                        setSelectedSessionId(null)
+                      })
+                    }}
+                    onSelectMemory={(memoryId) => {
+                      navigateTo('memories', () => {
+                        setSelectedMemoryId(memoryId)
+                        setSelectedSessionId(null)
+                      })
+                    }}
+                  />
                 ) : (
-                  <motion.div
-                    key={viewMode}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.12, ease: [0.25, 0.46, 0.45, 0.94] }}
-                    className="p-6 h-full overflow-y-auto"
-                  >
+                  <>
                     {proFeatureComingSoon(viewMode, currentPlatform(), true) ? (
                       <UpgradeScreen variant="coming-soon" feature={getProFeature(viewMode)} />
                     ) : viewMode === 'explore' ? (
@@ -1480,9 +1463,9 @@ function AppContent(): React.JSX.Element {
                         <UpgradeScreen feature={getProFeature(viewMode)} />
                       ))
                     )}
-                  </motion.div>
+                  </>
                 )}
-              </AnimatePresence>
+              </ScreenTransition>
             </div>
           </div>
         </div>
