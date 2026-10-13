@@ -128,7 +128,7 @@
     "ws": "^8.18.3"
   },
   "optionalDependencies": {
-    "@offgrid/operator-ui": "github:wednesday-solutions/component-library-animations#b5782b7695145369f82fc251ac70cf178c53ba4e",
+    "@offgrid/operator-ui": "github:wednesday-solutions/component-library-animations#55f57b79e196ea47e16a1f6f5eb3993894c4233b",
     "@nut-tree-fork/nut-js": "^4.2.6"
   },
   "devDependencies": {
