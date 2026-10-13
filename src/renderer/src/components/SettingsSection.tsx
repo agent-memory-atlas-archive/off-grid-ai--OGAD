@@ -45,13 +45,13 @@ export function SettingsSection(props: {
         setOpen(next)
         rememberOpen(props.id, next)
       }}
-      className="group mb-3 rounded-md border border-neutral-800 bg-neutral-950/40"
+      className="group mb-6 rounded-md border border-neutral-800 bg-neutral-950/40"
     >
-      <CollapsibleTrigger className="flex w-full items-start justify-between gap-3 px-3 py-2.5 text-left transition-colors hover:bg-neutral-900/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500/60">
+      <CollapsibleTrigger className="flex w-full items-start justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-neutral-900/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500/60">
         <span className="min-w-0">
-          <span className="block text-xs font-medium text-neutral-200">{props.title}</span>
+          <span className="block text-[13px] font-medium text-neutral-200">{props.title}</span>
           {props.summary ? (
-            <span className="mt-0.5 block truncate text-[11px] text-neutral-500">
+            <span className="mt-1 block truncate text-[11.5px] text-neutral-500">
               {props.summary}
             </span>
           ) : null}
@@ -62,7 +62,7 @@ export function SettingsSection(props: {
         />
       </CollapsibleTrigger>
       <CollapsibleContent className="offgrid-smooth-collapsible overflow-hidden">
-        <div className="border-t border-neutral-800 px-3 pb-1 pt-3">{props.children}</div>
+        <div className="border-t border-neutral-900 px-4 pb-3 pt-4">{props.children}</div>
       </CollapsibleContent>
     </Collapsible>
   )

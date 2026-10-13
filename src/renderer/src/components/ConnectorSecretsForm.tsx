@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 
 interface ConnectorSecret {
   readonly key: string
@@ -49,7 +50,7 @@ export function ConnectorSecretsForm({
           disabled={connecting}
           className="rounded-md bg-green-500 px-2.5 py-1 text-xs text-neutral-950 hover:bg-green-400 disabled:opacity-40"
         >
-          {connecting ? 'Connecting…' : 'Connect'}
+          <TextMorph as="span">{connecting ? 'Connecting…' : 'Connect'}</TextMorph>
         </button>
         <button
           onClick={onCancel}

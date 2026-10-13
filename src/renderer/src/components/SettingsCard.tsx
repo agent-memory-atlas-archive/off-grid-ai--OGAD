@@ -2,6 +2,7 @@ import { createContext, useContext, useState } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { LockKey, CaretDown, CaretLeft, Clock } from '@phosphor-icons/react'
 import { cn } from '@renderer/lib/utils'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
 
 // Reusable Settings chrome, extracted from the Settings screen so both core and the
 // pro package (pro/renderer/settings-sections.tsx) can render sections with the same
@@ -180,13 +181,13 @@ export function ProPlaceholder({
           transition={{ duration: 0.6, delay }}
         >
           {variant === 'coming-soon' ? (
-            <span className="absolute right-4 top-4 inline-flex items-center gap-1 rounded-full border border-neutral-700 bg-neutral-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-neutral-300">
+            <Badge variant="outline" className="absolute right-4 top-4">
               <Clock weight="bold" className="h-3 w-3" /> Coming soon
-            </span>
+            </Badge>
           ) : (
-            <span className="absolute right-4 top-4 inline-flex items-center gap-1 rounded-full border border-green-500/30 bg-green-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-400">
+            <Badge variant="success" className="absolute right-4 top-4">
               <LockKey weight="bold" className="h-3 w-3" /> Pro
-            </span>
+            </Badge>
           )}
           <h3 className="mb-1 pr-28 text-base font-medium text-neutral-300">{title}</h3>
           <p className="text-sm text-neutral-600">{description}</p>

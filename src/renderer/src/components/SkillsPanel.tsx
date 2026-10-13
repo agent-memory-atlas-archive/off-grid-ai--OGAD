@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useRendererEntitlement } from '@renderer/bootstrap/useRendererEntitlement'
 import { SidePanel } from './SidePanel'
+import { AnimatePresence, motion } from 'motion/react'
+import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
+import { Empty, EmptyContent, EmptyDescription } from '@offgrid/operator-ui/operator/coss/empty'
+import { SettingsSelect } from './SettingsSelect'
 
 // Right-side panel to view, create, edit, and delete Skills — reusable
 // instruction packs invoked from chat with /skill-name. Mirrors the ArtifactCanvas
@@ -228,18 +232,22 @@ export function SkillsPanel({
                     Automation{' '}
                     <span className="text-neutral-600">(optional — run this skill on its own)</span>
                   </label>
-                  <select
-                    value={draft.triggerKind}
-                    onChange={(e) =>
-                      setDraft({ ...draft, triggerKind: e.target.value as TriggerKind })
-                    }
-                    className="mt-2 w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 outline-none focus:border-green-500"
-                  >
-                    <option value="">Manual only (invoke with /name)</option>
-                    <option value="schedule">On a schedule (daily)</option>
-                    <option value="keyword">When a keyword is captured</option>
-                    <option value="event">On a new event</option>
-                  </select>
+                  <div className="mt-2">
+                    <SettingsSelect
+                      id="skill-trigger-kind"
+                      label="Automation"
+                      value={draft.triggerKind}
+                      onValueChange={(value) =>
+                        setDraft({ ...draft, triggerKind: value as TriggerKind })
+                      }
+                      options={[
+                        { value: '', label: 'Manual only (invoke with /name)' },
+                        { value: 'schedule', label: 'On a schedule (daily)' },
+                        { value: 'keyword', label: 'When a keyword is captured' },
+                        { value: 'event', label: 'On a new event' }
+                      ]}
+                    />
+                  </div>
 
                   {draft.triggerKind === 'schedule' && (
                     <input
@@ -258,14 +266,18 @@ export function SkillsPanel({
                     />
                   )}
                   {draft.triggerKind === 'event' && (
-                    <select
-                      value={draft.triggerConfig || 'calendar'}
-                      onChange={(e) => setDraft({ ...draft, triggerConfig: e.target.value })}
-                      className="mt-2 w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 outline-none focus:border-green-500"
-                    >
-                      <option value="calendar">New calendar event</option>
-                      <option value="approval">New approval</option>
-                    </select>
+                    <div className="mt-2">
+                      <SettingsSelect
+                        id="skill-trigger-event"
+                        label="Event"
+                        value={draft.triggerConfig || 'calendar'}
+                        onValueChange={(value) => setDraft({ ...draft, triggerConfig: value })}
+                        options={[
+                          { value: 'calendar', label: 'New calendar event' },
+                          { value: 'approval', label: 'New approval' }
+                        ]}
+                      />
+                    </div>
                   )}
 
                   {draft.triggerKind && (
@@ -280,12 +292,11 @@ export function SkillsPanel({
                         rows={3}
                         className="mt-2 w-full resize-none rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm leading-relaxed text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
                       />
-                      <label className="mt-2 flex items-center gap-2 text-xs text-neutral-400">
-                        <input
-                          type="checkbox"
+                      <label className="mt-3 flex cursor-pointer items-center gap-3 text-xs text-neutral-400">
+                        <Switch
+                          aria-label="Let it use connectors"
                           checked={draft.connectors}
-                          onChange={(e) => setDraft({ ...draft, connectors: e.target.checked })}
-                          className="accent-green-500"
+                          onCheckedChange={(checked) => setDraft({ ...draft, connectors: checked })}
                         />
                         Let it use connectors (writes still require your approval)
                       </label>
@@ -323,29 +334,38 @@ export function SkillsPanel({
             </div>
           </div>
         ) : skills.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-neutral-600">
-            <p className="text-sm">No skills yet.</p>
-            <button
-              onClick={() => setDraft({ ...BLANK })}
-              className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 transition-colors hover:border-green-500 hover:text-green-500"
-            >
-              Create your first skill
-            </button>
-          </div>
+          <Empty className="h-full">
+            <EmptyDescription className="text-sm text-neutral-600">No skills yet.</EmptyDescription>
+            <EmptyContent>
+              <button
+                onClick={() => setDraft({ ...BLANK })}
+                className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 transition-colors hover:border-green-500 hover:text-green-500"
+              >
+                Create your first skill
+              </button>
+            </EmptyContent>
+          </Empty>
         ) : (
           <div className="flex flex-col gap-2">
-            {skills.map((s) => (
-              <button
-                key={s.name}
-                onClick={() => openSkill(s.name)}
-                className="flex flex-col items-start gap-0.5 rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2.5 text-left transition-colors hover:border-green-500/60"
-              >
-                <span className="text-sm text-green-500">/{s.name}</span>
-                {s.description ? (
-                  <span className="text-xs text-neutral-500">{s.description}</span>
-                ) : null}
-              </button>
-            ))}
+            <AnimatePresence initial={false}>
+              {skills.map((s) => (
+                <motion.button
+                  key={s.name}
+                  layout
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                  onClick={() => openSkill(s.name)}
+                  className="flex flex-col items-start gap-0.5 rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2.5 text-left transition-colors hover:border-green-500/60"
+                >
+                  <span className="text-sm text-green-500">/{s.name}</span>
+                  {s.description ? (
+                    <span className="text-xs text-neutral-500">{s.description}</span>
+                  ) : null}
+                </motion.button>
+              ))}
+            </AnimatePresence>
           </div>
         )}
       </div>

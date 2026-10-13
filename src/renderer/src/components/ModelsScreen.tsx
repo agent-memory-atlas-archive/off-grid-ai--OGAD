@@ -1,7 +1,31 @@
 import { modelShowsOnTab } from '../../../shared/model-settings-rules'
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { isDecisionModel, useTaskRoles } from '../lib/task-roles'
-import { AnimatePresence } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
+import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import {
+  Progress,
+  ProgressIndicator,
+  ProgressTrack
+} from '@offgrid/operator-ui/operator/coss/progress'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
+import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
+import { Empty, EmptyDescription, EmptyMedia } from '@offgrid/operator-ui/operator/coss/empty'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput
+} from '@offgrid/operator-ui/operator/coss/input-group'
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue
+} from '@offgrid/operator-ui/operator/coss/select'
 import { Button } from '@offgrid/operator-ui/operator/button'
 import '@offgrid/operator-ui/styles.css'
 import {
@@ -9,8 +33,6 @@ import {
   IconCircleCheck,
   IconLoader2,
   IconSearch,
-  IconChevronDown,
-  IconCheck,
   IconX,
   IconTrash,
   IconUpload,
@@ -73,59 +95,34 @@ function Sel({
   allLabel?: string
   prefix?: string
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const onDoc = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDoc)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
   const items = allLabel ? [{ key: 'all', label: allLabel }, ...options] : [...options]
-  const current = items.find((o) => o.key === value) ?? items[0]
+  const labelFor = (key: string): string =>
+    (items.find((o) => o.key === key) ?? items[0])?.label ?? ''
   return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className={`flex items-center gap-1 rounded border bg-neutral-900/60 px-2 py-1 text-[10px] transition-colors ${open ? 'border-green-500 text-white' : 'border-neutral-800 text-neutral-400 hover:border-neutral-600 hover:text-white'}`}
+    <Select
+      value={value}
+      onValueChange={(next) => {
+        if (next != null) onChange(next)
+      }}
+      items={items.map((o) => ({ value: o.key, label: o.label }))}
+    >
+      <SelectTrigger
+        size="sm"
+        aria-label={prefix ? prefix.replace(/:\s*$/, '') : (allLabel ?? labelFor(value))}
+        className="min-h-0 w-auto min-w-0 gap-1 rounded px-2 py-1 text-[10px] sm:min-h-0 sm:text-[10px]"
       >
-        <span>
-          {prefix ?? ''}
-          {current?.label}
-        </span>
-        <IconChevronDown
-          className={`h-2.5 w-2.5 text-neutral-500 transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
-        />
-      </button>
-      {open && (
-        <div className="absolute left-0 z-30 mt-1 min-w-[150px] overflow-hidden rounded border border-neutral-800 bg-neutral-950 py-0.5 shadow-xl">
-          {items.map((o) => (
-            <button
-              key={o.key}
-              onClick={() => {
-                onChange(o.key)
-                setOpen(false)
-              }}
-              className={`flex w-full items-center gap-1.5 px-2.5 py-1 text-left text-[10px] transition-colors hover:bg-neutral-900 ${o.key === value ? 'text-green-500' : 'text-neutral-300'}`}
-            >
-              <IconCheck
-                className={`h-2.5 w-2.5 shrink-0 transition-opacity ${o.key === value ? 'opacity-100' : 'opacity-0'}`}
-              />
-              {o.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+        <SelectValue>
+          {(key: string) => `${prefix ?? ''}${labelFor(key)}`}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectPopup>
+        {items.map((o) => (
+          <SelectItem key={o.key} value={o.key} className="text-[10px] sm:text-[10px]">
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectPopup>
+    </Select>
   )
 }
 
@@ -835,9 +832,14 @@ export function ModelsScreen({
       !isHf && (bonsaiFits(m) || (!!recommendedImageId && m.id === recommendedImageId))
 
     return (
-      <div
+      <motion.div
         key={m.id}
         role="listitem"
+        layout
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
         className={`group flex flex-col gap-2 rounded-md border p-3 transition-all duration-150 hover:border-neutral-700 ${active ? 'border-green-500/50 bg-green-500/5' : 'border-neutral-800 bg-neutral-900/40'}`}
       >
         {/* Title row */}
@@ -965,7 +967,8 @@ export function ModelsScreen({
             >
               {switching === m.id ? (
                 <>
-                  <IconLoader2 className="h-3 w-3 animate-spin" /> Switching
+                  <IconLoader2 className="h-3 w-3 animate-spin" />{' '}
+                  <TextShimmer as="span">Switching</TextShimmer>
                 </>
               ) : (
                 'Use'
@@ -980,11 +983,15 @@ export function ModelsScreen({
             <>
               <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[10px] text-neutral-500">
                 <span className="text-neutral-300">
-                  {prog.status === 'queued'
-                    ? 'Queued'
-                    : downloadProgress?.determinate
-                      ? `${Math.round(downloadProgress.percentage ?? 0)}%`
-                      : 'Downloading'}
+                  {prog.status === 'queued' ? (
+                    'Queued'
+                  ) : downloadProgress?.determinate ? (
+                    <>
+                      <AnimatedNumber value={Math.round(downloadProgress.percentage ?? 0)} />%
+                    </>
+                  ) : (
+                    <TextShimmer as="span">Downloading</TextShimmer>
+                  )}
                 </span>
                 {downloadProgress && downloadProgress.totalBytes !== undefined ? (
                   <span className="whitespace-nowrap">
@@ -1108,14 +1115,16 @@ export function ModelsScreen({
             carries the exact amount, and the part being fetched is named at the end of it where it
             belongs (adding a projector to a model already on disk is not a re-download). */}
         {downloading && (
-          <div className="h-0.5 w-full overflow-hidden rounded-full bg-neutral-800">
-            <div
-              className="h-full w-full origin-left bg-green-500 transition-transform duration-300 ease-out motion-reduce:transition-none"
-              style={{ transform: `scaleX(${(downloadProgress?.percentage ?? 0) / 100})` }}
-            />
-          </div>
+          <Progress
+            aria-label={`${m.name} download progress`}
+            value={downloadProgress?.percentage ?? 0}
+          >
+            <ProgressTrack className="h-0.5 bg-neutral-800">
+              <ProgressIndicator className="bg-green-500 duration-300 ease-out motion-reduce:transition-none" />
+            </ProgressTrack>
+          </Progress>
         )}
-      </div>
+      </motion.div>
     )
   }
 
@@ -1124,8 +1133,20 @@ export function ModelsScreen({
   return (
     <div className="flex h-full flex-col font-mono">
       {/* Header */}
-      <div className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-6 py-3">
-        <h1 className="text-xs font-medium uppercase tracking-widest text-neutral-400">Models</h1>
+      <div className="flex shrink-0 items-start justify-between gap-6 px-6 pb-6 pt-8">
+        <div className="min-w-0">
+          <TextEffect
+            as="h1"
+            preset="fade-in-blur"
+            per="char"
+            className="text-lg font-light tracking-tight text-white"
+          >
+            Models
+          </TextEffect>
+          <p className="mt-1 text-sm text-neutral-500">
+            Download, switch, and manage the models that run on this {deviceNoun()}.
+          </p>
+        </div>
         <div className="flex items-center gap-3">
           <button
             onClick={importModel}
@@ -1137,50 +1158,52 @@ export function ModelsScreen({
             ) : (
               <IconUpload className="h-3 w-3" />
             )}
-            {importing ? 'Importing…' : 'Import .gguf'}
+            <TextMorph as="span">{importing ? 'Importing…' : 'Import .gguf'}</TextMorph>
           </button>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex shrink-0 items-end gap-0 border-b border-neutral-800 px-6">
-        {tabs.map(({ id: kind, label }) => (
-          <button
-            key={kind}
-            aria-current={activeKind === kind ? 'page' : undefined}
-            onClick={() => selectKind(kind)}
-            className={`flex items-center gap-1.5 px-3 py-2 text-[10px] uppercase tracking-wider transition-colors duration-150 ${activeKind === kind ? 'border-b-2 border-green-500 text-white' : 'text-neutral-500 hover:text-neutral-300'}`}
-          >
-            {kind === 'storage' ? (
-              <>
-                <IconDatabase className="h-3 w-3" /> Storage
-                {/* Live counts: installed, transferring, queued, and failed. */}
-                <span className="ml-1 font-normal normal-case tracking-normal text-neutral-600">
-                  {installed.length}
+      <div className="flex shrink-0 items-center gap-3 border-b border-neutral-800 px-6 py-2">
+        <Segmented
+          label="Model types"
+          size="sm"
+          value={activeKind}
+          onValueChange={selectKind}
+          options={tabs.map(({ id: kind, label }) => ({
+            id: kind,
+            label: kind === 'storage' ? 'Storage' : label,
+            icon:
+              kind === 'storage' ? (
+                <span className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider">
+                  <IconDatabase className="h-3 w-3" /> Storage
+                  {/* Live counts: installed, transferring, queued, and failed. */}
+                  <span className="ml-1 font-normal normal-case tracking-normal text-neutral-600">
+                    {installed.length}
+                  </span>
+                  {storageCounts.downloading > 0 && (
+                    <Badge size="sm" variant="success">
+                      {storageCounts.downloading}↓
+                    </Badge>
+                  )}
+                  {storageCounts.queued > 0 && (
+                    <Badge size="sm" variant="secondary">
+                      {storageCounts.queued} queued
+                    </Badge>
+                  )}
+                  {storageCounts.failed > 0 && (
+                    <Badge size="sm" variant="error">
+                      {storageCounts.failed}✕
+                    </Badge>
+                  )}
                 </span>
-                {storageCounts.downloading > 0 && (
-                  <span className="rounded-sm bg-green-500/15 px-1 text-[8px] text-green-500">
-                    {storageCounts.downloading}↓
-                  </span>
-                )}
-                {storageCounts.queued > 0 && (
-                  <span className="rounded-sm bg-neutral-800 px-1 text-[8px] text-neutral-400">
-                    {storageCounts.queued} queued
-                  </span>
-                )}
-                {storageCounts.failed > 0 && (
-                  <span className="rounded-sm bg-red-500/15 px-1 text-[8px] text-red-400">
-                    {storageCounts.failed}✕
-                  </span>
-                )}
-              </>
-            ) : (
-              label
-            )}
-          </button>
-        ))}
+              ) : (
+                <span className="text-[10px] uppercase tracking-wider">{label}</span>
+              )
+          }))}
+        />
         {ramGb && activeKind !== 'storage' && (
-          <span className="ml-auto pb-2 text-[9px] text-neutral-700">
+          <span className="ml-auto text-[9px] text-neutral-700">
             {ramGb}GB RAM · fits ≤{Math.round(ramGb * FIT_OK_FRAC)}GB
           </span>
         )}
@@ -1199,19 +1222,22 @@ export function ModelsScreen({
           {/* Filter bar */}
           <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-neutral-800/60 px-6 py-2">
             {searchEnabled && (
-              <div
-                data-focus-surface="models-search"
-                className="flex items-center gap-1.5 rounded border border-neutral-800 bg-neutral-900/60 px-2 py-1 focus-within:border-neutral-600"
-              >
-                <IconSearch className="h-3 w-3 shrink-0 text-neutral-600" />
-                <input
+              <InputGroup data-focus-surface="models-search" className="w-auto rounded">
+                <InputGroupAddon>
+                  <IconSearch className="h-3 w-3 shrink-0 text-neutral-600" aria-hidden="true" />
+                </InputGroupAddon>
+                <InputGroupInput
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder={`Search HuggingFace…`}
-                  className="w-44 bg-transparent text-[10px] text-white placeholder-neutral-600 outline-none"
+                  className="w-44 text-[10px]"
                 />
-                {searching && <IconLoader2 className="h-3 w-3 animate-spin text-neutral-600" />}
-              </div>
+                {searching && (
+                  <InputGroupAddon align="inline-end">
+                    <IconLoader2 className="h-3 w-3 animate-spin text-neutral-600" />
+                  </InputGroupAddon>
+                )}
+              </InputGroup>
             )}
             {['text', 'vision', 'computer_use'].includes(activeKind) && (
               <Button
@@ -1226,7 +1252,7 @@ export function ModelsScreen({
                 }}
                 title="Choose full models with Multi-Token Prediction weights"
               >
-                MTP downloads: {mtpDownloads ? 'On' : 'Off'}
+                <TextMorph as="span">{`MTP downloads: ${mtpDownloads ? 'On' : 'Off'}`}</TextMorph>
               </Button>
             )}
             <Sel
@@ -1249,16 +1275,22 @@ export function ModelsScreen({
               options={SORT_OPTIONS}
               prefix="Sort: "
             />
-            {!searchingMode &&
-              (SIZE_BUCKETS as readonly number[]).map((b) => (
-                <button
-                  key={b}
-                  onClick={() => setSizeBucket((c) => (c === b ? null : b))}
-                  className={`rounded border px-2 py-0.5 text-[9px] transition-all duration-150 active:scale-95 ${sizeBucket === b ? 'border-green-500 bg-green-500/10 text-green-500' : 'border-neutral-800 text-neutral-500 hover:border-neutral-600 hover:text-neutral-300'}`}
-                >
-                  ≤{b}GB
-                </button>
-              ))}
+            {!searchingMode && (
+              <Segmented
+                label="Fits in memory"
+                size="sm"
+                tone="quiet"
+                value={sizeBucket === null ? 'any' : String(sizeBucket)}
+                onValueChange={(id) => setSizeBucket(id === 'any' ? null : Number(id))}
+                options={[
+                  { id: 'any', label: 'Any' },
+                  ...(SIZE_BUCKETS as readonly number[]).map((b) => ({
+                    id: String(b),
+                    label: `≤${b}GB`
+                  }))
+                ]}
+              />
+            )}
             {hasActiveFilters(filterState) && (
               <button
                 onClick={() => {
@@ -1278,20 +1310,27 @@ export function ModelsScreen({
           {/* Use-case chips (text only, browse mode) */}
           {activeKind === 'text' && !searchingMode && (
             <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-neutral-800/40 px-6 py-1.5">
-              {USE_CASES.filter((u) => u.id !== 'all').map((u) => (
-                <button
-                  key={u.id}
-                  onClick={() => setUseCase((cur) => (cur === u.id ? 'all' : u.id))}
-                  className={`rounded-full border px-2 py-0.5 text-[9px] transition-all duration-150 active:scale-95 ${useCase === u.id ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-600 hover:border-neutral-700 hover:text-neutral-400'}`}
-                >
-                  {u.label}
-                </button>
-              ))}
-              {useCase !== 'all' && (
-                <span className="ml-2 text-[9px] text-neutral-600">
-                  {USE_CASES.find((u) => u.id === useCase)?.blurb}
-                </span>
-              )}
+              <Segmented
+                label="Use case"
+                size="sm"
+                value={useCase}
+                onValueChange={setUseCase}
+                options={USE_CASES.map((u) => ({ id: u.id, label: u.label }))}
+              />
+              <AnimatePresence mode="wait" initial={false}>
+                {useCase !== 'all' && (
+                  <motion.span
+                    key={useCase}
+                    initial={{ opacity: 0, y: 6, filter: 'blur(4px)' }}
+                    animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                    exit={{ opacity: 0, y: -6, filter: 'blur(4px)' }}
+                    transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+                    className="ml-2 text-[9px] text-neutral-600"
+                  >
+                    {USE_CASES.find((u) => u.id === useCase)?.blurb}
+                  </motion.span>
+                )}
+              </AnimatePresence>
             </div>
           )}
 
@@ -1334,11 +1373,17 @@ export function ModelsScreen({
             {searchingMode ? (
               <>
                 {displayed.length === 0 && !searching && (
-                  <p className="px-6 py-4 text-xs text-neutral-600">
-                    No results for &quot;{query}&quot;.
-                  </p>
+                  <Empty className="px-6 py-8 md:py-8">
+                    <EmptyMedia variant="icon">
+                      <IconSearch className="text-neutral-600" />
+                    </EmptyMedia>
+                    <EmptyDescription className="text-xs text-neutral-600">
+                      No results for &quot;{query}&quot;.
+                    </EmptyDescription>
+                  </Empty>
                 )}
                 <div role="list" aria-label="Model search results" className={GRID}>
+                  <AnimatePresence initial={false}>
                   {displayed
                     .filter(
                       (result, index, results) =>
@@ -1363,15 +1408,21 @@ export function ModelsScreen({
                         !list.some((model) => model.id === r.id)
                       )
                     )}
+                  </AnimatePresence>
                 </div>
               </>
             ) : (
               (() => {
                 if (displayedCatalog.length === 0) {
                   return (
-                    <p className="px-6 py-4 text-xs text-neutral-600">
-                      No models match the current filters.
-                    </p>
+                    <Empty className="px-6 py-8 md:py-8">
+                      <EmptyMedia variant="icon">
+                        <IconSearch className="text-neutral-600" />
+                      </EmptyMedia>
+                      <EmptyDescription className="text-xs text-neutral-600">
+                        No models match the current filters.
+                      </EmptyDescription>
+                    </Empty>
                   )
                 }
                 // One group of cards, the same rows on every tab: on this device, remote (a saved
@@ -1416,7 +1467,9 @@ export function ModelsScreen({
                           {heading}
                         </div>
                         <div role="list" aria-label={label} className={GRID}>
-                          {list.map((m) => renderCard(m))}
+                          <AnimatePresence initial={false}>
+                            {list.map((m) => renderCard(m))}
+                          </AnimatePresence>
                         </div>
                       </div>
                     ) : null

@@ -15,6 +15,8 @@ import {
   type SystemHealthComponentStatusContract,
   type SystemHealthContract
 } from '../../../../shared/ipc-contracts'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
 
 // Emerald is the only accent (DESIGN): healthy = emerald, everything else reads
 // through opacity tiers + icon shape, never a status color palette.
@@ -136,7 +138,7 @@ export function HealthPanel(): React.ReactElement {
             title="Stop the chat engine and free its model port (for LM Studio or another tool) without quitting the app"
             className="text-[11px] text-neutral-500 transition-colors hover:text-white active:scale-95 disabled:opacity-50"
           >
-            {freeing ? 'Freeing...' : 'Free engine'}
+            <TextMorph as="span">{freeing ? 'Freeing...' : 'Free engine'}</TextMorph>
           </button>
           <button
             onClick={refresh}
@@ -149,7 +151,16 @@ export function HealthPanel(): React.ReactElement {
       </div>
 
       {!health ? (
-        <div className="px-4 py-6 text-center text-xs text-neutral-600">Checking components…</div>
+        // Shaped like the component grid that replaces it.
+        <div
+          className="grid grid-cols-1 gap-1.5 p-3 sm:grid-cols-2 lg:grid-cols-3"
+          aria-busy="true"
+        >
+          <p className="sr-only">Checking components…</p>
+          {Array.from({ length: 6 }, (_, index) => (
+            <Skeleton key={index} className="h-11 rounded" />
+          ))}
+        </div>
       ) : (
         <div className="grid grid-cols-1 gap-1.5 p-3 sm:grid-cols-2 lg:grid-cols-3">
           {health.components.map((c) => {

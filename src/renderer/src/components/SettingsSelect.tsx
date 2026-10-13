@@ -1,12 +1,18 @@
-import { useRef, useState } from 'react'
-import { CaretDown } from '@phosphor-icons/react'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger
-} from './ui/dropdown-menu'
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue
+} from '@offgrid/operator-ui/operator/coss/select'
+import {
+  Combobox,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxPopup
+} from '@offgrid/operator-ui/operator/coss/combobox'
 
 export interface SettingsSelectOption<T extends string> {
   value: T
@@ -14,6 +20,8 @@ export interface SettingsSelectOption<T extends string> {
   disabled?: boolean
 }
 
+// Every settings picker. A long list (installed models) is searchable, so it is a combobox you
+// type into; everything else is a plain select whose options roll open from the trigger.
 export function SettingsSelect<T extends string>({
   id,
   label,
@@ -34,71 +42,61 @@ export function SettingsSelect<T extends string>({
   onValueChange: (value: T) => void
 }): React.JSX.Element {
   const selected = options.find((option) => option.value === value)
-  const [query, setQuery] = useState('')
-  const searchRef = useRef<HTMLInputElement>(null)
-  const visibleOptions = searchable
-    ? options.filter((option) => `${option.label} ${option.value}`.toLowerCase().includes(query.trim().toLowerCase()))
-    : options
+
+  if (searchable) {
+    return (
+      <Combobox<SettingsSelectOption<T>>
+        items={options}
+        value={selected ?? null}
+        onValueChange={(option) => {
+          if (option) onValueChange(option.value)
+        }}
+        itemToStringLabel={(option) => option.label}
+        isItemEqualToValue={(option, current) => option.value === current.value}
+        disabled={disabled}
+      >
+        <ComboboxInput
+          id={id}
+          size="sm"
+          aria-label={label}
+          placeholder={options.length === 0 ? placeholder : 'Search models'}
+          triggerProps={{ 'aria-label': `Show ${label.toLowerCase()} options` }}
+        />
+        <ComboboxPopup>
+          <ComboboxEmpty>No matching models.</ComboboxEmpty>
+          <ComboboxList>
+            {(option: SettingsSelectOption<T>) => (
+              <ComboboxItem key={option.value} value={option} disabled={option.disabled}>
+                {option.label}
+              </ComboboxItem>
+            )}
+          </ComboboxList>
+        </ComboboxPopup>
+      </Combobox>
+    )
+  }
 
   return (
-    <DropdownMenu onOpenChange={(open) => {
-      if (open && searchable) requestAnimationFrame(() => searchRef.current?.focus())
-      if (!open) setQuery('')
-    }}>
-      <DropdownMenuTrigger asChild disabled={disabled}>
-        <button
-          id={id}
-          type="button"
-          aria-label={label}
-          className="flex w-full items-center justify-between gap-3 rounded-md border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 text-left text-xs text-neutral-200 outline-none transition-colors hover:border-neutral-700 focus-visible:border-green-500 focus-visible:ring-2 focus-visible:ring-green-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <span className="truncate">
-            {selected?.label ?? (options.length === 0 ? placeholder : undefined) ?? value}
-          </span>
-          <CaretDown aria-hidden className="size-3.5 shrink-0 text-neutral-500" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="start"
-        onEscapeKeyDown={(event) => event.stopPropagation()}
-        className="max-h-64 w-(--radix-dropdown-menu-trigger-width) min-w-56 border-neutral-800 bg-neutral-950 text-neutral-200 shadow-none"
-      >
-        {searchable && (
-          <input
-            ref={searchRef}
-            type="search"
-            aria-label={`Search ${label.toLowerCase()}`}
-            placeholder="Search models"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'ArrowDown') {
-                event.preventDefault()
-                searchRef.current?.closest('[role="menu"]')?.querySelector<HTMLElement>('[role="menuitemradio"]:not([data-disabled])')?.focus()
-              } else if (event.key !== 'Escape') {
-                event.stopPropagation()
-              }
-            }}
-            className="mb-1 w-full rounded-md border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 text-xs text-neutral-200 outline-none focus-visible:border-green-500"
-          />
-        )}
-        <DropdownMenuRadioGroup
-          value={value}
-          onValueChange={(nextValue) => onValueChange(nextValue as T)}
-        >
-          {visibleOptions.map((option) => (
-            <DropdownMenuRadioItem
-              key={option.value}
-              value={option.value}
-              disabled={option.disabled}
-              className="text-xs focus:bg-green-500/15 focus:text-green-300"
-            >
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-        {visibleOptions.length === 0 && <p className="px-2 py-1.5 text-xs text-neutral-500">No matching models.</p>}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Select
+      value={value}
+      onValueChange={(next) => {
+        if (next != null) onValueChange(next as T)
+      }}
+      items={options.map((option) => ({ value: option.value, label: option.label }))}
+      disabled={disabled}
+    >
+      <SelectTrigger id={id} size="sm" aria-label={label}>
+        <SelectValue>
+          {() => selected?.label ?? (options.length === 0 ? placeholder : undefined) ?? value}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectPopup>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value} disabled={option.disabled}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectPopup>
+    </Select>
   )
 }

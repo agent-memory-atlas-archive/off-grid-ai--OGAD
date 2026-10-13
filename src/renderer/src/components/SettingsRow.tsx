@@ -13,16 +13,19 @@ export function SettingsRow({
   controlId?: string
   children: ReactNode
 }): React.JSX.Element {
+  // Title, one line on what it does, then the control: the same reading order on every row.
   return (
-    <div className="mb-4">
-      <div className="mb-1 flex items-center justify-between">
-        <label htmlFor={controlId} className="text-[11px] uppercase tracking-wide text-neutral-400">
+    <div className="py-4 first:pt-1">
+      <div className="flex items-baseline justify-between gap-4">
+        <label htmlFor={controlId} className="text-[13px] text-neutral-200">
           {label}
         </label>
-        {value !== undefined ? <span className="text-xs text-green-500">{value}</span> : null}
+        {value !== undefined ? (
+          <span className="shrink-0 text-xs tabular-nums text-green-500">{value}</span>
+        ) : null}
       </div>
-      {children}
-      {hint ? <p className="mt-1 text-[10px] text-neutral-600">{hint}</p> : null}
+      {hint ? <p className="mt-1 text-[11.5px] leading-relaxed text-neutral-500">{hint}</p> : null}
+      <div className="mt-3">{children}</div>
     </div>
   )
 }

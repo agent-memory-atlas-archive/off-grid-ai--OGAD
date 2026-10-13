@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'motion/react'
 import { ProgressiveBlur } from './ui/progressive-blur'
+import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
 import { SetupPanel } from './setup/SetupPanel'
 import { PerformancePackPanel } from './setup/PerformancePackPanel'
 import { StoragePanel } from './setup/StoragePanel'
@@ -106,7 +108,7 @@ export function Settings({
   return (
     <div className="relative flex h-full flex-col">
       {/* Fixed header — stays put while the content below scrolls. */}
-      <div className="flex shrink-0 items-center gap-3 border-b border-neutral-800/60 px-1 pb-4">
+      <div className="flex shrink-0 items-center gap-3 px-1 pb-6">
         <div className="h-10 w-10 rounded-xl bg-neutral-800 border border-neutral-700 flex items-center justify-center">
           <svg
             className="w-5 h-5 text-neutral-400"
@@ -129,7 +131,14 @@ export function Settings({
           </svg>
         </div>
         <div>
-          <h2 className="text-lg font-semibold text-white">Settings</h2>
+          <TextEffect
+            as="h2"
+            preset="fade-in-blur"
+            per="char"
+            className="text-lg font-semibold text-white"
+          >
+            Settings
+          </TextEffect>
           <p className="text-sm text-neutral-500">
             {isPro
               ? 'Who you are, what Off Grid AI has learned, and your devices'
@@ -139,7 +148,7 @@ export function Settings({
       </div>
 
       {/* Scrolling content below the fixed header */}
-      <div className="relative flex-1 overflow-y-auto px-1 pt-5 pb-16">
+      <div className="relative flex-1 overflow-y-auto px-1 pt-2 pb-16">
         <motion.div
           className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2 2xl:grid-cols-3"
           initial={{ opacity: 0, y: 20 }}
@@ -168,12 +177,12 @@ export function Settings({
               delay={0.13}
             >
               <SetupPanel />
-              <div className="mt-4">
+              <div className="mt-10">
                 <StoragePanel />
               </div>
               {currentPlatform() === 'darwin' ? (
-                <section id="settings-permissions" className="mt-6 scroll-mt-4">
-                  <div className="mb-3 text-[10px] font-medium uppercase tracking-widest text-neutral-600">
+                <section id="settings-permissions" className="mt-10 scroll-mt-4">
+                  <div className="mb-3 text-[10px] font-medium uppercase tracking-widest text-neutral-500">
                     System permissions
                   </div>
                   <SettingsPermissionsPanel />
@@ -198,9 +207,9 @@ export function Settings({
                 <CaptureContribution />
               ) : (
                 <div className="mb-5 border border-neutral-800 bg-neutral-950/40 p-3 text-xs text-neutral-500">
-                  <span className="mr-2 text-[10px] uppercase tracking-wide text-emerald-500">
+                  <Badge variant="success" size="sm" className="mr-2">
                     Pro
-                  </span>
+                  </Badge>
                   {currentPlatform() === 'linux'
                     ? 'Capture and Replay controls are available with Pro on Linux.'
                     : 'Screen capture, backlog recovery, and proactive delivery are available with Pro on Windows, Linux, and macOS.'}

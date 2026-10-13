@@ -10,6 +10,14 @@ import { resolveModelName } from '@renderer/lib/model-summary'
 import { SettingsSelect } from './SettingsSelect'
 import { BackendPreferencesSection } from './ProcessingControls'
 import { SettingsSection } from './SettingsSection'
+import {
+  NumberField,
+  NumberFieldDecrement,
+  NumberFieldGroup,
+  NumberFieldIncrement,
+  NumberFieldInput
+} from '@offgrid/operator-ui/operator/coss/number-field'
+import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
 
 type ImageSettings = {
   imageParams?: ImageParamStore
@@ -179,42 +187,50 @@ export function ImageSettingsTab(): React.JSX.Element {
             <span className="mb-1 block text-[11px] uppercase tracking-wide text-neutral-400">
               Steps
             </span>
-            <input
+            <NumberField
               key={model}
-              aria-label="Image steps"
-              type="number"
+              size="sm"
               min={4}
               max={50}
               defaultValue={effective.steps}
-              onChange={(event) => saveTypedOverride('steps', event.target.value, 4, 50)}
-              onBlur={(event) => {
-                const steps = Math.max(4, Math.min(50, Number(event.target.value) || 4))
-                event.target.value = String(steps)
-                saveOverride('steps', steps)
+              onValueChange={(value) => {
+                if (value != null) saveTypedOverride('steps', String(value), 4, 50)
               }}
-              className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-neutral-200 outline-none focus:border-green-500"
-            />
+              onValueCommitted={(value) =>
+                saveOverride('steps', Math.max(4, Math.min(50, value || 4)))
+              }
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput aria-label="Image steps" />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
           </label>
           <label>
             <span className="mb-1 block text-[11px] uppercase tracking-wide text-neutral-400">
               Guidance
             </span>
-            <input
+            <NumberField
               key={model}
-              aria-label="Image guidance"
-              type="number"
+              size="sm"
               min={0}
               max={20}
               step={0.5}
               defaultValue={effective.cfgScale}
-              onChange={(event) => saveTypedOverride('cfgScale', event.target.value, 0, 20)}
-              onBlur={(event) => {
-                const guidance = Math.max(0, Math.min(20, Number(event.target.value) || 0))
-                event.target.value = String(guidance)
-                saveOverride('cfgScale', guidance)
+              onValueChange={(value) => {
+                if (value != null) saveTypedOverride('cfgScale', String(value), 0, 20)
               }}
-              className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-neutral-200 outline-none focus:border-green-500"
-            />
+              onValueCommitted={(value) =>
+                saveOverride('cfgScale', Math.max(0, Math.min(20, value || 0)))
+              }
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput aria-label="Image guidance" />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
           </label>
           <label>
             <span className="mb-1 block text-[11px] uppercase tracking-wide text-neutral-400">
@@ -253,22 +269,21 @@ export function ImageSettingsTab(): React.JSX.Element {
             />
           </label>
 
-          <label className="flex items-start gap-2 border border-neutral-800 bg-neutral-900/40 p-3">
-            <input
-              type="checkbox"
-              checked={enhance}
-              onChange={(event) => {
-                setEnhance(event.target.checked)
-                persist('enhanceImagePrompts', event.target.checked)
-              }}
-              className="mt-0.5 accent-green-500"
-            />
-            <span>
-              <span className="block text-xs text-neutral-200">Enhance prompts</span>
-              <span className="mt-0.5 block text-[10px] text-neutral-600">
+          <label className="flex cursor-pointer items-center justify-between gap-8 py-1">
+            <span className="min-w-0">
+              <span className="block text-[13px] text-neutral-200">Enhance prompts</span>
+              <span className="mt-1 block text-[11.5px] leading-relaxed text-neutral-500">
                 Let the local chat model add useful visual detail before generation.
               </span>
             </span>
+            <Switch
+              aria-label="Enhance prompts"
+              checked={enhance}
+              onCheckedChange={(checked) => {
+                setEnhance(checked)
+                persist('enhanceImagePrompts', checked)
+              }}
+            />
           </label>
         </div>
       </SettingsSection>

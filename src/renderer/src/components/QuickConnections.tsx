@@ -1,5 +1,8 @@
 import { SidePanel } from './SidePanel'
-import { AnimatePresence } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
+import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
 import { CONNECTIONS_CHANGED_EVENT } from './useQuickConnection'
 import { getRendererIsPro } from '@renderer/bootstrap/entitlementRegistry'
 import { useEffect, useState, type JSX } from 'react'
@@ -55,7 +58,9 @@ export function QuickConnections({
   return (
     <section aria-label="Quick connections" className="space-y-6">
       <div>
-        <h2 className="text-lg text-neutral-100">Connect your work</h2>
+        <TextEffect as="h2" preset="fade-in-blur" per="char" className="text-lg text-neutral-100">
+          Connect your work
+        </TextEffect>
         <p className="mt-2 text-sm text-neutral-400">
           Bring your accounts and tools into your private workspace. Accounts are read live when you
           ask and nothing from them is copied into memory. Add as many as you use.
@@ -89,42 +94,57 @@ export function QuickConnections({
               </Button>
             </header>
             <div className="space-y-3 px-6 py-5">
-              {connection.items
-                .filter((account) => account.url === manageUrl)
-                .map((account) => (
-                  <Item key={account.id} variant="outline">
-                    <ItemContent>
-                      <ItemTitle>{account.name}</ItemTitle>
-                      <ItemDescription>Connection {account.id}</ItemDescription>
-                    </ItemContent>
-                    <ItemActions>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={removing != null}
-                        aria-label={`Remove ${account.name} connection ${account.id}`}
-                        onClick={() => {
-                          setRemoving(account.id)
-                          setRemoveError('')
-                          void window.api
-                            .mcpRemove(account.id)
-                            .then(() => connection.reload())
-                            .then(() => window.dispatchEvent(new Event(CONNECTIONS_CHANGED_EVENT)))
-                            .catch((cause) =>
-                              setRemoveError(
-                                cause instanceof Error
-                                  ? cause.message
-                                  : 'Could not remove this connection.'
-                              )
-                            )
-                            .finally(() => setRemoving(null))
-                        }}
-                      >
-                        {removing === account.id ? 'Removing' : 'Remove'}
-                      </Button>
-                    </ItemActions>
-                  </Item>
-                ))}
+              <AnimatePresence initial={false}>
+                {connection.items
+                  .filter((account) => account.url === manageUrl)
+                  .map((account) => (
+                    <motion.div
+                      key={account.id}
+                      layout
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                    >
+                      <Item variant="outline">
+                        <ItemContent>
+                          <ItemTitle>{account.name}</ItemTitle>
+                          <ItemDescription>Connection {account.id}</ItemDescription>
+                        </ItemContent>
+                        <ItemActions>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={removing != null}
+                            aria-label={`Remove ${account.name} connection ${account.id}`}
+                            onClick={() => {
+                              setRemoving(account.id)
+                              setRemoveError('')
+                              void window.api
+                                .mcpRemove(account.id)
+                                .then(() => connection.reload())
+                                .then(() =>
+                                  window.dispatchEvent(new Event(CONNECTIONS_CHANGED_EVENT))
+                                )
+                                .catch((cause) =>
+                                  setRemoveError(
+                                    cause instanceof Error
+                                      ? cause.message
+                                      : 'Could not remove this connection.'
+                                  )
+                                )
+                                .finally(() => setRemoving(null))
+                            }}
+                          >
+                            <TextMorph as="span">
+                              {removing === account.id ? 'Removing' : 'Remove'}
+                            </TextMorph>
+                          </Button>
+                        </ItemActions>
+                      </Item>
+                    </motion.div>
+                  ))}
+              </AnimatePresence>
               {removeError && (
                 <p role="alert" className="connection-error">
                   {removeError}
@@ -190,8 +210,8 @@ export function QuickConnections({
                     <ItemActions>
                       {connected ? (
                         <span role="status" className="connection-status">
-                          <CheckCircle aria-hidden="true" className="size-4" /> {accounts.length}{' '}
-                          connected
+                          <CheckCircle aria-hidden="true" className="size-4" />{' '}
+                          <AnimatedNumber value={accounts.length} /> connected
                         </span>
                       ) : null}
                       <Button
@@ -202,13 +222,15 @@ export function QuickConnections({
                         disabled={connection.loading || pending}
                         onClick={() => void connection.connect({ ...entry, newAccount: connected })}
                       >
-                        {authorizing
-                          ? 'Connecting'
-                          : connected
-                            ? 'Add account'
-                            : record
-                              ? 'Reconnect'
-                              : 'Connect'}
+                        <TextMorph as="span">
+                          {authorizing
+                            ? 'Connecting'
+                            : connected
+                              ? 'Add account'
+                              : record
+                                ? 'Reconnect'
+                                : 'Connect'}
+                        </TextMorph>
                       </Button>
                       {connected && (
                         <Button

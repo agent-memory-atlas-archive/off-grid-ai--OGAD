@@ -23,6 +23,25 @@ import {
   type AIRequestSummary
 } from '@offgrid/core/shared/ai-request-log'
 import { Button } from './ui/button'
+import { AnimatePresence, motion } from 'motion/react'
+import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
+import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
+import { Empty, EmptyDescription, EmptyMedia } from '@offgrid/operator-ui/operator/coss/empty'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput
+} from '@offgrid/operator-ui/operator/coss/input-group'
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue
+} from '@offgrid/operator-ui/operator/coss/select'
 import { SettingsSelect } from './SettingsSelect'
 import { CopyButton } from './ui/CopyButton'
 import {
@@ -42,8 +61,6 @@ const labels = {
 }
 const initialDisplay = { request: true, response: true, model: true, details: true }
 type Display = typeof initialDisplay
-const inputClass =
-  'min-w-0 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring'
 const duration = (ms?: number): string =>
   ms === undefined ? 'In progress' : `${(ms / 1000).toFixed(ms < 1000 ? 2 : 1)}s`
 const errorMessage = (error: unknown): string =>
@@ -485,7 +502,11 @@ export function AIRequestLogs({
     >
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3">
         <div>
-          {standalone && <h1 className="text-lg font-normal">AI activity</h1>}
+          {standalone && (
+            <TextEffect as="h1" preset="fade-in-blur" per="char" className="text-lg font-normal">
+              AI activity
+            </TextEffect>
+          )}
           <p className="mt-1 text-xs text-muted-foreground">
             Inspect your AI requests and responses.
           </p>
@@ -524,20 +545,18 @@ export function AIRequestLogs({
         </div>
       </header>
       <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <label
-          data-focus-surface
-          className="flex min-w-48 flex-1 items-center gap-2 rounded-md border border-border bg-background px-3"
-        >
-          <MagnifyingGlass aria-hidden />
-          <input
+        <InputGroup data-focus-surface className="min-w-48 flex-1">
+          <InputGroupAddon>
+            <MagnifyingGlass aria-hidden />
+          </InputGroupAddon>
+          <InputGroupInput
             aria-label="Search requests and responses"
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search requests, responses, models..."
-            className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none"
           />
-        </label>
+        </InputGroup>
         <Button
           variant="outline"
           size="sm"
@@ -627,29 +646,17 @@ export function AIRequestLogs({
           </Button>
         </div>
       )}
-      <div className="flex shrink-0 flex-wrap gap-1" role="group" aria-label="Modality">
-        <Button
-          variant={modality === 'all' ? 'secondary' : 'ghost'}
-          size="sm"
-          aria-pressed={modality === 'all'}
-          className={modality === 'all' ? 'text-primary' : 'text-muted-foreground'}
-          onClick={() => setModality('all')}
-        >
-          All
-        </Button>
-        {AI_MODALITIES.map((kind) => (
-          <Button
-            key={kind}
-            variant={modality === kind ? 'secondary' : 'ghost'}
-            size="sm"
-            aria-pressed={modality === kind}
-            className={modality === kind ? 'text-primary' : 'text-muted-foreground'}
-            onClick={() => setModality(kind)}
-          >
-            {labels[kind]}
-          </Button>
-        ))}
-      </div>
+      <Segmented
+        label="Modality"
+        size="sm"
+        className="shrink-0 self-start"
+        value={modality}
+        onValueChange={setModality}
+        options={[
+          { id: 'all', label: 'All' },
+          ...AI_MODALITIES.map((kind) => ({ id: kind as string, label: labels[kind] }))
+        ]}
+      />
       {(error || page.storageError) && (
         <p role="alert" className="rounded-md border border-border p-3 text-xs">
           {error || page.storageError}
@@ -666,7 +673,7 @@ export function AIRequestLogs({
               aria-live="polite"
               className="shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground"
             >
-              {page.total} requests
+              <AnimatedNumber value={page.total} /> requests
             </span>
             <div className="min-w-0 max-w-44">
               <SettingsSelect
@@ -684,14 +691,20 @@ export function AIRequestLogs({
           </div>
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
             {loading && (
-              <p role="status" className="p-4 text-xs text-muted-foreground">
-                Loading activity...
-              </p>
+              // Shaped like the request rows that replace it.
+              <div role="status" className="space-y-2 p-4">
+                <span className="sr-only">Loading activity...</span>
+                {Array.from({ length: 5 }, (_, index) => (
+                  <Skeleton key={index} className="h-16 w-full" />
+                ))}
+              </div>
             )}
             {!loading && !page.rows.length && (
-              <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-                <ListMagnifyingGlass aria-hidden className="size-6 text-muted-foreground" />
-                <p className="max-w-xs text-sm text-muted-foreground">
+              <Empty className="p-6 md:py-6">
+                <EmptyMedia variant="icon">
+                  <ListMagnifyingGlass aria-hidden className="text-muted-foreground" />
+                </EmptyMedia>
+                <EmptyDescription className="max-w-xs">
                   {search ||
                   modality !== 'all' ||
                   status !== 'all' ||
@@ -700,44 +713,51 @@ export function AIRequestLogs({
                   period !== 'all'
                     ? 'No requests match these filters.'
                     : 'No activity yet. Your next AI request will appear here.'}
-                </p>
-              </div>
+                </EmptyDescription>
+              </Empty>
             )}
             <div>
-              {page.rows.map((row) => (
-                <button
-                  key={row.id}
-                  type="button"
-                  aria-pressed={selectedId === row.id}
-                  onClick={() => {
-                    setRecord(null)
-                    setSelectedId(row.id)
-                  }}
-                  className={`block w-full border-b border-l-2 border-b-border px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring ${selectedId === row.id ? 'border-l-primary bg-primary/5' : 'border-l-transparent'}`}
-                >
-                  <span className="flex justify-between gap-2 text-[11px] text-muted-foreground">
-                    <span>
-                      {labels[row.modality]}
-                      {row.source ? ` · ${row.source}` : ''}
-                      {row.parentId ? ' · Attempt / child' : ''}
+              <AnimatePresence initial={false}>
+                {page.rows.map((row) => (
+                  <motion.button
+                    key={row.id}
+                    layout
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                    type="button"
+                    aria-pressed={selectedId === row.id}
+                    onClick={() => {
+                      setRecord(null)
+                      setSelectedId(row.id)
+                    }}
+                    className={`block w-full border-b border-l-2 border-b-border px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring ${selectedId === row.id ? 'border-l-primary bg-primary/5' : 'border-l-transparent'}`}
+                  >
+                    <span className="flex justify-between gap-2 text-[11px] text-muted-foreground">
+                      <span>
+                        {labels[row.modality]}
+                        {row.source ? ` · ${row.source}` : ''}
+                        {row.parentId ? ' · Attempt / child' : ''}
+                      </span>
+                      <time>{new Date(row.startedAt).toLocaleTimeString()}</time>
                     </span>
-                    <time>{new Date(row.startedAt).toLocaleTimeString()}</time>
-                  </span>
-                  <span className="my-1 block truncate text-sm">{row.preview || row.source}</span>
-                  <span className="flex justify-between gap-2 text-xs text-muted-foreground">
-                    <span className="truncate">
-                      {display.model ? (row.model ?? row.source) : row.source}
+                    <span className="my-1 block truncate text-sm">{row.preview || row.source}</span>
+                    <span className="flex justify-between gap-2 text-xs text-muted-foreground">
+                      <span className="truncate">
+                        {display.model ? (row.model ?? row.source) : row.source}
+                      </span>
+                      {display.details && (
+                        <span className="shrink-0">{duration(row.durationMs)}</span>
+                      )}
                     </span>
-                    {display.details && (
-                      <span className="shrink-0">{duration(row.durationMs)}</span>
-                    )}
-                  </span>
-                  <span className="mt-1 block text-[11px] text-muted-foreground">
-                    {row.status}
-                    {display.model ? ` · ${row.backend ?? 'Backend not reported'}` : ''}
-                  </span>
-                </button>
-              ))}
+                    <span className="mt-1 block text-[11px] text-muted-foreground">
+                      {row.status}
+                      {display.model ? ` · ${row.backend ?? 'Backend not reported'}` : ''}
+                    </span>
+                  </motion.button>
+                ))}
+              </AnimatePresence>
             </div>
           </div>
           <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border px-3 py-2">
@@ -772,36 +792,31 @@ export function AIRequestLogs({
               Request details
             </span>
             {record && (
-              <div className="flex gap-1">
-                <Button
-                  size="xs"
-                  variant={raw ? 'ghost' : 'secondary'}
-                  aria-pressed={!raw}
-                  onClick={() => setRaw(false)}
-                >
-                  Readable
-                </Button>
-                <Button
-                  size="xs"
-                  variant={raw ? 'secondary' : 'ghost'}
-                  aria-pressed={raw}
-                  onClick={() => setRaw(true)}
-                >
-                  Raw
-                </Button>
-              </div>
+              <Segmented
+                label="Detail view"
+                size="sm"
+                tone="quiet"
+                value={raw ? 'raw' : 'readable'}
+                onValueChange={(view) => setRaw(view === 'raw')}
+                options={[
+                  { id: 'readable', label: 'Readable' },
+                  { id: 'raw', label: 'Raw' }
+                ]}
+              />
             )}
           </div>
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-5">
             {record ? (
               <RequestDetail key={record.id} record={record} display={display} raw={raw} />
             ) : (
-              <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
-                <ListMagnifyingGlass aria-hidden className="size-6" />
-                <p className="text-sm">
+              <Empty className="p-6 md:py-6">
+                <EmptyMedia variant="icon">
+                  <ListMagnifyingGlass aria-hidden className="text-muted-foreground" />
+                </EmptyMedia>
+                <EmptyDescription>
                   {selectedId ? 'Loading request...' : 'Select a request to inspect it.'}
-                </p>
-              </div>
+                </EmptyDescription>
+              </Empty>
             )}
           </div>
         </div>
@@ -844,7 +859,7 @@ export function AIRequestLogs({
             Cancel
           </Button>
           <Button size="sm" variant="destructive" disabled={clearing} onClick={() => void clear()}>
-            {clearing ? 'Clearing...' : 'Delete history'}
+            <TextMorph as="span">{clearing ? 'Clearing...' : 'Delete history'}</TextMorph>
           </Button>
         </div>
       )}
@@ -872,20 +887,26 @@ function Filter({
     unknown: 'Not reported'
   }
   return (
-    <label className="flex min-w-32 flex-col gap-1 text-xs text-muted-foreground">
+    <div className="flex min-w-32 flex-col gap-1 text-xs text-muted-foreground">
       <span className="text-[11px] uppercase tracking-wide">{label}</span>
-      <select
-        aria-label={label}
-        className={inputClass}
+      <Select
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onValueChange={(next) => {
+          if (next != null) onChange(next)
+        }}
+        items={options.map((option) => ({ value: option, label: names[option] ?? option }))}
       >
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {names[option] ?? option}
-          </option>
-        ))}
-      </select>
-    </label>
+        <SelectTrigger size="sm" aria-label={label}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectPopup>
+          {options.map((option) => (
+            <SelectItem key={option} value={option}>
+              {names[option] ?? option}
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
+    </div>
   )
 }

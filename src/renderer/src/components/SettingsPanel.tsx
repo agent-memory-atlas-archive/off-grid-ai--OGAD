@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { persistToggle } from '@renderer/lib/persist-toggle'
 import {
   DEFAULT_CTX_SIZE,
@@ -32,12 +33,19 @@ import { RemoteVisionSettingsTab } from './RemoteVisionSettingsTab'
 import { SettingsRow as Row } from './SettingsRow'
 import { SettingsSelect } from './SettingsSelect'
 import { NativeSelect } from '@offgrid/operator-ui/operator/forms'
+import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import ElasticSlider from '@offgrid/operator-ui/operator/bits/elastic-slider'
+import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
+import { Stat, StatLabel, StatValue } from '@offgrid/operator-ui/operator/dice/stat'
+import { Empty, EmptyDescription, EmptyMedia } from '@offgrid/operator-ui/operator/coss/empty'
 import { BackendPreferencesSection } from './ProcessingControls'
 import { useReplySound } from '../lib/reply-sound'
 import { SettingsSection } from './SettingsSection'
 import { groupConnectors } from '../../../shared/connector-groups'
 import type { SpeechLanguage } from '@offgrid/speech'
-import { CaretRight, X } from '@phosphor-icons/react'
+import { CaretRight, Flame, Plugs, Snowflake, X } from '@phosphor-icons/react'
 import { getSlot, SLOTS } from '@renderer/bootstrap/slotRegistry'
 
 import {
@@ -178,6 +186,56 @@ const DEFAULTS: LlmSettings = {
   batchSize: 512,
   speculativeDecoding: 'off',
   draftModel: ''
+}
+
+/**
+ * A slider that drafts while it moves and saves when it loses focus, like the range inputs it
+ * replaced - dragging must not reconfigure the engine on every step.
+ */
+function SettingSlider({
+  id,
+  label,
+  value,
+  min,
+  max,
+  step,
+  decimals = 0,
+  format,
+  onDraft,
+  onCommit,
+  leftIcon,
+  rightIcon
+}: {
+  id?: string
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  decimals?: number
+  format: (value: number) => string
+  onDraft: (value: number) => void
+  onCommit: (value: number) => void
+  leftIcon?: React.ReactNode
+  rightIcon?: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <div id={id} onBlur={() => onCommit(value)}>
+      <ElasticSlider
+        aria-label={label}
+        className="w-full pt-4"
+        value={value}
+        onValueChange={(next: number) => onDraft(Number(next.toFixed(decimals)))}
+        startingValue={min}
+        maxValue={max}
+        isStepped
+        stepSize={step}
+        formatValue={format}
+        leftIcon={leftIcon}
+        rightIcon={rightIcon}
+      />
+    </div>
+  )
 }
 
 export function SettingsPanel({
@@ -410,26 +468,29 @@ export function SettingsPanel({
       <BestSettingsCard onApplied={reloadAfterBestSettings} />
 
       <div className="flex flex-nowrap items-center gap-1 overflow-x-auto border-b border-neutral-800 px-3 py-2">
-        {(
-          [
-            'model',
-            'image',
-            'voice',
-            'transcription',
-            'remote',
-            ...(TaskSettings ? (['tasks'] as const) : []),
-            'tools',
-            'connectors'
-          ] as const
-        ).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`shrink-0 rounded-md px-3 py-1 text-xs capitalize transition-colors ${tab === t ? 'bg-neutral-800 text-green-500' : 'text-neutral-500 hover:text-neutral-300'}`}
-          >
-            {t === 'model' ? 'Text' : t}
-          </button>
-        ))}
+        <Segmented
+          label="Settings sections"
+          size="sm"
+          tone="quiet"
+          value={tab}
+          onValueChange={setTab}
+          options={(
+            [
+              'model',
+              'image',
+              'voice',
+              'transcription',
+              'remote',
+              ...(TaskSettings ? (['tasks'] as const) : []),
+              'tools',
+              'connectors'
+            ] as const
+          ).map((t) => ({
+            id: t,
+            label: t === 'model' ? 'Text' : t,
+            icon: <span className="capitalize">{t === 'model' ? 'Text' : t}</span>
+          }))}
+        />
       </div>
 
       <div
@@ -459,28 +520,37 @@ export function SettingsPanel({
               summary={`${activeModelName ?? 'No active model'} · context ${formatContextWindow(s.ctxSize) ?? 'checking'}`}
               defaultOpen
             >
-              <div
-                className="mb-5 grid grid-cols-2 gap-px border border-neutral-800 bg-neutral-800 lg:grid-cols-4"
-                role="status"
-              >
-                {[
-                  ['Current model', activeModelName ?? 'No active model'],
-                  ['Configured', formatContextWindow(s.ctxSize) ?? 'Checking'],
-                  ['Running', formatContextWindow(s.effectiveCtxSize) ?? 'Checking'],
-                  [
-                    'Recommended',
-                    formatContextWindow(recommendedContextWindow(s.modelMaxCtx)) ?? 'Not supported'
-                  ]
-                ].map(([label, value]) => (
-                  <div key={label} className="bg-neutral-950/90 p-3">
-                    <div className="text-[10px] uppercase tracking-wide text-neutral-600">
-                      {label}
-                    </div>
-                    <div className="mt-1 truncate text-xs text-neutral-200" title={value}>
-                      {value}
-                    </div>
-                  </div>
-                ))}
+              <div className="mb-5" role="status">
+                <AnimatedGroup
+                  preset="fade"
+                  className="grid grid-cols-2 gap-px border border-neutral-800 bg-neutral-800 lg:grid-cols-4"
+                >
+                  {[
+                    ['Current model', activeModelName ?? 'No active model'],
+                    ['Configured', formatContextWindow(s.ctxSize) ?? 'Checking'],
+                    ['Running', formatContextWindow(s.effectiveCtxSize) ?? 'Checking'],
+                    [
+                      'Recommended',
+                      formatContextWindow(recommendedContextWindow(s.modelMaxCtx)) ??
+                        'Not supported'
+                    ]
+                  ].map(([label, value]) => (
+                    <Stat
+                      key={label}
+                      className="h-full rounded-none border-0 bg-neutral-950/90 p-3 shadow-none"
+                    >
+                      <StatLabel className="text-[10px] font-normal uppercase tracking-wide text-neutral-600">
+                        {label}
+                      </StatLabel>
+                      <StatValue
+                        className="min-w-0 truncate text-xs font-normal tracking-normal text-neutral-200"
+                        title={value}
+                      >
+                        {value}
+                      </StatValue>
+                    </Stat>
+                  ))}
+                </AnimatedGroup>
               </div>
               <p className="mb-5 text-[11px] leading-5 text-neutral-500">
                 16K is recommended for capture and chat. Capture needs at least 8K; smaller windows
@@ -569,17 +639,18 @@ export function SettingsPanel({
                 value={(s.temperature ?? 0.7).toFixed(2)}
                 hint="Lower = focused, higher = creative."
               >
-                <input
-                  type="range"
+                <SettingSlider
+                  label="Temperature"
+                  value={s.temperature ?? 0.7}
                   min={0}
                   max={1.5}
                   step={0.05}
-                  value={s.temperature ?? 0.7}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, temperature: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ temperature: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  decimals={2}
+                  format={(value) => value.toFixed(2)}
+                  onDraft={(value) => setS((current) => ({ ...current, temperature: value }))}
+                  onCommit={(value) => set({ temperature: value })}
+                  leftIcon={<Snowflake className="size-4 text-muted-foreground" />}
+                  rightIcon={<Flame className="size-4 text-muted-foreground" />}
                 />
               </Row>
               <Row
@@ -588,20 +659,12 @@ export function SettingsPanel({
                 value={showGenerationDetails ? 'Shown' : 'Hidden'}
                 hint="Show context use, speed, token count, time, and the tools sent with the request under each answer."
               >
-                <button
+                <Switch
                   id="generation-details-toggle"
-                  type="button"
-                  role="switch"
-                  aria-checked={showGenerationDetails}
-                  onClick={toggleGenerationDetails}
-                  className={`w-full border px-3 py-1.5 text-left text-xs transition-colors ${
-                    showGenerationDetails
-                      ? 'border-green-500/40 text-green-500'
-                      : 'border-neutral-800 text-neutral-400 hover:text-neutral-200'
-                  }`}
-                >
-                  {showGenerationDetails ? 'Showing under each answer' : 'Hidden'}
-                </button>
+                  aria-label="Generation details"
+                  checked={showGenerationDetails}
+                  onCheckedChange={toggleGenerationDetails}
+                />
               </Row>
               <Row
                 label="Reply sound"
@@ -609,20 +672,12 @@ export function SettingsPanel({
                 value={replySound ? 'On' : 'Off'}
                 hint="A soft ding when an answer arrives, here and in God. The same setting in both."
               >
-                <button
+                <Switch
                   id="reply-sound-toggle"
-                  type="button"
-                  role="switch"
-                  aria-checked={replySound}
-                  onClick={() => setReplySound(!replySound)}
-                  className={`w-full border px-3 py-1.5 text-left text-xs transition-colors ${
-                    replySound
-                      ? 'border-green-500/40 text-green-500'
-                      : 'border-neutral-800 text-neutral-400 hover:text-neutral-200'
-                  }`}
-                >
-                  {replySound ? 'Ding when an answer arrives' : 'Off'}
-                </button>
+                  aria-label="Reply sound"
+                  checked={replySound}
+                  onCheckedChange={() => setReplySound(!replySound)}
+                />
               </Row>
               <Row
                 label="Maximum tool calls"
@@ -630,21 +685,18 @@ export function SettingsPanel({
                 value={String(s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS)}
                 hint="Emergency limit for tool calls in one response."
               >
-                <input
+                <SettingSlider
                   id="maximum-tool-calls"
-                  type="range"
+                  label="Maximum tool calls"
+                  value={s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS}
                   min={MIN_MAX_TOOL_CALLS}
                   max={MAX_MAX_TOOL_CALLS}
                   step={1}
-                  value={s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS}
-                  onChange={(e) =>
-                    setS((current) => ({
-                      ...current,
-                      maxToolCalls: Math.round(Number(e.target.value))
-                    }))
+                  format={(value) => String(value)}
+                  onDraft={(value) =>
+                    setS((current) => ({ ...current, maxToolCalls: Math.round(value) }))
                   }
-                  onBlur={(e) => set({ maxToolCalls: Math.round(Number(e.target.value)) })}
-                  className="w-full accent-green-500"
+                  onCommit={(value) => set({ maxToolCalls: Math.round(value) })}
                 />
               </Row>
               <Row
@@ -673,17 +725,16 @@ export function SettingsPanel({
                 value={(s.topP ?? 0.95).toFixed(2)}
                 hint="Nucleus sampling cutoff."
               >
-                <input
-                  type="range"
+                <SettingSlider
+                  label="Top-P"
+                  value={s.topP ?? 0.95}
                   min={0}
                   max={1}
                   step={0.01}
-                  value={s.topP ?? 0.95}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, topP: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ topP: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  decimals={2}
+                  format={(value) => value.toFixed(2)}
+                  onDraft={(value) => setS((current) => ({ ...current, topP: value }))}
+                  onCommit={(value) => set({ topP: value })}
                 />
               </Row>
               <Row
@@ -691,17 +742,15 @@ export function SettingsPanel({
                 value={String(s.topK ?? 40)}
                 hint="0 disables. Limits candidate tokens."
               >
-                <input
-                  type="range"
+                <SettingSlider
+                  label="Top-K"
+                  value={s.topK ?? 40}
                   min={0}
                   max={100}
                   step={1}
-                  value={s.topK ?? 40}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, topK: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ topK: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  format={(value) => String(value)}
+                  onDraft={(value) => setS((current) => ({ ...current, topK: value }))}
+                  onCommit={(value) => set({ topK: value })}
                 />
               </Row>
               <Row
@@ -709,17 +758,16 @@ export function SettingsPanel({
                 value={(s.minP ?? 0.05).toFixed(2)}
                 hint="Min probability relative to the top token."
               >
-                <input
-                  type="range"
+                <SettingSlider
+                  label="Min-P"
+                  value={s.minP ?? 0.05}
                   min={0}
                   max={0.5}
                   step={0.01}
-                  value={s.minP ?? 0.05}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, minP: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ minP: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  decimals={2}
+                  format={(value) => value.toFixed(2)}
+                  onDraft={(value) => setS((current) => ({ ...current, minP: value }))}
+                  onCommit={(value) => set({ minP: value })}
                 />
               </Row>
               <Row
@@ -727,17 +775,16 @@ export function SettingsPanel({
                 value={(s.repeatPenalty ?? 1.1).toFixed(2)}
                 hint="Higher discourages repetition."
               >
-                <input
-                  type="range"
+                <SettingSlider
+                  label="Repeat penalty"
+                  value={s.repeatPenalty ?? 1.1}
                   min={1}
                   max={1.5}
                   step={0.01}
-                  value={s.repeatPenalty ?? 1.1}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, repeatPenalty: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ repeatPenalty: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  decimals={2}
+                  format={(value) => value.toFixed(2)}
+                  onDraft={(value) => setS((current) => ({ ...current, repeatPenalty: value }))}
+                  onCommit={(value) => set({ repeatPenalty: value })}
                 />
               </Row>
             </SettingsSection>
@@ -752,19 +799,15 @@ export function SettingsPanel({
                 label="KV cache"
                 hint="Quantize the KV cache to cut memory and allow a larger context. q8_0 ≈ half, q4_0 ≈ quarter of f16. Auto-enables FlashAttention."
               >
-                <div className="flex gap-1.5">
-                  {(['f16', 'q8_0', 'q4_0'] as const).map((t) => (
-                    <button
-                      key={t}
-                      onClick={() =>
-                        set({ kvCacheType: t, ...(t !== 'f16' ? { flashAttn: true } : {}) })
-                      }
-                      className={`flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors ${(s.kvCacheType ?? 'f16') === t ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
+                <Segmented
+                  label="KV cache"
+                  size="sm"
+                  value={s.kvCacheType ?? 'f16'}
+                  onValueChange={(t) =>
+                    set({ kvCacheType: t, ...(t !== 'f16' ? { flashAttn: true } : {}) })
+                  }
+                  options={(['f16', 'q8_0', 'q4_0'] as const).map((t) => ({ id: t, label: t }))}
+                />
               </Row>
               <Row
                 label="FlashAttention"
@@ -776,7 +819,7 @@ export function SettingsPanel({
                   disabled={(s.kvCacheType ?? 'f16') !== 'f16'}
                   className={`w-full rounded-md border px-2 py-1.5 text-xs transition-colors disabled:opacity-50 ${s.flashAttn ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}
                 >
-                  {s.flashAttn ? 'Enabled' : 'Disabled'}
+                  <TextMorph as="span">{s.flashAttn ? 'Enabled' : 'Disabled'}</TextMorph>
                 </button>
               </Row>
               <Row
@@ -842,17 +885,15 @@ export function SettingsPanel({
                 value={String(s.gpuLayers ?? 99)}
                 hint={gpuLayersHint(s.gpuAccelerator ?? null)}
               >
-                <input
-                  type="range"
+                <SettingSlider
+                  label="GPU layers"
+                  value={s.gpuLayers ?? 99}
                   min={0}
                   max={99}
                   step={1}
-                  value={s.gpuLayers ?? 99}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, gpuLayers: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ gpuLayers: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  format={(value) => String(value)}
+                  onDraft={(value) => setS((current) => ({ ...current, gpuLayers: value }))}
+                  onCommit={(value) => set({ gpuLayers: value })}
                 />
               </Row>
               <Row
@@ -860,17 +901,15 @@ export function SettingsPanel({
                 value={(s.threads ?? 0) === 0 ? 'auto' : String(s.threads)}
                 hint="0 = auto (let llama.cpp choose)."
               >
-                <input
-                  type="range"
+                <SettingSlider
+                  label="CPU threads"
+                  value={s.threads ?? 0}
                   min={0}
                   max={16}
                   step={1}
-                  value={s.threads ?? 0}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, threads: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ threads: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  format={(value) => (value === 0 ? 'auto' : String(value))}
+                  onDraft={(value) => setS((current) => ({ ...current, threads: value }))}
+                  onCommit={(value) => set({ threads: value })}
                 />
               </Row>
               <Row
@@ -878,17 +917,15 @@ export function SettingsPanel({
                 value={String(s.batchSize ?? 512)}
                 hint="Tokens processed per batch during prompt ingest."
               >
-                <input
-                  type="range"
+                <SettingSlider
+                  label="Batch size"
+                  value={s.batchSize ?? 512}
                   min={64}
                   max={2048}
                   step={64}
-                  value={s.batchSize ?? 512}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, batchSize: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ batchSize: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  format={(value) => String(value)}
+                  onDraft={(value) => setS((current) => ({ ...current, batchSize: value }))}
+                  onCommit={(value) => set({ batchSize: value })}
                 />
               </Row>
             </SettingsSection>
@@ -977,12 +1014,10 @@ export function SettingsPanel({
                   Controls whether any tools are sent to the chat model.
                 </div>
               </div>
-              <button
-                type="button"
-                role="switch"
+              <Switch
                 aria-label="Enable tools"
-                aria-checked={toolsEnabled}
-                onClick={() => {
+                checked={toolsEnabled}
+                onCheckedChange={() => {
                   const next = !toolsEnabled
                   setToolsEnabled(next)
                   void window.api.saveSetting('toolsEnabled', next)
@@ -990,10 +1025,7 @@ export function SettingsPanel({
                     new CustomEvent('offgrid-tools-enabled-changed', { detail: next })
                   )
                 }}
-                className={`shrink-0 rounded px-2 py-1 text-[11px] ${toolsEnabled ? 'text-green-500' : 'text-neutral-500'}`}
-              >
-                {toolsEnabled ? 'On' : 'Off'}
-              </button>
+              />
             </div>
             <p className="mb-3 text-[11px] text-neutral-500">
               Built-in tools the model can call when “Tools” is on in the composer.
@@ -1073,7 +1105,7 @@ export function SettingsPanel({
                           }}
                           className={`shrink-0 rounded px-2 py-1 text-[11px] transition-all duration-150 active:scale-95 ${allEnabled ? 'text-green-500' : 'text-neutral-500'}`}
                         >
-                          {groupState}
+                          <TextMorph as="span">{groupState}</TextMorph>
                         </button>
                       </div>
                       {isExpanded && (
@@ -1096,12 +1128,10 @@ export function SettingsPanel({
                                   {tool.description}
                                 </div>
                               </div>
-                              <button
-                                type="button"
-                                role="switch"
+                              <Switch
                                 aria-label={`Enable ${tool.name}`}
-                                aria-checked={tool.enabled !== false}
-                                onClick={() => {
+                                checked={tool.enabled !== false}
+                                onCheckedChange={() => {
                                   const next = tool.enabled === false
                                   void persistToggle(
                                     tools.map((item) =>
@@ -1116,10 +1146,7 @@ export function SettingsPanel({
                                       )
                                   )
                                 }}
-                                className={`shrink-0 rounded px-2 py-1 text-[11px] transition-all duration-150 active:scale-95 ${tool.enabled === false ? 'text-neutral-500' : 'text-green-500'}`}
-                              >
-                                {tool.enabled === false ? 'Off' : 'On'}
-                              </button>
+                              />
                             </div>
                           ))}
                         </div>
@@ -1167,7 +1194,14 @@ export function SettingsPanel({
               </button>
             </div>
             {connectors.length === 0 ? (
-              <p className="text-xs text-neutral-600">No connectors yet.</p>
+              <Empty className="px-0 py-6 md:py-6">
+                <EmptyMedia variant="icon">
+                  <Plugs className="text-neutral-600" />
+                </EmptyMedia>
+                <EmptyDescription className="text-xs text-neutral-600">
+                  No connectors yet.
+                </EmptyDescription>
+              </Empty>
             ) : (
               // By service: several accounts and servers of one service sit together.
               <div className="flex flex-col">
@@ -1180,43 +1214,50 @@ export function SettingsPanel({
                       group.connectors.filter((c) => c.enabled).length
                     } on`}
                   >
-                    <div className="flex flex-col gap-2 pb-2">
-                      {group.connectors.map((c) => (
-                        <div
-                          key={c.id}
-                          className="flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2"
-                        >
-                          <div className="min-w-0">
-                            <div className="truncate text-sm text-neutral-200">{c.name}</div>
-                            {c.url ? (
-                              <div className="truncate text-[10px] text-neutral-600">{c.url}</div>
-                            ) : null}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={async () => {
-                                await (window.api as Partial<typeof window.api>).mcpSetEnabled?.(
-                                  c.id,
-                                  !c.enabled
-                                )
-                                refreshConnectors()
-                              }}
-                              className={`rounded px-2 py-1 text-[11px] ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
-                            >
-                              {c.enabled ? 'On' : 'Off'}
-                            </button>
-                            <button
-                              onClick={async () => {
-                                await (window.api as Partial<typeof window.api>).mcpRemove?.(c.id)
-                                refreshConnectors()
-                              }}
-                              className="rounded px-2 py-1 text-[11px] text-red-400 hover:bg-red-500/10"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                    <div className="flex flex-col divide-y divide-neutral-900 pb-2">
+                      <AnimatePresence initial={false}>
+                        {group.connectors.map((c) => (
+                          <motion.div
+                            key={c.id}
+                            layout
+                            initial={{ opacity: 0, y: 6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0 }}
+                            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                            className="flex items-center justify-between py-2.5"
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate text-sm text-neutral-200">{c.name}</div>
+                              {c.url ? (
+                                <div className="truncate text-[10px] text-neutral-600">{c.url}</div>
+                              ) : null}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={async () => {
+                                  await (window.api as Partial<typeof window.api>).mcpSetEnabled?.(
+                                    c.id,
+                                    !c.enabled
+                                  )
+                                  refreshConnectors()
+                                }}
+                                className={`rounded px-2 py-1 text-[11px] ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
+                              >
+                                <TextMorph as="span">{c.enabled ? 'On' : 'Off'}</TextMorph>
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  await (window.api as Partial<typeof window.api>).mcpRemove?.(c.id)
+                                  refreshConnectors()
+                                }}
+                                className="rounded px-2 py-1 text-[11px] text-red-400 hover:bg-red-500/10"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </motion.div>
+                        ))}
+                      </AnimatePresence>
                     </div>
                   </SettingsSection>
                 ))}

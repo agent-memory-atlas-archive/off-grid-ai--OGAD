@@ -5,6 +5,7 @@ import type {
   BackupRestoreSummaryContract
 } from '../../../shared/backup-contracts'
 import { Button } from './ui/button'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 
 type BackupAction = 'export' | 'restore'
 
@@ -63,8 +64,8 @@ export function BackupRestoreSection(): React.ReactElement {
     )
 
   return (
-    <div className="grid gap-3 lg:grid-cols-2">
-      <section className="border border-neutral-800 bg-neutral-950/40 p-3">
+    <div className="grid gap-x-8 gap-y-6 lg:grid-cols-2">
+      <section>
         <div className="mb-3">
           <h4 className="text-sm text-neutral-200">Create a portable backup</h4>
           <p className="mt-1 text-xs leading-relaxed text-neutral-500">
@@ -79,11 +80,13 @@ export function BackupRestoreSection(): React.ReactElement {
           className="rounded-none bg-emerald-600 text-white active:scale-95"
         >
           <DownloadSimple />
-          {busy === 'export' ? 'Creating backup...' : 'Create backup'}
+          <TextMorph as="span">
+            {busy === 'export' ? 'Creating backup...' : 'Create backup'}
+          </TextMorph>
         </Button>
       </section>
 
-      <section className="border border-neutral-800 bg-neutral-950/40 p-3">
+      <section>
         <div className="mb-3">
           <h4 className="text-sm text-neutral-200">Restore from a backup</h4>
           <p className="mt-1 text-xs leading-relaxed text-neutral-500">
@@ -99,7 +102,7 @@ export function BackupRestoreSection(): React.ReactElement {
           className="rounded-none border-neutral-700 bg-transparent active:scale-95"
         >
           <UploadSimple />
-          {busy === 'restore' ? 'Restoring...' : 'Choose backup'}
+          <TextMorph as="span">{busy === 'restore' ? 'Restoring...' : 'Choose backup'}</TextMorph>
         </Button>
       </section>
 

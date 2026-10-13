@@ -27,6 +27,11 @@ import { SettingsSelect } from './SettingsSelect'
 import { BackendPreferencesSection } from './ProcessingControls'
 import { SettingsSection } from './SettingsSection'
 import { LoadingDots } from './ui/loading-dots'
+import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import ElasticSlider from '@offgrid/operator-ui/operator/bits/elastic-slider'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
 import { formatTransferSpeed } from '@offgrid/sync'
 import { projectProgress } from '@offgrid/ui'
 import { formatStorageBytes } from './setup/storage-format'
@@ -55,24 +60,18 @@ function PreferenceButtons<T extends string | number>({
   onSelect: (id: T) => void
   label: string
 }): React.JSX.Element {
+  // Segmented speaks in string ids; the numeric delay choices map back on the way out.
   return (
-    <div
-      className="grid grid-flow-col auto-cols-fr gap-1 rounded-md border border-neutral-800 bg-neutral-950 p-1"
-      role="group"
-      aria-label={label}
-    >
-      {options.map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          aria-pressed={selected === option.id}
-          onClick={() => onSelect(option.id)}
-          className={`rounded px-2 py-1.5 text-[11px] transition-colors ${selected === option.id ? 'bg-green-500/15 text-green-400' : 'text-neutral-500 hover:bg-neutral-900 hover:text-neutral-300'}`}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
+    <Segmented
+      label={label}
+      size="sm"
+      value={String(selected)}
+      onValueChange={(id) => {
+        const option = options.find((candidate) => String(candidate.id) === id)
+        if (option) onSelect(option.id)
+      }}
+      options={options.map((option) => ({ id: String(option.id), label: option.label }))}
+    />
   )
 }
 
@@ -451,7 +450,9 @@ export function VoiceSettingsTab(): React.JSX.Element {
             className="mb-4 flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 px-3.5 py-2.5 text-xs text-neutral-400"
           >
             <LoadingDots />
-            {assetsState === 'loading' ? 'Loading voices...' : 'Checking voice files...'}
+            <TextShimmer as="span">
+              {assetsState === 'loading' ? 'Loading voices...' : 'Checking voice files...'}
+            </TextShimmer>
           </div>
         ) : assetsState === 'downloading' ? (
           <div
@@ -461,7 +462,14 @@ export function VoiceSettingsTab(): React.JSX.Element {
           >
             <LoadingDots />
             Downloading {runtimeVoiceLanguage({ id: voice })?.label ?? language} audio
-            {assetProgress.determinate ? ` - ${Math.round(assetProgress.percentage ?? 0)}%` : '...'}
+            {assetProgress.determinate ? (
+              <>
+                {' - '}
+                <AnimatedNumber value={Math.round(assetProgress.percentage ?? 0)} />%
+              </>
+            ) : (
+              '...'
+            )}
             {assetProgress.totalBytes
               ? ` · ${formatStorageBytes(assetProgress.currentBytes)} / ${formatStorageBytes(assetProgress.totalBytes)}`
               : ''}
@@ -524,19 +532,25 @@ export function VoiceSettingsTab(): React.JSX.Element {
           value={`${preferences.speed.toFixed(1)}x`}
           controlId="tts-speed"
         >
-          <input
+          {/* Drafts while it moves and saves on blur, like the range input it replaced. */}
+          <div
             id="tts-speed"
-            type="range"
-            min={0.5}
-            max={2}
-            step={0.1}
-            value={preferences.speed}
-            onChange={(event) =>
-              setPreferences((current) => ({ ...current, speed: Number(event.target.value) }))
-            }
-            onBlur={(event) => persistPreference('speed', Number(event.target.value), 'ttsSpeed')}
-            className="w-full accent-green-500"
-          />
+            onBlur={() => persistPreference('speed', preferences.speed, 'ttsSpeed')}
+          >
+            <ElasticSlider
+              aria-label="Playback speed"
+              className="w-full pt-4"
+              value={preferences.speed}
+              onValueChange={(speed: number) =>
+                setPreferences((current) => ({ ...current, speed: Number(speed.toFixed(1)) }))
+              }
+              startingValue={0.5}
+              maxValue={2}
+              isStepped
+              stepSize={0.1}
+              formatValue={(speed) => `${speed.toFixed(1)}x`}
+            />
+          </div>
         </SettingsRow>
 
         <div className="pb-3">
@@ -546,11 +560,13 @@ export function VoiceSettingsTab(): React.JSX.Element {
             disabled={testState === 'generating' || testState === 'playing'}
             className="rounded-md bg-green-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-green-500 disabled:opacity-40"
           >
-            {testState === 'generating'
-              ? 'Generating...'
-              : testState === 'playing'
-                ? 'Playing...'
-                : 'Test voice'}
+            <TextMorph as="span">
+              {testState === 'generating'
+                ? 'Generating...'
+                : testState === 'playing'
+                  ? 'Playing...'
+                  : 'Test voice'}
+            </TextMorph>
           </button>
           {testState === 'error' ? (
             <span className="ml-2 text-[11px] text-red-400">

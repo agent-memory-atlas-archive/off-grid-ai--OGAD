@@ -1,6 +1,9 @@
 import { ArrowsClockwise, Check, Eye, Shield, WifiHigh, X } from '@phosphor-icons/react'
 import { cn } from '@renderer/lib/utils'
 import { Button } from './ui/button'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
+import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { usePermissionController, type PermissionController } from './use-permission-controller'
 
 interface PermissionCardProps {
@@ -31,7 +34,7 @@ function PermissionCard({
       role="status"
       aria-label={`${title} permission`}
       className={cn(
-        'flex min-h-44 flex-col border p-4 transition-colors duration-150',
+        'flex h-full min-h-44 flex-col border p-4 transition-colors duration-150',
         granted ? 'border-neutral-700 bg-neutral-900/60' : 'border-neutral-800 bg-neutral-950/40'
       )}
     >
@@ -39,14 +42,11 @@ function PermissionCard({
         <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-neutral-800 bg-neutral-900 text-neutral-400">
           {icon}
         </div>
-        <span
-          className={cn(
-            'text-[10px] uppercase tracking-widest',
-            granted ? 'text-emerald-500' : 'text-neutral-500'
-          )}
-        >
-          {checking ? 'Checking' : granted ? 'Granted' : 'Permission needed'}
-        </span>
+        <Badge variant={granted ? 'success' : 'outline'}>
+          <TextMorph as="span">
+            {checking ? 'Checking' : granted ? 'Granted' : 'Permission needed'}
+          </TextMorph>
+        </Badge>
       </div>
       <div className="mt-3 flex-1">
         <div className="flex items-center gap-2">
@@ -98,7 +98,7 @@ export function PermissionsPanel({
 
   return (
     <div className="font-mono">
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+      <AnimatedGroup preset="blur-slide" className="grid grid-cols-1 gap-3 lg:grid-cols-3">
         <PermissionCard
           title="Accessibility"
           description="Read exact text, app names, and URLs when macOS exposes them."
@@ -142,7 +142,7 @@ export function PermissionsPanel({
           state={permissionState(status?.localNetwork)}
           onOpenSettings={() => void permissions.openLocalNetwork()}
         />
-      </div>
+      </AnimatedGroup>
 
       {error ? (
         <p
@@ -155,11 +155,13 @@ export function PermissionsPanel({
 
       <div className="mt-3 flex items-center justify-between gap-3 border-t border-neutral-800 pt-3">
         <span className="text-[10px] uppercase tracking-widest text-neutral-600" aria-live="polite">
-          {screenRecordingRestartRequired
-            ? 'Restart required'
-            : checking
-              ? 'Checking current grants'
-              : 'Current access status'}
+          <TextMorph as="span">
+            {screenRecordingRestartRequired
+              ? 'Restart required'
+              : checking
+                ? 'Checking current grants'
+                : 'Current access status'}
+          </TextMorph>
         </span>
         <Button
           type="button"
@@ -170,7 +172,7 @@ export function PermissionsPanel({
           className="rounded-none border-neutral-700 active:scale-95"
         >
           <ArrowsClockwise className={cn('h-4 w-4', checking && 'animate-spin')} />
-          {checking ? 'Checking' : 'Check permissions again'}
+          <TextMorph as="span">{checking ? 'Checking' : 'Check permissions again'}</TextMorph>
         </Button>
       </div>
     </div>

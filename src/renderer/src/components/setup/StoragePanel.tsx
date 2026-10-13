@@ -1,7 +1,26 @@
 import { Button } from '@offgrid/operator-ui/operator/button'
 import '@offgrid/operator-ui/styles.css'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { HardDrives, Trash, ArrowsClockwise, X, Broom, FolderOpen } from '@phosphor-icons/react'
+import {
+  HardDrives,
+  Trash,
+  ArrowsClockwise,
+  X,
+  Broom,
+  FolderOpen,
+  Cube
+} from '@phosphor-icons/react'
+import { AnimatePresence, motion } from 'motion/react'
+import { Meter, MeterIndicator, MeterTrack } from '@offgrid/operator-ui/operator/coss/meter'
+import {
+  Progress,
+  ProgressIndicator,
+  ProgressTrack
+} from '@offgrid/operator-ui/operator/coss/progress'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
+import { Empty, EmptyDescription, EmptyMedia } from '@offgrid/operator-ui/operator/coss/empty'
 import { cn } from '@renderer/lib/utils'
 import { modelKindLabel } from '@renderer/lib/model-kind-labels'
 import { companionDownloadLabel } from '@renderer/lib/download-label'
@@ -253,7 +272,11 @@ export function StoragePanel(): React.ReactElement {
       <div className="px-4 py-2">
         <div className="mb-1 flex items-center justify-between">
           <span className="text-[11px] text-neutral-400">
-            {info ? `${formatStorageBytes(info.totalBytes)} used by models` : 'Reading…'}
+            {info ? (
+              `${formatStorageBytes(info.totalBytes)} used by models`
+            ) : (
+              <TextShimmer as="span">Reading…</TextShimmer>
+            )}
           </span>
           {info && (
             <span className="text-[10px] text-neutral-600">
@@ -261,12 +284,11 @@ export function StoragePanel(): React.ReactElement {
             </span>
           )}
         </div>
-        <div className="h-1 w-full overflow-hidden rounded-full bg-neutral-800">
-          <div
-            className="h-full rounded-full bg-green-500"
-            style={{ width: `${Math.min(100, Math.round(usedFrac * 100))}%` }}
-          />
-        </div>
+        <Meter aria-label="Disk used by models" value={Math.min(100, Math.round(usedFrac * 100))}>
+          <MeterTrack className="h-1 rounded-full bg-neutral-800">
+            <MeterIndicator className="rounded-full bg-green-500" />
+          </MeterTrack>
+        </Meter>
       </div>
 
       <div className="flex flex-wrap items-center gap-3 border-t border-neutral-800/40 px-4 py-3">
@@ -308,7 +330,9 @@ export function StoragePanel(): React.ReactElement {
             className="min-h-0 shadow-none flex items-center gap-1.5 rounded-md border border-neutral-700 px-2.5 py-1 text-[11px] text-neutral-300 transition-colors hover:border-green-500 hover:text-white focus-visible:outline focus-visible:outline-green-500 disabled:opacity-50"
           >
             <FolderOpen className="h-3.5 w-3.5" />{' '}
-            {busy === 'directory' ? 'Choosing...' : 'Choose folder'}
+            <TextMorph as="span">
+              {busy === 'directory' ? 'Choosing...' : 'Choose folder'}
+            </TextMorph>
           </Button>
           {pendingDirectory && (
             <Button
@@ -386,89 +410,118 @@ export function StoragePanel(): React.ReactElement {
                 disabled={busy === 'clear-dl'}
                 className="text-[10px] text-neutral-500 transition-colors hover:text-white disabled:opacity-50"
               >
-                {busy === 'clear-dl' ? 'Clearing…' : `Clear ${incomplete.length} interrupted`}
+                <TextMorph as="span">
+                  {busy === 'clear-dl' ? 'Clearing…' : `Clear ${incomplete.length} interrupted`}
+                </TextMorph>
               </button>
             )}
           </div>
-          {active.map((d) => {
-            const progress = projectProgress(d)
-            const timeRemaining = downloadTimeRemaining(progress)
-            return (
-              <div key={d.modelId} className="flex items-center gap-3 py-1.5">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-mono text-[11px] text-neutral-300">
-                    {d.modelId}
-                    {companionDownloadLabel(d.currentFile) && (
-                      // A companion-only fetch (e.g. adding a vision projector to a model
-                      // already on disk) — say so, or it reads as a full re-download.
-                      <span className="ml-1.5 rounded-sm border border-emerald-300/40 px-1 py-px text-[9px] uppercase tracking-wide text-emerald-300">
-                        {companionDownloadLabel(d.currentFile)} only
-                      </span>
-                    )}
-                  </div>
-                  {d.status === 'queued' ? (
-                    <div className="mt-0.5 text-[10px] text-neutral-500">Queued</div>
-                  ) : (
-                    <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-neutral-800">
-                      <div
-                        className="h-full w-full origin-left rounded-full bg-green-500 transition-transform duration-300 ease-out motion-reduce:transition-none"
-                        style={{ transform: `scaleX(${(progress.percentage ?? 0) / 100})` }}
-                      />
-                    </div>
-                  )}
-                  {d.status === 'downloading' ? (
-                    <div className="mt-1 text-[10px] tabular-nums text-neutral-500">
-                      {progress.totalBytes !== undefined
-                        ? `${formatStorageBytes(progress.currentBytes)} of ${formatStorageBytes(progress.totalBytes)}`
-                        : 'Total size unavailable'}
-                      {progress.bytesPerSecond !== undefined
-                        ? ` · ${formatTransferSpeed(progress.bytesPerSecond)}`
-                        : ''}
-                      {timeRemaining ? ` · ${timeRemaining}` : ''}
-                    </div>
-                  ) : null}
-                </div>
-                {d.status === 'downloading' && (
-                  <span className="font-mono text-[10px] text-neutral-500">
-                    {progress.determinate
-                      ? `${Math.round(progress.percentage ?? 0)}%`
-                      : 'Downloading'}
-                  </span>
-                )}
-                <button
-                  onClick={() => cancel(d.modelId)}
-                  className="rounded-md p-1 text-neutral-500 hover:text-white"
-                  aria-label={`Cancel ${d.modelId}`}
+          <AnimatePresence initial={false}>
+            {active.map((d) => {
+              const progress = projectProgress(d)
+              const timeRemaining = downloadTimeRemaining(progress)
+              return (
+                <motion.div
+                  key={d.modelId}
+                  layout
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                  className="flex items-center gap-3 py-1.5"
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-mono text-[11px] text-neutral-300">
+                      {d.modelId}
+                      {companionDownloadLabel(d.currentFile) && (
+                        // A companion-only fetch (e.g. adding a vision projector to a model
+                        // already on disk) — say so, or it reads as a full re-download.
+                        <span className="ml-1.5 rounded-sm border border-emerald-300/40 px-1 py-px text-[9px] uppercase tracking-wide text-emerald-300">
+                          {companionDownloadLabel(d.currentFile)} only
+                        </span>
+                      )}
+                    </div>
+                    {d.status === 'queued' ? (
+                      <div className="mt-0.5 text-[10px] text-neutral-500">Queued</div>
+                    ) : (
+                      <Progress
+                        aria-label={`${d.modelId} download progress`}
+                        value={progress.percentage ?? 0}
+                        className="mt-1"
+                      >
+                        <ProgressTrack className="h-1 bg-neutral-800">
+                          <ProgressIndicator className="rounded-full bg-green-500 duration-300 ease-out motion-reduce:transition-none" />
+                        </ProgressTrack>
+                      </Progress>
+                    )}
+                    {d.status === 'downloading' ? (
+                      <div className="mt-1 text-[10px] tabular-nums text-neutral-500">
+                        {progress.totalBytes !== undefined
+                          ? `${formatStorageBytes(progress.currentBytes)} of ${formatStorageBytes(progress.totalBytes)}`
+                          : 'Total size unavailable'}
+                        {progress.bytesPerSecond !== undefined
+                          ? ` · ${formatTransferSpeed(progress.bytesPerSecond)}`
+                          : ''}
+                        {timeRemaining ? ` · ${timeRemaining}` : ''}
+                      </div>
+                    ) : null}
+                  </div>
+                  {d.status === 'downloading' && (
+                    <span className="font-mono text-[10px] text-neutral-500">
+                      {progress.determinate ? (
+                        <>
+                          <AnimatedNumber value={Math.round(progress.percentage ?? 0)} />%
+                        </>
+                      ) : (
+                        <TextShimmer as="span">Downloading</TextShimmer>
+                      )}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => cancel(d.modelId)}
+                    className="rounded-md p-1 text-neutral-500 hover:text-white"
+                    aria-label={`Cancel ${d.modelId}`}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </motion.div>
+              )
+            })}
+          </AnimatePresence>
+          <AnimatePresence initial={false}>
+            {incomplete.map((d) => (
+              <motion.div
+                key={d.modelId}
+                layout
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                className="flex items-center gap-3 py-1.5"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-mono text-[11px] text-neutral-300">{d.modelId}</div>
+                  <div className="truncate text-[10px] text-neutral-500">{d.error ?? d.status}</div>
+                </div>
+                <button
+                  onClick={() => retry(d.modelId)}
+                  disabled={busy === d.modelId}
+                  className="rounded-md border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 hover:border-green-500/60 hover:text-white disabled:opacity-50"
+                >
+                  {busy === d.modelId ? '…' : 'Retry'}
                 </button>
-              </div>
-            )
-          })}
-          {incomplete.map((d) => (
-            <div key={d.modelId} className="flex items-center gap-3 py-1.5">
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-mono text-[11px] text-neutral-300">{d.modelId}</div>
-                <div className="truncate text-[10px] text-neutral-500">{d.error ?? d.status}</div>
-              </div>
-              <button
-                onClick={() => retry(d.modelId)}
-                disabled={busy === d.modelId}
-                className="rounded-md border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 hover:border-green-500/60 hover:text-white disabled:opacity-50"
-              >
-                {busy === d.modelId ? '…' : 'Retry'}
-              </button>
-              <button
-                onClick={() => clearOne(d.modelId)}
-                disabled={busy === d.modelId}
-                aria-label="Dismiss"
-                title="Dismiss and delete the partial file"
-                className="rounded-md p-1 text-neutral-500 transition-colors hover:text-red-400 disabled:opacity-50"
-              >
-                <Trash className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ))}
+                <button
+                  onClick={() => clearOne(d.modelId)}
+                  disabled={busy === d.modelId}
+                  aria-label="Dismiss"
+                  title="Dismiss and delete the partial file"
+                  className="rounded-md p-1 text-neutral-500 transition-colors hover:text-red-400 disabled:opacity-50"
+                >
+                  <Trash className="h-3.5 w-3.5" />
+                </button>
+              </motion.div>
+            ))}
+          </AnimatePresence>
         </div>
       )}
 
@@ -476,9 +529,14 @@ export function StoragePanel(): React.ReactElement {
           the type and the active model per type are easy to spot. */}
       <div className="border-t border-neutral-800/40 p-3">
         {info && info.models.length === 0 ? (
-          <div className="px-1 py-3 text-center text-xs text-neutral-600">
-            No models installed yet.
-          </div>
+          <Empty className="px-1 py-3 md:py-3">
+            <EmptyMedia variant="icon">
+              <Cube className="text-neutral-600" />
+            </EmptyMedia>
+            <EmptyDescription className="text-xs text-neutral-600">
+              No models installed yet.
+            </EmptyDescription>
+          </Empty>
         ) : (
           <div className="space-y-3">
             {KIND_ORDER.filter((k) =>
@@ -501,60 +559,67 @@ export function StoragePanel(): React.ReactElement {
                     <div className="h-px flex-1 bg-neutral-800/50" />
                   </div>
                   <div className="grid grid-cols-2 gap-1.5 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                    {group.map((m) => {
-                      // Every model type has an "active" pick — activate any non-active one.
-                      const activatable = !m.active
-                      return (
-                        <div
-                          key={m.id}
-                          className={`group flex h-7 items-center gap-2 rounded border px-2.5 transition-colors duration-150 hover:border-neutral-700 ${m.active ? 'border-green-500/50 bg-green-500/5' : 'border-neutral-800/60 bg-neutral-900/30'}`}
-                        >
-                          {m.active && supportsModelSettings(m.kind) && (
-                            <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-green-500" />
-                          )}
-                          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-neutral-200">
-                            {m.name}
-                          </span>
-                          {/* Hover actions: activate (text/vision) + delete. Size shows when idle. */}
-                          {activatable && (
-                            <button
-                              onClick={() => use(m.id)}
-                              disabled={busy === m.id}
-                              className="hidden shrink-0 rounded border border-neutral-700 px-1.5 text-[9px] leading-4 text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:opacity-40 group-hover:block"
-                            >
-                              {busy === m.id ? '…' : 'Use'}
-                            </button>
-                          )}
-                          <span
-                            className={`shrink-0 font-mono text-[10px] text-neutral-500 tabular-nums ${activatable ? 'group-hover:hidden' : ''}`}
+                    <AnimatePresence initial={false}>
+                      {group.map((m) => {
+                        // Every model type has an "active" pick — activate any non-active one.
+                        const activatable = !m.active
+                        return (
+                          <motion.div
+                            key={m.id}
+                            layout
+                            initial={{ opacity: 0, y: 6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0 }}
+                            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                            className={`group flex h-7 items-center gap-2 rounded border px-2.5 transition-colors duration-150 hover:border-neutral-700 ${m.active ? 'border-green-500/50 bg-green-500/5' : 'border-neutral-800/60 bg-neutral-900/30'}`}
                           >
-                            {formatStorageBytes(m.bytes)}
-                          </span>
-                          {m.active && (
-                            <button
-                              type="button"
-                              onClick={() => openModelSettings(m.kind)}
-                              aria-label={`Settings for ${m.name}`}
-                              title="Open settings for the active model"
-                              className="shrink-0 rounded border border-neutral-700 px-1.5 text-[9px] leading-4 text-neutral-400 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
+                            {m.active && supportsModelSettings(m.kind) && (
+                              <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-green-500" />
+                            )}
+                            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-neutral-200">
+                              {m.name}
+                            </span>
+                            {/* Hover actions: activate (text/vision) + delete. Size shows when idle. */}
+                            {activatable && (
+                              <button
+                                onClick={() => use(m.id)}
+                                disabled={busy === m.id}
+                                className="hidden shrink-0 rounded border border-neutral-700 px-1.5 text-[9px] leading-4 text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:opacity-40 group-hover:block"
+                              >
+                                {busy === m.id ? '…' : 'Use'}
+                              </button>
+                            )}
+                            <span
+                              className={`shrink-0 font-mono text-[10px] text-neutral-500 tabular-nums ${activatable ? 'group-hover:hidden' : ''}`}
                             >
-                              Settings
-                            </button>
-                          )}
-                          {!m.id.startsWith('external:') && (
-                            <button
-                              onClick={() => del(m.id, m.name)}
-                              disabled={busy === m.id || m.active}
-                              aria-label={`Delete ${m.name}`}
-                              title={m.active ? 'Deactivate before deleting' : 'Delete'}
-                              className="shrink-0 rounded p-0.5 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
-                            >
-                              <Trash className="h-3 w-3" />
-                            </button>
-                          )}
-                        </div>
-                      )
-                    })}
+                              {formatStorageBytes(m.bytes)}
+                            </span>
+                            {m.active && (
+                              <button
+                                type="button"
+                                onClick={() => openModelSettings(m.kind)}
+                                aria-label={`Settings for ${m.name}`}
+                                title="Open settings for the active model"
+                                className="shrink-0 rounded border border-neutral-700 px-1.5 text-[9px] leading-4 text-neutral-400 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
+                              >
+                                Settings
+                              </button>
+                            )}
+                            {!m.id.startsWith('external:') && (
+                              <button
+                                onClick={() => del(m.id, m.name)}
+                                disabled={busy === m.id || m.active}
+                                aria-label={`Delete ${m.name}`}
+                                title={m.active ? 'Deactivate before deleting' : 'Delete'}
+                                className="shrink-0 rounded p-0.5 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
+                              >
+                                <Trash className="h-3 w-3" />
+                              </button>
+                            )}
+                          </motion.div>
+                        )
+                      })}
+                    </AnimatePresence>
                   </div>
                 </div>
               )
@@ -577,7 +642,8 @@ export function StoragePanel(): React.ReactElement {
               'transition-colors hover:border-green-500/60 hover:text-white disabled:opacity-50'
             )}
           >
-            <Broom className="h-3 w-3" /> {busy === 'orphans' ? 'Cleaning…' : 'Clean up'}
+            <Broom className="h-3 w-3" />{' '}
+            <TextMorph as="span">{busy === 'orphans' ? 'Cleaning…' : 'Clean up'}</TextMorph>
           </button>
         </div>
       )}

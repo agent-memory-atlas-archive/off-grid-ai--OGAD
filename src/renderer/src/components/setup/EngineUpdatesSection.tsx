@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import { Button } from '../ui/button'
 import type { EngineUpdateStatus } from '../../../../shared/engine-updates'
 import { formatStorageBytes } from './storage-format'
+import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 
 const ENGINE_NAMES: Record<string, string> = {
   'llama-cuda': 'Chat and vision engine'
@@ -56,24 +59,20 @@ export function EngineUpdatesSection(): React.ReactElement | null {
             app update.
           </p>
         </div>
-        <button
-          type="button"
-          role="switch"
+        <Switch
+          className="mt-1"
           aria-label="Keep engines up to date"
-          aria-checked={status.enabled}
-          onClick={() => void window.api.engineUpdates.setEnabled(!status.enabled).then(setStatus)}
-          className={`relative mt-1 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${status.enabled ? 'bg-emerald-500' : 'bg-neutral-700'}`}
-        >
-          <span
-            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${status.enabled ? 'translate-x-6' : 'translate-x-1'}`}
-          />
-        </button>
+          checked={status.enabled}
+          onCheckedChange={() =>
+            void window.api.engineUpdates.setEnabled(!status.enabled).then(setStatus)
+          }
+        />
       </div>
       <p
         role="status"
         className={`mt-2 text-[11px] ${status.phase === 'failed' ? 'text-red-400' : 'text-neutral-500'}`}
       >
-        {phaseText(status)}
+        {busy ? <TextShimmer as="span">{phaseText(status)}</TextShimmer> : phaseText(status)}
       </p>
       {installed.length ? (
         <p className="mt-1 text-[11px] text-neutral-500">
@@ -88,7 +87,7 @@ export function EngineUpdatesSection(): React.ReactElement | null {
           disabled={busy}
           onClick={() => void window.api.engineUpdates.check().then(setStatus)}
         >
-          {busy ? 'Checking...' : 'Check for engine updates'}
+          <TextMorph as="span">{busy ? 'Checking...' : 'Check for engine updates'}</TextMorph>
         </Button>
       ) : null}
     </div>

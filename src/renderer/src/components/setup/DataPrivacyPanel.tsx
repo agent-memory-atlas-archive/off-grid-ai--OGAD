@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
 import { Trash, Warning } from '@phosphor-icons/react'
 
 interface DataCategory {
@@ -135,14 +137,22 @@ export function DataPrivacyPanel(): React.ReactElement {
                   className="flex items-center gap-1.5 rounded-md border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-colors hover:border-red-500/60 hover:text-red-400 disabled:opacity-30"
                 >
                   <Trash className="h-3 w-3" />{' '}
-                  {busy === c.id ? 'Clearing…' : RETENTION[c.id] ? 'All' : 'Clear'}
+                  <TextMorph as="span">
+                    {busy === c.id ? 'Clearing…' : RETENTION[c.id] ? 'All' : 'Clear'}
+                  </TextMorph>
                 </button>
               </div>
             </div>
           )
         })}
         {cats.length === 0 && (
-          <div className="px-4 py-6 text-center text-xs text-neutral-600">Reading…</div>
+          // Shaped like the category rows that replace it.
+          <div className="space-y-2 px-4 py-3" aria-busy="true">
+            <p className="sr-only">Reading…</p>
+            {Array.from({ length: 4 }, (_, index) => (
+              <Skeleton key={index} className="h-9 w-full" />
+            ))}
+          </div>
         )}
       </div>
 
@@ -157,7 +167,7 @@ export function DataPrivacyPanel(): React.ReactElement {
           disabled={busy === 'all'}
           className="shrink-0 whitespace-nowrap rounded-md border border-red-500/40 px-3 py-1.5 text-[11px] text-red-400 transition-colors hover:bg-red-500/10 disabled:opacity-50"
         >
-          {busy === 'all' ? 'Deleting…' : 'Delete all my data'}
+          <TextMorph as="span">{busy === 'all' ? 'Deleting…' : 'Delete all my data'}</TextMorph>
         </button>
       </div>
     </div>

@@ -6,6 +6,9 @@ import type { PerformancePackStatus } from '../../../../shared/performance-pack'
 import { currentPlatform } from '@renderer/lib/device'
 import { formatStorageBytes } from './storage-format'
 import { EngineUpdatesSection } from './EngineUpdatesSection'
+import { Progress, ProgressIndicator, ProgressTrack } from '@offgrid/operator-ui/operator/coss/progress'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 
 interface PerformancePackPanelProps {
   onSkip?: () => void
@@ -29,7 +32,7 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
     return pack.onChanged?.(setStatus)
   }, [])
 
-  if (!status) return showUnavailable ? <p role="status" className="text-sm text-neutral-500">Checking GPU components...</p> : null
+  if (!status) return showUnavailable ? <p role="status" className="text-sm text-neutral-500"><TextShimmer as="span">Checking GPU components...</TextShimmer></p> : null
   if (status.phase === 'not-needed' || status.phase === 'unavailable') {
     if (!showUnavailable) return null
     const message = currentPlatform() === 'darwin'
@@ -68,7 +71,7 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
           {status.error ? <p className="mt-2 text-xs text-red-400">{status.error}</p> : null}
         </div>
       </div>
-      <div className="mt-4 divide-y divide-neutral-800 rounded-md border border-neutral-800 bg-neutral-950/40 px-3">
+      <div className="mt-4 divide-y divide-neutral-900">
         {GPU_COMPONENTS.map((component) => (
           <div key={component.name} className="flex items-center justify-between gap-3 py-2.5">
             <div className="min-w-0">
@@ -87,12 +90,14 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
       {status.downloadedBytes > 0 && !installed ? (
         <div className="mt-4">
           <div className="mb-1 flex justify-between text-[11px] text-neutral-400">
-            <span>{status.phase === 'paused' ? 'Paused' : 'Downloading'}</span>
+            <TextMorph as="span">{status.phase === 'paused' ? 'Paused' : 'Downloading'}</TextMorph>
             <span>{formatStorageBytes(status.downloadedBytes)} / {formatStorageBytes(status.bytes)}</span>
           </div>
-          <div className="h-1.5 overflow-hidden rounded-sm bg-neutral-800" role="progressbar" aria-label="NVIDIA GPU download" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.percentage ?? 0}>
-            <div className="h-full bg-green-500" style={{ width: `${progress.percentage ?? 0}%` }} />
-          </div>
+          <Progress aria-label="NVIDIA GPU download" value={progress.percentage ?? 0}>
+            <ProgressTrack className="rounded-sm bg-neutral-800">
+              <ProgressIndicator className="bg-green-500" />
+            </ProgressTrack>
+          </Progress>
         </div>
       ) : null}
       <div className="mt-4 flex flex-wrap gap-2">
@@ -103,7 +108,9 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
         ) : !installed ? (
           <Button size="sm" onClick={() => void action().then(setStatus)}>
             {downloading ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-            {downloading ? 'Pause' : status.phase === 'paused' ? 'Resume' : status.phase === 'failed' ? 'Try again' : 'Download'}
+            <TextMorph as="span">
+              {downloading ? 'Pause' : status.phase === 'paused' ? 'Resume' : status.phase === 'failed' ? 'Try again' : 'Download'}
+            </TextMorph>
           </Button>
         ) : null}
         {onSkip ? (

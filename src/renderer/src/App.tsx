@@ -1,4 +1,5 @@
 import { appLocationPath, replaceAppLocation } from './lib/app-location'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { ChatDetail } from './components/ChatDetail'
 import { CommandPalette } from './components/CommandPalette'
 import logo from './assets/logo.png'
@@ -188,9 +189,7 @@ const navRowClass = (expanded: boolean, active = false): string =>
   cn(
     'group/nav relative flex items-center gap-3 rounded-lg py-2 text-sm transition-colors',
     expanded ? 'px-3' : 'justify-center px-0',
-    active
-      ? 'bg-green-500/10 text-emerald-400'
-      : 'text-neutral-400 hover:bg-neutral-500/10 hover:text-white'
+    active ? 'text-emerald-400' : 'text-neutral-400 hover:bg-neutral-500/10 hover:text-white'
   )
 
 // Model-server health dot for the sidebar. Uses the same authoritative chat probe
@@ -276,7 +275,11 @@ function ModelStatusDot({
       className={navRowClass(open)}
     >
       <IconActivityHeartbeat className={cn('h-5 w-5 shrink-0', color)} />
-      {open && <span className="flex-1 text-left text-xs">{text}</span>}
+      {open && (
+        <TextMorph as="span" className="flex-1 text-left text-xs">
+          {text}
+        </TextMorph>
+      )}
     </button>
   )
 }
@@ -1058,11 +1061,25 @@ function AppContent(): React.JSX.Element {
         title={!sidebarOpen ? item.label : undefined}
         className={navRowClass(sidebarOpen, active)}
       >
+        {/* One highlight across the rail: it glides from the old item to the new one. */}
         {active && (
-          <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-green-500" />
+          <motion.span
+            layoutId="nav-active"
+            aria-hidden
+            className="absolute inset-0 rounded-lg"
+            transition={{ type: 'spring', stiffness: 380, damping: 34 }}
+            style={{
+              background:
+                'linear-gradient(90deg, rgb(var(--og-rgb-primary) / 0.12), rgb(var(--og-rgb-text) / 0.02) 70%)',
+              boxShadow:
+                'inset 2px 0 0 rgb(var(--og-rgb-primary) / 0.9), inset 0 0 0 1px rgb(var(--og-rgb-text) / 0.04)'
+            }}
+          />
         )}
-        {item.icon}
-        {sidebarOpen && <span className="flex-1 text-left whitespace-pre">{item.label}</span>}
+        <span className="relative z-10 flex shrink-0">{item.icon}</span>
+        {sidebarOpen && (
+          <span className="relative z-10 flex-1 text-left whitespace-pre">{item.label}</span>
+        )}
         {item.view === 'explore' && GodBadge && (
           <GodBadge open={viewMode === 'explore'} compact={!sidebarOpen} />
         )}
@@ -1070,8 +1087,8 @@ function AppContent(): React.JSX.Element {
           <span
             aria-label={`${notificationCount} unread notifications`}
             className={cn(
-              'flex h-4 min-w-4 items-center justify-center border border-green-500 bg-green-500 px-1 font-mono text-[9px] leading-none text-black',
-              !sidebarOpen && 'absolute right-0 top-0'
+              'z-10 flex h-4 min-w-4 items-center justify-center border border-green-500 bg-green-500 px-1 font-mono text-[9px] leading-none text-black',
+              sidebarOpen ? 'relative' : 'absolute right-0 top-0'
             )}
           >
             {notificationCountLabel}
@@ -1079,7 +1096,7 @@ function AppContent(): React.JSX.Element {
         )}
         {sidebarOpen && item.locked && (
           <IconLock
-            className="h-3.5 w-3.5 shrink-0 text-neutral-400/60"
+            className="relative z-10 h-3.5 w-3.5 shrink-0 text-neutral-400/60"
             title={proFeatureComingSoon(item.view, currentPlatform(), true) ? 'Coming soon' : 'Pro'}
           />
         )}

@@ -6,9 +6,12 @@ import {
   FieldError,
   Input,
   Label,
-  NativeSelect
 } from '@offgrid/operator-ui/operator/forms'
 import type { GatewayApiKeySettingsContract } from '../../../shared/ipc-contracts'
+import { AnimatePresence, motion } from 'motion/react'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
+import { SettingsSelect } from './SettingsSelect'
 
 export function GatewayApiKeysSettings(): React.JSX.Element {
   const [settings, setSettings] = useState<GatewayApiKeySettingsContract | null>(null)
@@ -69,7 +72,9 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
   }
 
   if (!settings)
-    return error ? <FieldError>{error}</FieldError> : <p role="status">Loading API keys...</p>
+    return error ? <FieldError>{error}</FieldError> : <p role="status">
+        <TextShimmer as="span">Loading API keys...</TextShimmer>
+      </p>
 
   return (
     <div className="space-y-4 text-xs">
@@ -78,7 +83,11 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
         Authorization: Bearer header.
       </p>
       <div className="flex flex-wrap items-center gap-3">
-        <span role="status">{settings.enabled ? 'API key required' : 'API key not required'}</span>
+        <span role="status">
+          <TextMorph as="span">
+            {settings.enabled ? 'API key required' : 'API key not required'}
+          </TextMorph>
+        </span>
         <Button
           size="sm"
           variant="outline"
@@ -91,7 +100,9 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
                 })
           }
         >
-          {settings.enabled ? 'Turn off authentication' : 'Require API keys'}
+          <TextMorph as="span">
+            {settings.enabled ? 'Turn off authentication' : 'Require API keys'}
+          </TextMorph>
         </Button>
       </div>
       <form
@@ -115,18 +126,20 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
         </Field>
         <Field>
           <Label htmlFor="gateway-key-expiry">Expiry</Label>
-          <NativeSelect
+          <SettingsSelect
             id="gateway-key-expiry"
+            label="Expiry"
             value={expiry}
             disabled={busy}
-            onChange={(e) => setExpiry(e.target.value)}
-          >
-            <option value="7">7 days</option>
-            <option value="30">30 days</option>
-            <option value="90">90 days</option>
-            <option value="custom">Custom date and time</option>
-            <option value="never">No expiry</option>
-          </NativeSelect>
+            onValueChange={setExpiry}
+            options={[
+              { value: '7', label: '7 days' },
+              { value: '30', label: '30 days' },
+              { value: '90', label: '90 days' },
+              { value: 'custom', label: 'Custom date and time' },
+              { value: 'never', label: 'No expiry' }
+            ]}
+          />
         </Field>
         {expiry === 'custom' && (
           <Field>
@@ -220,6 +233,7 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
         <p className="text-neutral-500">No API keys. Create a separate key for each client.</p>
       )}
       <ul className="space-y-2" aria-label="API keys">
+        <AnimatePresence initial={false}>
         {settings.keys.map((key) => {
           const status =
             key.revokedAt !== null
@@ -228,8 +242,13 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
                 ? 'Expired'
                 : 'Active'
           return (
-            <li
+            <motion.li
               key={key.id}
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
               className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-800 py-3"
             >
               <div className="min-w-0">
@@ -269,9 +288,10 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
                   </Button>
                 </div>
               )}
-            </li>
+            </motion.li>
           )
         })}
+        </AnimatePresence>
       </ul>
       <Button
         size="sm"

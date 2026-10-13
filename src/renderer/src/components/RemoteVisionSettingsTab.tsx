@@ -15,6 +15,9 @@ import { providerNeedsScreenDisclosure } from '../../../shared/remote-screen-pri
 import { SettingsRow as Row } from './SettingsRow'
 import { SettingsSelect } from './SettingsSelect'
 import { SettingsSection } from './SettingsSection'
+import { AnimatePresence, motion } from 'motion/react'
+import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
 
 const EMPTY_SETTINGS: RemoteVisionServerSettings = {
   provider: 'local',
@@ -359,9 +362,15 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
           </div>
           {settings.servers.length > 0 ? (
             <div className="space-y-2">
+              <AnimatePresence initial={false}>
               {settings.servers.map((server) => (
-                <div
+                <motion.div
                   key={server.id}
+                  layout
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
                   className={`flex items-center gap-3 border p-2 ${form.id === server.id ? 'border-green-500/60 bg-green-500/5' : 'border-neutral-800 bg-neutral-950/40'}`}
                 >
                   <button
@@ -375,9 +384,9 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
                     </span>
                   </button>
                   {settings.activeServerId === server.id ? (
-                    <span className="text-[9px] uppercase tracking-wide text-green-500">
+                    <Badge variant="success" size="sm">
                       Active
-                    </span>
+                    </Badge>
                   ) : null}
                   <button
                     type="button"
@@ -395,8 +404,9 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
                   >
                     Remove
                   </button>
-                </div>
+                </motion.div>
               ))}
+              </AnimatePresence>
             </div>
           ) : (
             <p className="text-[10px] text-neutral-600">No saved servers.</p>
@@ -415,21 +425,15 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
             controlId="remote-server-enabled"
             hint="Off uses models on this device."
           >
-            <button
+            <Switch
               id="remote-server-enabled"
-              type="button"
-              role="switch"
-              aria-checked={remoteEnabled}
-              onClick={() => {
+              aria-label="Use remote server"
+              checked={remoteEnabled}
+              onCheckedChange={() => {
                 setRemoteEnabled((enabled) => !enabled)
                 setStatus('Not saved.')
               }}
-              className={`relative h-6 w-11 rounded-full border transition-colors ${remoteEnabled ? 'border-green-500 bg-green-500/20' : 'border-neutral-700 bg-neutral-900'}`}
-            >
-              <span
-                className={`absolute left-1 top-1 h-3.5 w-3.5 rounded-full transition-transform ${remoteEnabled ? 'translate-x-5 bg-green-500' : 'translate-x-0 bg-neutral-500'}`}
-              />
-            </button>
+            />
           </Row>
 
           {remoteEnabled ? (
@@ -511,24 +515,18 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
                         : 'Blocked until you allow it. Web Use and Computer Use can send screen images with visible text, apps, and other content to this server.'
                     }
                   >
-                    <button
+                    <Switch
                       id="remote-server-screen-frames"
-                      type="button"
-                      role="switch"
-                      aria-checked={form.screenFramesAllowed}
-                      onClick={() => {
+                      aria-label="Allow screen images"
+                      checked={form.screenFramesAllowed}
+                      onCheckedChange={() => {
                         setForm((current) => ({
                           ...current,
                           screenFramesAllowed: !current.screenFramesAllowed
                         }))
                         setStatus('Not saved.')
                       }}
-                      className={`relative h-6 w-11 rounded-full border transition-colors ${form.screenFramesAllowed ? 'border-green-500 bg-green-500/20' : 'border-neutral-700 bg-neutral-900'}`}
-                    >
-                      <span
-                        className={`absolute left-1 top-1 h-3.5 w-3.5 rounded-full transition-transform ${form.screenFramesAllowed ? 'translate-x-5 bg-green-500' : 'translate-x-0 bg-neutral-500'}`}
-                      />
-                    </button>
+                    />
                   </Row>
                 </div>
               ) : null}
@@ -668,7 +666,17 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
 
       <div className="mt-3 flex items-center justify-between gap-3 border-t border-neutral-800 pt-3">
         <p role="status" aria-live="polite" className="min-w-0 flex-1 text-[10px] text-neutral-500">
-          {status}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.span
+              key={status}
+              className="block"
+              initial={{ opacity: 0, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, filter: 'blur(4px)' }}
+            >
+              {status}
+            </motion.span>
+          </AnimatePresence>
         </p>
         {remoteEnabled ? (
           <button

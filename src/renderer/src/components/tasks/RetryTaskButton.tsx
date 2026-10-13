@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { CaretDown } from '@phosphor-icons/react'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import type { TaskSession } from '@renderer/lib/task-session-store'
 import { openTaskSidePanel } from '@renderer/lib/task-side-panel'
 import {
@@ -100,13 +101,15 @@ export function RetryTaskButton({
           className="border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 transition-colors hover:border-green-500 hover:text-green-500 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
           onClick={() => continueTask()}
         >
-          {retrying
-            ? 'Continuing...'
-            : resolvedAvailability === null
-              ? 'Checking...'
-              : resolvedAvailability.available
-                ? actionLabel
-                : unavailableLabel}
+          <TextMorph as="span">
+            {retrying
+              ? 'Continuing...'
+              : resolvedAvailability === null
+                ? 'Checking...'
+                : resolvedAvailability.available
+                  ? actionLabel
+                  : unavailableLabel}
+          </TextMorph>
         </button>
         {earlierPhases.length > 0 ? (
           <DropdownMenu>
