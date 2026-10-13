@@ -11,6 +11,7 @@ export type PersistedQueuedTurn = Omit<QueuedTurn, 'atts'> & { atts: QueuedAttac
 
 export function persistedQueuedTurn(item: QueuedTurn): PersistedQueuedTurn {
   return {
+    ...(item.id ? { id: item.id } : {}),
     text: item.text,
     projectId: item.projectId,
     mode: item.mode,

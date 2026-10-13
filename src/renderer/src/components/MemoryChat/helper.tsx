@@ -25,6 +25,9 @@ import type {
 import { noticeText } from './utlis'
 import type { TaskSession } from '@renderer/lib/task-session-store'
 import { taskReferenceFromResult } from '../chat-tool-projection'
+import type { ProcessingAttachment } from '@offgrid/operator-ui/operator/workflows/attachments'
+import type { QueuedMessage } from '@offgrid/operator-ui/operator/workflows/queue'
+import type { QueuedTurn } from '@renderer/lib/chat-queue-types'
 
 export function completedImageMessage(
   content: string,
@@ -398,4 +401,72 @@ export async function stopLiveTask(
   task: Pick<TaskSession, 'taskId' | 'kind'>
 ): Promise<boolean> {
   return (await window.api.vision?.control('stop', task.taskId)) ?? false
+}
+
+const MEDIA_TYPE_BY_KIND: Record<Attachment['kind'], string> = {
+  text: 'text/plain',
+  pasted: 'text/plain',
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  image: 'image/png',
+  audio: 'audio/wav',
+  video: 'video/mp4'
+}
+
+/** A composer or queued attachment as the library's processing card sees it. */
+export function toProcessingAttachment(attachment: Attachment): ProcessingAttachment {
+  const status =
+    attachment.status === 'loading'
+      ? 'processing'
+      : attachment.status === 'error'
+        ? 'error'
+        : 'ready'
+  const url =
+    attachment.kind === 'image'
+      ? attachment.preview || (attachment.path ? captureUrlForPath(attachment.path) : '')
+      : undefined
+  return {
+    id: attachment.id,
+    name: attachment.kind === 'pasted' ? 'Pasted text' : attachment.name,
+    mediaType: attachment.mimeType || MEDIA_TYPE_BY_KIND[attachment.kind],
+    ...(url ? { url } : {}),
+    status,
+    message:
+      attachment.status === 'loading'
+        ? attachment.kind === 'image'
+          ? 'Reading…'
+          : 'Processing…'
+        : attachment.status === 'error'
+          ? attachment.error ||
+            (attachment.kind === 'image' ? 'Could not read this image.' : 'Could not read this file.')
+          : undefined,
+    textPreview:
+      attachment.kind !== 'image' && status === 'ready' && attachment.text
+        ? attachment.text.slice(0, 140)
+        : undefined,
+    kindLabel: attachment.kind === 'pasted' ? 'Pasted' : attachment.kind
+  }
+}
+
+// Turns queued before ids existed are keyed by object identity, so a row keeps its key while it
+// waits even though it has no stored id.
+const legacyQueuedIds = new WeakMap<QueuedTurn, string>()
+export function queuedTurnId(turn: QueuedTurn): string {
+  if (turn.id) return turn.id
+  let id = legacyQueuedIds.get(turn)
+  if (!id) {
+    id = crypto.randomUUID()
+    legacyQueuedIds.set(turn, id)
+  }
+  return id
+}
+
+/** A waiting turn as the library's message queue sees it. Everything queued is waiting its turn. */
+export function toQueuedMessage(turn: QueuedTurn): QueuedMessage {
+  return {
+    id: queuedTurnId(turn),
+    text: turn.text,
+    state: 'queued',
+    ...(turn.atts.length ? { attachments: turn.atts.map(toProcessingAttachment) } : {})
+  }
 }

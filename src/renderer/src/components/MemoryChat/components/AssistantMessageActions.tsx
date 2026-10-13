@@ -1,8 +1,8 @@
 import { memo } from 'react'
-import { Button } from '@offgrid/operator-ui/operator/button'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
 import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
-import { CaretLeft, CaretRight } from '@phosphor-icons/react'
+import { AppWindow, CaretLeft, CaretRight } from '@phosphor-icons/react'
 import { DropdownMenuItem } from '@renderer/components/ui/dropdown-menu'
 import type { Artifact } from '../../ArtifactCanvas'
 import type { ChatMessage } from '../types'
@@ -74,13 +74,8 @@ function SpeechActionComponent({
       </svg>
     )
   }
-  const color = state === 'idle' ? 'text-neutral-600 hover:text-green-500' : 'text-green-500'
   return (
-    <DropdownMenuItem
-      onSelect={onSpeak}
-      className={`flex items-center gap-1 text-[11px] transition-colors ${color}`}
-      title={label}
-    >
+    <DropdownMenuItem onSelect={onSpeak} title={label}>
       {icon}
       <TextMorph as="span">{label}</TextMorph>
     </DropdownMenuItem>
@@ -101,11 +96,10 @@ function VariantNavigationComponent({
     <span className="flex items-center gap-1 text-[11px] text-neutral-500">
       <Button
         variant="ghost"
-        size="icon"
+        size="icon-xs"
         aria-label="Previous response"
         onClick={() => onSelect(-1)}
         disabled={index <= 0}
-        className="size-6"
       >
         <CaretLeft aria-hidden="true" />
       </Button>
@@ -114,11 +108,10 @@ function VariantNavigationComponent({
       </span>
       <Button
         variant="ghost"
-        size="icon"
+        size="icon-xs"
         aria-label="Next response"
         onClick={() => onSelect(1)}
         disabled={index >= message.variants.length - 1}
-        className="size-6"
       >
         <CaretRight aria-hidden="true" />
       </Button>
@@ -164,7 +157,10 @@ function AssistantMessageActionsComponent({
           <RegenerateAction label="Regenerate" title="Regenerate" onRegenerate={onRegenerate} />
         ) : null}
         {artifact ? (
-          <DropdownMenuItem onSelect={() => onOpenArtifact(artifact)}>Open canvas</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onOpenArtifact(artifact)} title="Open canvas">
+            <AppWindow className="h-3.5 w-3.5" aria-hidden="true" />
+            Open canvas
+          </DropdownMenuItem>
         ) : null}
       </MessageActionsMenu>
       <VariantNavigation message={message} onSelect={onSelectVariant} />

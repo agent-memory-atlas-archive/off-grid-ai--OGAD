@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useState } from 'react'
 import { attachmentKindFor, type SyncedMessageRole } from '@offgrid/sync'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
+import { Message, MessageContent } from '@offgrid/operator-ui/operator/elements/message'
 import { hasLiveStreamActivity } from '@renderer/lib/stream-reducer'
 import { type TaskSession, useGuidanceTaskForJourney } from '@renderer/lib/task-session-store'
 import { captureUrlForPath } from '../../../../../shared/ogcapture-url'
@@ -23,6 +24,7 @@ import {
   assistantWorkIsSettled,
   isPromptEnhancementMessage,
   isSupportingMessage,
+  messageContentClass,
   messageToSpeakable,
   parseAsk,
   selectedMessageContent,
@@ -443,7 +445,7 @@ function MessageBubble({
     (attachment) => attachmentKindFor({ fileName: attachment.name }) !== 'audio'
   )
   return (
-    <div className={standardMessageBubbleClass(message, editing)}>
+    <MessageContent className={messageContentClass(message, editing)}>
       {message.context?.taskGuidance ? (
         <div className="mb-2 flex items-center justify-between gap-3 border-b border-green-500/20 pb-2 text-[9px] uppercase tracking-wide text-green-600 dark:text-green-400">
           <span>Task guidance</span>
@@ -499,7 +501,7 @@ function MessageBubble({
           onSubmit={() => actions.submitAsk(selected)}
         />
       ) : null}
-    </div>
+    </MessageContent>
   )
 }
 
@@ -583,8 +585,9 @@ function StandardMessageRow({
         stopped={message.turnStatus === 'cancelled'}
         failed={message.turnStatus === 'failed'}
       />
-      <div
-        className={`flex flex-col ${message.role === 'user' ? 'items-end' : 'items-start'} ${message.image || message.attachments?.length || state.editingId === message.id ? 'w-full max-w-2xl' : 'w-fit max-w-[85%]'}`}
+      <Message
+        from={message.role === 'user' ? 'user' : 'assistant'}
+        className={`gap-0 ${message.role === 'user' ? 'items-end' : 'items-start'} ${message.image || message.attachments?.length || state.editingId === message.id ? 'w-full max-w-2xl' : 'w-fit max-w-[85%]'}`}
       >
         <MessageBubble message={message} state={state} actions={actions} navigation={navigation} />
         {message.role === 'user' ? (
@@ -611,7 +614,7 @@ function StandardMessageRow({
             )}
           </div>
         ) : null}
-      </div>
+      </Message>
       {continuation}
       {isFinalAssistantResponse ? (
         <div className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1 pr-1">

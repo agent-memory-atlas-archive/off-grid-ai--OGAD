@@ -110,8 +110,16 @@ import {
   type ImageGenerationRequestContract
 } from '../../../../shared/image-generation-contract'
 import { Button } from '@renderer/components/ui/button'
-import { Button as QueueActionButton } from '@offgrid/operator-ui/operator/button'
-import '@offgrid/operator-ui/styles.css'
+import { MessageQueue, type QueueEdit } from '@offgrid/operator-ui/operator/workflows/queue'
+import { AttachmentList } from '@offgrid/operator-ui/operator/workflows/attachments'
+import { AutoHeight } from '@offgrid/operator-ui/operator/presence'
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputFooter,
+  PromptInputHeader,
+  PromptInputTools
+} from '@offgrid/operator-ui/operator/elements/prompt-input'
 import {
   Dialog,
   DialogContent,
@@ -162,9 +170,7 @@ import {
   FolderOpen,
   CaretDown,
   Lightning,
-  WarningCircle,
-  ArrowElbowDownLeft,
-  Trash
+  WarningCircle
 } from '@phosphor-icons/react'
 import type { MemoryChatProps } from './interfaces'
 import { announceAssistantActivity, announceAssistantListening } from '../../lib/assistant-activity'
@@ -189,7 +195,10 @@ import {
   groupChatTurnWork,
   mapRagMessages,
   mergeDurableAndStreaming,
-  mergeRemotePreviewTools
+  mergeRemotePreviewTools,
+  queuedTurnId,
+  toProcessingAttachment,
+  toQueuedMessage
 } from './helper'
 import {
   findDurableWorkMessageId,
@@ -203,7 +212,7 @@ import {
   readOpenChatTabs
 } from './utlis'
 import { ToolMessageTimelineRow } from './components/ToolMessageTimelineRow'
-import { AudioPane, DocumentPane } from './components/AttachmentPanes'
+import { AttachmentPreview } from './components/AttachmentPanes'
 import {
   ASK_EXAMPLES,
   ASK_EXAMPLES_PRO,
@@ -807,6 +816,7 @@ export function MemoryChat({
     renderer?: 'image' | 'document' | 'audio' | 'video' | 'text'
   } | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [queueEdit, setQueueEdit] = useState<QueueEdit | null>(null)
   const [lightbox, setLightbox] = useState<{ url: string; path?: string } | null>(null)
   // Pro registers this slot after the core renderer starts. Resolve it on each render so an
   // execution-chat approval cannot stay hidden behind a value cached before Pro activation.
@@ -1637,7 +1647,14 @@ export function MemoryChat({
         queueStore,
         targetConv,
         generatingRef.current,
-        { text: typed, atts, assistantEnabled: assistantForTurn, projectId, mode: turnMode },
+        {
+          id: crypto.randomUUID(),
+          text: typed,
+          atts,
+          assistantEnabled: assistantForTurn,
+          projectId,
+          mode: turnMode
+        },
         {
           draftStore,
           sendNow: opts?.sendNow,
@@ -2796,6 +2813,36 @@ export function MemoryChat({
       projectIdOverride: item.projectId,
       modeOverride: item.mode
     })
+  }
+
+  const findQueuedMessage = (conversationId: string, id: string): QueuedTurn | undefined =>
+    (queuedRef.current[conversationId] ?? []).find((queued) => queuedTurnId(queued) === id)
+
+  /** Rewrite one waiting turn in place; a turn that already left the queue is left alone. */
+  const saveQueuedEdit = (conversationId: string): void => {
+    const edit = queueEdit
+    setQueueEdit(null)
+    if (!edit) return
+    const queue = queuedRef.current[conversationId] ?? []
+    const item = findQueuedMessage(conversationId, edit.id)
+    if (!item) return
+    const text = edit.text.trim()
+    if (!text && item.atts.length === 0) return
+    setQueuedByConv({
+      ...queuedRef.current,
+      [conversationId]: queue.map((queued) =>
+        queued === item ? { ...queued, id: queuedTurnId(queued), text } : queued
+      )
+    })
+  }
+
+  const moveQueuedMessage = (conversationId: string, id: string, direction: -1 | 1): void => {
+    const queue = [...(queuedRef.current[conversationId] ?? [])]
+    const index = queue.findIndex((queued) => queuedTurnId(queued) === id)
+    const target = index + direction
+    if (index < 0 || target < 0 || target >= queue.length) return
+    ;[queue[index], queue[target]] = [queue[target]!, queue[index]!]
+    setQueuedByConv({ ...queuedRef.current, [conversationId]: queue })
   }
 
   async function settleObservedRun(
@@ -4518,104 +4565,54 @@ export function MemoryChat({
                         />
                       )}
 
-                      {queuedCount(queuedByConv, activeConversationId) > 0 && (
-                        <div className="mb-2 flex flex-col gap-1">
-                          {(activeConversationId
-                            ? (queuedByConv[activeConversationId] ?? [])
-                            : []
-                          ).map((q, i) => (
-                            <div
-                              key={i}
-                              role="group"
-                              aria-label={`Queued message ${i + 1}`}
-                              className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-1.5 text-[11px] text-neutral-400"
-                            >
-                              <svg
-                                className="h-3 w-3 shrink-0 text-neutral-600"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth={2}
-                                  d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                                />
-                              </svg>
-                              <span className="flex-1 select-text cursor-text whitespace-pre-wrap break-words">
-                                {q.text ||
-                                  `(${q.atts.length} attachment${q.atts.length > 1 ? 's' : ''})`}
-                              </span>
-                              {q.atts.length > 0 ? (
-                                <span
-                                  className="flex shrink-0 items-center gap-1 text-neutral-500"
-                                  title={q.atts.map((a) => a.name).join(', ')}
-                                >
-                                  <svg
-                                    className="h-3 w-3"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                  >
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      strokeWidth={2}
-                                      d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"
-                                    />
-                                  </svg>
-                                  {q.atts.length}
-                                </span>
-                              ) : null}
-                              <button
-                                onClick={() => copyText(q.text)}
-                                className="shrink-0 cursor-pointer text-neutral-600 transition-colors hover:text-green-500"
-                                title="Copy"
-                              >
-                                <svg
-                                  className="h-3 w-3"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M8 16h8M8 12h8m-7 8h6a2 2 0 002-2V6a2 2 0 00-2-2h-3.586a1 1 0 00-.707.293l-2.414 2.414A1 1 0 009 7.414V18a2 2 0 002 2z"
-                                  />
-                                </svg>
-                              </button>
-                              <span className="shrink-0 text-neutral-600">queued</span>
-                              <QueueActionButton
-                                variant="ghost"
-                                size="icon"
-                                className="size-6 min-h-6 min-w-6 text-muted-foreground hover:text-primary"
-                                aria-label="Send queued message now"
-                                title="Send now"
-                                onClick={() => {
-                                  if (activeConversationId) sendQueuedMessage(activeConversationId, q)
-                                }}
-                              >
-                                <ArrowElbowDownLeft size={14} aria-hidden="true" />
-                              </QueueActionButton>
-                              <QueueActionButton
-                                variant="ghost"
-                                size="icon"
-                                className="size-6 min-h-6 min-w-6 text-muted-foreground hover:text-destructive"
-                                aria-label="Delete queued message"
-                                title="Delete queued message"
-                                onClick={() => {
-                                  if (activeConversationId) removeQueuedMessage(activeConversationId, q)
-                                }}
-                              >
-                                <Trash size={14} aria-hidden="true" />
-                              </QueueActionButton>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                      {/* The queue rises above the composer: rows can be edited, reordered, sent now
+                  or dropped while the current reply finishes. */}
+                      <AutoHeight>
+                        {activeConversationId &&
+                        queuedCount(queuedByConv, activeConversationId) > 0 ? (
+                          <div className="mb-2">
+                            <MessageQueue
+                              items={(queuedByConv[activeConversationId] ?? []).map(toQueuedMessage)}
+                              edit={queueEdit}
+                              copiedId={
+                                copiedKey?.startsWith('queued:') ? copiedKey.slice('queued:'.length) : null
+                              }
+                              onCopy={(id) => {
+                                const item = findQueuedMessage(activeConversationId, id)
+                                if (item) void copyText(item.text, `queued:${id}`)
+                              }}
+                              onEdit={(id) => {
+                                const item = findQueuedMessage(activeConversationId, id)
+                                if (item) setQueueEdit({ id, text: item.text })
+                              }}
+                              onEditChange={(text) =>
+                                setQueueEdit((current) => (current ? { ...current, text } : null))
+                              }
+                              onSaveEdit={() => saveQueuedEdit(activeConversationId)}
+                              onCancelEdit={() => setQueueEdit(null)}
+                              onMove={(id, direction) =>
+                                moveQueuedMessage(activeConversationId, id, direction)
+                              }
+                              onSendNow={(id) => {
+                                const item = findQueuedMessage(activeConversationId, id)
+                                if (item) sendQueuedMessage(activeConversationId, item)
+                              }}
+                              onRetry={(id) => {
+                                const item = findQueuedMessage(activeConversationId, id)
+                                if (item) sendQueuedMessage(activeConversationId, item)
+                              }}
+                              onCancel={(id) => {
+                                const item = findQueuedMessage(activeConversationId, id)
+                                if (item) removeQueuedMessage(activeConversationId, item)
+                              }}
+                              onRemove={(id) => {
+                                const item = findQueuedMessage(activeConversationId, id)
+                                if (item) removeQueuedMessage(activeConversationId, item)
+                              }}
+                            />
+                          </div>
+                        ) : null}
+                      </AutoHeight>
 
                       {/* Unified composer — the SAME toolbar (attach / image / project /
                   skills / tools / memory scope / thinking) serves chat and voice
@@ -4635,7 +4632,14 @@ export function MemoryChat({
                           setDragOver(false)
                           if (e.dataTransfer.files.length) void addFiles(e.dataTransfer.files)
                         }}
-                        className={`relative rounded-xl border bg-card text-card-foreground shadow-sm transition-colors ${dragOver ? 'border-primary' : 'border-input focus-within:border-ring'}`}
+                        // The composer sends through its own handlers (Enter, ⌘Enter, the send button).
+                        // A stray submit (a button without a type, Enter in a gate field) must not reach
+                        // PromptInput, which would reset the draft field.
+                        onSubmitCapture={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                        }}
+                        className="relative"
                       >
                         {dragOver ? (
                           <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center rounded-xl bg-card/80 text-xs text-primary">
@@ -4663,11 +4667,18 @@ export function MemoryChat({
                             e.target.value = ''
                           }}
                         />
+                        <PromptInput
+                          onSubmit={() => {}}
+                          className={`[&>[data-slot=input-group]]:h-auto [&>[data-slot=input-group]]:flex-col [&>[data-slot=input-group]]:items-stretch [&>[data-slot=input-group]]:overflow-visible [&>[data-slot=input-group]]:rounded-xl [&>[data-slot=input-group]]:bg-card [&>[data-slot=input-group]]:text-card-foreground [&>[data-slot=input-group]]:shadow-sm [&>[data-slot=input-group]]:transition-colors ${dragOver ? '[&>[data-slot=input-group]]:border-primary' : ''}`}
+                        >
+                        <PromptInputHeader className="cursor-auto select-auto flex-col items-stretch gap-0 p-0 font-normal text-foreground">
+                        <AutoHeight>
                         {attachWarn && (
                           <div className="mx-3 mt-3 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
                             <WarningCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" weight="fill" />
                             <span className="flex-1">{attachWarn}</span>
                             <button
+                              type="button"
                               onClick={() => setAttachWarn(null)}
                               className="shrink-0 text-amber-400/70 hover:text-amber-200"
                             >
@@ -4675,88 +4686,42 @@ export function MemoryChat({
                             </button>
                           </div>
                         )}
-                        {attachments.length > 0 && (
-                          <div className="flex flex-wrap gap-2 px-3 pt-3">
-                            {attachments.map((a) => (
-                              <div
-                                key={a.id}
-                                className="group relative flex w-40 flex-col gap-1 rounded-lg border border-neutral-800 bg-neutral-900 p-2"
-                              >
-                                <button
-                                  onClick={() => removeAttachment(a.id)}
-                                  className="absolute -right-1.5 -top-1.5 z-10 flex h-4 w-4 items-center justify-center rounded-full border border-neutral-700 bg-neutral-950 text-[10px] text-neutral-400 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
-                                >
-                                  ✕
-                                </button>
-                                {a.kind === 'image' ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const url =
-                                        a.preview || (a.path ? captureUrlForPath(a.path) : '')
-                                      if (url) {
-                                        closePanels()
-                                        setLightbox({ url, path: a.path })
-                                      }
-                                    }}
-                                    title="Click to view"
-                                    className="relative h-[2.6rem] overflow-hidden rounded-md"
-                                  >
-                                    <img
-                                      src={a.preview || (a.path ? captureUrlForPath(a.path) : '')}
-                                      alt={a.name}
-                                      className="h-full w-full object-cover"
-                                    />
-                                    {a.status === 'loading' ? (
-                                      <span className="absolute inset-0 flex items-center justify-center bg-neutral-950/50 text-[9px] text-neutral-300">
-                                        Reading…
-                                      </span>
-                                    ) : a.status === 'error' ? (
-                                      <span className="absolute inset-0 flex items-center justify-center bg-neutral-950/85 px-2 text-center text-[9px] text-red-300">
-                                        {a.error || 'Could not read this image.'}
-                                      </span>
-                                    ) : null}
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    disabled={!a.text}
-                                    onClick={() => {
-                                      if (a.text || a.path) {
-                                        closePanels()
-                                        setViewer({
-                                          title: a.kind === 'pasted' ? 'Pasted text' : a.name,
-                                          text: a.text || '',
-                                          path: a.path,
-                                          kind: a.kind
-                                        })
-                                      }
-                                    }}
-                                    title={a.text ? 'Click to expand' : undefined}
-                                    className="line-clamp-3 h-[2.6rem] overflow-hidden text-left text-[10px] leading-snug text-neutral-500 enabled:hover:text-neutral-300"
-                                  >
-                                    {a.status === 'loading'
-                                      ? 'Processing…'
-                                      : a.status === 'error'
-                                        ? a.error || 'Could not read this file.'
-                                        : a.text.slice(0, 140) || a.name}
-                                  </button>
-                                )}
-                                <div className="flex items-center justify-between">
-                                  <span
-                                    className="truncate text-[10px] text-neutral-400"
-                                    title={a.name}
-                                  >
-                                    {a.kind === 'pasted' ? '' : a.name}
-                                  </span>
-                                  <span className="rounded-sm border border-neutral-700 px-1 py-0.5 text-[9px] uppercase tracking-wide text-neutral-400">
-                                    {a.kind === 'pasted' ? 'Pasted' : a.kind}
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                        </AutoHeight>
+                        <AutoHeight>
+                          {attachments.length > 0 ? (
+                            <div
+                              className="px-3 pt-3"
+                              aria-busy={attachments.some((a) => a.status === 'loading')}
+                            >
+                              <AttachmentList
+                                attachments={attachments.map(toProcessingAttachment)}
+                                onRemove={removeAttachment}
+                                onOpen={(id) => {
+                                  const a = attachments.find((attachment) => attachment.id === id)
+                                  if (!a) return
+                                  if (a.kind === 'image') {
+                                    const url = a.preview || (a.path ? captureUrlForPath(a.path) : '')
+                                    if (url) {
+                                      closePanels()
+                                      setLightbox({ url, path: a.path })
+                                    }
+                                    return
+                                  }
+                                  if (a.text || a.path) {
+                                    closePanels()
+                                    setViewer({
+                                      title: a.kind === 'pasted' ? 'Pasted text' : a.name,
+                                      text: a.text || '',
+                                      path: a.path,
+                                      kind: a.kind
+                                    })
+                                  }
+                                }}
+                              />
+                            </div>
+                          ) : null}
+                        </AutoHeight>
+                        </PromptInputHeader>
                         {/* Approval UX v2: pending gate cards + outcomes, in-flow above the composer */}
                         <ActionGateDock conversationId={activeConversationId} />
                         {/* Vision rail: the supervisor overlay slides in during a computer-use task */}
@@ -4801,6 +4766,7 @@ export function MemoryChat({
                             }}
                           />
                         ) : (
+                          <PromptInputBody>
                           <ChatDraftInput
                             ref={draftInputRef}
                             store={draftStore}
@@ -4822,11 +4788,12 @@ export function MemoryChat({
                             onSendNow={() => void sendMessage(undefined, { sendNow: true })}
                             busy={Boolean(activeConversationId && generatingConvs.has(activeConversationId))}
                           />
+                          </PromptInputBody>
                         )}
-                        <div className="flex flex-wrap items-center justify-between gap-y-2 gap-x-2 px-2.5 pb-2.5 pt-1">
+                        <PromptInputFooter className="cursor-auto select-auto flex-wrap gap-x-2 gap-y-2 px-2.5 pb-2.5 pt-1 font-normal text-foreground">
                           {/* Chips wrap to a new line on narrow widths instead of overflowing the composer
                       (the Image chip used to clip off the right edge). */}
-                          <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <PromptInputTools className="flex-wrap gap-2">
                             {/* "+" menu — attach / image / project / tools */}
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
@@ -5171,7 +5138,7 @@ export function MemoryChat({
                                 queued
                               </span>
                             )}
-                          </div>
+                          </PromptInputTools>
 
                           <div className={`flex shrink-0 items-center gap-1.5 ${voiceMode ? 'mr-10' : ''}`}>
                             {!voiceMode && (
@@ -5298,7 +5265,8 @@ export function MemoryChat({
                               />
                             )}
                           </div>
-                        </div>
+                        </PromptInputFooter>
+                        </PromptInput>
                       </div>
                     </div>
                   </div>
@@ -5415,36 +5383,22 @@ export function MemoryChat({
                 </h2>
                 <div className="flex shrink-0 items-center gap-2">
                   {viewer.path && (
-                    <button
+                    <Button
                       type="button"
+                      size="sm"
+                      variant="outline"
                       onClick={() => downloadImage(viewer.path, viewer.title)}
-                      className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 transition-colors hover:border-green-500 hover:text-green-500"
                     >
                       Download
-                    </button>
+                    </Button>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => setViewer(null)}
-                    className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 transition-colors hover:text-white"
-                  >
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setViewer(null)}>
                     Close
-                  </button>
+                  </Button>
                 </div>
               </header>
               <div className="min-h-0 flex-1 overflow-auto p-4">
-                {viewer.renderer === 'audio' && viewer.path ? (
-                  <AudioPane path={viewer.path} title={viewer.title} />
-                ) : viewer.renderer === 'document' && viewer.path ? (
-                  // A document renders from its BYTES. main already serves them as a data URL for
-                  // exactly this - Chromium draws the PDF itself - and the old code path never called
-                  // it, so every PDF fell through to the text pane below and showed an empty page.
-                  <DocumentPane path={viewer.path} title={viewer.title} />
-                ) : (
-                  <pre className="min-h-full w-full whitespace-pre-wrap break-words rounded-md border border-neutral-800 bg-neutral-950 p-5 text-sm leading-relaxed text-neutral-200">
-                    {viewer.text}
-                  </pre>
-                )}
+                <AttachmentPreview key={`${viewer.path ?? ''}:${viewer.title}`} content={viewer} />
               </div>
             </SidePanel>
           )}

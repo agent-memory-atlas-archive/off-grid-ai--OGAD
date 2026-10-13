@@ -4,6 +4,9 @@
 import type { Attachment, ChatMode } from '../components/MemoryChat/types'
 
 export interface QueuedTurn {
+  /** Stable identity for the queue view (rows glide, edit and reorder by id). Turns persisted
+   *  before ids existed have none; the view keys those by object identity. */
+  id?: string
   text: string
   atts: Attachment[]
   assistantEnabled?: boolean

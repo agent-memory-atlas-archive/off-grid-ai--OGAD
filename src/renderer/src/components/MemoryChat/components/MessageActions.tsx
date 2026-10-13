@@ -13,13 +13,8 @@ export function CopyAction({
   onCopy
 }: Readonly<{ copied: boolean; onCopy: () => void }>): React.JSX.Element {
   console.log('MemoryChat CopyAction rendered')
-  const color = copied ? 'text-green-500' : 'text-neutral-600 hover:text-green-500'
   return (
-    <DropdownMenuItem
-      onSelect={onCopy}
-      className={`flex items-center gap-1 text-[11px] transition-colors ${color}`}
-      title="Copy"
-    >
+    <DropdownMenuItem onSelect={onCopy} title="Copy">
       {copied ? (
         <Check className="h-3.5 w-3.5" weight="bold" />
       ) : (
@@ -53,7 +48,6 @@ export function RegenerateAction({
     <DropdownMenuItem
       disabled={disabled}
       onSelect={onRegenerate}
-      className="flex items-center gap-1 text-[11px] text-neutral-600 transition-colors enabled:hover:text-green-500 disabled:cursor-not-allowed disabled:opacity-40"
       title={title}
     >
       <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -98,7 +92,6 @@ function UserMessageActionsComponent({
       />
       <DropdownMenuItem
         onSelect={onEdit}
-        className="flex items-center gap-1 text-[11px] text-neutral-600 transition-colors hover:text-green-500"
         title="Edit this message"
       >
         <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -150,7 +143,6 @@ function VoiceMessageActionsComponent({
       />
       <DropdownMenuItem
         onSelect={onEdit}
-        className="flex items-center gap-1 text-[11px] text-neutral-600 transition-colors hover:text-green-500"
         title="Edit this message"
       >
         <PencilSimple className="h-3.5 w-3.5" aria-hidden="true" />
@@ -159,7 +151,6 @@ function VoiceMessageActionsComponent({
       <DropdownMenuItem
         disabled={!canTranscribe || transcribing}
         onSelect={onTranscribe}
-        className="flex items-center gap-1 text-[11px] text-neutral-600 transition-colors enabled:hover:text-green-500 disabled:cursor-not-allowed disabled:opacity-40"
         title={canTranscribe ? 'Transcribe this voice note again' : 'Voice note is not available'}
       >
         <Waveform className="h-3.5 w-3.5" aria-hidden="true" />
