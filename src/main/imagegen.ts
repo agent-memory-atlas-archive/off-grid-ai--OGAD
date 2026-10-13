@@ -582,11 +582,6 @@ export async function generateImage(
         remote &&
         (!params.model || params.model === remote.selectedModel || params.model === remoteId)
       ) {
-        if (params.initImage) {
-          throw new Error(
-            'The selected remote image model does not support image editing. Select a local image model that supports an init image.'
-          )
-        }
         if (remoteAbort)
           throw new Error('An image is already generating — please wait for it to finish.')
         const controller = new AbortController()
@@ -601,7 +596,8 @@ export async function generateImage(
             params.width,
             params.height,
             params.allowUnsafeMemoryOverride === true,
-            controller.signal
+            controller.signal,
+            params.initImage
           )
           if (signal?.aborted) throw new Error(IMAGE_CANCELLED_MESSAGE)
           const extension =

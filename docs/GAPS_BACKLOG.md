@@ -7,6 +7,67 @@ how to reproduce, and the fix direction. Close with evidence; never hide.
 
 ## OPEN
 
+### MODEL-REMOTE-20261013 (P1) - Serve grounding and decision specialists through the OGAD API
+
+**Status:** source patch prepared; keep open until the PR is merged and released.
+
+**Evidence (2026-10-13, nightly 0.0.55-beta.122 on Runpod):** UI-Mate-27B and Kev 4B are installed.
+The server task-role endpoint reports UI-Mate as the local grounding specialist, but `/v1/models`
+omits both specialists. The Mac remote-server dropdowns therefore show only the active Qwen chat
+model. `/v1/chat/completions` routes local requests to Chat rather than the requested specialist.
+Repeatedly selecting Kev with Use does not change the visible active lineup when the task strategy
+does not use a decision model; verify this selection behavior separately from runtime startup.
+
+**Required change:** advertise installed, runnable specialists with stable model IDs and route each
+request to the existing grounding or decision runtime. Keep the existing remote-client contract,
+Chat selection, streaming, errors, and cancellation behavior. Do not send Kev requests to Chat.
+
+**Acceptance:** the Mac discovers UI-Mate and Kev through the Runpod API; a small synthetic image
+request reaches UI-Mate; a small option-selection request reaches Kev and returns valid choice
+probabilities. Confirm CUDA for both. Preserve Chat and the persistent model files. Record the
+installed patch and verification here; a Runpod-only patch does not close the Git/release work.
+
+**Patch evidence:** installed on Runpod nightly 0.0.55-beta.122. A small synthetic Save-button image
+returned a UI-Mate result; Kev chose Save with 0.9916 probability through the private API. Runtime
+logs and GPU process memory confirm CUDA for both. Role dropdowns now filter grounding specialists
+and decision outputs separately, using the existing catalog and output-modalities contract.
+A renderer integration check covers UI-Mate, Kev, a provider decider, and a general vision model.
+The Mac dropdown change still requires installation of the updated client.
+
+### MODEL-SPLIT-20261013 (P1) - Download all GGUF shards with one file-picker action
+
+**Status:** source patch prepared; keep open until the PR is merged and released.
+
+**Evidence (2026-10-13, nightly 0.0.55-beta.122):** selecting a split Qwen3.8 Flash Next GGUF in the
+GUI downloads only the selected shard plus its projector. The user had to download part 1 separately
+after selecting part 2. The loader requires the complete matching shard set in the same directory.
+
+**Required change:** selecting any shard must resolve the complete matching set, download all parts
+and the required projector through the existing download queue, and record part 1 as the primary
+file. Validate the full set before download; preserve checksums, progress, cancellation, resume,
+existing completed files, and non-split downloads. Never combine different quantizations or folders.
+
+**Acceptance:** use a small complete split-file fixture to verify either selection fetches all parts
+once and records part 1; a missing shard fails clearly. Verify the installed Runpod patch without
+downloading the existing 75.8 GB model again. Record focused checks and remaining GUI/release checks.
+
+**Patch evidence:** shard resolution is installed on Runpod. Focused fixtures cover selection of
+either shard, order and metadata, incomplete sets, folders, quantizations, and ordinary files.
+A full GUI transfer was not repeated. Release and GUI download checks remain open.
+
+### MODEL-IMAGE-REMOTE-20261013 (P1) - Forward source images to remote editing endpoints
+
+**Status:** client source patch prepared; installation and a real image-edit run remain open.
+
+**Evidence:** a selected remote Qwen Image 2.1 model was rejected in the Mac client before the
+request reached the server. The client unconditionally rejected every remote init image.
+
+**Change:** send a source image as multipart data to the existing `/v1/images/edits` endpoint;
+retain JSON `/v1/images/generations` for requests without a source image. Preserve authentication,
+cancellation, and provider error handling. A small HTTP boundary fixture verifies source bytes,
+model, prompt, size, and the returned image for edit and generation requests.
+The separate chat claim that ten pages were generated after tool failures is not fixed here.
+
 ### REC-F6-001 (P1) - Desktop recovery backlog items need final review
 
 **Status:** open; reported during the cumulative F6 manual pass on 2026-09-11. These items are

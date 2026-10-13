@@ -92,33 +92,57 @@ export async function generateRemoteImage(
   width: number | undefined,
   height: number | undefined,
   allowUnsafeMemoryOverride: boolean,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  initImage?: string
 ): Promise<{ bytes: Buffer; mime: string }> {
-  const response = await checked(await fetch(`${server.endpoint}/images/generations`, {
-    method: 'POST',
-    headers: headers(server, 'application/json'),
-    signal,
-    body: JSON.stringify({
-      model: server.selectedModel,
-      prompt,
-      ...(width && height ? { size: `${width}x${height}` } : {}),
-      allow_unsafe_memory_override: allowUnsafeMemoryOverride
+  const fields = {
+    model: server.selectedModel,
+    prompt,
+    ...(width && height ? { size: `${width}x${height}` } : {}),
+    allow_unsafe_memory_override: allowUnsafeMemoryOverride
+  }
+  let requestBody: string | FormData = JSON.stringify(fields)
+  if (initImage) {
+    const form = new FormData()
+    for (const [key, value] of Object.entries(fields)) form.append(key, String(value))
+    const bytes = await fs.promises.readFile(initImage)
+    const extension = path.extname(initImage).toLowerCase()
+    const mime =
+      extension === '.jpg' || extension === '.jpeg'
+        ? 'image/jpeg'
+        : extension === '.webp'
+          ? 'image/webp'
+          : 'image/png'
+    form.append('image', new Blob([bytes], { type: mime }), path.basename(initImage))
+    requestBody = form
+  }
+  const response = await checked(
+    await fetch(`${server.endpoint}/images/${initImage ? 'edits' : 'generations'}`, {
+      method: 'POST',
+      headers: headers(server, initImage ? undefined : 'application/json'),
+      signal,
+      body: requestBody
     })
-  }))
-  const body = await response.json() as {
+  )
+  const body = (await response.json()) as {
     data?: Array<{ b64_json?: string; url?: string }>
   }
-  const value = body.data?.[0]?.url ?? (body.data?.[0]?.b64_json ? `data:image/png;base64,${body.data[0].b64_json}` : undefined)
+  const value =
+    body.data?.[0]?.url ??
+    (body.data?.[0]?.b64_json ? `data:image/png;base64,${body.data[0].b64_json}` : undefined)
   if (!value) throw new Error('The remote server returned no image.')
   if (value.startsWith('data:')) return decodeImageDataUrl(value)
   const url = new URL(value)
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('The remote server returned an unsupported image URL.')
+  if (!['http:', 'https:'].includes(url.protocol))
+    throw new Error('The remote server returned an unsupported image URL.')
   // The provider token must never be forwarded to a returned media URL.
   const image = await checked(await fetch(url, { signal }))
   const mime = (image.headers.get('content-type') ?? '').split(';')[0]!.toLowerCase()
-  if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime)) throw new Error('The remote server returned an unsupported image format.')
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime))
+    throw new Error('The remote server returned an unsupported image format.')
   const bytes = Buffer.from(await image.arrayBuffer())
-  if (!bytes.length || bytes.length > 50 * 1024 * 1024) throw new Error('The remote server returned an invalid image size.')
+  if (!bytes.length || bytes.length > 50 * 1024 * 1024)
+    throw new Error('The remote server returned an invalid image size.')
   return { bytes, mime }
 }
 

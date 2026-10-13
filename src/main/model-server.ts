@@ -57,10 +57,10 @@ import {
 import { errBody, errMeta } from './model-server/errors'
 import { handleExtensionBridge, handleExtensionUpgrade } from './extension-bridge/bridge-http'
 import { isAsync, matchPollRoute } from './model-server/async-request'
-import { sanitizeChatMessages } from './model-server/chat-messages'
+import { sanitizeChatMessages, parseDecisionChatMessages } from './model-server/chat-messages'
 import { applyThinkingPayload, requestedThinking } from './llm/chat-payload'
 import { parseMultipart } from './model-server/multipart'
-import { tagLlmEntries, modelEntry, ollamaMirror } from './model-server/models-list'
+import { tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries } from './model-server/models-list'
 import { buildGatewayModalities, type GatewayModalities } from './model-server/health'
 import { safeProxyResponse } from './model-server/proxy-response'
 import { writeDiagnosticLog } from './diagnostics-log'
@@ -243,9 +243,10 @@ function proxyToLlama(
   res: http.ServerResponse,
   bodyOverride?: Buffer,
   retryUntil = 0,
-  activity?: AIRequestHandle
+  activity?: AIRequestHandle,
+  targetPort?: number
 ): void {
-  const headers = { ...req.headers, host: `${UPSTREAM_HOST}:${upstreamPort()}` }
+  const headers = { ...req.headers, host: `${UPSTREAM_HOST}:${targetPort ?? upstreamPort()}` }
   if (bodyOverride) {
     headers['content-length'] = String(bodyOverride.length)
     delete headers['transfer-encoding']
@@ -257,7 +258,7 @@ function proxyToLlama(
       const proxyReq = http.request(
         {
           hostname: UPSTREAM_HOST,
-          port: upstreamPort(),
+          port: targetPort ?? upstreamPort(),
           path: req.url,
           method: req.method,
           headers
@@ -554,7 +555,11 @@ function jsonWithId(res: http.ServerResponse, rid: string, result: unknown): voi
 // via the shared `retryWithDeadline` helper. Only a connection error is
 // transient; an HTTP >= 400 answer (or a parse failure) is the engine's real
 // reply and is never retried - so those attempt-rejections are tagged fatal.
-function callLlamaJson(bodyObj: Record<string, unknown>, retryUntil: number): Promise<unknown> {
+function callLlamaJson(
+  bodyObj: Record<string, unknown>,
+  retryUntil: number,
+  targetPort?: number
+): Promise<unknown> {
   const payload = Buffer.from(JSON.stringify({ ...bodyObj, stream: false }))
   // One attempt. A connection ('error') rejection is left un-tagged (transient);
   // an HTTP-error or parse rejection is tagged `fatal` so it is not replayed.
@@ -563,7 +568,7 @@ function callLlamaJson(bodyObj: Record<string, unknown>, retryUntil: number): Pr
       const upstream = http.request(
         {
           hostname: UPSTREAM_HOST,
-          port: upstreamPort(),
+          port: targetPort ?? upstreamPort(),
           path: '/v1/chat/completions',
           method: 'POST',
           headers: { 'content-type': 'application/json', 'content-length': String(payload.length) }
@@ -608,6 +613,158 @@ function callLlamaJson(bodyObj: Record<string, unknown>, retryUntil: number): Pr
   })
 }
 
+async function handleSpecialistChat(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  rid: string,
+  body: Record<string, unknown>
+): Promise<boolean> {
+  if (typeof body.model !== 'string') return false
+  const { desktopCatalog, listInstalled } = await import('./models-manager')
+  const model = (await desktopCatalog()).find(
+    (entry) => entry.id === body.model && entry.kind === 'computer_use'
+  )
+  if (!model) return false
+  if (!(await listInstalled()).includes(model.id)) {
+    json(res, 404, errBody('The requested specialist is not installed.', 'not_found'))
+    return true
+  }
+  res.setHeader('X-Request-Id', rid)
+  const activity = new AIRequestHandle({
+    modality: 'text',
+    source: 'API specialist',
+    model: model.id,
+    request: body
+  })
+  try {
+    if (model.tags?.includes('Decision')) {
+      let input: ReturnType<typeof parseDecisionChatMessages>
+      try {
+        input = parseDecisionChatMessages(body.messages)
+      } catch (error) {
+        activity.finish(undefined, error)
+        json(res, 400, errBody((error as Error).message, 'invalid_request_error'))
+        return true
+      }
+      const { decisionRuntime } = await import('./accessibility/decision-runtime')
+      const controller = new AbortController()
+      const abort = (): void => {
+        if (!res.writableEnded) controller.abort()
+      }
+      const asyncRequest = isAsync(req, body)
+      if (!asyncRequest) res.once('close', abort)
+      await serve(
+        res,
+        rid,
+        'chat',
+        '/v1/chat/completions',
+        asyncRequest,
+        async () => {
+          try {
+            await decisionRuntime.start(model.id)
+            if (controller.signal.aborted) throw new Error('Decision request cancelled.')
+            if (decisionRuntime.activeModelId !== model.id)
+              throw new Error('The requested decision model is not ready.')
+            const decision = await decisionRuntime.decide(
+              input.context,
+              input.question,
+              input.options,
+              controller.signal
+            )
+            const result = {
+              id: `chatcmpl-${rid}`,
+              object: 'chat.completion',
+              created: Math.floor(Date.now() / 1000),
+              model: model.id,
+              choices: [
+                {
+                  index: 0,
+                  message: { role: 'assistant', content: JSON.stringify(decision) },
+                  finish_reason: 'stop'
+                }
+              ]
+            }
+            activity.finish(result)
+            return result
+          } catch (error) {
+            activity.finish(undefined, error)
+            throw error
+          } finally {
+            res.off('close', abort)
+          }
+        },
+        (value) => {
+          if (res.destroyed) return
+          const result = value as {
+            id: string
+            created: number
+            model: string
+            choices: { message: { content: string } }[]
+          }
+          if (body.stream === true) {
+            res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' })
+            const chunk = {
+              id: result.id,
+              object: 'chat.completion.chunk',
+              created: result.created,
+              model: result.model
+            }
+            res.write(
+              `data: ${JSON.stringify({ ...chunk, choices: [{ index: 0, delta: { role: 'assistant', content: result.choices[0]!.message.content }, finish_reason: null }] })}\n\n`
+            )
+            res.end(
+              `data: ${JSON.stringify({ ...chunk, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`
+            )
+          } else jsonWithId(res, rid, result)
+        }
+      )
+    } else {
+      const { grounderRuntime } = await import('./vision/grounder-runtime')
+      const connection = await grounderRuntime.connection(model.id)
+      if (res.destroyed) return true
+      await inlineChatImages(body)
+      sanitizeChatMessages(body)
+      activity.update({ backend: connection.computeBackend ?? 'Unknown', effectiveRequest: body })
+      const port = Number(new URL(connection.endpoint).port)
+      if (isAsync(req, body)) {
+        await serve(
+          res,
+          rid,
+          'chat',
+          '/v1/chat/completions',
+          true,
+          async () => {
+            try {
+              const result = await callLlamaJson(body, Date.now() + 45_000, port)
+              activity.finish(result)
+              return result
+            } catch (error) {
+              activity.finish(undefined, error)
+              throw error
+            }
+          },
+          () => {}
+        )
+      } else
+        proxyToLlama(
+          req,
+          res,
+          Buffer.from(JSON.stringify(body)),
+          Date.now() + 45_000,
+          activity,
+          port
+        )
+    }
+  } catch (error) {
+    activity.finish(undefined, error)
+    if (!res.headersSent && !res.destroyed) {
+      const failure = errMeta(error)
+      json(res, failure.status, errBody(failure.message, failure.type))
+    }
+  }
+  return true
+}
+
 async function handleChat(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -634,6 +791,13 @@ async function handleChat(
     return
   }
 
+  try {
+    if (await handleSpecialistChat(req, res, rid, body)) return
+  } catch (error) {
+    const failure = errMeta(error)
+    json(res, failure.status, errBody(failure.message, failure.type))
+    return
+  }
   try {
     let changed = await inlineChatImages(body)
     // Gemma 4 (and others) reject system messages that aren't at position 0.
@@ -848,7 +1012,15 @@ async function handleModelsList(
       (whisperModel() ? path.basename(whisperModel() as string) : null)
   const transcription = sttId ? [tag(sttId, 'transcription')] : []
 
-  const data: Record<string, unknown>[] = [...text, ...images, ...speech, ...transcription]
+  const { desktopCatalog, listInstalled } = await import('./models-manager')
+  const specialists = specialistModelEntries(await desktopCatalog(), await listInstalled(), now)
+  const data: Record<string, unknown>[] = [
+    ...text,
+    ...specialists.filter((model) => !text.some((entry) => entry.id === model.id)),
+    ...images,
+    ...speech,
+    ...transcription
+  ]
   const requested = outputModalities
     ?.split(',')
     .map((value) => value.trim())

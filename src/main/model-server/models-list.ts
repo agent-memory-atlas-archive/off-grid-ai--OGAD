@@ -28,3 +28,22 @@ export function modelEntry(
 export function ollamaMirror(data: Record<string, unknown>[]): Record<string, unknown>[] {
   return data.map((m) => ({ name: m.id, model: m.id, type: 'model', kind: m.kind }))
 }
+
+export function specialistModelEntries(
+  catalog: readonly { id: string; name: string; kind: string; tags?: readonly string[] }[],
+  installed: readonly string[],
+  now: number
+): Record<string, unknown>[] {
+  return catalog
+    .filter((model) => model.kind === 'computer_use' && installed.includes(model.id))
+    .map((model) =>
+      modelEntry(model.id, model.tags?.includes('Decision') ? 'chat' : 'vision', now, {
+        name: model.name,
+        capabilities: model.tags?.includes('Decision') ? [] : ['vision'],
+        architecture: {
+          input_modalities: model.tags?.includes('Decision') ? ['text'] : ['text', 'image'],
+          output_modalities: model.tags?.includes('Decision') ? ['decisions'] : ['text']
+        }
+      })
+    )
+}
