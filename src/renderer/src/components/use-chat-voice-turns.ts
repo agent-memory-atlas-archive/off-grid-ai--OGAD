@@ -66,9 +66,17 @@ interface ChatVoiceTurns {
   start: () => void
   toggle: () => void
   cancel: () => void
+  /** Feeds the live microphone envelope to a waveform without re-rendering the chat. */
+  subscribeAmplitudes: (listener: (amplitudes: number[]) => void) => () => void
 }
 
 const LEVEL_SAMPLE_MS = 50
+/** About two and a half seconds of signal at the meter's sample rate. */
+const AMPLITUDE_SAMPLES = 48
+const QUIET_LEVEL = 0.04
+/** Speech RMS sits well below 1; scale it so a normal voice fills the waveform. */
+const LEVEL_GAIN = 6
+const silentAmplitudes = (): number[] => Array<number>(AMPLITUDE_SAMPLES).fill(QUIET_LEVEL)
 
 function recorderMime(): string {
   const supports =
@@ -287,6 +295,33 @@ export function useChatVoiceTurns(options: ChatVoiceTurnOptions): ChatVoiceTurns
   )
 
   const finishCaptureRef = useRef<(suspendAfter: boolean) => void>(() => {})
+  // The envelope lives in a ref and goes straight to subscribers, so the chat never re-renders
+  // for it; only the waveform does.
+  const amplitudesRef = useRef<number[]>(silentAmplitudes())
+  const amplitudeListenersRef = useRef(new Set<(amplitudes: number[]) => void>())
+  const publishAmplitudes = useCallback((next: number[]): void => {
+    amplitudesRef.current = next
+    amplitudeListenersRef.current.forEach((listener) => listener(next))
+  }, [])
+  const publishLevel = useCallback(
+    (level: number): void => {
+      publishAmplitudes([
+        ...amplitudesRef.current.slice(1),
+        Math.max(QUIET_LEVEL, Math.min(1, level * LEVEL_GAIN))
+      ])
+    },
+    [publishAmplitudes]
+  )
+  const subscribeAmplitudes = useCallback(
+    (listener: (amplitudes: number[]) => void): (() => void) => {
+      amplitudeListenersRef.current.add(listener)
+      listener(amplitudesRef.current)
+      return () => {
+        amplitudeListenersRef.current.delete(listener)
+      }
+    },
+    []
+  )
 
   const refreshTranscriptionLabel = useCallback(async (sequence: number): Promise<void> => {
     try {
@@ -343,6 +378,7 @@ export function useChatVoiceTurns(options: ChatVoiceTurnOptions): ChatVoiceTurns
         mimeRef.current = actualMime
         startedAtRef.current = Date.now()
         discardRef.current = false
+        publishAmplitudes(silentAmplitudes())
 
         recorder.ondataavailable = (event) => {
           if (event.data.size > 0) chunksRef.current.push(event.data)
@@ -380,10 +416,29 @@ export function useChatVoiceTurns(options: ChatVoiceTurnOptions): ChatVoiceTurns
           resources.endpoint = endpoint
           resources.meter = setInterval(() => {
             analyser.getFloatTimeDomainData(samples)
-            const reading = endpoint.observeLevel(rms(samples))
+            const level = rms(samples)
+            publishLevel(level)
+            const reading = endpoint.observeLevel(level)
             if (mode === 'handsfree' && reading.speech && phaseRef.current === 'listening')
               updatePhase('recording')
           }, LEVEL_SAMPLE_MS)
+        } else if (typeof window.AudioContext === 'function') {
+          // Manual turns need no endpoint, only the meter for the waveform. Recording never
+          // depends on it, so a meter that cannot start is skipped.
+          try {
+            const context = new window.AudioContext()
+            const analyser = context.createAnalyser()
+            analyser.fftSize = 2048
+            context.createMediaStreamSource(stream).connect(analyser)
+            const samples = new Float32Array(analyser.fftSize)
+            resources.context = context
+            resources.meter = setInterval(() => {
+              analyser.getFloatTimeDomainData(samples)
+              publishLevel(rms(samples))
+            }, LEVEL_SAMPLE_MS)
+          } catch {
+            stopAnalysis(resources)
+          }
         }
 
         recorder.start(250)
@@ -404,6 +459,8 @@ export function useChatVoiceTurns(options: ChatVoiceTurnOptions): ChatVoiceTurns
       }
     },
     [
+      publishAmplitudes,
+      publishLevel,
       refreshTranscriptionLabel,
       stopAnalysis,
       stopTracks,
@@ -582,6 +639,7 @@ export function useChatVoiceTurns(options: ChatVoiceTurnOptions): ChatVoiceTurns
     transcriptionLabel,
     start,
     toggle,
-    cancel
+    cancel,
+    subscribeAmplitudes
   }
 }

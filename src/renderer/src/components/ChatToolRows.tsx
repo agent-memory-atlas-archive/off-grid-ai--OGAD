@@ -1,4 +1,4 @@
-import { useState, type MouseEvent, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { ChatStreamTool, ProjectedSyncedTool } from '@offgrid/sync'
 import { Button } from '@offgrid/operator-ui/operator/coss/button'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
@@ -9,6 +9,7 @@ import {
   type ToolTraceEntry
 } from '@offgrid/operator-ui/operator/workflows/tool-timeline'
 import { ChatMarkdown } from './ChatMarkdown'
+import { ChatThinkingBlock } from './ChatThinkingBlock'
 import type { AssistantTimelineEntry } from '@renderer/lib/message-persistence'
 import { type TaskSession, useTaskSessionsForReferences } from '@renderer/lib/task-session-store'
 import {
@@ -26,6 +27,7 @@ type DisplayTool =
 
 interface ChatToolRowsProps {
   tools?: readonly DisplayTool[]
+  /** A host-rendered thinking block (header included), shown as is in the timeline. */
   thinking?: ReactNode
   /** Whether the thinking row has content beyond a waiting indicator. */
   thinkingHasContent?: boolean
@@ -50,16 +52,25 @@ type WorkStatus = 'running' | 'complete' | 'failed' | 'needs attention'
 
 type ToolEntryState = Extract<ToolTraceEntry, { kind: 'tool' }>['state']
 
-/** The timeline's step badge speaks the library's states; the product keeps its own words. */
+/**
+ * The timeline's step badge speaks the library's states; the product keeps its own words in each
+ * step's name. Work waiting on the person stays a collapsible step (a breathing ring) so its row
+ * keeps its accessible name and its task.
+ */
 const ENTRY_STATE: Record<WorkStatus, ToolEntryState> = {
   running: 'running',
   complete: 'success',
   failed: 'error',
-  'needs attention': 'needs-attention'
+  'needs attention': 'pending'
 }
 
-/** The collapsed step line sits beside the step name, so long updates move into the detail. */
-const SUMMARY_LIMIT = 64
+/** The trigger keeps the product's words for each state of the work. */
+const STATE_LABELS: ToolTimelineProps['stateLabels'] = {
+  working: 'Working',
+  done: 'Work done',
+  stopped: 'Work stopped',
+  failed: 'Work failed'
+}
 
 const PROPOSAL_STAGE_LABELS: Record<string, string> = {
   start: 'Started proposal',
@@ -323,12 +334,9 @@ export function ChatToolRows({
     ordered.filter((entry) => entry.kind === 'tool').length - projected.length
   )
 
-  /** Linked task per rendered step, so a step's own row can open its task. */
-  const stepTasks: Array<TaskSession | undefined> = []
   const entries: ToolTraceEntry[] = []
-  const pushThinking = (id: string, text: ReactNode, streaming: boolean): void => {
-    stepTasks.push(undefined)
-    entries.push({ id, kind: 'thinking', text, streaming })
+  const pushThinking = (id: string, render: ReactNode, streaming: boolean): void => {
+    entries.push({ id, kind: 'thinking', text: null, render, streaming })
   }
   const liveThinking = (): void => {
     if (thinking) pushThinking('thinking:live', thinking, workIsLive && !thinkingHasContent)
@@ -338,10 +346,9 @@ export function ChatToolRows({
   ordered.forEach((entry, orderIndex) => {
     if (entry.kind === 'thinking') {
       const streaming = thinkingLive && orderIndex === ordered.length - 1
-      if (!entry.text.trim() && !streaming) return
       pushThinking(
         `thinking:${orderIndex}`,
-        entry.text.trim() ? <ChatMarkdown content={entry.text} /> : null,
+        <ChatThinkingBlock content={entry.text} live={streaming} className="max-w-full" />,
         streaming
       )
       return
@@ -369,14 +376,10 @@ export function ChatToolRows({
       showMemorySources ||
       (!(memorySources && memoryTool && stepStatus === 'complete') &&
         (Boolean(details) || hasComputerDetails || Boolean(linkedTask)))
-    const line = showMemorySources ? undefined : shortResult(tool, stepStatus, rowSummary)
-    const lineIsLong = Boolean(line && line.length > SUMMARY_LIMIT)
-    const summary = line && lineIsLong ? `${line.slice(0, SUMMARY_LIMIT - 1).trimEnd()}…` : line
     const detail = !hasDisclosure ? undefined : showMemorySources ? (
       <div className="max-h-[400px] overflow-y-auto text-sm">{memorySources?.content}</div>
     ) : (
       <AutoHeight className="space-y-2 leading-relaxed text-muted-foreground">
-        {lineIsLong && line !== details ? <p>{line}</p> : null}
         {details ? <ChatMarkdown content={details} /> : null}
         <ComputerUseStepDetails details={linkedTask?.stepDetails} />
         {linkedTask ? (
@@ -404,45 +407,38 @@ export function ChatToolRows({
         ) : null}
       </AutoHeight>
     )
-    stepTasks.push(linkedTask)
     entries.push({
       id: `${tool.name}:${entry.toolIndex}`,
       kind: 'tool',
       name: stepLabel,
+      ariaLabel: `${stepLabel}, ${stepStatus}`,
       state: ENTRY_STATE[stepStatus],
-      summary,
+      description: showMemorySources ? undefined : shortResult(tool, stepStatus, rowSummary),
+      summary: stepStatus,
       result: detail,
+      // A linked task's row opens that task as well as its detail.
+      ...(linkedTask
+        ? {
+            onSelect: () =>
+              openTaskSidePanel({ taskId: linkedTask.taskId, kind: linkedTask.kind, detail: true })
+          }
+        : {}),
       ...(durationMs === undefined ? {} : { time: `${Math.round(durationMs)} ms` })
     })
   })
   if (hasOrderedThinking) liveThinking()
 
-  // A linked task's step row opens that task as well as its detail. The timeline renders
-  // each step's header as the first button of its list item, so route that click here.
-  const openStepTask = (event: MouseEvent<HTMLDivElement>): void => {
-    const target = event.target as HTMLElement
-    const item = target.closest<HTMLElement>('[role="listitem"]')
-    const button = target.closest('button')
-    if (!item || !button || button !== item.querySelector('button')) return
-    const items = Array.from(item.parentElement?.children ?? []).filter(
-      (child) => child.getAttribute('role') === 'listitem'
-    )
-    const task = stepTasks[items.indexOf(item)]
-    if (task) openTaskSidePanel({ taskId: task.taskId, kind: task.kind, detail: true })
-  }
-
   return (
     <>
-      <div
-        className="ml-1 w-full max-w-[85%]"
-        aria-busy={workIsLive || undefined}
-        onClick={openStepTask}
-      >
+      <div className="ml-1 w-full max-w-[85%]" aria-busy={workIsLive || undefined}>
         <ToolTimeline
           entries={entries}
           state={workState}
           expanded={expanded}
           onExpandedChange={setExpanded}
+          label={thinking || hasOrderedThinking ? 'Thinking and tool calls' : 'Tool calls'}
+          stateLabels={STATE_LABELS}
+          showCount
         />
       </div>
       {footer ? (

@@ -9,11 +9,10 @@
 // pass (container → 16 kHz mono) for whisper. The AudioContext here drives ONLY the
 // level meter (an AnalyserNode) — it never touches the recorded audio.
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Square } from '@phosphor-icons/react'
 import { useReducedMotion } from 'motion/react'
 import { VoiceCapture } from '@offgrid/operator-ui/operator/workflows/voice-capture'
-import { LiveStatus } from '@offgrid/operator-ui/operator/presence'
 import { voice } from '@renderer/lib/voiceApi'
 import { shortcutLabel } from '@renderer/lib/device'
 
@@ -41,10 +40,26 @@ function interimTail(text: string): string {
 export function DictationOverlay(): React.JSX.Element | null {
   const [active, setActive] = useState(false)
   const [phase, setPhase] = useState<Phase>('recording')
-  // The analyser writes every frame into a ref; the waveform keeps a short scrolling buffer of it.
+  // The analyser writes every frame into a ref; a short scrolling buffer of it goes straight to the
+  // waveform's subscription, so the overlay itself does not re-render for the meter.
   const levelRef = useRef(0)
-  const [amplitudes, setAmplitudes] = useState(silentAmplitudes)
+  const amplitudesRef = useRef<number[]>(silentAmplitudes())
+  const amplitudeListenersRef = useRef(new Set<(amplitudes: number[]) => void>())
   const reduceMotion = useReducedMotion()
+  const publishAmplitudes = useCallback((next: number[]): void => {
+    amplitudesRef.current = next
+    amplitudeListenersRef.current.forEach((listener) => listener(next))
+  }, [])
+  const subscribeAmplitudes = useCallback(
+    (listener: (amplitudes: number[]) => void): (() => void) => {
+      amplitudeListenersRef.current.add(listener)
+      listener(amplitudesRef.current)
+      return () => {
+        amplitudeListenersRef.current.delete(listener)
+      }
+    },
+    []
+  )
   const [elapsed, setElapsed] = useState(0)
   const [interim, setInterim] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -213,7 +228,7 @@ export function DictationOverlay(): React.JSX.Element | null {
       setError(null)
       setInterim('')
       levelRef.current = 0
-      setAmplitudes(silentAmplitudes())
+      publishAmplitudes(silentAmplitudes())
       setElapsed(0)
       setPhase('recording')
       setActive(true)
@@ -283,10 +298,10 @@ export function DictationOverlay(): React.JSX.Element | null {
   useEffect(() => {
     if (!active || phase !== 'recording' || error || reduceMotion) return
     const id = setInterval(() => {
-      setAmplitudes((current) => [...current.slice(1), Math.max(QUIET, levelRef.current)])
+      publishAmplitudes([...amplitudesRef.current.slice(1), Math.max(QUIET, levelRef.current)])
     }, AMPLITUDE_INTERVAL_MS)
     return () => clearInterval(id)
-  }, [active, phase, error, reduceMotion])
+  }, [active, phase, error, reduceMotion, publishAmplitudes])
 
   if (!active) return null
 
@@ -300,22 +315,17 @@ export function DictationOverlay(): React.JSX.Element | null {
   return (
     <div className="flex h-screen w-screen items-stretch justify-center bg-transparent p-1.5">
       <div
-        className={`relative w-full overflow-hidden rounded-2xl border border-border bg-background/90 px-3 py-2 shadow-2xl backdrop-blur [&_section]:space-y-1.5 [&_section_p[role=status]]:hidden [&_p[aria-label^=Interim]]:leading-snug`}
+        className={`relative w-full overflow-hidden rounded-2xl border border-border bg-background/90 px-3 py-2 shadow-2xl backdrop-blur [&_section]:space-y-1.5 [&_p[aria-label^=Interim]]:leading-snug`}
       >
         <VoiceCapture
           phase={error ? 'error' : phase}
           mode={mode === 'hold' ? 'tap' : 'handsfree'}
           elapsedMs={elapsed * 1000}
-          amplitudes={error ? undefined : amplitudes}
+          subscribeAmplitudes={error ? undefined : subscribeAmplitudes}
           interimTranscript={error || !interim ? undefined : interimTail(interim)}
-          message={error ?? undefined}
+          // The live transcript takes the hint's place once words arrive.
+          message={error ?? (phase === 'recording' && !interim ? hint : undefined)}
         />
-        {/* The live transcript takes the status line's place once words arrive. */}
-        {phase === 'recording' && !error && !interim && (
-          <LiveStatus travel="across" className="mt-1.5 text-xs">
-            {hint}
-          </LiveStatus>
-        )}
         {phase === 'recording' && !error && (
           <button
             onClick={stop}

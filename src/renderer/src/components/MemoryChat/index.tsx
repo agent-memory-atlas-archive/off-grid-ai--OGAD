@@ -4759,6 +4759,7 @@ export function MemoryChat({
                             suspended={voiceTurns.suspended}
                             transcriptionLabel={voiceTurns.transcriptionLabel}
                             error={voiceTurns.error}
+                            subscribeAmplitudes={voiceTurns.subscribeAmplitudes}
                             onToggleRecording={toggleRecording}
                             onTurnModeChange={(mode: VoiceTurnMode) => {
                               setVoiceTurnMode(mode)
