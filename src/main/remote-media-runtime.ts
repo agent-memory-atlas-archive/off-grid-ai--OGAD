@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { kokoroVoiceLanguage, type RuntimeSpeechVoice } from '@offgrid/speech'
+import { kokoroVoiceLanguage, kokoroVoiceLabel, type RuntimeSpeechVoice } from '@offgrid/speech'
 import { IMAGE_MEMORY_GUARD_ERROR_CODE, imageMemoryGuardErrorMessage } from '../shared/image-generation-contract'
 import { getActiveRemoteVisionServerForModality } from './vision/remote-vision-server'
 
@@ -14,6 +14,24 @@ export async function listRemoteVoices(server: RemoteServer): Promise<RuntimeSpe
   const key = `${server.id}:${server.endpoint}:${server.selectedModel}`
   if (cachedRemoteVoices?.key === key && cachedRemoteVoices.expiresAt > Date.now()) {
     return cachedRemoteVoices.voices
+  }
+  if (server.provider === 'ogad') {
+    const response = await checked(
+      await fetch(`${server.endpoint}/audio/voices`, { headers: headers(server) })
+    )
+    const body = (await response.json()) as { voices?: unknown }
+    const voices = (Array.isArray(body.voices) ? body.voices : [])
+      .filter((id): id is string => typeof id === 'string' && !!id)
+      .map((id) => {
+        const language = /kokoro/i.test(server.selectedModel) ? kokoroVoiceLanguage(id) : undefined
+        return {
+          id,
+          label: language ? kokoroVoiceLabel(id) : id,
+          ...(language ? { language: language.code, languageLabel: language.label } : {})
+        }
+      })
+    cachedRemoteVoices = { key, voices, expiresAt: Date.now() + 5 * 60_000 }
+    return voices
   }
   const response = await checked(
     await fetch(`${server.endpoint}/models?output_modalities=speech`, {
@@ -92,33 +110,62 @@ export async function generateRemoteImage(
   width: number | undefined,
   height: number | undefined,
   allowUnsafeMemoryOverride: boolean,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  initImage?: string,
+  parameters?: { steps?: number; cfgScale?: number; seed?: number; negativePrompt?: string }
 ): Promise<{ bytes: Buffer; mime: string }> {
-  const response = await checked(await fetch(`${server.endpoint}/images/generations`, {
-    method: 'POST',
-    headers: headers(server, 'application/json'),
-    signal,
-    body: JSON.stringify({
-      model: server.selectedModel,
-      prompt,
-      ...(width && height ? { size: `${width}x${height}` } : {}),
-      allow_unsafe_memory_override: allowUnsafeMemoryOverride
+  const fields = {
+    model: server.selectedModel,
+    prompt,
+    ...(width && height ? { size: `${width}x${height}` } : {}),
+    ...(parameters?.steps !== undefined ? { steps: parameters.steps } : {}),
+    ...(parameters?.cfgScale !== undefined ? { cfg_scale: parameters.cfgScale } : {}),
+    ...(parameters?.seed !== undefined ? { seed: parameters.seed } : {}),
+    ...(parameters?.negativePrompt ? { negative_prompt: parameters.negativePrompt } : {}),
+    allow_unsafe_memory_override: allowUnsafeMemoryOverride
+  }
+  let requestBody: string | FormData = JSON.stringify(fields)
+  if (initImage) {
+    const form = new FormData()
+    for (const [key, value] of Object.entries(fields)) form.append(key, String(value))
+    const bytes = await fs.promises.readFile(initImage)
+    const extension = path.extname(initImage).toLowerCase()
+    const mime =
+      extension === '.jpg' || extension === '.jpeg'
+        ? 'image/jpeg'
+        : extension === '.webp'
+          ? 'image/webp'
+          : 'image/png'
+    form.append('image', new Blob([bytes], { type: mime }), path.basename(initImage))
+    requestBody = form
+  }
+  const response = await checked(
+    await fetch(`${server.endpoint}/images/${initImage ? 'edits' : 'generations'}`, {
+      method: 'POST',
+      headers: headers(server, initImage ? undefined : 'application/json'),
+      signal,
+      body: requestBody
     })
-  }))
-  const body = await response.json() as {
+  )
+  const body = (await response.json()) as {
     data?: Array<{ b64_json?: string; url?: string }>
   }
-  const value = body.data?.[0]?.url ?? (body.data?.[0]?.b64_json ? `data:image/png;base64,${body.data[0].b64_json}` : undefined)
+  const value =
+    body.data?.[0]?.url ??
+    (body.data?.[0]?.b64_json ? `data:image/png;base64,${body.data[0].b64_json}` : undefined)
   if (!value) throw new Error('The remote server returned no image.')
   if (value.startsWith('data:')) return decodeImageDataUrl(value)
   const url = new URL(value)
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('The remote server returned an unsupported image URL.')
+  if (!['http:', 'https:'].includes(url.protocol))
+    throw new Error('The remote server returned an unsupported image URL.')
   // The provider token must never be forwarded to a returned media URL.
   const image = await checked(await fetch(url, { signal }))
   const mime = (image.headers.get('content-type') ?? '').split(';')[0]!.toLowerCase()
-  if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime)) throw new Error('The remote server returned an unsupported image format.')
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime))
+    throw new Error('The remote server returned an unsupported image format.')
   const bytes = Buffer.from(await image.arrayBuffer())
-  if (!bytes.length || bytes.length > 50 * 1024 * 1024) throw new Error('The remote server returned an invalid image size.')
+  if (!bytes.length || bytes.length > 50 * 1024 * 1024)
+    throw new Error('The remote server returned an invalid image size.')
   return { bytes, mime }
 }
 
