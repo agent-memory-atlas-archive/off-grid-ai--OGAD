@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useState } from 'react'
 import { attachmentKindFor, type SyncedMessageRole } from '@offgrid/sync'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
-import { Message, MessageContent } from '@offgrid/operator-ui/operator/elements/message'
+import { Message, MessageContent } from '@offgrid/operator-ui/operator/elements/message-core'
 import { hasLiveStreamActivity } from '@renderer/lib/stream-reducer'
 import { type TaskSession, useGuidanceTaskForJourney } from '@renderer/lib/task-session-store'
 import { captureUrlForPath } from '../../../../../shared/ogcapture-url'

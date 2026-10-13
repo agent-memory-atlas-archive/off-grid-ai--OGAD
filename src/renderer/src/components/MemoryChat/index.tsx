@@ -110,7 +110,11 @@ import {
   type ImageGenerationRequestContract
 } from '../../../../shared/image-generation-contract'
 import { Button } from '@renderer/components/ui/button'
-import { MessageQueue, type QueueEdit } from '@offgrid/operator-ui/operator/workflows/queue'
+import {
+  MessageQueue,
+  type MessageQueueLabels,
+  type QueueEdit
+} from '@offgrid/operator-ui/operator/workflows/queue'
 import { AttachmentList } from '@offgrid/operator-ui/operator/workflows/attachments'
 import { AutoHeight } from '@offgrid/operator-ui/operator/presence'
 import {
@@ -241,6 +245,25 @@ import {
   textRecordingButtonLabel,
   textRecordingTooltip
 } from './utlis'
+
+/** OGAD's names for the queue's rows and actions. */
+const QUEUE_LABELS: MessageQueueLabels = {
+  queue: 'Queued messages',
+  section: 'queued',
+  attachmentsOnly: (message) => {
+    const count = message.attachments?.length ?? 0
+    return `(${count} attachment${count === 1 ? '' : 's'})`
+  },
+  sendNow: 'Send queued message now',
+  remove: 'Delete queued message',
+  cancel: 'Cancel queued message',
+  copy: 'Copy queued message',
+  copied: 'Copied queued message',
+  edit: 'Edit queued message',
+  moveUp: 'Move queued message up',
+  moveDown: 'Move queued message down',
+  editField: 'Edit queued message'
+}
 
 /** The image sizes the composer offers, as segmented options. */
 const IMAGE_SIZE_OPTIONS = [256, 512, 640, 768, 1024].map((size) => ({
@@ -4573,6 +4596,9 @@ export function MemoryChat({
                           <div className="mb-2">
                             <MessageQueue
                               items={(queuedByConv[activeConversationId] ?? []).map(toQueuedMessage)}
+                              rowRole="group"
+                              rowLabel={(_message, index) => `Queued message ${index + 1}`}
+                              labels={QUEUE_LABELS}
                               edit={queueEdit}
                               copiedId={
                                 copiedKey?.startsWith('queued:') ? copiedKey.slice('queued:'.length) : null
@@ -4632,13 +4658,6 @@ export function MemoryChat({
                           setDragOver(false)
                           if (e.dataTransfer.files.length) void addFiles(e.dataTransfer.files)
                         }}
-                        // The composer sends through its own handlers (Enter, ⌘Enter, the send button).
-                        // A stray submit (a button without a type, Enter in a gate field) must not reach
-                        // PromptInput, which would reset the draft field.
-                        onSubmitCapture={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                        }}
                         className="relative"
                       >
                         {dragOver ? (
@@ -4667,9 +4686,13 @@ export function MemoryChat({
                             e.target.value = ''
                           }}
                         />
+                        {/* The composer sends through its own handlers (Enter, ⌘Enter, the send button), so
+                        a stray form submit (a button without a type, Enter in a gate field) does nothing
+                        and leaves the draft as it is. */}
                         <PromptInput
                           onSubmit={() => {}}
-                          className={`[&>[data-slot=input-group]]:h-auto [&>[data-slot=input-group]]:flex-col [&>[data-slot=input-group]]:items-stretch [&>[data-slot=input-group]]:overflow-visible [&>[data-slot=input-group]]:rounded-xl [&>[data-slot=input-group]]:bg-card [&>[data-slot=input-group]]:text-card-foreground [&>[data-slot=input-group]]:shadow-sm [&>[data-slot=input-group]]:transition-colors ${dragOver ? '[&>[data-slot=input-group]]:border-primary' : ''}`}
+                          resetOnSubmit={false}
+                          groupClassName={`h-auto flex-col items-stretch rounded-xl bg-card text-card-foreground shadow-sm transition-colors ${dragOver ? 'border-primary' : ''}`}
                         >
                         <PromptInputHeader className="cursor-auto select-auto flex-col items-stretch gap-0 p-0 font-normal text-foreground">
                         <AutoHeight>

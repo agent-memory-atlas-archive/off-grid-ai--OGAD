@@ -3,6 +3,7 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
+  useState,
   useSyncExternalStore,
   type ClipboardEvent,
   type KeyboardEvent
@@ -14,9 +15,9 @@ import {
   PromptInputCommandGroup,
   PromptInputCommandItem,
   PromptInputCommandList,
-  PromptInputSubmit,
-  PromptInputTextarea
+  PromptInputSubmit
 } from '@offgrid/operator-ui/operator/elements/prompt-input'
+import { TextareaInlineCompletion } from '@offgrid/operator-ui/operator/media/textarea-inline-completion'
 import { Highlight } from '@offgrid/operator-ui/operator/presence'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import type { ChatDraftStore } from './chat-draft-store'
@@ -78,8 +79,12 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
     const textareaRef = useRef<HTMLTextAreaElement>(null)
     const matches = mode === 'ask' ? matchingSkills(value, skills) : []
     const query = skillQuery(value) ?? ''
+    // Escape sets a suggestion aside; a new suggestion offers itself again.
+    const [dismissedSuggestion, setDismissedSuggestion] = useState<string>()
     const offeredSuggestion =
-      mode === 'ask' && !busy && !attachmentPending && !value ? suggestion : undefined
+      mode === 'ask' && !busy && !attachmentPending && !value && suggestion !== dismissedSuggestion
+        ? suggestion
+        : undefined
 
     useImperativeHandle(forwardedRef, () => ({
       focus: () => textareaRef.current?.focus()
@@ -99,18 +104,7 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
 
     const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
       if (event.nativeEvent.isComposing || event.keyCode === 229) return
-      if (
-        offeredSuggestion &&
-        event.key === 'Tab' &&
-        !event.shiftKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey
-      ) {
-        event.preventDefault()
-        store.set(offeredSuggestion)
-        return
-      }
+      // Tab on an offered suggestion and Escape are TextareaInlineCompletion's (onAccept/onDismiss).
       if (matches.length > 0 && !event.metaKey && !event.ctrlKey) {
         const query = value.slice(value.lastIndexOf('/') + 1).toLowerCase()
         const exact = skills.some((skill) => skill.name.toLowerCase() === query)
@@ -179,8 +173,16 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
             </motion.div>
           ) : null}
         </AnimatePresence>
-        <PromptInputTextarea
+        {/* The suggestion waits as ghost text at the caret; the placeholder names the same words
+            (and the Tab key) while the field is not focused. data-slot makes it the composer
+            group's control, so header and footer clicks focus it. */}
+        <TextareaInlineCompletion
           ref={textareaRef}
+          data-slot="input-group-control"
+          containerClassName="w-full"
+          suggestion={offeredSuggestion}
+          onAccept={(nextValue) => store.set(nextValue)}
+          onDismiss={() => setDismissedSuggestion(offeredSuggestion)}
           value={value}
           onChange={(event) => store.set(event.target.value)}
           onKeyDown={handleKeyDown}

@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { FilePreview, type FilePreviewState } from '@offgrid/operator-ui/operator/media/file-preview'
 import pdfWorkerUrl from '@offgrid/operator-ui/pdf.worker.min.mjs?url'
@@ -47,8 +47,8 @@ function previewFor(
     message: `This ${what} could not be opened. Its bytes are not on this device.`
   })
   if (content.renderer === 'audio' && content.path) {
-    // A voice note, played rather than looked at.
-    return src ? { kind: 'audio', src } : missing('voice note')
+    // A voice note, played rather than looked at: it starts as soon as it opens, as it always has.
+    return src ? { kind: 'audio', src, autoPlay: true } : missing('voice note')
   }
   if (content.renderer === 'video' && content.path) {
     return src ? { kind: 'video', src } : missing('video')
@@ -81,23 +81,14 @@ function AttachmentPreviewComponent({
   console.log('MemoryChat AttachmentPreview rendered')
   const [page, setPage] = useState(1)
   const [scale, setScale] = useState(1)
-  const frame = useRef<HTMLDivElement>(null)
   const src = content.path ? captureUrlForPath(content.path) : ''
   const framedDocument = content.renderer === 'document' && content.kind !== 'pdf' && content.path
   const preview = previewFor(content, src, { page, setPage, scale, setScale })
-
-  // The voice note plays as soon as it opens, as it always has.
-  useEffect(() => {
-    if (preview.kind !== 'audio') return
-    const audio = frame.current?.querySelector('audio')
-    void audio?.play().catch(() => {})
-  }, [preview.kind, src])
 
   return (
     <AnimatePresence mode="popLayout" initial={false}>
       <motion.div
         key={`${content.renderer ?? 'text'}:${content.path ?? content.title}`}
-        ref={frame}
         initial={{ opacity: 0, y: 8, filter: 'blur(6px)' }}
         animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
         exit={{ opacity: 0, y: -4, filter: 'blur(6px)' }}
