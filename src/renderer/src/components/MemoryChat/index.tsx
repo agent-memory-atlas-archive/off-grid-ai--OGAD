@@ -2094,6 +2094,11 @@ export function MemoryChat({
       const comicPages: ComicBookPage[] = []
       let comicTitle = comicPageTotal ? (comicBookTitle(modelQuery) ?? 'Comic Book') : 'Comic Book'
       let comicReaderMessageId = `comic-reader-${toolStreamId}`
+      // The written answer, shown above the reader while its pages generate (set after the text turn).
+      let comicAnswer = ''
+      // Failed pages are reported inside the reader row: a separate row after it would become the
+      // row Chat shows for the turn and hide both the answer and the reader.
+      const comicFailures: ChatMessage[] = []
       const comicReaderPersistence = { saved: false }
       let comicArtifactId: string | null = null
       const updateComicReader = async (): Promise<void> => {
@@ -2119,7 +2124,11 @@ export function MemoryChat({
           const reader: ChatMessage = {
             id: comicReaderMessageId,
             role: 'assistant',
-            content
+            // The finished turn saves the answer above the reader in this one row. Chat shows a tool
+            // turn through its last answering row, so the tool row's own text is not shown here.
+            content: [comicAnswer, content, ...comicFailures.map((failure) => failure.content)]
+              .filter((text) => text.trim())
+              .join('\n\n')
           }
           const existing = previous.findIndex(
             (message) => message.id === comicReaderMessageId || message.id === previousMessageId
@@ -2160,7 +2169,10 @@ export function MemoryChat({
         ? await window.api.keepInitImage(comicHeroSource).catch(() => null)
         : null
       const comicHeroPath = keptComicHero?.path ?? comicHeroSource
-      const imageGenerationParams = (imageRequest: { prompt: string; enhancePrompt?: boolean }) => {
+      const imageGenerationParams = (imageRequest: {
+        prompt: string
+        enhancePrompt?: boolean
+      }): Parameters<typeof window.api.generateImage>[0] => {
         const comicPage = comicPageTotal ? comicBookPageFromPrompt(imageRequest.prompt) : null
         return {
           prompt: comicPage?.prompt ?? imageRequest.prompt,
@@ -2344,6 +2356,8 @@ export function MemoryChat({
         let generatedImageCount = 0
         if (comicPageTotal) {
           comicTitle = comicBookTitle(imageRequests[0]?.prompt ?? '') ?? comicTitle
+          // A tool row without tool calls is not grouped with the reader and still shows its answer.
+          comicAnswer = pendingToolCalls.length ? visibleToolAnswer : ''
           await updateComicReader()
         }
         const setComicImageToolStatus = (
@@ -2485,22 +2499,25 @@ export function MemoryChat({
                 (error instanceof Error ? error.message : 'Image generation failed.')
               if (!/cancel/i.test(message)) {
                 setComicImageToolStatus(imageRequestIndex, 'failed')
-                setConvMessages(convId, (previous) => [
-                  ...previous,
-                  {
-                    id: crypto.randomUUID(),
-                    role: 'assistant',
-                    content: message,
-                    imageMemoryRetry: memoryGuard
-                      ? {
-                          request: { prompt: imageRequest.prompt },
-                          prompt: imageRequest.prompt,
-                          conversationId: convId,
-                          projectId
-                        }
-                      : undefined
-                  }
-                ])
+                const failure: ChatMessage = {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: comicPageTotal ? `Page ${imageRequestIndex + 1}: ${message}` : message,
+                  imageMemoryRetry: memoryGuard
+                    ? {
+                        request: { prompt: imageRequest.prompt },
+                        prompt: imageRequest.prompt,
+                        conversationId: convId,
+                        projectId
+                      }
+                    : undefined
+                }
+                if (comicPageTotal) {
+                  comicFailures.push(failure)
+                  await updateComicReader()
+                } else {
+                  setConvMessages(convId, (previous) => [...previous, failure])
+                }
               }
             }
           }
@@ -2508,7 +2525,8 @@ export function MemoryChat({
             const finalHtml = buildComicBookReader(comicPages, comicPageTotal, comicTitle)
             const finalContent = [
               visibleToolAnswer,
-              `Comic book reader: ${comicPages.length} of ${comicPageTotal} pages ready.\n\n\`\`\`html\n${finalHtml}\n\`\`\``
+              `Comic book reader: ${comicPages.length} of ${comicPageTotal} pages ready.\n\n\`\`\`html\n${finalHtml}\n\`\`\``,
+              ...comicFailures.map((failure) => failure.content)
             ]
               .filter((text) => text.trim())
               .join('\n\n')
@@ -2560,9 +2578,11 @@ export function MemoryChat({
                 current.filter((artifact) => artifact.id !== savedComicArtifactId)
               )
             }
-            setConvMessages(convId, (previous) =>
-              previous.filter((message) => message.id !== comicReaderMessageId)
-            )
+            // With no reader left to hold them, failed pages are reported as their own rows again.
+            setConvMessages(convId, (previous) => [
+              ...previous.filter((message) => message.id !== comicReaderMessageId),
+              ...comicFailures
+            ])
             setCanvasArtifact(null)
           }
         } finally {
