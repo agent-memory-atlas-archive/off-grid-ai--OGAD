@@ -159,7 +159,7 @@ it('downloads complete shards and serves decision, grounding, and selected chat 
         name: entry.name,
         kind: entry.kind,
         source: 'catalog',
-        files
+        files: [files[0]!, ...files.slice(1)]
       })
     ).toMatchObject({ success: true })
   }
