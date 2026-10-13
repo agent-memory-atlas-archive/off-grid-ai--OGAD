@@ -56,6 +56,9 @@ export default defineConfig({
     // those browser boundaries in one renderer harness so Radix-backed components
     // exercise the real product tree without every suite redefining the platform.
     setupFiles: ['src/renderer/src/__tests__/browser-boundaries.setup.ts'],
+    // The ui/* primitives come from @offgrid/operator-ui; inline it so the suite's
+    // motion/react stub reaches those components as it reaches local ones.
+    server: { deps: { inline: ['@offgrid/operator-ui'] } },
     // jsdom render tests (userEvent + waitFor over real DOM) and DB/crypto integration
     // tests legitimately exceed the 5s default under CI/parallel load — this was
     // intermittently failing the pre-push gate. 15s is generous headroom without

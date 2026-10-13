@@ -15,6 +15,7 @@ initScrollActivity()
 
 import { StrictMode, type FC } from 'react'
 import { createRoot } from 'react-dom/client'
+import { AliveProvider, LivingField } from '@offgrid/operator-ui/operator/alive'
 import App from './App'
 import { TooltipProvider } from './components/ui/tooltip'
 import { AIRequestLogs } from './components/AIRequestLogs'
@@ -54,22 +55,30 @@ if (isDictation || isGodTwin) {
 // No analytics / telemetry. Off Grid AI is local-first — nothing leaves your device.
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {hash === '#ai-activity' ? (
-      <TooltipProvider delayDuration={300}>
-        <AIRequestLogs standalone />
-      </TooltipProvider>
-    ) : isClipPopup ? (
-      <ClipboardPopup />
-    ) : isDictation ? (
-      <DictationOverlay />
-    ) : isCuSupervisor ? (
-      <ComputerUseSupervisor />
-    ) : isGodTwin ? (
-      <GodTwinCompanion />
-    ) : (
-      <TooltipProvider delayDuration={300}>
-        <App />
-      </TooltipProvider>
-    )}
+    {/* Starts the operator-ui alive conductor (pointer light, pulses) for every surface. */}
+    <AliveProvider>
+      {hash === '#ai-activity' ? (
+        <TooltipProvider delayDuration={300}>
+          <AIRequestLogs standalone />
+        </TooltipProvider>
+      ) : isClipPopup ? (
+        <ClipboardPopup />
+      ) : isDictation ? (
+        <DictationOverlay />
+      ) : isCuSupervisor ? (
+        <ComputerUseSupervisor />
+      ) : isGodTwin ? (
+        <GodTwinCompanion />
+      ) : (
+        <>
+          {/* The breathing background lives in the main window only; the floating
+              overlays above stay transparent. */}
+          <LivingField />
+          <TooltipProvider delayDuration={300}>
+            <App />
+          </TooltipProvider>
+        </>
+      )}
+    </AliveProvider>
   </StrictMode>
 )

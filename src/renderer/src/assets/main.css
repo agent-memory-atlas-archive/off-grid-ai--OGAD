@@ -3,6 +3,20 @@
 
 @import './base.css';
 @import 'tailwindcss';
+/* @offgrid/operator-ui alive layer: motion and light for the shadcn/Radix
+   primitives (data-slot / data-state). Cascade-layered, so OGAD's own
+   unlayered rules below keep precedence. */
+@import '@offgrid/operator-ui/alive.css' layer(alive);
+/* Motion for hand-built screens (plain HTML and ARIA under #root[data-og-alive]);
+   in the base layer, so every OGAD utility still wins. */
+@import '@offgrid/operator-ui/alive-semantic.css' layer(base);
+/* The new design direction for every screen: re-renders the neutral, radius,
+   accent and type vocabulary. Unlayered on purpose, so it wins over the theme. */
+@import '@offgrid/operator-ui/ogad/skin.css';
+
+/* The ui/* primitives are re-exports of @offgrid/operator-ui/ogad/ui/*; scan
+   their built files so the utilities they use are generated. */
+@source "../../../../node_modules/@offgrid/operator-ui/dist";
 
 /* Tailwind v4 auto-detects content but SKIPS .gitignored paths — and the pro/
    submodule is gitignored. Without this, any utility class used only in pro

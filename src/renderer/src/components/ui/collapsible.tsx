@@ -1,21 +1,4 @@
-import { Collapsible as CollapsiblePrimitive } from 'radix-ui'
-
-function Collapsible({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.Root>): React.JSX.Element {
-  return <CollapsiblePrimitive.Root data-slot="collapsible" {...props} />
-}
-
-function CollapsibleTrigger({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleTrigger>): React.JSX.Element {
-  return <CollapsiblePrimitive.CollapsibleTrigger data-slot="collapsible-trigger" {...props} />
-}
-
-function CollapsibleContent({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleContent>): React.JSX.Element {
-  return <CollapsiblePrimitive.CollapsibleContent data-slot="collapsible-content" {...props} />
-}
-
-export { Collapsible, CollapsibleTrigger, CollapsibleContent }
+// Drop-in: this primitive now lives in @offgrid/operator-ui (src/hosts/ogad/ui/collapsible.tsx)
+// with the same exports and props. Edit it there, not here.
+// eslint-disable-next-line react-refresh/only-export-components -- re-export shim; the components are defined in @offgrid/operator-ui
+export * from '@offgrid/operator-ui/ogad/ui/collapsible'

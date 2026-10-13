@@ -25,6 +25,7 @@ import { getSlot, SLOTS } from '@/bootstrap/slotRegistry'
 import { QuickConnections } from './QuickConnections'
 import { QUICK_CONNECTION_IDS } from './quickConnectionCatalog'
 import { CONNECTIONS_CHANGED_EVENT } from './useQuickConnection'
+import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 
 // Brands Simple Icons dropped (trademark) → bundled local logos, keyed by catalog id.
 const LOGO_OVERRIDE: Record<string, string> = { slack: slackLogo }
@@ -507,20 +508,24 @@ export function ConnectorsScreen(): ReactElement {
         </div>
         <div className="flex items-center gap-3">
           {detailId == null && (
-            <div className="flex items-center gap-0.5 rounded-full border border-neutral-800 p-0.5">
-              {(['all', 'connected', 'disconnected'] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setTab(t)}
-                  className={`rounded-full px-3 py-1 text-xs capitalize transition-colors ${tab === t ? 'bg-neutral-800 text-green-500' : 'text-neutral-500 hover:text-white'}`}
-                >
-                  {t}{' '}
-                  {t === 'connected' && items.length > 0 && (
-                    <span className="text-neutral-500">{items.length}</span>
-                  )}
-                </button>
-              ))}
-            </div>
+            <Segmented
+              label="Filter connectors"
+              size="sm"
+              value={tab}
+              onValueChange={setTab}
+              options={(['all', 'connected', 'disconnected'] as const).map((t) => ({
+                id: t,
+                label: t === 'connected' && items.length > 0 ? `${t} ${items.length}` : t,
+                icon: (
+                  <span className="capitalize">
+                    {t}
+                    {t === 'connected' && items.length > 0 && (
+                      <span className="ml-1 text-neutral-500">{items.length}</span>
+                    )}
+                  </span>
+                )
+              }))}
+            />
           )}
           <button
             onClick={() => setAdding((v) => !v)}
@@ -856,17 +861,17 @@ export function ConnectorsScreen(): ReactElement {
                     placeholder="Name"
                     className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 outline-none focus:border-neutral-600"
                   />
-                  <div className="flex w-fit items-center gap-0.5 rounded-full border border-neutral-800 p-0.5">
-                    {(['http', 'stdio'] as const).map((t) => (
-                      <button
-                        key={t}
-                        onClick={() => setTransport(t)}
-                        className={`rounded-full px-3 py-1 text-xs transition-colors ${transport === t ? 'bg-neutral-800 text-green-500' : 'text-neutral-500 hover:text-white'}`}
-                      >
-                        {t === 'http' ? 'HTTP / SSE' : 'stdio (local)'}
-                      </button>
-                    ))}
-                  </div>
+                  <Segmented
+                    label="Transport"
+                    size="sm"
+                    className="w-fit"
+                    value={transport}
+                    onValueChange={setTransport}
+                    options={[
+                      { id: 'http', label: 'HTTP / SSE' },
+                      { id: 'stdio', label: 'stdio (local)' }
+                    ]}
+                  />
                   {transport === 'http' ? (
                     <input
                       value={url}
