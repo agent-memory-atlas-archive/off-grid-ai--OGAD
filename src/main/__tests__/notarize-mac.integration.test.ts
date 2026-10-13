@@ -74,13 +74,25 @@ describe('Mac notarization hook', () => {
 
   it('keeps stapling while Apple drops the connection after an accepted notarization', async () => {
     const { boundary, calls } = appleBoundary({
-      notarizeError: new Error('Failed to staple your application with code: 68'),
+      notarizeError: new Error(
+        'Failed to staple your application with code: 68\n\nThe network connection was lost.'
+      ),
       dropStaples: 3
     })
     await notarizeAndStaple(APP, CREDENTIALS, boundary)
     expect(calls.notarize).toBe(1)
     expect(calls.staple).toBe(4)
     expect(calls.waits).toEqual([30_000, 30_000, 30_000])
+  })
+
+  it('fails when the library could not staple for a reason other than the connection', async () => {
+    const { boundary, calls } = appleBoundary({
+      notarizeError: new Error(
+        'Failed to staple your application with code: 65\n\nCloudKit query failed due to "Record not found".'
+      )
+    })
+    await expect(notarizeAndStaple(APP, CREDENTIALS, boundary)).rejects.toThrow('Record not found')
+    expect(calls.staple).toBe(0)
   })
 
   it('fails a rejected notarization without stapling', async () => {

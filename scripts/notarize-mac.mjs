@@ -59,8 +59,10 @@ export async function notarizeAndStaple(appPath, credentials, boundary = systemB
   try {
     await boundary.notarize({ tool: 'notarytool', appPath, ...credentials })
   } catch (error) {
-    // Submission and acceptance already succeeded when only the staple failed.
-    if (!/Failed to staple/.test(failureText(error))) throw error
+    // Submission and acceptance already succeeded when only the staple failed. Recover only when
+    // that failure was Apple's ticket service dropping the connection; a missing ticket propagates.
+    const text = failureText(error)
+    if (!/Failed to staple/.test(text) || !NETWORK_FAILURE.test(text)) throw error
     console.log('[notarize] notarization accepted; stapling with a longer retry window')
     await stapleWithRetry(appPath, boundary)
   }
