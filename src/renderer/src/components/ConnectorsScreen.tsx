@@ -26,6 +26,9 @@ import { QuickConnections } from './QuickConnections'
 import { QUICK_CONNECTION_IDS } from './quickConnectionCatalog'
 import { CONNECTIONS_CHANGED_EVENT } from './useQuickConnection'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
+import { AnimatePresence, motion } from 'motion/react'
 
 // Brands Simple Icons dropped (trademark) → bundled local logos, keyed by catalog id.
 const LOGO_OVERRIDE: Record<string, string> = { slack: slackLogo }
@@ -500,7 +503,9 @@ export function ConnectorsScreen(): ReactElement {
         <div className="flex items-center gap-3">
           <IconPlug className="h-5 w-5 text-green-500" />
           <div>
-            <h1 className="text-lg tracking-tight text-white">Integrations</h1>
+            <TextEffect as="h1" preset="fade-in-blur" per="char" className="text-lg font-light tracking-tight text-white">
+              Integrations
+            </TextEffect>
             <div className="text-[11px] uppercase tracking-wide text-neutral-600">
               Connect a tool · authorized actions run only after approval
             </div>
@@ -1002,8 +1007,10 @@ export function ConnectorsScreen(): ReactElement {
                     Connected
                   </h2>
                   {loading && items.length === 0 ? (
-                    <div className="flex items-center justify-center gap-2 py-12 text-sm text-neutral-600">
-                      <IconLoader2 className="h-4 w-4 animate-spin" /> Loading…
+                    <div className="space-y-2" aria-busy="true" aria-label="Loading connections">
+                      {[0, 1, 2].map((i) => (
+                        <Skeleton key={i} className="h-[62px] w-full rounded-md" />
+                      ))}
                     </div>
                   ) : items.length === 0 ? (
                     <p className="py-8 text-sm text-neutral-600">
@@ -1011,6 +1018,7 @@ export function ConnectorsScreen(): ReactElement {
                     </p>
                   ) : (
                     <div className="space-y-2">
+                      <AnimatePresence initial={false}>
                       {items.map((c) => {
                         const cat = CONNECTOR_CATALOG.find((x) => x.name === c.name)
                         // Preview catalog entries stay disabled. A verified internal local provider
@@ -1020,8 +1028,13 @@ export function ConnectorsScreen(): ReactElement {
                           !cat.ready &&
                           !(c.tools && c.tools !== '[]' && c.url?.startsWith('offgrid-'))
                         return (
-                          <button
+                          <motion.button
                             key={c.id}
+                            layout
+                            initial={{ opacity: 0, y: 6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0 }}
+                            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
                             onClick={() => openDetail(c)}
                             className={`flex w-full items-center gap-3 rounded-md border border-neutral-800 bg-neutral-900/40 p-3 text-left transition-colors hover:border-neutral-700 ${notReady ? 'opacity-55' : ''}`}
                           >
@@ -1056,9 +1069,10 @@ export function ConnectorsScreen(): ReactElement {
                               </div>
                             </div>
                             <IconChevronRight className="h-4 w-4 shrink-0 text-neutral-600" />
-                          </button>
+                          </motion.button>
                         )
                       })}
+                      </AnimatePresence>
                     </div>
                   )}
                 </section>

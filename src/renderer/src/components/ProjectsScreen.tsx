@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, type ReactNode } from 'react'
-import { AnimatePresence } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
 import {
   IconPlus,
   IconFolder,
@@ -15,6 +15,16 @@ import {
   IconSettings,
   IconLayoutGrid
 } from '@tabler/icons-react'
+import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia
+} from '@offgrid/operator-ui/operator/coss/empty'
+import { Button } from './ui/button'
 import { ArtifactCanvas, type Artifact } from './ArtifactCanvas'
 import { artifactKindLabel } from '@renderer/lib/artifact-labels'
 import { timeAgo } from '@renderer/lib/time'
@@ -194,9 +204,11 @@ export function ProjectsScreen({
   return (
     <div className="flex h-full font-mono">
       {/* Projects column */}
-      <div className="flex w-60 shrink-0 flex-col border-r border-neutral-800">
-        <div className="flex items-center justify-between px-4 py-4">
-          <h1 className="text-lg font-light tracking-tight text-white">Projects</h1>
+      <div className="flex w-60 shrink-0 flex-col border-r border-neutral-900">
+        <div className="mb-2 flex items-center justify-between border-b border-neutral-900 px-4 py-4">
+          <TextEffect as="h1" preset="fade-in-blur" per="char" className="text-lg font-light tracking-tight text-white">
+            Projects
+          </TextEffect>
           <button
             onClick={() => setCreating(true)}
             title="New project"
@@ -233,9 +245,15 @@ export function ProjectsScreen({
               No projects yet. Create one to configure a knowledge base.
             </p>
           )}
+          <AnimatePresence initial={false}>
           {projects.map((p) => (
-            <button
+            <motion.button
               key={p.id}
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
               onClick={() => selectProject(p.id)}
               className={`group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors ${
                 p.id === activeId
@@ -245,8 +263,9 @@ export function ProjectsScreen({
             >
               <IconFolder className="h-4 w-4 shrink-0 text-neutral-500" />
               <span className="truncate">{p.name}</span>
-            </button>
+            </motion.button>
           ))}
+          </AnimatePresence>
         </div>
       </div>
 
@@ -254,42 +273,46 @@ export function ProjectsScreen({
       {active ? (
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Project header with view toggle */}
-          <div className="flex items-center justify-between border-b border-neutral-800 px-6 py-3">
+          <div className="flex items-center justify-between border-b border-neutral-900 px-6 py-4">
             <div className="flex min-w-0 items-center gap-2 text-sm text-white">
               <IconFolder className="h-4 w-4 shrink-0 text-neutral-500" />
               <span className="truncate">{active.name}</span>
             </div>
-            <div className="flex items-center gap-1 rounded-md border border-neutral-800 p-0.5">
-              <button
-                onClick={() => setView('chat')}
-                className={`flex items-center gap-1.5 rounded px-3 py-1 text-xs transition-colors ${
-                  view === 'chat'
-                    ? 'bg-neutral-800 text-white'
-                    : 'text-neutral-500 hover:text-neutral-300'
-                }`}
-              >
-                <IconMessage className="h-3.5 w-3.5" /> Chats
-              </button>
-              <button
-                onClick={() => setView('artifacts')}
-                className={`flex items-center gap-1.5 rounded px-3 py-1 text-xs transition-colors ${
-                  view === 'artifacts'
-                    ? 'bg-neutral-800 text-white'
-                    : 'text-neutral-500 hover:text-neutral-300'
-                }`}
-              >
-                <IconLayoutGrid className="h-3.5 w-3.5" /> Artifacts
-              </button>
-              <button
-                onClick={() => setView('config')}
-                className={`flex items-center gap-1.5 rounded px-3 py-1 text-xs transition-colors ${
-                  view === 'config'
-                    ? 'bg-neutral-800 text-white'
-                    : 'text-neutral-500 hover:text-neutral-300'
-                }`}
-              >
-                <IconSettings className="h-3.5 w-3.5" /> Knowledge & settings
-              </button>
+            <Segmented
+              label="Project view"
+              size="sm"
+              value={view}
+              onValueChange={setView}
+              options={[
+                {
+                  id: 'chat',
+                  label: 'Chats',
+                  icon: (
+                    <>
+                      <IconMessage className="h-3.5 w-3.5" /> Chats
+                    </>
+                  )
+                },
+                {
+                  id: 'artifacts',
+                  label: 'Artifacts',
+                  icon: (
+                    <>
+                      <IconLayoutGrid className="h-3.5 w-3.5" /> Artifacts
+                    </>
+                  )
+                },
+                {
+                  id: 'config',
+                  label: 'Knowledge & settings',
+                  icon: (
+                    <>
+                      <IconSettings className="h-3.5 w-3.5" /> Knowledge & settings
+                    </>
+                  )
+                }
+              ]}
+            />
             </div>
           </div>
 
@@ -307,9 +330,19 @@ export function ProjectsScreen({
           )}
         </div>
       ) : (
-        <div className="flex flex-1 items-center justify-center text-sm text-neutral-600">
-          Select or create a project to get started.
-        </div>
+        <Empty>
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <IconFolder />
+            </EmptyMedia>
+            <EmptyDescription>Select or create a project to get started.</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button size="sm" onClick={() => setCreating(true)}>
+              <IconPlus className="h-4 w-4" /> New project
+            </Button>
+          </EmptyContent>
+        </Empty>
       )}
     </div>
   )

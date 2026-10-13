@@ -3,6 +3,8 @@ import { IconServer2, IconExternalLink } from '@tabler/icons-react'
 import { GATEWAY_HOST, GATEWAY_PORT } from '@offgrid/core/shared/ports'
 import { CopyButton } from './ui/CopyButton'
 import { GatewayApiKeysSettings } from './GatewayApiKeysSettings'
+import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
 
 // Explains the local OpenAI-compatible gateway with copyable quick-start snippets
 // and a link to the interactive playground the gateway serves. Core feature.
@@ -137,23 +139,25 @@ export function GatewayScreen(): React.ReactElement {
           </p>
         </div>
 
-        <section aria-label="API keys" className="rounded-md border border-neutral-800 p-5">
-          <h3 className="mb-3 text-sm text-neutral-200">API keys</h3>
+        <section
+          aria-label="API keys"
+          className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5"
+        >
+          <h3 className="mb-3 text-[10px] uppercase tracking-widest text-neutral-500">API keys</h3>
           <GatewayApiKeysSettings />
         </section>
 
         {/* Quick start */}
         <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5">
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            {SNIPPETS.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => setTab(s.id)}
-                className={`rounded-md px-2.5 py-1 text-xs transition-colors ${tab === s.id ? 'bg-green-500/15 text-emerald-400' : 'text-neutral-400 hover:text-white'}`}
-              >
-                {s.label}
-              </button>
-            ))}
+            <Segmented
+              label="Quick start language"
+              size="sm"
+              tone="quiet"
+              value={tab}
+              onValueChange={setTab}
+              options={SNIPPETS.map((s) => ({ id: s.id, label: s.label }))}
+            />
             <div className="ml-auto">
               <CopyButton text={active.code} />
             </div>
@@ -168,12 +172,12 @@ export function GatewayScreen(): React.ReactElement {
           <div className="mb-2 text-[10px] uppercase tracking-widest text-neutral-500">
             Endpoints
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <AnimatedGroup preset="blur-slide" className="grid gap-2 sm:grid-cols-2">
             {ENDPOINTS.map((e) => (
               <button
                 key={e.path}
                 onClick={() => open(e.path)}
-                className="flex flex-col gap-1 rounded-xl border border-neutral-800 bg-neutral-900/40 p-3 text-left transition-colors hover:border-green-500/40"
+                className="flex h-full w-full flex-col gap-1 rounded-xl border border-neutral-800 bg-neutral-900/40 p-3 text-left transition-colors hover:border-green-500/40"
               >
                 <div className="flex items-center gap-2">
                   <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
@@ -185,7 +189,7 @@ export function GatewayScreen(): React.ReactElement {
                 <span className="text-[11px] text-neutral-600">{e.note}</span>
               </button>
             ))}
-          </div>
+          </AnimatedGroup>
         </div>
       </div>
     </div>
