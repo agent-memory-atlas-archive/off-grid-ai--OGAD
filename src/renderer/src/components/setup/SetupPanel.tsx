@@ -19,6 +19,7 @@ import { projectProgress } from '@offgrid/ui'
 import { formatStorageBytes } from './storage-format'
 import { AnimatePresence, motion } from 'motion/react'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import { Section } from '@offgrid/operator-ui/operator/experience'
 import {
   Progress,
   ProgressIndicator,
@@ -190,7 +191,7 @@ export function SetupPanel({ onConfigured, hideHealth }: SetupPanelProps): React
   else if (errored) progressTextClass = 'text-neutral-300'
 
   return (
-    <div className="space-y-4 font-mono">
+    <div className="space-y-12 font-mono">
       <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-4">
         <div className="flex items-start gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-neutral-800 bg-neutral-800/60">
@@ -241,10 +242,7 @@ export function SetupPanel({ onConfigured, hideHealth }: SetupPanelProps): React
         </div>
 
         {/* Resource-use selector (Conservative / Balanced / Extreme) */}
-        <div className="mt-8">
-          <div className="mb-3 text-[10px] uppercase tracking-widest text-neutral-500">
-            Resource use
-          </div>
+        <Section className="mt-8" label="Resource use">
           <Segmented
             label="Resource use"
             size="sm"
@@ -257,21 +255,23 @@ export function SetupPanel({ onConfigured, hideHealth }: SetupPanelProps): React
           <div className="mt-1.5 text-[11px] text-neutral-500">
             {MODES.find((m) => m.id === mode)?.hint}
           </div>
-        </div>
+        </Section>
 
         {/* Exactly which models it will set up — the full baseline, no surprises */}
         {plan && (
-          <div className="mt-8">
-            <div className="mb-3 flex items-center justify-between text-[10px] uppercase tracking-widest text-neutral-500">
-              <span>Will set up</span>
-              <span className="normal-case tracking-normal text-neutral-500">
+          <Section
+            className="mt-8"
+            label="Will set up"
+            actions={
+              <span className="text-[10px] text-neutral-500">
                 {plan.totalDownloadGb > 0
                   ? `~${plan.totalDownloadGb.toFixed(1)} GB to download`
                   : 'all installed'}
                 {' · sized for your '}
                 {plan.ramGb} GB {deviceNoun()}
               </span>
-            </div>
+            }
+          >
             <ul className="divide-y divide-neutral-900">
               <AnimatePresence initial={false}>
               {plan.items.map((it) => {
@@ -326,7 +326,7 @@ export function SetupPanel({ onConfigured, hideHealth }: SetupPanelProps): React
               ~6 GB - fine on a 16 GB {deviceNoun()}). Smaller 2B models are lighter and add vision,
               but are noticeably weaker at reasoning.
             </div>
-          </div>
+          </Section>
         )}
 
         {/* Progress / result */}

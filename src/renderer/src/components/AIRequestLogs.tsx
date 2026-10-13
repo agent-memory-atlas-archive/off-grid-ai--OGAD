@@ -25,7 +25,7 @@ import {
 import { Button } from './ui/button'
 import { AnimatePresence, motion } from 'motion/react'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
-import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { PageHeader } from '@offgrid/operator-ui/operator/experience'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
 import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
@@ -495,55 +495,60 @@ export function AIRequestLogs({
       setClearing(false)
     }
   }
+  const headerActions = (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button
+        variant="ghost"
+        size="sm"
+        aria-pressed={live}
+        className={live ? 'text-primary' : 'text-muted-foreground'}
+        onClick={() => setLive((value) => !value)}
+      >
+        {live ? <Pulse aria-hidden /> : <Pause aria-hidden />}
+        Live updates
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        aria-label="Refresh activity"
+        onClick={() => setRefresh((value) => value + 1)}
+      >
+        <ArrowClockwise />
+      </Button>
+      {!standalone && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            void window.api.aiLogsOpenWindow().catch((error) => setError(errorMessage(error)))
+          }
+        >
+          <ArrowSquareOut />
+          Open in new window
+        </Button>
+      )}
+    </div>
+  )
   return (
     <section
       aria-label="AI activity"
       className={`flex w-full min-w-0 flex-col gap-3 overflow-auto font-mono text-foreground ${standalone ? 'h-full flex-1 bg-background p-6' : 'h-[calc(100dvh-18rem)] min-h-96'}`}
     >
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3">
-        <div>
-          {standalone && (
-            <TextEffect as="h1" preset="fade-in-blur" per="char" className="text-lg font-normal">
-              AI activity
-            </TextEffect>
-          )}
+      {standalone ? (
+        <PageHeader
+          className="shrink-0 pb-4"
+          title="AI activity"
+          description="Inspect your AI requests and responses."
+          actions={headerActions}
+        />
+      ) : (
+        <header className="flex shrink-0 flex-wrap items-center justify-between gap-3">
           <p className="mt-1 text-xs text-muted-foreground">
             Inspect your AI requests and responses.
           </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-pressed={live}
-            className={live ? 'text-primary' : 'text-muted-foreground'}
-            onClick={() => setLive((value) => !value)}
-          >
-            {live ? <Pulse aria-hidden /> : <Pause aria-hidden />}
-            Live updates
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-label="Refresh activity"
-            onClick={() => setRefresh((value) => value + 1)}
-          >
-            <ArrowClockwise />
-          </Button>
-          {!standalone && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                void window.api.aiLogsOpenWindow().catch((error) => setError(errorMessage(error)))
-              }
-            >
-              <ArrowSquareOut />
-              Open in new window
-            </Button>
-          )}
-        </div>
-      </header>
+          {headerActions}
+        </header>
+      )}
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         <InputGroup data-focus-surface className="min-w-48 flex-1">
           <InputGroupAddon>

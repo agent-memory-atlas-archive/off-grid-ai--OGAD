@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
 import { Empty, EmptyContent, EmptyDescription } from '@offgrid/operator-ui/operator/coss/empty'
 import { SettingsSelect } from './SettingsSelect'
+import { ListRow } from '@offgrid/operator-ui/operator/list-row'
 
 // Right-side panel to view, create, edit, and delete Skills — reusable
 // instruction packs invoked from chat with /skill-name. Mirrors the ArtifactCanvas
@@ -349,21 +350,20 @@ export function SkillsPanel({
           <div className="flex flex-col gap-2">
             <AnimatePresence initial={false}>
               {skills.map((s) => (
-                <motion.button
+                <motion.div
                   key={s.name}
                   layout
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-                  onClick={() => openSkill(s.name)}
-                  className="flex flex-col items-start gap-0.5 rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2.5 text-left transition-colors hover:border-green-500/60"
                 >
-                  <span className="text-sm text-green-500">/{s.name}</span>
-                  {s.description ? (
-                    <span className="text-xs text-neutral-500">{s.description}</span>
-                  ) : null}
-                </motion.button>
+                  <ListRow
+                    title={`/${s.name}`}
+                    description={s.description || undefined}
+                    onSelect={() => openSkill(s.name)}
+                  />
+                </motion.div>
               ))}
             </AnimatePresence>
           </div>

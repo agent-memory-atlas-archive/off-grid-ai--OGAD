@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'motion/react'
 import { ProgressiveBlur } from './ui/progressive-blur'
-import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { PageHeader, Section } from '@offgrid/operator-ui/operator/experience'
 import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
 import { SetupPanel } from './setup/SetupPanel'
 import { PerformancePackPanel } from './setup/PerformancePackPanel'
@@ -108,44 +108,15 @@ export function Settings({
   return (
     <div className="relative flex h-full flex-col">
       {/* Fixed header — stays put while the content below scrolls. */}
-      <div className="flex shrink-0 items-center gap-3 px-1 pb-6">
-        <div className="h-10 w-10 rounded-xl bg-neutral-800 border border-neutral-700 flex items-center justify-center">
-          <svg
-            className="w-5 h-5 text-neutral-400"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-            />
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-            />
-          </svg>
-        </div>
-        <div>
-          <TextEffect
-            as="h2"
-            preset="fade-in-blur"
-            per="char"
-            className="text-lg font-semibold text-white"
-          >
-            Settings
-          </TextEffect>
-          <p className="text-sm text-neutral-500">
-            {isPro
-              ? 'Who you are, what Off Grid AI has learned, and your devices'
-              : 'Personalization & automation unlock with Pro'}
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        className="shrink-0 px-1 pb-6"
+        title="Settings"
+        description={
+          isPro
+            ? 'Who you are, what Off Grid AI has learned, and your devices'
+            : 'Personalization & automation unlock with Pro'
+        }
+      />
 
       {/* Scrolling content below the fixed header */}
       <div className="relative flex-1 overflow-y-auto px-1 pt-2 pb-16">
@@ -176,18 +147,17 @@ export function Settings({
               summary="Set up your local AI, manage storage, and see live component health."
               delay={0.13}
             >
-              <SetupPanel />
-              <div className="mt-10">
+              <div className="space-y-12">
+                <SetupPanel />
                 <StoragePanel />
-              </div>
-              {currentPlatform() === 'darwin' ? (
-                <section id="settings-permissions" className="mt-10 scroll-mt-4">
-                  <div className="mb-3 text-[10px] font-medium uppercase tracking-widest text-neutral-500">
-                    System permissions
+                {currentPlatform() === 'darwin' ? (
+                  <div id="settings-permissions" className="scroll-mt-4">
+                    <Section label="System permissions">
+                      <SettingsPermissionsPanel />
+                    </Section>
                   </div>
-                  <SettingsPermissionsPanel />
-                </section>
-              ) : null}
+                ) : null}
+              </div>
             </SettingsCard>
 
             <SettingsCard

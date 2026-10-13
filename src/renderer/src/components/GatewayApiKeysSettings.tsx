@@ -12,6 +12,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { SettingsSelect } from './SettingsSelect'
+import { ListRow } from '@offgrid/operator-ui/operator/list-row'
 
 export function GatewayApiKeysSettings(): React.JSX.Element {
   const [settings, setSettings] = useState<GatewayApiKeySettingsContract | null>(null)
@@ -232,7 +233,7 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
       {!settings.keys.length && (
         <p className="text-neutral-500">No API keys. Create a separate key for each client.</p>
       )}
-      <ul className="space-y-2" aria-label="API keys">
+      <ul className="space-y-1" aria-label="API keys">
         <AnimatePresence initial={false}>
         {settings.keys.map((key) => {
           const status =
@@ -249,45 +250,44 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-              className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-800 py-3"
             >
-              <div className="min-w-0">
-                <p className="break-words">
-                  {key.name} · {status}
-                </p>
-                <p className="text-neutral-500">
-                  {key.prefix}… · Created {new Date(key.createdAt).toLocaleString()}
-                </p>
-                <p className="text-neutral-500">
-                  {key.expiresAt === null
-                    ? 'No expiry'
-                    : `Expires ${new Date(key.expiresAt).toLocaleString()}`}{' '}
-                  ·{' '}
-                  {key.lastUsedAt === null
+              <ListRow
+                title={`${key.name} · ${status}`}
+                description={`${key.prefix}… · Created ${new Date(key.createdAt).toLocaleString()} · ${
+                  key.lastUsedAt === null
                     ? 'Never used'
-                    : `Last used ${new Date(key.lastUsedAt).toLocaleString()}`}
-                </p>
-              </div>
-              {key.revokedAt === null && (
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy || !!createdKey}
-                    onClick={() => setConfirm({ action: 'replace', id: key.id, name: key.name })}
-                  >
-                    Replace {key.name}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() => setConfirm({ action: 'revoke', id: key.id, name: key.name })}
-                  >
-                    Revoke {key.name}
-                  </Button>
-                </div>
-              )}
+                    : `Last used ${new Date(key.lastUsedAt).toLocaleString()}`
+                }`}
+                meta={
+                  key.expiresAt === null
+                    ? 'No expiry'
+                    : `Expires ${new Date(key.expiresAt).toLocaleString()}`
+                }
+                actions={
+                  key.revokedAt === null ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy || !!createdKey}
+                        onClick={() =>
+                          setConfirm({ action: 'replace', id: key.id, name: key.name })
+                        }
+                      >
+                        Replace {key.name}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => setConfirm({ action: 'revoke', id: key.id, name: key.name })}
+                      >
+                        Revoke {key.name}
+                      </Button>
+                    </>
+                  ) : undefined
+                }
+              />
             </motion.li>
           )
         })}

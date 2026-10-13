@@ -527,11 +527,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
           </SettingsRow>
         )}
 
-        <SettingsRow
-          label="Playback speed"
-          value={`${preferences.speed.toFixed(1)}x`}
-          controlId="tts-speed"
-        >
+        <SettingsRow label="Playback speed" controlId="tts-speed">
           {/* Drafts while it moves and saves on blur, like the range input it replaced. */}
           <div
             id="tts-speed"

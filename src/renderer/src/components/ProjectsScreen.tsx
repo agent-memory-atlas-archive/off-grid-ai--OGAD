@@ -17,6 +17,7 @@ import {
 } from '@tabler/icons-react'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { PageHeader } from '@offgrid/operator-ui/operator/experience'
 import {
   Empty,
   EmptyContent,
@@ -206,7 +207,12 @@ export function ProjectsScreen({
       {/* Projects column */}
       <div className="flex w-60 shrink-0 flex-col border-r border-neutral-900">
         <div className="mb-2 flex items-center justify-between border-b border-neutral-900 px-4 py-4">
-          <TextEffect as="h1" preset="fade-in-blur" per="char" className="text-lg font-light tracking-tight text-white">
+          <TextEffect
+            as="h1"
+            preset="fade-in-blur"
+            per="char"
+            className="text-lg font-light tracking-tight text-white"
+          >
             Projects
           </TextEffect>
           <button
@@ -246,25 +252,25 @@ export function ProjectsScreen({
             </p>
           )}
           <AnimatePresence initial={false}>
-          {projects.map((p) => (
-            <motion.button
-              key={p.id}
-              layout
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-              onClick={() => selectProject(p.id)}
-              className={`group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors ${
-                p.id === activeId
-                  ? 'bg-neutral-900 text-white'
-                  : 'text-neutral-400 hover:bg-neutral-900/50'
-              }`}
-            >
-              <IconFolder className="h-4 w-4 shrink-0 text-neutral-500" />
-              <span className="truncate">{p.name}</span>
-            </motion.button>
-          ))}
+            {projects.map((p) => (
+              <motion.button
+                key={p.id}
+                layout
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                onClick={() => selectProject(p.id)}
+                className={`group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors ${
+                  p.id === activeId
+                    ? 'bg-neutral-900 text-white'
+                    : 'text-neutral-400 hover:bg-neutral-900/50'
+                }`}
+              >
+                <IconFolder className="h-4 w-4 shrink-0 text-neutral-500" />
+                <span className="truncate">{p.name}</span>
+              </motion.button>
+            ))}
           </AnimatePresence>
         </div>
       </div>
@@ -273,47 +279,48 @@ export function ProjectsScreen({
       {active ? (
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Project header with view toggle */}
-          <div className="flex items-center justify-between border-b border-neutral-900 px-6 py-4">
-            <div className="flex min-w-0 items-center gap-2 text-sm text-white">
-              <IconFolder className="h-4 w-4 shrink-0 text-neutral-500" />
-              <span className="truncate">{active.name}</span>
-            </div>
-            <Segmented
-              label="Project view"
-              size="sm"
-              value={view}
-              onValueChange={setView}
-              options={[
-                {
-                  id: 'chat',
-                  label: 'Chats',
-                  icon: (
-                    <>
-                      <IconMessage className="h-3.5 w-3.5" /> Chats
-                    </>
-                  )
-                },
-                {
-                  id: 'artifacts',
-                  label: 'Artifacts',
-                  icon: (
-                    <>
-                      <IconLayoutGrid className="h-3.5 w-3.5" /> Artifacts
-                    </>
-                  )
-                },
-                {
-                  id: 'config',
-                  label: 'Knowledge & settings',
-                  icon: (
-                    <>
-                      <IconSettings className="h-3.5 w-3.5" /> Knowledge & settings
-                    </>
-                  )
-                }
-              ]}
-            />
-          </div>
+          <PageHeader
+            className="px-8 pt-8 pb-6"
+            eyebrow="Project"
+            title={active.name}
+            actions={
+              <Segmented
+                label="Project view"
+                size="sm"
+                value={view}
+                onValueChange={setView}
+                options={[
+                  {
+                    id: 'chat',
+                    label: 'Chats',
+                    icon: (
+                      <>
+                        <IconMessage className="h-3.5 w-3.5" /> Chats
+                      </>
+                    )
+                  },
+                  {
+                    id: 'artifacts',
+                    label: 'Artifacts',
+                    icon: (
+                      <>
+                        <IconLayoutGrid className="h-3.5 w-3.5" /> Artifacts
+                      </>
+                    )
+                  },
+                  {
+                    id: 'config',
+                    label: 'Knowledge & settings',
+                    icon: (
+                      <>
+                        <IconSettings className="h-3.5 w-3.5" /> Knowledge & settings
+                      </>
+                    )
+                  }
+                ]}
+              />
+            }
+          />
 
           {view === 'chat' ? (
             <ProjectChats key={active.id} project={active} onOpenChat={onOpenChat} />
@@ -548,7 +555,15 @@ function ProjectConfig({
   )
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }): React.JSX.Element {
+function Field({
+  label,
+  hint,
+  children
+}: {
+  label: string
+  hint?: string
+  children: ReactNode
+}): React.JSX.Element {
   return (
     <div>
       <div className="mb-1.5 text-[11px] uppercase tracking-wide text-neutral-500">{label}</div>

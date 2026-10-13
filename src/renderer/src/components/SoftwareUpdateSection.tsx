@@ -14,6 +14,8 @@ import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-nu
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
+import { ListRow } from '@offgrid/operator-ui/operator/list-row'
+import { Section } from '@offgrid/operator-ui/operator/experience'
 import { AnimatePresence, motion } from 'motion/react'
 import {
   Dialog,
@@ -62,10 +64,7 @@ function PreviousVersionsPanel({
   onSelect
 }: PreviousVersionsPanelProps): React.ReactElement {
   return (
-    <div className="mt-3 border border-neutral-800 bg-neutral-950/40">
-      <div className="border-b border-neutral-800 px-3 py-2 text-[11px] uppercase tracking-wide text-neutral-500">
-        Signed releases for this device
-      </div>
+    <Section className="mt-6" label="Signed releases for this device">
       {loading ? (
         <div className="space-y-2 px-3 py-3" aria-busy="true">
           <p className="sr-only">Loading...</p>
@@ -80,7 +79,7 @@ function PreviousVersionsPanel({
           No compatible previous versions were found.
         </p>
       ) : null}
-      <div className="max-h-52 overflow-y-auto divide-y divide-neutral-800">
+      <div className="max-h-52 overflow-y-auto py-1">
         <AnimatePresence initial={false}>
           {releases.map((release) => (
             <motion.div
@@ -90,23 +89,22 @@ function PreviousVersionsPanel({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-              className="flex items-center justify-between gap-4 px-3 py-2 transition-colors duration-150 hover:bg-neutral-900/70"
+              className="px-2"
             >
-              <div className="min-w-0">
-                <div className="text-xs text-neutral-200">v{release.version}</div>
-                <div className="text-[11px] text-neutral-600">
-                  {release.channel === 'nightly' ? 'Nightly' : 'Stable'} ·{' '}
-                  {releaseDate(release.publishedAt)}
-                </div>
-              </div>
-              <Button size="xs" variant="outline" onClick={() => onSelect(release)}>
-                Use v{release.version}
-              </Button>
+              <ListRow
+                title={`v${release.version}`}
+                description={`${release.channel === 'nightly' ? 'Nightly' : 'Stable'} · ${releaseDate(release.publishedAt)}`}
+                actions={
+                  <Button size="xs" variant="outline" onClick={() => onSelect(release)}>
+                    Use v{release.version}
+                  </Button>
+                }
+              />
             </motion.div>
           ))}
         </AnimatePresence>
       </div>
-    </div>
+    </Section>
   )
 }
 

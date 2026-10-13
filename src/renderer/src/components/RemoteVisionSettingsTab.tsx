@@ -18,6 +18,8 @@ import { SettingsSection } from './SettingsSection'
 import { AnimatePresence, motion } from 'motion/react'
 import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
 import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
+import { ListRow } from '@offgrid/operator-ui/operator/list-row'
+import { Section } from '@offgrid/operator-ui/operator/experience'
 
 const EMPTY_SETTINGS: RemoteVisionServerSettings = {
   provider: 'local',
@@ -345,13 +347,11 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
         summary={serversSummary}
         defaultOpen
       >
-        <p className="mb-3 text-[11px] leading-4 text-neutral-500">
-          Save model servers once, then switch between them when you need one.
-        </p>
-
-        <div className="mb-3">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <p className="text-[11px] uppercase tracking-wide text-neutral-400">Saved servers</p>
+        <Section
+          className="mb-3"
+          label="Saved servers"
+          description="Save model servers once, then switch between them when you need one."
+          actions={
             <button
               type="button"
               onClick={addServer}
@@ -359,9 +359,10 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
             >
               Add server
             </button>
-          </div>
+          }
+        >
           {settings.servers.length > 0 ? (
-            <div className="space-y-2">
+            <div className="space-y-1">
               <AnimatePresence initial={false}>
               {settings.servers.map((server) => (
                 <motion.div
@@ -371,39 +372,40 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-                  className={`flex items-center gap-3 border p-2 ${form.id === server.id ? 'border-green-500/60 bg-green-500/5' : 'border-neutral-800 bg-neutral-950/40'}`}
                 >
-                  <button
-                    type="button"
-                    onClick={() => selectServer(server)}
-                    className="min-w-0 flex-1 text-left"
-                  >
-                    <span className="block truncate text-xs text-neutral-200">{server.name}</span>
-                    <span className="block truncate text-[10px] text-neutral-600">
-                      {server.endpoint} · {server.model}
-                    </span>
-                  </button>
-                  {settings.activeServerId === server.id ? (
-                    <Badge variant="success" size="sm">
-                      Active
-                    </Badge>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => void changeModel(server)}
-                    disabled={busy}
-                    className="text-[10px] text-neutral-400 hover:text-white disabled:opacity-40"
-                  >
-                    Change model
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void remove(server.id)}
-                    disabled={busy}
-                    className="text-[10px] text-neutral-600 hover:text-red-400 disabled:opacity-40"
-                  >
-                    Remove
-                  </button>
+                  <ListRow
+                    title={server.name}
+                    description={`${server.endpoint} · ${server.model}`}
+                    onSelect={() => selectServer(server)}
+                    selected={form.id === server.id}
+                    meta={
+                      settings.activeServerId === server.id ? (
+                        <Badge variant="success" size="sm">
+                          Active
+                        </Badge>
+                      ) : null
+                    }
+                    actions={
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void changeModel(server)}
+                          disabled={busy}
+                          className="text-[10px] text-neutral-400 hover:text-white disabled:opacity-40"
+                        >
+                          Change model
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void remove(server.id)}
+                          disabled={busy}
+                          className="text-[10px] text-neutral-600 hover:text-red-400 disabled:opacity-40"
+                        >
+                          Remove
+                        </button>
+                      </>
+                    }
+                  />
                 </motion.div>
               ))}
               </AnimatePresence>
@@ -411,7 +413,7 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
           ) : (
             <p className="text-[10px] text-neutral-600">No saved servers.</p>
           )}
-        </div>
+        </Section>
       </SettingsSection>
 
       <SettingsSection id="remote.server" title="Server" summary={serverSummary} defaultOpen>

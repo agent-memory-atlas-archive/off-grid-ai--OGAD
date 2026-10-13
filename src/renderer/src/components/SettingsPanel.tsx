@@ -40,6 +40,7 @@ import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
 import { Stat, StatLabel, StatValue } from '@offgrid/operator-ui/operator/dice/stat'
 import { Empty, EmptyDescription, EmptyMedia } from '@offgrid/operator-ui/operator/coss/empty'
+import { ListRow } from '@offgrid/operator-ui/operator/list-row'
 import { BackendPreferencesSection } from './ProcessingControls'
 import { useReplySound } from '../lib/reply-sound'
 import { SettingsSection } from './SettingsSection'
@@ -634,11 +635,7 @@ export function SettingsPanel({
               summary={`Temperature ${(s.temperature ?? 0.7).toFixed(2)} · up to ${s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS} tool calls`}
               defaultOpen
             >
-              <Row
-                label="Temperature"
-                value={(s.temperature ?? 0.7).toFixed(2)}
-                hint="Lower = focused, higher = creative."
-              >
+              <Row label="Temperature" hint="Lower = focused, higher = creative.">
                 <SettingSlider
                   label="Temperature"
                   value={s.temperature ?? 0.7}
@@ -682,7 +679,6 @@ export function SettingsPanel({
               <Row
                 label="Maximum tool calls"
                 controlId="maximum-tool-calls"
-                value={String(s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS)}
                 hint="Emergency limit for tool calls in one response."
               >
                 <SettingSlider
@@ -720,11 +716,7 @@ export function SettingsPanel({
               title="Sampling"
               summary={`Top-P ${(s.topP ?? 0.95).toFixed(2)} · Top-K ${s.topK ?? 40} · repeat penalty ${(s.repeatPenalty ?? 1.1).toFixed(2)}`}
             >
-              <Row
-                label="Top-P"
-                value={(s.topP ?? 0.95).toFixed(2)}
-                hint="Nucleus sampling cutoff."
-              >
+              <Row label="Top-P" hint="Nucleus sampling cutoff.">
                 <SettingSlider
                   label="Top-P"
                   value={s.topP ?? 0.95}
@@ -737,11 +729,7 @@ export function SettingsPanel({
                   onCommit={(value) => set({ topP: value })}
                 />
               </Row>
-              <Row
-                label="Top-K"
-                value={String(s.topK ?? 40)}
-                hint="0 disables. Limits candidate tokens."
-              >
+              <Row label="Top-K" hint="0 disables. Limits candidate tokens.">
                 <SettingSlider
                   label="Top-K"
                   value={s.topK ?? 40}
@@ -753,11 +741,7 @@ export function SettingsPanel({
                   onCommit={(value) => set({ topK: value })}
                 />
               </Row>
-              <Row
-                label="Min-P"
-                value={(s.minP ?? 0.05).toFixed(2)}
-                hint="Min probability relative to the top token."
-              >
+              <Row label="Min-P" hint="Min probability relative to the top token.">
                 <SettingSlider
                   label="Min-P"
                   value={s.minP ?? 0.05}
@@ -770,11 +754,7 @@ export function SettingsPanel({
                   onCommit={(value) => set({ minP: value })}
                 />
               </Row>
-              <Row
-                label="Repeat penalty"
-                value={(s.repeatPenalty ?? 1.1).toFixed(2)}
-                hint="Higher discourages repetition."
-              >
+              <Row label="Repeat penalty" hint="Higher discourages repetition.">
                 <SettingSlider
                   label="Repeat penalty"
                   value={s.repeatPenalty ?? 1.1}
@@ -880,11 +860,7 @@ export function SettingsPanel({
                   />
                 </Row>
               )}
-              <Row
-                label="GPU layers"
-                value={String(s.gpuLayers ?? 99)}
-                hint={gpuLayersHint(s.gpuAccelerator ?? null)}
-              >
+              <Row label="GPU layers" hint={gpuLayersHint(s.gpuAccelerator ?? null)}>
                 <SettingSlider
                   label="GPU layers"
                   value={s.gpuLayers ?? 99}
@@ -896,11 +872,7 @@ export function SettingsPanel({
                   onCommit={(value) => set({ gpuLayers: value })}
                 />
               </Row>
-              <Row
-                label="CPU threads"
-                value={(s.threads ?? 0) === 0 ? 'auto' : String(s.threads)}
-                hint="0 = auto (let llama.cpp choose)."
-              >
+              <Row label="CPU threads" hint="0 = auto (let llama.cpp choose).">
                 <SettingSlider
                   label="CPU threads"
                   value={s.threads ?? 0}
@@ -912,11 +884,7 @@ export function SettingsPanel({
                   onCommit={(value) => set({ threads: value })}
                 />
               </Row>
-              <Row
-                label="Batch size"
-                value={String(s.batchSize ?? 512)}
-                hint="Tokens processed per batch during prompt ingest."
-              >
+              <Row label="Batch size" hint="Tokens processed per batch during prompt ingest.">
                 <SettingSlider
                   label="Batch size"
                   value={s.batchSize ?? 512}
@@ -1214,7 +1182,7 @@ export function SettingsPanel({
                       group.connectors.filter((c) => c.enabled).length
                     } on`}
                   >
-                    <div className="flex flex-col divide-y divide-neutral-900 pb-2">
+                    <div className="flex flex-col pb-2">
                       <AnimatePresence initial={false}>
                         {group.connectors.map((c) => (
                           <motion.div
@@ -1224,37 +1192,38 @@ export function SettingsPanel({
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0 }}
                             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-                            className="flex items-center justify-between py-2.5"
                           >
-                            <div className="min-w-0">
-                              <div className="truncate text-sm text-neutral-200">{c.name}</div>
-                              {c.url ? (
-                                <div className="truncate text-[10px] text-neutral-600">{c.url}</div>
-                              ) : null}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={async () => {
-                                  await (window.api as Partial<typeof window.api>).mcpSetEnabled?.(
-                                    c.id,
-                                    !c.enabled
-                                  )
-                                  refreshConnectors()
-                                }}
-                                className={`rounded px-2 py-1 text-[11px] ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
-                              >
-                                <TextMorph as="span">{c.enabled ? 'On' : 'Off'}</TextMorph>
-                              </button>
-                              <button
-                                onClick={async () => {
-                                  await (window.api as Partial<typeof window.api>).mcpRemove?.(c.id)
-                                  refreshConnectors()
-                                }}
-                                className="rounded px-2 py-1 text-[11px] text-red-400 hover:bg-red-500/10"
-                              >
-                                Remove
-                              </button>
-                            </div>
+                            <ListRow
+                              title={c.name}
+                              description={c.url ?? undefined}
+                              // On/Off is state, so it stays visible; only Remove waits for hover.
+                              meta={
+                                <button
+                                  onClick={async () => {
+                                    await (
+                                      window.api as Partial<typeof window.api>
+                                    ).mcpSetEnabled?.(c.id, !c.enabled)
+                                    refreshConnectors()
+                                  }}
+                                  className={`rounded px-2 py-1 text-[11px] ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
+                                >
+                                  <TextMorph as="span">{c.enabled ? 'On' : 'Off'}</TextMorph>
+                                </button>
+                              }
+                              actions={
+                                <button
+                                  onClick={async () => {
+                                    await (window.api as Partial<typeof window.api>).mcpRemove?.(
+                                      c.id
+                                    )
+                                    refreshConnectors()
+                                  }}
+                                  className="rounded px-2 py-1 text-[11px] text-red-400 hover:bg-red-500/10"
+                                >
+                                  Remove
+                                </button>
+                              }
+                            />
                           </motion.div>
                         ))}
                       </AnimatePresence>
