@@ -10,7 +10,10 @@
 // level meter (an AnalyserNode) — it never touches the recorded audio.
 
 import { useEffect, useRef, useState } from 'react'
-import { Microphone, Square } from '@phosphor-icons/react'
+import { Square } from '@phosphor-icons/react'
+import { useReducedMotion } from 'motion/react'
+import { VoiceCapture } from '@offgrid/operator-ui/operator/workflows/voice-capture'
+import { LiveStatus } from '@offgrid/operator-ui/operator/presence'
 import { voice } from '@renderer/lib/voiceApi'
 import { shortcutLabel } from '@renderer/lib/device'
 
@@ -21,10 +24,27 @@ type Phase = 'recording' | 'transcribing'
  *  (macOS reads 'Option+Space'). */
 const DEFAULT_DICTATION_ACCELERATOR = 'Alt+Space'
 
+/** About four seconds of signal: the meter samples the live level twelve times a second. */
+const AMPLITUDE_SAMPLES = 48
+const AMPLITUDE_INTERVAL_MS = 80
+const QUIET = 0.04
+const silentAmplitudes = (): number[] => Array<number>(AMPLITUDE_SAMPLES).fill(QUIET)
+/** Two lines of the overlay: the newest words stay in view as the transcript grows. */
+const INTERIM_TAIL = 110
+
+function interimTail(text: string): string {
+  if (text.length <= INTERIM_TAIL) return text
+  const tail = text.slice(-INTERIM_TAIL)
+  return `…${tail.slice(tail.indexOf(' ') + 1)}`
+}
+
 export function DictationOverlay(): React.JSX.Element | null {
   const [active, setActive] = useState(false)
   const [phase, setPhase] = useState<Phase>('recording')
-  const [level, setLevel] = useState(0)
+  // The analyser writes every frame into a ref; the waveform keeps a short scrolling buffer of it.
+  const levelRef = useRef(0)
+  const [amplitudes, setAmplitudes] = useState(silentAmplitudes)
+  const reduceMotion = useReducedMotion()
   const [elapsed, setElapsed] = useState(0)
   const [interim, setInterim] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -44,15 +64,9 @@ export function DictationOverlay(): React.JSX.Element | null {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const errorHideRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const errorVisibleRef = useRef(false)
-  const transcriptRef = useRef<HTMLDivElement | null>(null)
   // True while a live-interim request is in flight — the next timeslice waits for it,
   // so we never queue up overlapping interim passes (self-pacing).
   const interimBusyRef = useRef(false)
-
-  useEffect(() => {
-    const el = transcriptRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [interim])
 
   async function startCapture(): Promise<void> {
     const v = voice()
@@ -142,7 +156,7 @@ export function DictationOverlay(): React.JSX.Element | null {
           const x = (buf[i]! - 128) / 128
           sum += x * x
         }
-        setLevel(Math.min(1, Math.sqrt(sum / buf.length) * 6))
+        levelRef.current = Math.min(1, Math.sqrt(sum / buf.length) * 6)
         rafRef.current = requestAnimationFrame(tick)
       }
       rafRef.current = requestAnimationFrame(tick)
@@ -198,7 +212,8 @@ export function DictationOverlay(): React.JSX.Element | null {
       errorVisibleRef.current = false
       setError(null)
       setInterim('')
-      setLevel(0)
+      levelRef.current = 0
+      setAmplitudes(silentAmplitudes())
       setElapsed(0)
       setPhase('recording')
       setActive(true)
@@ -265,74 +280,51 @@ export function DictationOverlay(): React.JSX.Element | null {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    if (!active || phase !== 'recording' || error || reduceMotion) return
+    const id = setInterval(() => {
+      setAmplitudes((current) => [...current.slice(1), Math.max(QUIET, levelRef.current)])
+    }, AMPLITUDE_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [active, phase, error, reduceMotion])
+
   if (!active) return null
 
-  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0')
-  const ss = String(elapsed % 60).padStart(2, '0')
   const stop = (): void => {
     void voice()?.toggle()
   }
   const keys = shortcutLabel(accelerator)
   const hint = mode === 'hold' ? `release ${keys} to stop` : `tap ${keys} or ■ to stop`
 
+  // The window stays transparent; only the pill is a surface, sized to the fixed 460×168 overlay.
   return (
-    <div className="flex h-screen w-screen items-stretch justify-center bg-transparent p-2 font-mono">
-      <div className="flex w-full flex-col gap-1.5 rounded-2xl border border-neutral-800 bg-black/90 px-3 py-2.5 shadow-2xl backdrop-blur">
-        <div className="flex items-center gap-2.5">
-          {error ? (
-            <span className="text-xs text-red-400">{error}</span>
-          ) : (
-            <>
-              <span className="relative flex h-2.5 w-2.5 shrink-0">
-                {phase === 'recording' && (
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-                )}
-                <span
-                  className={`relative inline-flex h-2.5 w-2.5 rounded-full ${phase === 'recording' ? 'bg-emerald-400' : 'bg-amber-400'}`}
-                />
-              </span>
-              <Microphone className="h-4 w-4 shrink-0 text-emerald-400" weight="fill" />
-              <div className="flex h-4 flex-1 items-center gap-[2px]">
-                {Array.from({ length: 22 }).map((_, i) => {
-                  const on = level * 22 > i
-                  return (
-                    <span
-                      key={i}
-                      className={`w-[3px] rounded-sm transition-all duration-75 ${on ? 'bg-emerald-400' : 'bg-neutral-700'}`}
-                      style={{ height: `${20 + (on ? Math.min(80, (i + 1) * 4) : 8)}%` }}
-                    />
-                  )
-                })}
-              </div>
-              <span className="shrink-0 text-xs tabular-nums text-neutral-400">
-                {phase === 'transcribing' ? 'transcribing…' : `${mm}:${ss}`}
-              </span>
-              {phase === 'recording' && (
-                <button
-                  onClick={stop}
-                  title="Stop dictation"
-                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-neutral-700 text-neutral-300 transition-all hover:border-red-600 hover:text-red-400 active:scale-90"
-                >
-                  <Square className="h-3 w-3" weight="fill" />
-                </button>
-              )}
-            </>
-          )}
-        </div>
-        {!error &&
-          (interim ? (
-            <div
-              ref={transcriptRef}
-              className="min-h-0 flex-1 overflow-hidden text-[15px] leading-relaxed text-neutral-100"
-              style={{ WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 42%)' }}
-            >
-              <div className="flex min-h-full flex-col justify-end">{interim}</div>
-            </div>
-          ) : (
-            phase === 'recording' && (
-              <div className="flex flex-1 items-end text-[11px] text-neutral-600">{hint}</div>
-            )
-          ))}
+    <div className="flex h-screen w-screen items-stretch justify-center bg-transparent p-1.5">
+      <div
+        className={`relative w-full overflow-hidden rounded-2xl border border-border bg-background/90 px-3 py-2 shadow-2xl backdrop-blur [&_section]:space-y-1.5 [&_section_p[role=status]]:hidden [&_p[aria-label^=Interim]]:leading-snug`}
+      >
+        <VoiceCapture
+          phase={error ? 'error' : phase}
+          mode={mode === 'hold' ? 'tap' : 'handsfree'}
+          elapsedMs={elapsed * 1000}
+          amplitudes={error ? undefined : amplitudes}
+          interimTranscript={error || !interim ? undefined : interimTail(interim)}
+          message={error ?? undefined}
+        />
+        {/* The live transcript takes the status line's place once words arrive. */}
+        {phase === 'recording' && !error && !interim && (
+          <LiveStatus travel="across" className="mt-1.5 text-xs">
+            {hint}
+          </LiveStatus>
+        )}
+        {phase === 'recording' && !error && (
+          <button
+            onClick={stop}
+            title="Stop dictation"
+            className="absolute right-3 top-2 flex h-6 w-6 items-center justify-center rounded-md border border-border text-muted-foreground transition-all hover:border-red-600 hover:text-red-400 active:scale-90"
+          >
+            <Square className="h-3 w-3" weight="fill" />
+          </button>
+        )}
       </div>
     </div>
   )

@@ -1,55 +1,14 @@
-import {
-  CaretDown,
-  Microphone,
-  SlidersHorizontal,
-  SpeakerHigh,
-  Stop,
-  X
-} from '@phosphor-icons/react'
+import { useEffect, useState } from 'react'
+import { Microphone, SlidersHorizontal, SpeakerHigh, Stop, X } from '@phosphor-icons/react'
 import { VOICE_TURN_LABELS, type VoiceTurnMode } from '@offgrid/speech'
-import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
+import {
+  VoiceCapture,
+  type VoiceCapturePhase
+} from '@offgrid/operator-ui/operator/workflows/voice-capture'
+import { AutoHeight, LiveStatus } from '@offgrid/operator-ui/operator/presence'
 import { Button } from './ui/button'
 import { LoadingDots } from './ui/loading-dots'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger
-} from './ui/dropdown-menu'
-
-const TURN_MODES: readonly VoiceTurnMode[] = ['tap', 'silence', 'handsfree']
-
-/** The turn mode, as a small dropdown where the composer may change it (God's voice mode). */
-function TurnModePicker(props: {
-  readonly mode: VoiceTurnMode
-  readonly onChange: (mode: VoiceTurnMode) => void
-}): React.JSX.Element {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        aria-label={`Voice turns: ${VOICE_TURN_LABELS[props.mode].label}`}
-        className="flex shrink-0 items-center gap-1 rounded px-1 text-[10px] uppercase tracking-wide text-primary hover:bg-white/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-green-500"
-      >
-        {VOICE_TURN_LABELS[props.mode].label}
-        <CaretDown className="h-2.5 w-2.5" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        <DropdownMenuRadioGroup
-          value={props.mode}
-          onValueChange={(value) => props.onChange(value as VoiceTurnMode)}
-        >
-          {TURN_MODES.map((mode) => (
-            <DropdownMenuRadioItem key={mode} value={mode} className="text-xs">
-              {VOICE_TURN_LABELS[mode].label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
 import type { ChatVoicePhase } from './use-chat-voice-turns'
 
 interface ChatVoiceComposerProps {
@@ -93,7 +52,33 @@ function visibleError(error: string): string {
   return error.includes("Didn't catch") ? 'No speech detected. Try again.' : error
 }
 
-/** Compact voice input that occupies the same row as the normal text field. */
+function capturePhase(
+  phase: ChatVoicePhase,
+  suspended: boolean,
+  error: string | null
+): VoiceCapturePhase {
+  if (phase === 'starting') return 'opening'
+  if (phase !== 'idle') return phase
+  if (error) return error.includes("Didn't catch") ? 'no-speech' : 'error'
+  return suspended ? 'suspended' : 'idle'
+}
+
+/** Seconds since this recording began; the capture shows it beside its state. */
+function useRecordingElapsed(recording: boolean): number {
+  const [elapsedMs, setElapsedMs] = useState(0)
+  useEffect(() => {
+    if (!recording) return
+    const started = Date.now()
+    const id = setInterval(() => setElapsedMs(Date.now() - started), 250)
+    return () => {
+      clearInterval(id)
+      setElapsedMs(0)
+    }
+  }, [recording])
+  return elapsedMs
+}
+
+/** Voice input in the composer: the shared capture surface, with the record button in the send slot. */
 export function ChatVoiceComposer({
   phase,
   turnMode,
@@ -112,55 +97,56 @@ export function ChatVoiceComposer({
     suspended,
     transcriptionLabel
   })
+  const elapsedMs = useRecordingElapsed(phase === 'recording')
+  const capture = capturePhase(phase, suspended, error)
+  const failed = capture === 'error' || capture === 'no-speech'
 
   return (
-    <div className="flex min-h-11 w-full flex-col justify-center gap-1 px-3 py-2">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <div className="flex min-w-0 items-baseline gap-2">
-          {onTurnModeChange ? (
-            <TurnModePicker mode={turnMode} onChange={onTurnModeChange} />
-          ) : (
-            <span className="shrink-0 text-[10px] uppercase tracking-wide text-primary">
-              {VOICE_TURN_LABELS[turnMode].label}
-            </span>
-          )}
-          <span aria-live="polite" className="truncate text-xs text-neutral-500">
-            {phase === 'starting' || transcribing ? (
-              <TextShimmer as="span" className="max-w-full truncate align-bottom">
-                {status}
-              </TextShimmer>
+    <div
+      className="w-full px-3 py-2 pr-12"
+      aria-busy={phase === 'starting' || transcribing || undefined}
+    >
+      {onTurnModeChange ? null : (
+        <span className="mb-1 block text-[10px] uppercase tracking-wide text-primary">
+          {VOICE_TURN_LABELS[turnMode].label}
+        </span>
+      )}
+      {/* The capture's own status line is static; the cross-fading line below replaces it. */}
+      <AutoHeight className="space-y-2 [&_section_p[role=status]]:hidden">
+        <VoiceCapture
+          phase={capture}
+          mode={turnMode}
+          onModeChange={onTurnModeChange}
+          elapsedMs={phase === 'recording' || transcribing ? elapsedMs : 0}
+          message={failed ? visibleError(error!) : status}
+        />
+        {failed ? null : (
+          <LiveStatus travel="across" className="text-xs">
+            {status}
+          </LiveStatus>
+        )}
+      </AutoHeight>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            onClick={onToggleRecording}
+            aria-label={label}
+            className={`absolute bottom-2.5 right-2.5 rounded-full ${active ? 'border-red-500/50 text-red-400 hover:bg-red-500/10' : 'border-green-500 text-primary hover:bg-green-500/10'}`}
+          >
+            {transcribing ? (
+              <LoadingDots size="small" />
+            ) : active ? (
+              <Stop className="h-3.5 w-3.5" weight="fill" />
             ) : (
-              status
+              <Microphone className="h-4 w-4" />
             )}
-          </span>
-        </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-sm"
-              onClick={onToggleRecording}
-              aria-label={label}
-              className={`absolute bottom-2.5 right-2.5 rounded-full ${active ? 'border-red-500/50 text-red-400 hover:bg-red-500/10' : 'border-green-500 text-primary hover:bg-green-500/10'}`}
-            >
-              {transcribing ? (
-                <LoadingDots size="small" />
-              ) : active ? (
-                <Stop className="h-3.5 w-3.5" weight="fill" />
-              ) : (
-                <Microphone className="h-4 w-4" />
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{label}</TooltipContent>
-        </Tooltip>
-      </div>
-      {error ? (
-        <p role="alert" className="text-[11px] text-amber-500">
-          {visibleError(error)}
-        </p>
-      ) : null}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
     </div>
   )
 }
