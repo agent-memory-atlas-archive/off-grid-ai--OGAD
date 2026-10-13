@@ -180,7 +180,7 @@ it('downloads complete shards and serves decision, grounding, and selected chat 
   ).toBe(400)
   const decision = await request(DECIDER_2B.id, messages)
   expect(decision.status).toBe(200)
-  expect(JSON.parse((await decision.json()).choices[0].message.content)).toMatchObject({
+  expect(JSON.parse((await decision.json()).choices[0]!.message.content)).toMatchObject({
     choice: 0,
     confidence: 0.8
   })
@@ -190,11 +190,11 @@ it('downloads complete shards and serves decision, grounding, and selected chat 
   const asyncDecision = await completed(await request(DECIDER_2B.id, messages, { async: true }))
   expect(asyncDecision.model).toBe(DECIDER_2B.id)
   const grounding = [{ role: 'user', content: 'Find the menu item.' }]
-  expect((await (await request(grounder, grounding)).json()).choices[0].message.content).toBe(
+  expect((await (await request(grounder, grounding)).json()).choices[0]!.message.content).toBe(
     'fixture answer'
   )
   expect(
-    (await completed(await request(grounder, grounding, { async: true }))).choices[0].message
+    (await completed(await request(grounder, grounding, { async: true }))).choices[0]!.message
       .content
   ).toBe('fixture answer')
   const chatResponse = await request(chat, [{ role: 'user', content: 'Hi' }], { stream: true })
