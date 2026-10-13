@@ -41,8 +41,6 @@ import { useNotifications } from './hooks/useNotifications'
 import { ToastProvider } from './hooks/ToastProvider'
 import { ReprocessingProvider, useReprocessing } from './hooks/useReprocessing'
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
-import { GridBackdrop } from './components/ui/grid-backdrop'
-import { StarfieldBackdrop } from './components/ui/starfield-backdrop'
 import { Sidebar, SidebarBody } from './components/ui/sidebar'
 import { NavThemeToggle } from './components/ThemeToggle'
 import { motion, AnimatePresence } from 'motion/react'
@@ -1093,7 +1091,7 @@ function AppContent(): React.JSX.Element {
   }
 
   return (
-    <div className="h-screen w-full overflow-hidden bg-neutral-950 relative">
+    <div className="relative h-screen w-full overflow-hidden">
       <StartupNotice />
       <CommandPalette
         onOpenHit={handleOpenHit}
@@ -1184,10 +1182,8 @@ function AppContent(): React.JSX.Element {
           </button>
         </div>
       )}
-      {/* Background — flat Off Grid AI terminal grid (theme-aware), with a dark-mode
-          starfield + periodic shooting star layered on top. */}
-      <GridBackdrop className="z-0" />
-      <StarfieldBackdrop className="z-0" />
+      {/* The background is the library LivingField (mounted in main.tsx): one breathing layer
+          under every screen, so nothing here may paint an opaque or competing backdrop. */}
 
       <div className="flex h-full relative z-10">
         {/* Aceternity Sidebar */}

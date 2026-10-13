@@ -46,7 +46,7 @@ export function SettingsSection(props: {
         setOpen(next)
         rememberOpen(props.id, next)
       }}
-      className="group mb-12 rounded-md border border-neutral-800 bg-neutral-950/40"
+      className="group mb-3 rounded-md border border-neutral-800 bg-neutral-950/40"
     >
       <CollapsibleTrigger className="flex w-full items-start justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-neutral-900/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500/60">
         <span className="min-w-0">
