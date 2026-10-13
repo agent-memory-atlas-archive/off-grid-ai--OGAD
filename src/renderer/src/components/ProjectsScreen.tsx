@@ -313,7 +313,6 @@ export function ProjectsScreen({
                 }
               ]}
             />
-            </div>
           </div>
 
           {view === 'chat' ? (
