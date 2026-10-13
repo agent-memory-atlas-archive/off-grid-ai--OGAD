@@ -1,6 +1,10 @@
 import type { ReactNode } from 'react'
 import type { ChatStreamTool, ProjectedSyncedTool } from '@offgrid/sync'
 import { CaretDown, Check, Circle, Warning, X } from '@phosphor-icons/react'
+import { AnimatePresence, motion } from 'motion/react'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { ChatMarkdown } from './ChatMarkdown'
 import { ChatThinkingBlock } from './ChatThinkingBlock'
 import type { AssistantTimelineEntry } from '@renderer/lib/message-persistence'
@@ -46,6 +50,15 @@ interface ChatToolRowsProps {
 }
 
 type WorkStatus = 'running' | 'complete' | 'failed' | 'needs attention'
+
+/** New steps rise into the timeline; rows only move by position, so streaming text never stretches. */
+const TIMELINE_ROW_MOTION = {
+  layout: 'position',
+  initial: { opacity: 0, y: 6 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0 },
+  transition: { duration: 0.4, ease: [0.16, 1, 0.3, 1] }
+} as const
 
 const PROPOSAL_STAGE_LABELS: Record<string, string> = {
   start: 'Started proposal',
@@ -324,128 +337,145 @@ export function ChatToolRows({
           {thinking}
         </li>
       ) : null}
-      {ordered.map((entry, orderIndex) => {
-        if (entry.kind === 'thinking') {
-          return (
-            <li key={`thinking:${orderIndex}`} className={`relative pb-2 last:pb-0 ${hasTimelineContent ? 'pl-4' : ''}`}>
-              {entry.text.trim() ? (
-                <span className="absolute -left-1.5 top-1 flex h-3 w-3 items-center justify-center bg-neutral-950">
-                  <Circle weight="fill" className="h-2 w-2 text-neutral-500" aria-hidden="true" />
-                </span>
-              ) : null}
-              <ChatThinkingBlock
-                content={entry.text}
-                live={thinkingLive && orderIndex === ordered.length - 1}
-                className="max-w-full"
-              />
-            </li>
-          )
-        }
-        const projectedTool = projected[entry.toolIndex - toolOffset]
-        if (!projectedTool) return null
-        const { tool, linkedTask, status: stepStatus } = projectedTool
-        const memoryTool = normalizedToolKey(tool.name) === 'search_memory'
-        const showMemorySources = Boolean(
-          memorySources && entry.toolIndex === firstMemoryToolIndex + toolOffset
-        )
-        const sourceCount = memorySources?.count ?? 0
-        const stepLabel = showMemorySources
-          ? `Searched your memory — ${sourceCount} result${sourceCount === 1 ? '' : 's'}`
-          : workStepLabel(tool)
-        const result = visibleToolResult(tool.result)
-        const error = 'error' in tool ? tool.error?.trim() : undefined
-        const taskSummary = linkedTask?.summary?.trim()
-        const liveTaskLine =
-          stepStatus === 'running' ? linkedTask?.currentAction?.trim() : undefined
-        const rowSummary = liveTaskLine || taskSummary
-        const details = taskSummary || error || result
-        const durationMs = 'durationMs' in tool ? tool.durationMs : undefined
-        const hasComputerDetails = Boolean(linkedTask?.stepDetails?.length)
-        const hasDisclosure =
-          showMemorySources ||
-          (!(memorySources && memoryTool && stepStatus === 'complete') &&
-            (Boolean(details) || hasComputerDetails || Boolean(linkedTask)))
-        return (
-          <li key={`${tool.name}:${entry.toolIndex}`} className="relative pb-2 pl-4 last:pb-0">
-            <span className="absolute -left-1.5 top-1 flex h-3 w-3 items-center justify-center bg-neutral-950">
-              {statusIcon(stepStatus)}
-            </span>
-            <Collapsible>
-              <CollapsibleTrigger
-                disabled={!hasDisclosure}
-                className="group flex w-full items-start gap-2 text-left disabled:cursor-default"
-                aria-label={`${stepLabel}, ${stepStatus}`}
-                onClick={() => {
-                  if (linkedTask) {
-                    openTaskSidePanel({
-                      taskId: linkedTask.taskId,
-                      kind: linkedTask.kind,
-                      detail: true
-                    })
-                  }
-                }}
+      <AnimatePresence initial={false}>
+        {ordered.map((entry, orderIndex) => {
+          if (entry.kind === 'thinking') {
+            return (
+              <motion.li
+                key={`thinking:${orderIndex}`}
+                {...TIMELINE_ROW_MOTION}
+                className={`relative pb-2 last:pb-0 ${hasTimelineContent ? 'pl-4' : ''}`}
               >
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-2 text-xs text-neutral-300">
-                    <span>{stepLabel}</span>
-                    {hasDisclosure ? (
-                      <CaretDown
-                        className="h-3 w-3 shrink-0 transition-transform group-data-[state=open]:rotate-180"
-                        aria-hidden="true"
-                      />
+                {entry.text.trim() ? (
+                  <span className="absolute -left-1.5 top-1 flex h-3 w-3 items-center justify-center bg-neutral-950">
+                    <Circle weight="fill" className="h-2 w-2 text-neutral-500" aria-hidden="true" />
+                  </span>
+                ) : null}
+                <ChatThinkingBlock
+                  content={entry.text}
+                  live={thinkingLive && orderIndex === ordered.length - 1}
+                  className="max-w-full"
+                />
+              </motion.li>
+            )
+          }
+          const projectedTool = projected[entry.toolIndex - toolOffset]
+          if (!projectedTool) return null
+          const { tool, linkedTask, status: stepStatus } = projectedTool
+          const memoryTool = normalizedToolKey(tool.name) === 'search_memory'
+          const showMemorySources = Boolean(
+            memorySources && entry.toolIndex === firstMemoryToolIndex + toolOffset
+          )
+          const sourceCount = memorySources?.count ?? 0
+          const stepLabel = showMemorySources
+            ? `Searched your memory — ${sourceCount} result${sourceCount === 1 ? '' : 's'}`
+            : workStepLabel(tool)
+          const result = visibleToolResult(tool.result)
+          const error = 'error' in tool ? tool.error?.trim() : undefined
+          const taskSummary = linkedTask?.summary?.trim()
+          const liveTaskLine =
+            stepStatus === 'running' ? linkedTask?.currentAction?.trim() : undefined
+          const rowSummary = liveTaskLine || taskSummary
+          const details = taskSummary || error || result
+          const durationMs = 'durationMs' in tool ? tool.durationMs : undefined
+          const hasComputerDetails = Boolean(linkedTask?.stepDetails?.length)
+          const hasDisclosure =
+            showMemorySources ||
+            (!(memorySources && memoryTool && stepStatus === 'complete') &&
+              (Boolean(details) || hasComputerDetails || Boolean(linkedTask)))
+          return (
+            <motion.li
+              key={`${tool.name}:${entry.toolIndex}`}
+              {...TIMELINE_ROW_MOTION}
+              className="relative pb-2 pl-4 last:pb-0"
+            >
+              <span className="absolute -left-1.5 top-1 flex h-3 w-3 items-center justify-center bg-neutral-950">
+                {statusIcon(stepStatus)}
+              </span>
+              <Collapsible>
+                <CollapsibleTrigger
+                  disabled={!hasDisclosure}
+                  className="group flex w-full items-start gap-2 text-left disabled:cursor-default"
+                  aria-label={`${stepLabel}, ${stepStatus}`}
+                  onClick={() => {
+                    if (linkedTask) {
+                      openTaskSidePanel({
+                        taskId: linkedTask.taskId,
+                        kind: linkedTask.kind,
+                        detail: true
+                      })
+                    }
+                  }}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2 text-xs text-neutral-300">
+                      <span>{stepLabel}</span>
+                      {hasDisclosure ? (
+                        <CaretDown
+                          className="h-3 w-3 shrink-0 transition-transform group-data-[state=open]:rotate-180"
+                          aria-hidden="true"
+                        />
+                      ) : null}
+                    </span>
+                    {!showMemorySources ? (
+                      <span className="mt-0.5 block text-[10px] leading-relaxed text-neutral-500 group-data-[state=open]:hidden">
+                        {shortResult(tool, stepStatus, rowSummary)}
+                      </span>
                     ) : null}
                   </span>
-                  {!showMemorySources ? (
-                    <span className="mt-0.5 block text-[10px] leading-relaxed text-neutral-500 group-data-[state=open]:hidden">
-                      {shortResult(tool, stepStatus, rowSummary)}
-                    </span>
-                  ) : null}
-                </span>
-                <span className="shrink-0 text-[9px] text-neutral-600">
-                  {durationMs !== undefined ? `${Math.round(durationMs)} ms · ` : ''}
-                  {stepStatus}
-                </span>
-              </CollapsibleTrigger>
-              {hasDisclosure ? (
-                <CollapsibleContent
-                  className={
-                    showMemorySources
-                      ? 'mt-1 max-h-[400px] overflow-y-auto rounded-md border border-neutral-800 bg-neutral-900/40 p-4 text-sm'
-                      : 'mt-1 border-l-2 border-neutral-800 pl-3 text-xs leading-relaxed text-neutral-500'
-                  }
-                >
-                  {showMemorySources ? (
-                    memorySources?.content
-                  ) : details ? (
-                    <ChatMarkdown content={details} />
-                  ) : null}
-                  <ComputerUseStepDetails details={linkedTask?.stepDetails} />
-                  {linkedTask ? (
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        className="mt-2 border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 hover:border-neutral-500"
-                        onClick={() =>
-                          taskWorkspaceOpen
-                            ? closeTaskWorkspace()
-                            : openTaskSidePanel({
-                                taskId: linkedTask.taskId,
-                                kind: linkedTask.kind,
-                                detail: true
-                              })
-                        }
-                      >
-                        {taskWorkspaceOpen ? 'Close task details' : 'Open task details'}
-                      </button>
-                      <RetryTaskButton task={linkedTask} />
-                    </div>
-                  ) : null}
-                </CollapsibleContent>
-              ) : null}
-            </Collapsible>
-          </li>
-        )
-      })}
+                  <span className="shrink-0 text-[9px] text-neutral-600">
+                    {durationMs !== undefined ? (
+                      <AnimatedNumber
+                        value={durationMs}
+                        format={(value) => `${Math.round(value)} ms · `}
+                      />
+                    ) : null}
+                    {stepStatus}
+                  </span>
+                </CollapsibleTrigger>
+                {hasDisclosure ? (
+                  <CollapsibleContent
+                    className={
+                      showMemorySources
+                        ? 'mt-1 max-h-[400px] overflow-y-auto rounded-md border border-neutral-800 bg-neutral-900/40 p-4 text-sm'
+                        : 'mt-1 border-l-2 border-neutral-800 pl-3 text-xs leading-relaxed text-neutral-500'
+                    }
+                  >
+                    {showMemorySources ? (
+                      memorySources?.content
+                    ) : details ? (
+                      <ChatMarkdown content={details} />
+                    ) : null}
+                    <ComputerUseStepDetails details={linkedTask?.stepDetails} />
+                    {linkedTask ? (
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="mt-2 border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 hover:border-neutral-500"
+                          onClick={() =>
+                            taskWorkspaceOpen
+                              ? closeTaskWorkspace()
+                              : openTaskSidePanel({
+                                  taskId: linkedTask.taskId,
+                                  kind: linkedTask.kind,
+                                  detail: true
+                                })
+                          }
+                        >
+                          <TextMorph as="span">
+                            {taskWorkspaceOpen ? 'Close task details' : 'Open task details'}
+                          </TextMorph>
+                        </button>
+                        <RetryTaskButton task={linkedTask} />
+                      </div>
+                    ) : null}
+                  </CollapsibleContent>
+                ) : null}
+              </Collapsible>
+            </motion.li>
+          )
+        })}
+      </AnimatePresence>
       {thinking && hasOrderedThinking ? (
         <li className={`relative pb-2 last:pb-0 ${hasTimelineContent ? 'pl-4' : ''}`}>
           {thinkingHasContent ? (
@@ -462,15 +492,11 @@ export function ChatToolRows({
     <>
       <Collapsible key={workState} defaultOpen={workIsLive} className="w-full">
         <CollapsibleTrigger className="group ml-1 flex items-center gap-1.5 py-1 text-xs text-neutral-500 transition-colors hover:text-neutral-300">
-          <span>
-            {workIsLive
-              ? 'Working'
-              : stopped
-                ? 'Work stopped'
-                : failed
-                  ? 'Work failed'
-                  : 'Work done'}
-          </span>
+          {workIsLive ? (
+            <TextShimmer as="span">Working</TextShimmer>
+          ) : (
+            <span>{stopped ? 'Work stopped' : failed ? 'Work failed' : 'Work done'}</span>
+          )}
           <CaretDown
             className="h-3 w-3 transition-transform group-data-[state=open]:rotate-180"
             aria-hidden="true"

@@ -7,7 +7,9 @@ import {
   type ClipboardEvent,
   type KeyboardEvent
 } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { Button } from '@renderer/components/ui/button'
+import { Kbd, KbdGroup } from '@offgrid/operator-ui/operator/coss/kbd'
 import { Textarea } from '@offgrid/operator-ui/operator/forms'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import type { ChatDraftStore } from './chat-draft-store'
@@ -116,29 +118,47 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
 
     return (
       <>
-        {matches.length > 0 ? (
-          <div className="absolute bottom-full left-0 z-20 mb-2 w-72 overflow-hidden rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg">
-            <div className="flex items-center justify-between px-3 py-1 text-[10px] uppercase tracking-wide text-neutral-600">
-              <span>Skills</span>
-              <span className="normal-case text-neutral-700">Tab to complete</span>
-            </div>
-            {matches.slice(0, 6).map((skill, index) => (
-              <button
-                key={skill.name}
-                type="button"
-                onClick={() => completeSkill(skill)}
-                className={`flex w-full flex-col items-start gap-0.5 px-3 py-1.5 text-left transition-colors hover:bg-neutral-900 ${index === 0 ? 'bg-neutral-900/60' : ''}`}
-              >
-                <span className="text-green-500">/{skill.name}</span>
-                {skill.description ? (
-                  <span className="line-clamp-1 text-[11px] text-neutral-500">
-                    {skill.description}
-                  </span>
-                ) : null}
-              </button>
-            ))}
-          </div>
-        ) : null}
+        <AnimatePresence>
+          {matches.length > 0 ? (
+            <motion.div
+              key="skills"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              className="absolute bottom-full left-0 z-20 mb-2 w-72 overflow-hidden rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
+            >
+              <div className="flex items-center justify-between px-3 py-1 text-[10px] uppercase tracking-wide text-neutral-600">
+                <span>Skills</span>
+                <span className="normal-case text-neutral-700">
+                  <Kbd className="h-4 text-[10px]">Tab</Kbd> to complete
+                </span>
+              </div>
+              <AnimatePresence initial={false}>
+                {matches.slice(0, 6).map((skill, index) => (
+                  <motion.button
+                    key={skill.name}
+                    layout
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                    type="button"
+                    onClick={() => completeSkill(skill)}
+                    className={`flex w-full flex-col items-start gap-0.5 px-3 py-1.5 text-left transition-colors hover:bg-neutral-900 ${index === 0 ? 'bg-neutral-900/60' : ''}`}
+                  >
+                    <span className="text-green-500">/{skill.name}</span>
+                    {skill.description ? (
+                      <span className="line-clamp-1 text-[11px] text-neutral-500">
+                        {skill.description}
+                      </span>
+                    ) : null}
+                  </motion.button>
+                ))}
+              </AnimatePresence>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
         <Textarea
           ref={textareaRef}
           value={value}
@@ -167,7 +187,11 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
         />
         {busy ? (
           <p className="px-3.5 pt-1 text-[10px] text-muted-foreground">
-            Enter to queue · ⌘/Ctrl+Enter to send now
+            <Kbd className="h-4 text-[10px]">Enter</Kbd> to queue ·{' '}
+            <KbdGroup>
+              <Kbd className="h-4 text-[10px]">⌘/Ctrl</Kbd>+<Kbd className="h-4 text-[10px]">Enter</Kbd>
+            </KbdGroup>{' '}
+            to send now
           </p>
         ) : null}
       </>

@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import { Check } from '@phosphor-icons/react'
+import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
 import { captureUrlForPath } from '../../../../../shared/ogcapture-url'
 
 export const ASK_EXAMPLES = [
@@ -121,7 +122,8 @@ function StylePresetPickerComponent({
           </button>
         ) : null}
       </div>
-      <div
+      <AnimatedGroup
+        preset="blur-slide"
         className={`grid w-full grid-cols-2 gap-2.5 sm:grid-cols-4 ${compact ? 'lg:grid-cols-8' : ''}`}
       >
         {presets.map((style) => {
@@ -134,7 +136,7 @@ function StylePresetPickerComponent({
               aria-label={style.name}
               aria-pressed={selected}
               onClick={() => onChange(selected ? null : style.name)}
-              className={`group relative overflow-hidden rounded-md border transition-all ${compact ? 'h-48' : 'aspect-[16/9]'} ${
+              className={`group relative w-full overflow-hidden rounded-md border transition-all ${compact ? 'h-48' : 'aspect-[16/9]'} ${
                 selected
                   ? 'border-green-500 ring-1 ring-green-500'
                   : 'border-neutral-800 hover:border-neutral-600'
@@ -160,7 +162,7 @@ function StylePresetPickerComponent({
             </button>
           )
         })}
-      </div>
+      </AnimatedGroup>
     </div>
   )
 }

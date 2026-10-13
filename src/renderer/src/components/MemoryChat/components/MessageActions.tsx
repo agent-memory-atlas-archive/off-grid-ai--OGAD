@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import { Check, DotsThree, PencilSimple, Waveform } from '@phosphor-icons/react'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,7 +32,7 @@ export function CopyAction({
           />
         </svg>
       )}
-      {copied ? 'Copied' : 'Copy'}
+      <TextMorph as="span">{copied ? 'Copied' : 'Copy'}</TextMorph>
     </DropdownMenuItem>
   )
 }

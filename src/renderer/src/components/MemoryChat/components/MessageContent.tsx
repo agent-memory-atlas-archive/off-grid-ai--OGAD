@@ -1,5 +1,6 @@
 import { memo, useState } from 'react'
 import { Paperclip } from '@phosphor-icons/react'
+import { AnimatePresence, motion } from 'motion/react'
 import { describeAttachment } from '@offgrid/sync'
 import type { IncomingSharedFile } from '@renderer/lib/sync-hooks'
 import { captureUrlForPath } from '../../../../../shared/ogcapture-url'
@@ -12,10 +13,15 @@ function IncomingFileRowsComponent({
 }: Readonly<{ files: readonly IncomingSharedFile[] }>): React.JSX.Element {
   console.log('MemoryChat IncomingFileRows rendered')
   return (
-    <>
+    <AnimatePresence initial={false}>
       {files.map((incoming) => (
-        <div
+        <motion.div
           key={`incoming-${incoming.syncId}`}
+          layout
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
           data-testid="incoming-shared-file"
           className="mb-2 flex w-fit items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 px-2 py-1"
         >
@@ -23,9 +29,9 @@ function IncomingFileRowsComponent({
           <span className="max-w-[16rem] truncate text-[10px] text-neutral-400">
             {incoming.name}
           </span>
-        </div>
+        </motion.div>
       ))}
-    </>
+    </AnimatePresence>
   )
 }
 

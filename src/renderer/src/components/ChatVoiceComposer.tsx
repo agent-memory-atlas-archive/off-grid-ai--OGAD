@@ -7,6 +7,7 @@ import {
   X
 } from '@phosphor-icons/react'
 import { VOICE_TURN_LABELS, type VoiceTurnMode } from '@offgrid/speech'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { Button } from './ui/button'
 import { LoadingDots } from './ui/loading-dots'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
@@ -105,6 +106,12 @@ export function ChatVoiceComposer({
   const active = phase !== 'idle'
   const transcribing = phase === 'transcribing'
   const label = recordButtonLabel(phase, suspended)
+  const status = statusText({
+    phase,
+    mode: turnMode,
+    suspended,
+    transcriptionLabel
+  })
 
   return (
     <div className="flex min-h-11 w-full flex-col justify-center gap-1 px-3 py-2">
@@ -118,12 +125,13 @@ export function ChatVoiceComposer({
             </span>
           )}
           <span aria-live="polite" className="truncate text-xs text-neutral-500">
-            {statusText({
-              phase,
-              mode: turnMode,
-              suspended,
-              transcriptionLabel
-            })}
+            {phase === 'starting' || transcribing ? (
+              <TextShimmer as="span" className="max-w-full truncate align-bottom">
+                {status}
+              </TextShimmer>
+            ) : (
+              status
+            )}
           </span>
         </div>
         <Tooltip>

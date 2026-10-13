@@ -1,5 +1,7 @@
 import { memo, useEffect, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { isPromptEnhancementReasoningLabel } from '@offgrid/sync'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { hasLiveStreamActivity } from '@renderer/lib/stream-reducer'
 import { ChatThinkingBlock } from '../../ChatThinkingBlock'
 import { ChatToolRows } from '../../ChatToolRows'
@@ -32,11 +34,21 @@ function WebTaskStepFeed(): React.JSX.Element | null {
   }
   return (
     <div className="max-w-[85%] space-y-0.5 border-l-2 border-neutral-800 pl-3 text-[11px] leading-4 text-neutral-500">
-      {steps.slice(-6).map((note, i) => (
-        <div key={`${steps.length}-${i}`} className="truncate">
-          {note}
-        </div>
-      ))}
+      <AnimatePresence initial={false}>
+        {steps.slice(-6).map((note, i) => (
+          <motion.div
+            key={`step-${Math.max(0, steps.length - 6) + i}`}
+            layout
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+            className="truncate"
+          >
+            {note}
+          </motion.div>
+        ))}
+      </AnimatePresence>
     </div>
   )
 }
@@ -62,7 +74,9 @@ function MessageThinkingHeaderComponent({
           />
         ) : null}
         {showLiveActivity && activity ? (
-          <span className="text-[11px] text-neutral-500">{activity}</span>
+          <TextShimmer as="span" className="text-[11px]">
+            {activity}
+          </TextShimmer>
         ) : null}
         {showLiveActivity ? <WebTaskStepFeed /> : null}
       </div>

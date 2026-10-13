@@ -1,5 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
+import { Empty, EmptyDescription } from '@offgrid/operator-ui/operator/coss/empty'
+import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
+import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -229,9 +233,10 @@ function SectionHeader({
         {icon}
       </div>
       <span className="text-sm font-medium text-white">{title}</span>
-      <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-neutral-700 text-neutral-300">
-        {count}
-      </span>
+      <AnimatedNumber
+        value={count}
+        className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-neutral-700 text-neutral-300"
+      />
       <button
         onClick={onExpand}
         className="ml-auto p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-700/50 transition-colors"
@@ -340,7 +345,14 @@ export function ChatDetail({ sessionId, onBack, onSelectEntity, onSelectMemory }
           </svg>
         </button>
         <div className="flex-1 min-w-0">
-          <h1 className="font-semibold text-white truncate text-sm">{readableTitle}</h1>
+          <TextEffect
+            as="h1"
+            preset="fade-in-blur"
+            per="line"
+            className="font-semibold text-white truncate text-sm [&_span]:truncate"
+          >
+            {readableTitle}
+          </TextEffect>
           {modelName && (
             <span className="text-[10px] text-neutral-500 uppercase tracking-wide">{llmLabel}</span>
           )}
@@ -354,10 +366,11 @@ export function ChatDetail({ sessionId, onBack, onSelectEntity, onSelectMemory }
 
       {/* Loading state */}
       {loading && (
-        <div className="flex items-center justify-center py-16 flex-1">
-          <div className="relative">
-            <div className="w-10 h-10 border-2 border-neutral-700 rounded-full" />
-            <div className="absolute top-0 left-0 w-10 h-10 border-2 border-neutral-500 border-t-transparent rounded-full animate-spin" />
+        <div className="flex-1 p-4 flex flex-col gap-4 overflow-hidden" aria-busy="true">
+          <Skeleton className="flex-[2] min-h-0 rounded-2xl" />
+          <div className="flex-1 min-h-0 grid grid-cols-2 gap-4">
+            <Skeleton className="rounded-2xl" />
+            <Skeleton className="rounded-2xl" />
           </div>
         </div>
       )}
@@ -415,9 +428,11 @@ export function ChatDetail({ sessionId, onBack, onSelectEntity, onSelectMemory }
                       </ReactMarkdown>
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center justify-center py-16 text-center">
-                      <p className="text-neutral-500">No summary available</p>
-                    </div>
+                    <Empty className="flex-none gap-0 px-0 py-16 md:py-16">
+                      <EmptyDescription className="text-neutral-500 text-[length:inherit]">
+                        No summary available
+                      </EmptyDescription>
+                    </Empty>
                   )}
                 </div>
               </div>
@@ -476,9 +491,11 @@ export function ChatDetail({ sessionId, onBack, onSelectEntity, onSelectMemory }
                         ))}
                       </div>
                     ) : (
-                      <div className="flex flex-col items-center justify-center h-full text-center">
-                        <p className="text-neutral-500">No memories yet</p>
-                      </div>
+                      <Empty className="h-full flex-none gap-0 px-0 py-0 md:py-0">
+                        <EmptyDescription className="text-neutral-500 text-[length:inherit]">
+                          No memories yet
+                        </EmptyDescription>
+                      </Empty>
                     )}
                   </div>
                   {memories.length > 4 && (
@@ -546,9 +563,11 @@ export function ChatDetail({ sessionId, onBack, onSelectEntity, onSelectMemory }
                         ))}
                       </div>
                     ) : (
-                      <div className="flex flex-col items-center justify-center h-full text-center">
-                        <p className="text-neutral-500">No entities yet</p>
-                      </div>
+                      <Empty className="h-full flex-none gap-0 px-0 py-0 md:py-0">
+                        <EmptyDescription className="text-neutral-500 text-[length:inherit]">
+                          No entities yet
+                        </EmptyDescription>
+                      </Empty>
                     )}
                   </div>
                   {entities.length > 4 && (
@@ -619,9 +638,11 @@ export function ChatDetail({ sessionId, onBack, onSelectEntity, onSelectMemory }
                         </ReactMarkdown>
                       </div>
                     ) : (
-                      <div className="flex flex-col items-center justify-center h-full text-center">
-                        <p className="text-neutral-500 text-sm">No summary available</p>
-                      </div>
+                      <Empty className="h-full flex-none gap-0 px-0 py-0 md:py-0">
+                        <EmptyDescription className="text-neutral-500 text-sm">
+                          No summary available
+                        </EmptyDescription>
+                      </Empty>
                     )}
                   </div>
                 </div>
@@ -678,9 +699,11 @@ export function ChatDetail({ sessionId, onBack, onSelectEntity, onSelectMemory }
                             />
                           ))
                       ) : (
-                        <div className="flex flex-col items-center justify-center h-full text-center py-4">
-                          <p className="text-neutral-500 text-xs">No memories yet</p>
-                        </div>
+                        <Empty className="h-full flex-none gap-0 px-0 py-4 md:py-4">
+                          <EmptyDescription className="text-neutral-500 text-xs">
+                            No memories yet
+                          </EmptyDescription>
+                        </Empty>
                       )}
                       {memories.length > 3 && (
                         <p className="text-[10px] text-neutral-500 text-center">
@@ -741,9 +764,11 @@ export function ChatDetail({ sessionId, onBack, onSelectEntity, onSelectMemory }
                             />
                           ))
                       ) : (
-                        <div className="flex flex-col items-center justify-center h-full text-center py-4">
-                          <p className="text-neutral-500 text-xs">No entities yet</p>
-                        </div>
+                        <Empty className="h-full flex-none gap-0 px-0 py-4 md:py-4">
+                          <EmptyDescription className="text-neutral-500 text-xs">
+                            No entities yet
+                          </EmptyDescription>
+                        </Empty>
                       )}
                       {entities.length > 3 && (
                         <p className="text-[10px] text-neutral-500 text-center">

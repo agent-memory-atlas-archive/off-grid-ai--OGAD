@@ -1,5 +1,7 @@
 import { memo } from 'react'
 import { Button } from '@offgrid/operator-ui/operator/button'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { CaretLeft, CaretRight } from '@phosphor-icons/react'
 import { DropdownMenuItem } from '@renderer/components/ui/dropdown-menu'
 import type { Artifact } from '../../ArtifactCanvas'
@@ -80,7 +82,7 @@ function SpeechActionComponent({
       title={label}
     >
       {icon}
-      {label}
+      <TextMorph as="span">{label}</TextMorph>
     </DropdownMenuItem>
   )
 }
@@ -108,7 +110,7 @@ function VariantNavigationComponent({
         <CaretLeft aria-hidden="true" />
       </Button>
       <span>
-        {index + 1}/{message.variants.length}
+        <AnimatedNumber value={index + 1} />/<AnimatedNumber value={message.variants.length} />
       </span>
       <Button
         variant="ghost"
@@ -185,20 +187,20 @@ function MessageTimeComponent({
     minute: '2-digit'
   })
   const ms = message.generationTimeMs
-  const duration =
-    ms === undefined
-      ? null
-      : ms < 1000
-        ? `${ms}ms`
-        : ms < 60000
-          ? `${(ms / 1000).toFixed(1)}s`
-          : `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`
   return (
     <span className="font-mono text-[11px] tabular-nums text-neutral-500">
       {time}
-      {duration ? <span className="ml-2 text-green-500">{duration}</span> : null}
+      {ms !== undefined ? (
+        <AnimatedNumber value={ms} format={formatGenerationTime} className="ml-2 text-green-500" />
+      ) : null}
     </span>
   )
+}
+
+function formatGenerationTime(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`
 }
 
 export const SpeechAction = memo(SpeechActionComponent)

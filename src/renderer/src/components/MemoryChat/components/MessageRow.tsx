@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useState } from 'react'
 import { attachmentKindFor, type SyncedMessageRole } from '@offgrid/sync'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { hasLiveStreamActivity } from '@renderer/lib/stream-reducer'
 import { type TaskSession, useGuidanceTaskForJourney } from '@renderer/lib/task-session-store'
 import { captureUrlForPath } from '../../../../../shared/ogcapture-url'
@@ -388,7 +389,7 @@ function VoiceMessageRow({
       ) : null}
       {transcribing ? (
         <div role="status" className="text-[11px] text-neutral-500">
-          Transcribing...
+          <TextShimmer as="span">Transcribing...</TextShimmer>
         </div>
       ) : null}
       {transcriptionError ? (
@@ -564,7 +565,7 @@ function StandardMessageRow({
                 <LoadingDots size="small" />
               ) : (
                 <span className="inline-flex items-center gap-1 text-[11px] text-neutral-500">
-                  {liveActivity}
+                  <TextShimmer as="span">{liveActivity}</TextShimmer>
                   <LoadingDots size="small" />
                 </span>
               )

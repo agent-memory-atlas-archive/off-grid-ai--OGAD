@@ -144,7 +144,7 @@ export function renderedMessageContent(message: ChatMessage): string {
 }
 
 export function standardMessageRowClass(message: ChatMessage): string {
-  const margin = isSupportingMessage(message) ? 'my-1' : 'my-2.5'
+  const margin = isSupportingMessage(message) ? 'my-1' : 'my-4'
   const alignment = message.role === 'user' ? 'items-end' : 'items-start'
   return `${margin} flex flex-col ${alignment}`
 }
@@ -162,6 +162,10 @@ export function standardMessageBubbleClass(message: ChatMessage, editing: boolea
       : 'max-w-full'
   if (message.context?.taskGuidance) {
     return `rounded-md border border-green-500/50 bg-green-500/5 px-3.5 py-2.5 text-sm leading-relaxed text-foreground ${width}`
+  }
+  if (message.role === 'user' && width === 'max-w-full') {
+    // The preview's user turn: a soft rounded surface, so the two voices read apart at a glance.
+    return `rounded-2xl bg-foreground/[0.06] px-4 py-2.5 text-sm leading-relaxed ${width} text-neutral-100`
   }
   const color = message.role === 'user' ? 'text-neutral-100' : 'text-neutral-200'
   return `py-1 text-sm leading-relaxed ${width} ${color}`

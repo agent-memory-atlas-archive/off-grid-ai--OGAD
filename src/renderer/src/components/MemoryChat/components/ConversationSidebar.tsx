@@ -1,6 +1,12 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { chatListPreviewLine } from '@offgrid/sync'
+import { Empty, EmptyDescription } from '@offgrid/operator-ui/operator/coss/empty'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput
+} from '@offgrid/operator-ui/operator/coss/input-group'
 import { timeAgo } from '@renderer/lib/time'
 import { ConversationTitleActions } from '../../ConversationTitleActions'
 import type { ConversationListRow } from '../types'
@@ -92,42 +98,53 @@ function ConversationSidebarComponent({
         </div>
         {conversationCount > 0 && (
           <div className="px-2 pb-2">
-            <div className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-950 px-2.5 py-1.5 focus-within:border-neutral-600">
-              <svg
-                className="h-3.5 w-3.5 shrink-0 text-neutral-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-              <input
+            <InputGroup className="text-xs">
+              <InputGroupAddon>
+                <svg
+                  className="h-3.5 w-3.5 shrink-0 text-neutral-600"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                  />
+                </svg>
+              </InputGroupAddon>
+              <InputGroupInput
+                size="sm"
                 value={draft}
                 onChange={(event) => changeDraft(event.target.value)}
                 placeholder="Search conversations…"
-                className="w-full bg-transparent text-xs text-neutral-200 placeholder-neutral-600 outline-none"
+                className="text-xs"
               />
               {draft && (
-                <button
-                  onClick={() => changeDraft('', true)}
-                  className="shrink-0 text-neutral-600 hover:text-neutral-300"
-                >
-                  ✕
-                </button>
+                <InputGroupAddon align="inline-end">
+                  <button
+                    onClick={() => changeDraft('', true)}
+                    className="shrink-0 text-neutral-600 hover:text-neutral-300"
+                  >
+                    ✕
+                  </button>
+                </InputGroupAddon>
               )}
-            </div>
+            </InputGroup>
           </div>
         )}
         <div ref={listRef} className="flex-1 overflow-y-auto px-2 pb-2">
           {conversationCount === 0 ? (
-            <p className="px-2 py-4 text-center text-xs text-neutral-600">No conversations yet</p>
+            <Empty className="flex-none gap-0 px-2 py-4 md:py-4">
+              <EmptyDescription className="text-xs text-neutral-600">
+                No conversations yet
+              </EmptyDescription>
+            </Empty>
           ) : rows.length === 0 ? (
-            <p className="px-2 py-4 text-center text-xs text-neutral-600">No matches</p>
+            <Empty className="flex-none gap-0 px-2 py-4 md:py-4">
+              <EmptyDescription className="text-xs text-neutral-600">No matches</EmptyDescription>
+            </Empty>
           ) : (
             <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
               {virtualizer.getVirtualItems().map((virtualRow) => {
