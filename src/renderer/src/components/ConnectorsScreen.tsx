@@ -3,7 +3,6 @@ import { ConnectorPullQueryField } from './ConnectorPullQueryField'
 import { ConnectorSecretsForm } from './ConnectorSecretsForm'
 import {
   IconLoader2,
-  IconPlug,
   IconPlus,
   IconTrash,
   IconPlugConnected,
@@ -26,7 +25,8 @@ import { QuickConnections } from './QuickConnections'
 import { QUICK_CONNECTION_IDS } from './quickConnectionCatalog'
 import { CONNECTIONS_CHANGED_EVENT } from './useQuickConnection'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
-import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { PageHeader } from '@offgrid/operator-ui/operator/experience'
+import { Button } from './ui/button'
 import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
 import { AnimatePresence, motion } from 'motion/react'
 
@@ -499,47 +499,38 @@ export function ConnectorsScreen(): ReactElement {
 
   return (
     <div className="flex h-full flex-col bg-neutral-950 font-mono">
-      <div className="flex items-center justify-between px-8 pt-8 pb-6">
-        <div className="flex items-center gap-3">
-          <IconPlug className="h-5 w-5 text-green-500" />
-          <div>
-            <TextEffect as="h1" preset="fade-in-blur" per="char" className="text-lg font-light tracking-tight text-white">
-              Integrations
-            </TextEffect>
-            <p className="text-sm text-neutral-500">
-              Connect a tool. Actions it takes run only after you approve them.
-            </p>
+      <PageHeader
+        className="px-8 pt-8 pb-6"
+        title="Integrations"
+        description="Connect a tool. Actions it takes run only after you approve them."
+        actions={
+          <div className="flex items-center gap-3">
+            {detailId == null && (
+              <Segmented
+                label="Filter connectors"
+                size="sm"
+                value={tab}
+                onValueChange={setTab}
+                options={(['all', 'connected', 'disconnected'] as const).map((t) => ({
+                  id: t,
+                  label: t === 'connected' && items.length > 0 ? `${t} ${items.length}` : t,
+                  icon: (
+                    <span className="capitalize">
+                      {t}
+                      {t === 'connected' && items.length > 0 && (
+                        <span className="ml-1 text-neutral-500">{items.length}</span>
+                      )}
+                    </span>
+                  )
+                }))}
+              />
+            )}
+            <Button variant="outline" size="sm" onClick={() => setAdding((v) => !v)}>
+              <IconPlus className="h-4 w-4" /> Custom
+            </Button>
           </div>
-        </div>
-        <div className="flex items-center gap-3">
-          {detailId == null && (
-            <Segmented
-              label="Filter connectors"
-              size="sm"
-              value={tab}
-              onValueChange={setTab}
-              options={(['all', 'connected', 'disconnected'] as const).map((t) => ({
-                id: t,
-                label: t === 'connected' && items.length > 0 ? `${t} ${items.length}` : t,
-                icon: (
-                  <span className="capitalize">
-                    {t}
-                    {t === 'connected' && items.length > 0 && (
-                      <span className="ml-1 text-neutral-500">{items.length}</span>
-                    )}
-                  </span>
-                )
-              }))}
-            />
-          )}
-          <button
-            onClick={() => setAdding((v) => !v)}
-            className="flex items-center gap-1 rounded-md border border-neutral-800 px-3 py-1.5 text-xs text-neutral-300 hover:border-green-500 hover:text-green-500"
-          >
-            <IconPlus className="h-4 w-4" /> Custom
-          </button>
-        </div>
-      </div>
+        }
+      />
 
       <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-10">
         {detailId == null && tab !== 'connected' && (
@@ -1019,59 +1010,59 @@ export function ConnectorsScreen(): ReactElement {
                   ) : (
                     <div className="space-y-2">
                       <AnimatePresence initial={false}>
-                      {items.map((c) => {
-                        const cat = CONNECTOR_CATALOG.find((x) => x.name === c.name)
-                        // Preview catalog entries stay disabled. A verified internal local provider
-                        // can supply working tools without that catalog's third-party server.
-                        const notReady =
-                          cat != null &&
-                          !cat.ready &&
-                          !(c.tools && c.tools !== '[]' && c.url?.startsWith('offgrid-'))
-                        return (
-                          <motion.button
-                            key={c.id}
-                            layout
-                            initial={{ opacity: 0, y: 6 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0 }}
-                            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-                            onClick={() => openDetail(c)}
-                            className={`flex w-full items-center gap-3 rounded-md border border-neutral-800 bg-neutral-900/40 p-3 text-left transition-colors hover:border-neutral-700 ${notReady ? 'opacity-55' : ''}`}
-                          >
-                            {cat ? (
-                              <Badge id={cat.id} color={cat.color} letter={cat.letter} />
-                            ) : (
-                              <div className="h-9 w-9 shrink-0" />
-                            )}
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm text-neutral-100">{c.name}</span>
-                                {notReady ? (
-                                  <span className="rounded-sm bg-neutral-800 px-1 py-0.5 text-[9px] uppercase tracking-wide text-neutral-500">
-                                    disabled · preview
-                                  </span>
-                                ) : c.status === 'ok' ? (
-                                  <span className="flex items-center gap-1 text-[11px] text-green-500">
-                                    <IconCircleCheck className="h-3.5 w-3.5" /> connected
-                                  </span>
-                                ) : c.status === 'error' ? (
-                                  <span className="flex items-center gap-1 text-[11px] text-red-400">
-                                    <IconAlertTriangle className="h-3.5 w-3.5" /> error
-                                  </span>
-                                ) : (
-                                  <span className="text-[11px] text-neutral-600">not tested</span>
-                                )}
+                        {items.map((c) => {
+                          const cat = CONNECTOR_CATALOG.find((x) => x.name === c.name)
+                          // Preview catalog entries stay disabled. A verified internal local provider
+                          // can supply working tools without that catalog's third-party server.
+                          const notReady =
+                            cat != null &&
+                            !cat.ready &&
+                            !(c.tools && c.tools !== '[]' && c.url?.startsWith('offgrid-'))
+                          return (
+                            <motion.button
+                              key={c.id}
+                              layout
+                              initial={{ opacity: 0, y: 6 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0 }}
+                              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                              onClick={() => openDetail(c)}
+                              className={`flex w-full items-center gap-3 rounded-md border border-neutral-800 bg-neutral-900/40 p-3 text-left transition-colors hover:border-neutral-700 ${notReady ? 'opacity-55' : ''}`}
+                            >
+                              {cat ? (
+                                <Badge id={cat.id} color={cat.color} letter={cat.letter} />
+                              ) : (
+                                <div className="h-9 w-9 shrink-0" />
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm text-neutral-100">{c.name}</span>
+                                  {notReady ? (
+                                    <span className="rounded-sm bg-neutral-800 px-1 py-0.5 text-[9px] uppercase tracking-wide text-neutral-500">
+                                      disabled · preview
+                                    </span>
+                                  ) : c.status === 'ok' ? (
+                                    <span className="flex items-center gap-1 text-[11px] text-green-500">
+                                      <IconCircleCheck className="h-3.5 w-3.5" /> connected
+                                    </span>
+                                  ) : c.status === 'error' ? (
+                                    <span className="flex items-center gap-1 text-[11px] text-red-400">
+                                      <IconAlertTriangle className="h-3.5 w-3.5" /> error
+                                    </span>
+                                  ) : (
+                                    <span className="text-[11px] text-neutral-600">not tested</span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] text-neutral-500">
+                                  {notReady
+                                    ? 'Integration not verified yet'
+                                    : `${c.synced_count ?? 0} items synced · last ${fmtAgo(c.last_synced)}`}
+                                </div>
                               </div>
-                              <div className="text-[11px] text-neutral-500">
-                                {notReady
-                                  ? 'Integration not verified yet'
-                                  : `${c.synced_count ?? 0} items synced · last ${fmtAgo(c.last_synced)}`}
-                              </div>
-                            </div>
-                            <IconChevronRight className="h-4 w-4 shrink-0 text-neutral-600" />
-                          </motion.button>
-                        )
-                      })}
+                              <IconChevronRight className="h-4 w-4 shrink-0 text-neutral-600" />
+                            </motion.button>
+                          )
+                        })}
                       </AnimatePresence>
                     </div>
                   )}

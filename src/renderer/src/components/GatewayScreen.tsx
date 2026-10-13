@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { IconServer2, IconExternalLink } from '@tabler/icons-react'
+import { IconExternalLink } from '@tabler/icons-react'
 import { GATEWAY_HOST, GATEWAY_PORT } from '@offgrid/core/shared/ports'
 import { CopyButton } from './ui/CopyButton'
 import { GatewayApiKeysSettings } from './GatewayApiKeysSettings'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
-import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { PageHeader, Section } from '@offgrid/operator-ui/operator/experience'
+import { Button } from './ui/button'
 
 // Explains the local OpenAI-compatible gateway with copyable quick-start snippets
 // and a link to the interactive playground the gateway serves. Core feature.
@@ -101,58 +102,41 @@ export function GatewayScreen(): React.ReactElement {
 
   return (
     <div className="relative h-full overflow-y-auto font-mono">
-      <div className="flex w-full flex-col gap-10 px-8 pt-8 pb-16">
-        {/* Header */}
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-neutral-700 bg-neutral-800">
-            <IconServer2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-          </div>
-          <div>
-            <TextEffect as="h1" preset="fade-in-blur" per="char" className="text-lg text-white">
-              Gateway
-            </TextEffect>
-            <p className="text-sm text-neutral-500">
-              One local, OpenAI-compatible API for every model you download — text, vision, image,
-              voice. Runs on your device; nothing leaves it.
-            </p>
-          </div>
-        </div>
-
-        {/* Base URL */}
-        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5">
-          <div className="mb-2 text-[10px] uppercase tracking-widest text-neutral-500">
-            Base URL
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <code className="flex-1 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-emerald-400">
-              {BASE}/v1
-            </code>
-            <CopyButton text={`${BASE}/v1`} />
-            <button
-              onClick={() => open('/docs')}
-              className="flex items-center gap-1.5 rounded-lg border border-neutral-700 px-3 py-2 text-xs text-neutral-300 hover:border-green-500/60 hover:text-white"
-            >
+      <div className="flex w-full flex-col px-8 pt-8 pb-16">
+        <PageHeader
+          title="Gateway"
+          description="One local, OpenAI-compatible API for every model you download: text, vision, image and voice. It runs on your device, and nothing leaves it."
+          actions={
+            <Button variant="outline" size="sm" onClick={() => open('/docs')}>
               <IconExternalLink className="h-4 w-4" /> Interactive playground
-            </button>
-          </div>
-          <p className="mt-3 text-xs leading-relaxed text-neutral-500">
-            Point any OpenAI client here. Supply a key when authentication is enabled. Run it
-            headless with <code className="text-neutral-300">--server-only</code> to deploy just the
-            gateway.
-          </p>
-        </div>
+            </Button>
+          }
+        />
 
-        <section
-          aria-label="API keys"
-          className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5"
-        >
-          <h3 className="mb-3 text-[10px] uppercase tracking-widest text-neutral-500">API keys</h3>
-          <GatewayApiKeysSettings />
-        </section>
+        <div className="space-y-12">
+          <Section
+            label="Base URL"
+            description="Point any OpenAI client here. Supply a key when authentication is enabled."
+          >
+            <div className="flex flex-wrap items-center gap-3">
+              <code className="flex-1 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-emerald-400">
+                {BASE}/v1
+              </code>
+              <CopyButton text={`${BASE}/v1`} />
+            </div>
+            <p className="mt-3 text-xs leading-relaxed text-neutral-500">
+              Run it headless with <code className="text-neutral-300">--server-only</code> to deploy
+              just the gateway.
+            </p>
+          </Section>
 
-        {/* Quick start */}
-        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5">
-          <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Section label="API keys">
+            <section aria-label="API keys">
+              <GatewayApiKeysSettings />
+            </section>
+          </Section>
+
+          <Section label="Quick start" actions={<CopyButton text={active.code} />}>
             <Segmented
               label="Quick start language"
               size="sm"
@@ -161,38 +145,31 @@ export function GatewayScreen(): React.ReactElement {
               onValueChange={setTab}
               options={SNIPPETS.map((s) => ({ id: s.id, label: s.label }))}
             />
-            <div className="ml-auto">
-              <CopyButton text={active.code} />
-            </div>
-          </div>
-          <pre className="overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-950 p-4 text-xs leading-relaxed text-neutral-200">
-            <code>{active.code}</code>
-          </pre>
-        </div>
+            <pre className="mt-3 overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-950 p-4 text-xs leading-relaxed text-neutral-200">
+              <code>{active.code}</code>
+            </pre>
+          </Section>
 
-        {/* Endpoints */}
-        <div>
-          <div className="mb-2 text-[10px] uppercase tracking-widest text-neutral-500">
-            Endpoints
-          </div>
-          <AnimatedGroup preset="blur-slide" className="grid gap-2 sm:grid-cols-2">
-            {ENDPOINTS.map((e) => (
-              <button
-                key={e.path}
-                onClick={() => open(e.path)}
-                className="flex h-full w-full flex-col gap-1 rounded-xl border border-neutral-800 bg-neutral-900/40 p-3 text-left transition-colors hover:border-green-500/40"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
-                    {e.method}
-                  </span>
-                  <span className="text-sm text-neutral-200">{e.label}</span>
-                </div>
-                <code className="text-xs text-neutral-500">{e.path}</code>
-                <span className="text-[11px] text-neutral-600">{e.note}</span>
-              </button>
-            ))}
-          </AnimatedGroup>
+          <Section label="Endpoints">
+            <AnimatedGroup preset="blur-slide" className="grid gap-2 sm:grid-cols-2">
+              {ENDPOINTS.map((e) => (
+                <button
+                  key={e.path}
+                  onClick={() => open(e.path)}
+                  className="flex h-full w-full flex-col gap-1 rounded-xl border border-neutral-800 bg-neutral-900/40 p-3 text-left transition-colors hover:border-green-500/40"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
+                      {e.method}
+                    </span>
+                    <span className="text-sm text-neutral-200">{e.label}</span>
+                  </div>
+                  <code className="text-xs text-neutral-500">{e.path}</code>
+                  <span className="text-[11px] text-neutral-600">{e.note}</span>
+                </button>
+              ))}
+            </AnimatedGroup>
+          </Section>
         </div>
       </div>
     </div>
