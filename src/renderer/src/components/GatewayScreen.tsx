@@ -1,11 +1,16 @@
 import { useState } from 'react'
-import { IconExternalLink } from '@tabler/icons-react'
+import { IconExternalLink, IconServer2 } from '@tabler/icons-react'
 import { GATEWAY_HOST, GATEWAY_PORT } from '@offgrid/core/shared/ports'
 import { CopyButton } from './ui/CopyButton'
 import { GatewayApiKeysSettings } from './GatewayApiKeysSettings'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
 import { PageHeader, Section } from '@offgrid/operator-ui/operator/experience'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput
+} from '@offgrid/operator-ui/operator/coss/input-group'
 import { Button } from './ui/button'
 
 // Explains the local OpenAI-compatible gateway with copyable quick-start snippets
@@ -118,12 +123,20 @@ export function GatewayScreen(): React.ReactElement {
             label="Base URL"
             description="Point any OpenAI client here. Supply a key when authentication is enabled."
           >
-            <div className="flex flex-wrap items-center gap-3">
-              <code className="flex-1 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-emerald-400">
-                {BASE}/v1
-              </code>
-              <CopyButton text={`${BASE}/v1`} />
-            </div>
+            <InputGroup>
+              <InputGroupAddon>
+                <IconServer2 aria-hidden="true" />
+              </InputGroupAddon>
+              <InputGroupInput
+                readOnly
+                aria-label="Gateway base URL"
+                value={`${BASE}/v1`}
+                className="font-mono text-emerald-400"
+              />
+              <InputGroupAddon align="inline-end">
+                <CopyButton text={`${BASE}/v1`} />
+              </InputGroupAddon>
+            </InputGroup>
             <p className="mt-3 text-xs leading-relaxed text-neutral-500">
               Run it headless with <code className="text-neutral-300">--server-only</code> to deploy
               just the gateway.
