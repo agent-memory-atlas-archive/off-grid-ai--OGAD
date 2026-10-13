@@ -1,7 +1,7 @@
 import { modelShowsOnTab } from '../../../shared/model-settings-rules'
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { isDecisionModel, useTaskRoles } from '../lib/task-roles'
-import { AnimatePresence, motion } from 'motion/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 import {
   Progress,
@@ -13,7 +13,25 @@ import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { PageHeader, Section } from '@offgrid/operator-ui/operator/experience'
 import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
-import { Empty, EmptyDescription, EmptyMedia } from '@offgrid/operator-ui/operator/coss/empty'
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle
+} from '@offgrid/operator-ui/operator/coss/empty'
+import { Card } from '@offgrid/operator-ui/operator/coss/card'
+import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
+} from '@offgrid/operator-ui/operator/coss/table'
+import { AnimatedBackground } from '@offgrid/operator-ui/operator/motion/animated-background'
 import {
   InputGroup,
   InputGroupAddon,
@@ -26,8 +44,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@offgrid/operator-ui/operator/coss/select'
-import { Button } from '@offgrid/operator-ui/operator/button'
-import '@offgrid/operator-ui/styles.css'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
 import {
   IconDownload,
   IconCircleCheck,
@@ -41,7 +58,9 @@ import {
   IconEye,
   IconDatabase,
   IconStarFilled,
-  IconClock
+  IconClock,
+  IconLayoutGrid,
+  IconList
 } from '@tabler/icons-react'
 import { StoragePanel } from './setup/StoragePanel'
 import { SidePanel } from './SidePanel'
@@ -111,9 +130,7 @@ function Sel({
         aria-label={prefix ? prefix.replace(/:\s*$/, '') : (allLabel ?? labelFor(value))}
         className="min-h-0 w-auto min-w-0 gap-1 rounded px-2 py-1 text-[10px] sm:min-h-0 sm:text-[10px]"
       >
-        <SelectValue>
-          {(key: string) => `${prefix ?? ''}${labelFor(key)}`}
-        </SelectValue>
+        <SelectValue>{(key: string) => `${prefix ?? ''}${labelFor(key)}`}</SelectValue>
       </SelectTrigger>
       <SelectPopup>
         {items.map((o) => (
@@ -319,6 +336,19 @@ function downloadFailureText(error?: string): string {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (window as any).api
 
+// The collections chapter's motion: one spring for cards and rows arriving, leaving and reflowing.
+const COLLECTION_SPRING = { type: 'spring', stiffness: 380, damping: 32 } as const
+const COLLECTION_EASE = [0.16, 1, 0.3, 1] as const
+const RISE = {
+  initial: { opacity: 0, y: 8, filter: 'blur(4px)' },
+  animate: { opacity: 1, y: 0, filter: 'blur(0px)' },
+  exit: { opacity: 0, y: -6, filter: 'blur(4px)' },
+  transition: { duration: 0.35, ease: COLLECTION_EASE }
+}
+const ACTIVE_RING =
+  'shadow-[inset_0_0_0_1px_rgb(var(--og-rgb-primary)/0.55),0_0_28px_-10px_rgb(var(--og-rgb-primary)/0.8)]'
+const MotionRow = motion.create(TableRow)
+
 export function ModelsScreen({
   navigationSubroute,
   onNavigateSubroute
@@ -328,6 +358,10 @@ export function ModelsScreen({
 } = {}): React.JSX.Element {
   const [kinds, setKinds] = useState<string[]>([])
   const [models, setModels] = useState<ModelEntry[]>([])
+  // False until the first catalog answer, so the grid draws its shape instead of "no match".
+  const [catalogLoaded, setCatalogLoaded] = useState(false)
+  const [view, setView] = useState<'grid' | 'list'>('grid')
+  const reducedMotion = useReducedMotion()
   const [installed, setInstalled] = useState<string[]>([])
   // Per-model optional companion readiness from the backend (derived from files + disk).
   // Drives repair actions for projectors and DFlash draft models.
@@ -414,7 +448,10 @@ export function ModelsScreen({
   const [variantError, setVariantError] = useState<string | null>(null)
   const variantGuidance = useMemo(() => modelFileGuidance(variants, ramGb), [variants, ramGb])
   const [detailFiles, setDetailFiles] = useState<DownloadableModelFile[]>([])
-  const detailFileGuidance = useMemo(() => modelFileGuidance(detailFiles, ramGb), [detailFiles, ramGb])
+  const detailFileGuidance = useMemo(
+    () => modelFileGuidance(detailFiles, ramGb),
+    [detailFiles, ramGb]
+  )
   const [detailFilesLoading, setDetailFilesLoading] = useState(false)
   const [detailFilesError, setDetailFilesError] = useState<string | null>(null)
   const [chosenVariants, setChosenVariants] = useState<Record<string, string>>({})
@@ -511,13 +548,17 @@ export function ModelsScreen({
       .systemHealth?.()
       .then((h: { ramGb?: number }) => setRamGb(h.ramGb ?? null))
       .catch(() => {})
-    api.getModelCatalog?.().then((c: { kinds: string[]; models: ModelEntry[] }) => {
-      setKinds(c.kinds)
-      setModels(c.models)
-      setActiveKind((current) =>
-        current === 'storage' || c.kinds.includes(current) ? current : (c.kinds[0] ?? 'text')
-      )
-    })
+    const catalog = api.getModelCatalog?.()
+    if (!catalog) setCatalogLoaded(true)
+    catalog
+      ?.then((c: { kinds: string[]; models: ModelEntry[] }) => {
+        setKinds(c.kinds)
+        setModels(c.models)
+        setActiveKind((current) =>
+          current === 'storage' || c.kinds.includes(current) ? current : (c.kinds[0] ?? 'text')
+        )
+      })
+      .finally(() => setCatalogLoaded(true))
     api.getInstalledModels?.().then(setInstalled)
     refreshVision()
     refreshActive()
@@ -686,10 +727,27 @@ export function ModelsScreen({
   const displayed = useMemo(
     () =>
       filterAndSort(
-        [...list.filter((model) => {
-          const name = `${model.name} ${model.id}`.toLowerCase()
-          return deferredQuery.trim().toLowerCase().split(/\s+/).every((term) => name.includes(term))
-        }).map((model) => ({ id: model.id, name: model.name, org: model.org ?? '', downloads: undefined, likes: undefined, lastModified: undefined, credibility: undefined })), ...hfResults.filter((result) => !list.some((model) => model.id === result.id))].map((r) => ({
+        [
+          ...list
+            .filter((model) => {
+              const name = `${model.name} ${model.id}`.toLowerCase()
+              return deferredQuery
+                .trim()
+                .toLowerCase()
+                .split(/\s+/)
+                .every((term) => name.includes(term))
+            })
+            .map((model) => ({
+              id: model.id,
+              name: model.name,
+              org: model.org ?? '',
+              downloads: undefined,
+              likes: undefined,
+              lastModified: undefined,
+              credibility: undefined
+            })),
+          ...hfResults.filter((result) => !list.some((model) => model.id === result.id))
+        ].map((r) => ({
           id: r.id,
           name: r.name,
           org: r.org,
@@ -831,55 +889,47 @@ export function ModelsScreen({
     const recommended =
       !isHf && (bonsaiFits(m) || (!!recommendedImageId && m.id === recommendedImageId))
 
-    return (
-      <motion.div
-        key={m.id}
-        role="listitem"
-        layout
-        initial={{ opacity: 0, y: 6 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-        className={`group flex flex-col gap-2 rounded-md border p-3 transition-all duration-150 hover:border-neutral-700 ${active ? 'border-green-500/50 bg-green-500/5' : 'border-neutral-800 bg-neutral-900/40'}`}
+    // One model, two layouts: the collections chapter's grid card and its table row share every
+    // piece below, so a state (downloading, failed, active) reads the same in either view.
+    const nameRow = (
+      <div className="flex flex-wrap items-center gap-1">
+        <button
+          onClick={() => openDetail(m)}
+          className="truncate text-left text-xs text-neutral-100 transition-colors duration-100 hover:text-emerald-500"
+        >
+          {m.name}
+        </button>
+        {worksBest && (
+          <span className="shrink-0 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
+            Works best
+          </span>
+        )}
+        {m.kind === 'vision' && (
+          <span className="flex shrink-0 items-center gap-0.5 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
+            <IconEye className="h-2 w-2" /> Vision
+          </span>
+        )}
+        {m.isNew && (
+          <span className="shrink-0 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
+            New
+          </span>
+        )}
+      </div>
+    )
+    const metaLine = (
+      <>{meta && <div className="mt-0.5 truncate text-[10px] text-neutral-600">{meta}</div>}</>
+    )
+    const detailsButton = (
+      <button
+        onClick={() => openDetail(m)}
+        title="Details"
+        className="shrink-0 rounded p-0.5 text-neutral-700 opacity-0 transition-all duration-150 hover:text-neutral-300 active:scale-90 group-hover:opacity-100"
       >
-        {/* Title row */}
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-1">
-              <button
-                onClick={() => openDetail(m)}
-                className="truncate text-left text-xs text-neutral-100 transition-colors duration-100 hover:text-emerald-500"
-              >
-                {m.name}
-              </button>
-              {worksBest && (
-                <span className="shrink-0 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-                  Works best
-                </span>
-              )}
-              {m.kind === 'vision' && (
-                <span className="flex shrink-0 items-center gap-0.5 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-                  <IconEye className="h-2 w-2" /> Vision
-                </span>
-              )}
-              {m.isNew && (
-                <span className="shrink-0 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-                  New
-                </span>
-              )}
-            </div>
-            {meta && <div className="mt-0.5 truncate text-[10px] text-neutral-600">{meta}</div>}
-          </div>
-          <button
-            onClick={() => openDetail(m)}
-            title="Details"
-            className="shrink-0 rounded p-0.5 text-neutral-700 opacity-0 transition-all duration-150 hover:text-neutral-300 active:scale-90 group-hover:opacity-100"
-          >
-            <IconInfoCircle className="h-3.5 w-3.5" />
-          </button>
-        </div>
-
-        {/* Badges row */}
+        <IconInfoCircle className="h-3.5 w-3.5" />
+      </button>
+    )
+    const badgeRow = (
+      <>
         {(comingSoon ||
           recommended ||
           tags.length > 0 ||
@@ -939,151 +989,155 @@ export function ModelsScreen({
             )}
           </div>
         )}
-
+      </>
+    )
+    const availabilityNote = (
+      <>
         {comingSoon && m.availabilityNote && (
           <p className="text-[9px] leading-relaxed text-neutral-600">{m.availabilityNote}</p>
         )}
-
-        {/* Action row */}
-        <div className="mt-auto flex items-center justify-between gap-2 pt-1">
-          {comingSoon ? (
-            <span className="text-[10px] text-neutral-500">
-              Available after support is fully tested
-            </span>
-          ) : active ? (
-            <span className="flex items-center gap-1 text-[11px] text-green-500">
-              <IconCircleCheck className="h-3.5 w-3.5 shrink-0" />{' '}
-              {/* A task model says the role it plays, and where: several are active at once. */}
-              {(m.kind === 'computer_use' && taskRoles?.badges[m.id]) || 'Active'}
-            </span>
-          ) : isInstalled ? (
-            // Every installed model is activatable for its type — no kind branch.
-            // Includes a downloaded HF model (registered as installed), so its search
-            // card flips from Download to Use instead of resetting.
-            <button
-              onClick={() => activateModel(m.id)}
-              disabled={!!switching}
-              className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:opacity-40"
-            >
-              {switching === m.id ? (
-                <>
-                  <IconLoader2 className="h-3 w-3 animate-spin" />{' '}
-                  <TextShimmer as="span">Switching</TextShimmer>
-                </>
-              ) : (
-                'Use'
-              )}
-            </button>
-          ) : downloading ? (
-            // Status left, action right, across the full width of the card. Stacked in a column on
-            // the left they left half the card empty and the whole thing read as lopsided; the row
-            // is already justify-between, so the pair simply uses the space that was there.
-            // The percent is NOT in the button: a control whose meaning is "Cancel" is the one place
-            // the card's main number should not live.
-            <>
-              <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[10px] text-neutral-500">
-                <span className="text-neutral-300">
-                  {prog.status === 'queued' ? (
-                    'Queued'
-                  ) : downloadProgress?.determinate ? (
-                    <>
-                      <AnimatedNumber value={Math.round(downloadProgress.percentage ?? 0)} />%
-                    </>
-                  ) : (
-                    <TextShimmer as="span">Downloading</TextShimmer>
-                  )}
-                </span>
-                {downloadProgress && downloadProgress.totalBytes !== undefined ? (
-                  <span className="whitespace-nowrap">
-                    {formatSize(downloadProgress.currentBytes)} of{' '}
-                    {formatSize(downloadProgress.totalBytes)}
-                  </span>
-                ) : prog.downloadedMB && prog.totalMB ? (
-                  <span className="whitespace-nowrap">
-                    {formatTransferred(prog.downloadedMB)} of {formatTransferred(prog.totalMB)}
-                  </span>
-                ) : null}
-                {downloadProgress?.bytesPerSecond !== undefined ? (
-                  <span className="whitespace-nowrap">
-                    · {formatTransferSpeed(downloadProgress.bytesPerSecond)}
-                  </span>
-                ) : null}
-                {timeRemaining ? (
-                  <span className="whitespace-nowrap">· {timeRemaining}</span>
-                ) : null}
-                <span className="min-w-0 truncate">{downloadPartLabel(prog)}</span>
-              </div>
-              <button
-                onClick={() => cancelDownload(m.id)}
-                className="flex shrink-0 items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-400 transition-all duration-150 hover:border-red-500/60 hover:text-red-400 active:scale-95"
-              >
+      </>
+    )
+    const actionRow = (
+      <>
+        {comingSoon ? (
+          <span className="text-[10px] text-neutral-500">
+            Available after support is fully tested
+          </span>
+        ) : active ? (
+          <span className="flex items-center gap-1 text-[11px] text-green-500">
+            <IconCircleCheck className="h-3.5 w-3.5 shrink-0" />{' '}
+            {/* A task model says the role it plays, and where: several are active at once. */}
+            {(m.kind === 'computer_use' && taskRoles?.badges[m.id]) || 'Active'}
+          </span>
+        ) : isInstalled ? (
+          // Every installed model is activatable for its type — no kind branch.
+          // Includes a downloaded HF model (registered as installed), so its search
+          // card flips from Download to Use instead of resetting.
+          <button
+            onClick={() => activateModel(m.id)}
+            disabled={!!switching}
+            className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:opacity-40"
+          >
+            {switching === m.id ? (
+              <>
+                <IconLoader2 className="h-3 w-3 animate-spin" />{' '}
+                <TextShimmer as="span">Switching</TextShimmer>
+              </>
+            ) : (
+              'Use'
+            )}
+          </button>
+        ) : downloading ? (
+          // Status left, action right, across the full width of the card. Stacked in a column on
+          // the left they left half the card empty and the whole thing read as lopsided; the row
+          // is already justify-between, so the pair simply uses the space that was there.
+          // The percent is NOT in the button: a control whose meaning is "Cancel" is the one place
+          // the card's main number should not live.
+          <>
+            <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[10px] text-neutral-500">
+              <span className="text-neutral-300">
                 {prog.status === 'queued' ? (
-                  <IconClock className="h-3 w-3" />
+                  'Queued'
+                ) : downloadProgress?.determinate ? (
+                  <>
+                    <AnimatedNumber value={Math.round(downloadProgress.percentage ?? 0)} />%
+                  </>
                 ) : (
-                  <IconX className="h-3 w-3" />
+                  <TextShimmer as="span">Downloading</TextShimmer>
                 )}
-                Cancel
-              </button>
-            </>
-          ) : prog?.status === 'failed' ? (
-            // A failure is a STATE of the action row, not a banner under it. As its own block it
-            // stacked a second button beneath "Download" and asked you to choose between two ways
-            // of doing the same thing. Reason left, one button right, on the row that was already
-            // there.
-            <>
-              <span
-                className="min-w-0 truncate text-[10px] text-red-400/90"
-                title={prog.error}
-                role="status"
-              >
-                {downloadFailureText(prog.error)}
               </span>
-              <button
-                onClick={() => retryDownload(m.id)}
-                className="flex shrink-0 items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
-              >
-                <IconDownload className="h-3 w-3" /> Try again
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={() => (isHf || useMtpDownloads ? void chooseVariant(m) : download(m.id))}
-              disabled={mtpUnavailable}
-              className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <IconDownload className="h-3 w-3" /> {mtpUnavailable ? 'MTP unavailable' : 'Download'}
-            </button>
-          )}
-          {isInstalled && (
-            <div className="flex shrink-0 items-center gap-1">
-              {active && !isRemote && supportsModelSettings(m.kind) && (
-                <button
-                  onClick={() => openModelSettings(m.kind)}
-                  aria-label="Open model settings"
-                  title="Open settings for the active model"
-                  className="rounded border border-neutral-800 px-1.5 py-1 text-[9px] text-neutral-500 transition-all duration-150 hover:border-green-500/60 hover:text-emerald-500 active:scale-95"
-                >
-                  Settings
-                </button>
-              )}
-              {!isRemote && !m.id.startsWith('external:') && (
-                <button
-                  onClick={() => removeModel(m.id, m.name)}
-                  disabled={deleting === m.id || active}
-                  title={active ? 'Switch to another model before deleting' : 'Delete from disk'}
-                  className="rounded p-1 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
-                >
-                  {deleting === m.id ? (
-                    <IconLoader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <IconTrash className="h-3 w-3" />
-                  )}
-                </button>
-              )}
+              {downloadProgress && downloadProgress.totalBytes !== undefined ? (
+                <span className="whitespace-nowrap">
+                  {formatSize(downloadProgress.currentBytes)} of{' '}
+                  {formatSize(downloadProgress.totalBytes)}
+                </span>
+              ) : prog.downloadedMB && prog.totalMB ? (
+                <span className="whitespace-nowrap">
+                  {formatTransferred(prog.downloadedMB)} of {formatTransferred(prog.totalMB)}
+                </span>
+              ) : null}
+              {downloadProgress?.bytesPerSecond !== undefined ? (
+                <span className="whitespace-nowrap">
+                  · {formatTransferSpeed(downloadProgress.bytesPerSecond)}
+                </span>
+              ) : null}
+              {timeRemaining ? <span className="whitespace-nowrap">· {timeRemaining}</span> : null}
+              <span className="min-w-0 truncate">{downloadPartLabel(prog)}</span>
             </div>
-          )}
-        </div>
-
+            <button
+              onClick={() => cancelDownload(m.id)}
+              className="flex shrink-0 items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-400 transition-all duration-150 hover:border-red-500/60 hover:text-red-400 active:scale-95"
+            >
+              {prog.status === 'queued' ? (
+                <IconClock className="h-3 w-3" />
+              ) : (
+                <IconX className="h-3 w-3" />
+              )}
+              Cancel
+            </button>
+          </>
+        ) : prog?.status === 'failed' ? (
+          // A failure is a STATE of the action row, not a banner under it. As its own block it
+          // stacked a second button beneath "Download" and asked you to choose between two ways
+          // of doing the same thing. Reason left, one button right, on the row that was already
+          // there.
+          <>
+            <span
+              className="min-w-0 truncate text-[10px] text-red-400/90"
+              title={prog.error}
+              role="status"
+            >
+              {downloadFailureText(prog.error)}
+            </span>
+            <button
+              onClick={() => retryDownload(m.id)}
+              className="flex shrink-0 items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
+            >
+              <IconDownload className="h-3 w-3" /> Try again
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={() => (isHf || useMtpDownloads ? void chooseVariant(m) : download(m.id))}
+            disabled={mtpUnavailable}
+            className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <IconDownload className="h-3 w-3" /> {mtpUnavailable ? 'MTP unavailable' : 'Download'}
+          </button>
+        )}
+        {isInstalled && (
+          <div className="flex shrink-0 items-center gap-1">
+            {active && !isRemote && supportsModelSettings(m.kind) && (
+              <button
+                onClick={() => openModelSettings(m.kind)}
+                aria-label="Open model settings"
+                title="Open settings for the active model"
+                className="rounded border border-neutral-800 px-1.5 py-1 text-[9px] text-neutral-500 transition-all duration-150 hover:border-green-500/60 hover:text-emerald-500 active:scale-95"
+              >
+                Settings
+              </button>
+            )}
+            {!isRemote && !m.id.startsWith('external:') && (
+              <button
+                onClick={() => removeModel(m.id, m.name)}
+                disabled={deleting === m.id || active}
+                title={active ? 'Switch to another model before deleting' : 'Delete from disk'}
+                className="rounded p-1 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
+              >
+                {deleting === m.id ? (
+                  <IconLoader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <IconTrash className="h-3 w-3" />
+                )}
+              </button>
+            )}
+          </div>
+        )}
+      </>
+    )
+    const repairActions = (
+      <>
         {/* Vision-capable but projector not downloaded — offer to add it. Hidden while a
             download is in flight (the progress UI covers that). */}
         {!comingSoon && projectorMissing && !dflashMissing && !mtpMissing && !downloading && (
@@ -1108,7 +1162,10 @@ export function ModelsScreen({
             <IconDownload className="h-3 w-3" /> {mtpMissing ? 'Add MTP' : 'Repair'}
           </button>
         )}
-
+      </>
+    )
+    const progressBar = (
+      <>
         {/* Download progress: one bar, one line. It used to be four stacked rows — a percent chip,
             a shouted status, the bytes, then the bar — which said the same thing three times and
             grew the card by half while it ran. The bar carries the shape of the progress, the line
@@ -1119,11 +1176,82 @@ export function ModelsScreen({
             aria-label={`${m.name} download progress`}
             value={downloadProgress?.percentage ?? 0}
           >
-            <ProgressTrack className="h-0.5 bg-neutral-800">
-              <ProgressIndicator className="bg-green-500 duration-300 ease-out motion-reduce:transition-none" />
+            <ProgressTrack className="h-0.5">
+              <ProgressIndicator
+                className={
+                  prog.status === 'queued'
+                    ? 'bg-primary/40 shadow-none duration-300 ease-out motion-reduce:transition-none'
+                    : 'duration-300 ease-out motion-reduce:transition-none'
+                }
+              />
             </ProgressTrack>
           </Progress>
         )}
+      </>
+    )
+
+    if (view === 'list') {
+      return (
+        <MotionRow
+          key={m.id}
+          layout
+          initial={{ opacity: 0, x: -8 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: 8 }}
+          transition={COLLECTION_SPRING}
+          data-state={active ? 'selected' : undefined}
+          className="group align-top transition-colors"
+        >
+          <TableCell className="whitespace-normal py-3">
+            {nameRow}
+            {metaLine}
+          </TableCell>
+          <TableCell className="whitespace-normal py-3">
+            {badgeRow}
+            {availabilityNote}
+          </TableCell>
+          <TableCell className="whitespace-normal py-3">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-2">{actionRow}</div>
+              {repairActions}
+              {progressBar}
+            </div>
+          </TableCell>
+          <TableCell className="py-3">{detailsButton}</TableCell>
+        </MotionRow>
+      )
+    }
+
+    return (
+      <motion.div
+        key={m.id}
+        role="listitem"
+        layout
+        initial={{ opacity: 0, scale: 0.96, filter: 'blur(4px)' }}
+        animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+        exit={{ opacity: 0, scale: 0.96, filter: 'blur(4px)' }}
+        transition={COLLECTION_SPRING}
+        whileHover={reducedMotion ? undefined : { y: -2 }}
+        className="group relative"
+      >
+        <Card
+          className={`h-full gap-2 p-3 transition-shadow duration-300 ${active ? ACTIVE_RING : ''}`}
+        >
+          {/* Title row */}
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              {nameRow}
+              {metaLine}
+            </div>
+            {detailsButton}
+          </div>
+          {badgeRow}
+          {availabilityNote}
+          {/* Action row */}
+          <div className="mt-auto flex items-center justify-between gap-2 pt-1">{actionRow}</div>
+          {repairActions}
+          {progressBar}
+        </Card>
       </motion.div>
     )
   }
@@ -1131,6 +1259,54 @@ export function ModelsScreen({
   const GRID = 'grid grid-cols-2 gap-2 px-6 py-3 lg:grid-cols-3 2xl:grid-cols-4'
   // Inside a Section the section carries the side padding.
   const SECTION_GRID = 'grid grid-cols-2 gap-2 lg:grid-cols-3 2xl:grid-cols-4'
+
+  // A named group of models as cards (a list of listitems) or as table rows. Both lay out with the
+  // same spring, so filtering or a model changing state reflows its neighbours instead of jumping.
+  const renderCollection = (
+    label: string,
+    items: React.ReactNode,
+    gridClassName: string,
+    listClassName = ''
+  ): React.JSX.Element =>
+    view === 'list' ? (
+      <div className={listClassName}>
+        <Table aria-label={label} className="table-fixed">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[34%]">Model</TableHead>
+              <TableHead className="w-[24%]">Labels</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="w-10">
+                <span className="sr-only">Details</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <AnimatePresence mode="popLayout" initial={false}>
+              {items}
+            </AnimatePresence>
+          </TableBody>
+        </Table>
+      </div>
+    ) : (
+      <div role="list" aria-label={label} className={`relative ${gridClassName}`}>
+        <AnimatePresence mode="popLayout" initial={false}>
+          {items}
+        </AnimatePresence>
+      </div>
+    )
+
+  const filtersNarrowing =
+    hasActiveFilters(filterState) ||
+    sizeBucket !== null ||
+    selectedTags.length > 0 ||
+    (activeKind === 'text' && useCase !== 'all')
+  const clearFilters = (): void => {
+    setFilterState(initialFilterState)
+    setSizeBucket(null)
+    setSelectedTags([])
+    setUseCase('all')
+  }
 
   return (
     <div className="flex h-full flex-col font-mono">
@@ -1233,9 +1409,9 @@ export function ModelsScreen({
             )}
             {['text', 'vision', 'computer_use'].includes(activeKind) && (
               <Button
-                size="sm"
+                size="xs"
                 variant={mtpDownloads ? 'secondary' : 'outline'}
-                className="min-h-0 rounded px-2 py-1 text-[10px] leading-normal shadow-none"
+                className="text-[10px]"
                 aria-pressed={mtpDownloads}
                 onClick={() => {
                   setMtpDownloads((enabled) => !enabled)
@@ -1294,9 +1470,21 @@ export function ModelsScreen({
                 Clear
               </button>
             )}
-            <span className="ml-auto text-[9px] text-neutral-700">
-              {searchingMode ? displayed.length : displayedCatalog.length} models
+            <span className="ml-auto text-[9px] text-muted-foreground">
+              <AnimatedNumber value={searchingMode ? displayed.length : displayedCatalog.length} />{' '}
+              models
             </span>
+            <Segmented
+              label="Layout"
+              size="sm"
+              tone="quiet"
+              value={view}
+              onValueChange={setView}
+              options={[
+                { id: 'grid', label: 'Grid view', icon: <IconLayoutGrid className="h-3 w-3" /> },
+                { id: 'list', label: 'List view', icon: <IconList className="h-3 w-3" /> }
+              ]}
+            />
           </div>
 
           {/* Use-case chips (text only, browse mode) */}
@@ -1330,19 +1518,28 @@ export function ModelsScreen({
               Anime … A chip narrows the list to models carrying every selected tag. */}
           {!searchingMode && availableTags.length > 0 && (
             <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-neutral-800/40 px-6 py-1.5">
-              {availableTags.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setSelectedTags((cur) => toggleTag(cur, t))}
-                  className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide transition-all duration-150 active:scale-95 ${
-                    selectedTags.includes(t)
-                      ? 'border-green-500 text-green-500'
-                      : 'border-neutral-800 text-neutral-600 hover:border-neutral-700 hover:text-neutral-400'
-                  }`}
-                >
-                  {t}
-                </button>
-              ))}
+              {/* One hover light glides from chip to chip (the collections chapter's rows). */}
+              <AnimatedBackground
+                enableHover
+                className="rounded-full bg-[rgb(var(--og-rgb-text)/0.06)]"
+                transition={{ type: 'spring', bounce: 0.1, duration: 0.35 }}
+              >
+                {availableTags.map((t) => (
+                  <button
+                    key={t}
+                    data-id={t}
+                    aria-pressed={selectedTags.includes(t)}
+                    onClick={() => setSelectedTags((cur) => toggleTag(cur, t))}
+                    className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide transition-[color,border-color,transform] duration-150 active:scale-95 ${
+                      selectedTags.includes(t)
+                        ? 'border-primary/60 text-primary'
+                        : 'border-border text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </AnimatedBackground>
               {selectedTags.length > 0 && (
                 <button
                   onClick={() => setSelectedTags([])}
@@ -1364,19 +1561,31 @@ export function ModelsScreen({
           <div className="flex-1 overflow-y-auto">
             {searchingMode ? (
               <>
-                {displayed.length === 0 && !searching && (
-                  <Empty className="px-6 py-8 md:py-8">
-                    <EmptyMedia variant="icon">
-                      <IconSearch className="text-neutral-600" />
-                    </EmptyMedia>
-                    <EmptyDescription className="text-xs text-neutral-600">
-                      No results for &quot;{query}&quot;.
-                    </EmptyDescription>
-                  </Empty>
-                )}
-                <div role="list" aria-label="Model search results" className={GRID}>
-                  <AnimatePresence initial={false}>
-                  {displayed
+                <AnimatePresence initial={false}>
+                  {displayed.length === 0 && !searching && (
+                    <motion.div key="no-results" {...RISE}>
+                      <Empty className="px-6 py-10 md:py-10">
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon">
+                            <IconSearch />
+                          </EmptyMedia>
+                          <EmptyTitle className="text-[15px] font-normal">No results</EmptyTitle>
+                          <EmptyDescription className="text-xs">
+                            No results for &quot;{query}&quot;.
+                          </EmptyDescription>
+                        </EmptyHeader>
+                        <EmptyContent>
+                          <Button size="sm" variant="outline" onClick={() => setQuery('')}>
+                            Clear search
+                          </Button>
+                        </EmptyContent>
+                      </Empty>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                {renderCollection(
+                  'Model search results',
+                  displayed
                     .filter(
                       (result, index, results) =>
                         !mtpDownloads ||
@@ -1399,22 +1608,58 @@ export function ModelsScreen({
                         },
                         !list.some((model) => model.id === r.id)
                       )
-                    )}
-                  </AnimatePresence>
-                </div>
+                    ),
+                  GRID,
+                  'px-6 py-3'
+                )}
               </>
             ) : (
               (() => {
+                if (!catalogLoaded) {
+                  // The catalog draws its own shape while it arrives, never a false "no match".
+                  return (
+                    <div
+                      aria-busy="true"
+                      aria-label="Loading models"
+                      className="grid grid-cols-2 gap-2 px-6 pt-6 lg:grid-cols-3 2xl:grid-cols-4"
+                    >
+                      {[0, 1, 2, 3, 4, 5].map((card) => (
+                        <div key={card} className="space-y-3 rounded-2xl p-3">
+                          <Skeleton className="h-3" style={{ width: `${62 - card * 5}%` }} />
+                          <Skeleton className="h-2.5 w-2/5" />
+                          <div className="flex items-center justify-between pt-3">
+                            <Skeleton className="h-6 w-20 rounded-md" />
+                            <Skeleton className="h-2.5 w-10" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                }
                 if (displayedCatalog.length === 0) {
                   return (
-                    <Empty className="px-6 py-8 md:py-8">
-                      <EmptyMedia variant="icon">
-                        <IconSearch className="text-neutral-600" />
-                      </EmptyMedia>
-                      <EmptyDescription className="text-xs text-neutral-600">
-                        No models match the current filters.
-                      </EmptyDescription>
-                    </Empty>
+                    <motion.div key="no-match" {...RISE}>
+                      <Empty className="px-6 py-10 md:py-10">
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon">
+                            <IconSearch />
+                          </EmptyMedia>
+                          <EmptyTitle className="text-[15px] font-normal">
+                            No matching models
+                          </EmptyTitle>
+                          <EmptyDescription className="text-xs">
+                            No models match the current filters.
+                          </EmptyDescription>
+                        </EmptyHeader>
+                        {filtersNarrowing && (
+                          <EmptyContent>
+                            <Button size="sm" variant="outline" onClick={clearFilters}>
+                              Clear filters
+                            </Button>
+                          </EmptyContent>
+                        )}
+                      </Empty>
+                    </motion.div>
                   )
                 }
                 // One group of cards, the same rows on every tab: on this device, remote (a saved
@@ -1455,11 +1700,11 @@ export function ModelsScreen({
                   return rows.map(([heading, label, list]) =>
                     list.length > 0 ? (
                       <Section key={label} label={heading} className="px-6 pt-10 first:pt-6">
-                        <div role="list" aria-label={label} className={SECTION_GRID}>
-                          <AnimatePresence initial={false}>
-                            {list.map((m) => renderCard(m))}
-                          </AnimatePresence>
-                        </div>
+                        {renderCollection(
+                          label,
+                          list.map((m) => renderCard(m)),
+                          SECTION_GRID
+                        )}
                       </Section>
                     ) : null
                   )
@@ -1745,15 +1990,17 @@ export function ModelsScreen({
                       >
                         Use this model
                       </button>
-                      {!m.id.startsWith('external:') && <button
-                        onClick={() => {
-                          void removeModel(m.id, m.name)
-                          closeDetail()
-                        }}
-                        className="rounded border border-neutral-800 px-3 py-1.5 text-xs text-neutral-500 transition-all duration-150 hover:border-red-500/60 hover:text-red-400 active:scale-95"
-                      >
-                        Delete
-                      </button>}
+                      {!m.id.startsWith('external:') && (
+                        <button
+                          onClick={() => {
+                            void removeModel(m.id, m.name)
+                            closeDetail()
+                          }}
+                          className="rounded border border-neutral-800 px-3 py-1.5 text-xs text-neutral-500 transition-all duration-150 hover:border-red-500/60 hover:text-red-400 active:scale-95"
+                        >
+                          Delete
+                        </button>
+                      )}
                     </>
                   ) : downloading ? (
                     <span className="text-xs text-neutral-400">

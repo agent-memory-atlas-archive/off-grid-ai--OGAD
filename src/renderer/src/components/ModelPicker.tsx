@@ -17,7 +17,7 @@ import { TaskLineups } from './TaskLineups'
 import { useTaskRoles } from '../lib/task-roles'
 import { resolveActiveTextModel } from '../lib/model-summary'
 import { invalidateLlmSettings } from '../lib/settings-invalidation'
-import { FieldError } from '@offgrid/operator-ui/operator/forms'
+import { Field, FieldError } from '@offgrid/operator-ui/operator/coss/field'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (): any => (window as any).api
@@ -224,7 +224,24 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
         </div>
       </div>
       <div className="flex-1 space-y-10 overflow-y-auto px-6 py-6">
-        {selectionError && <FieldError>{selectionError}</FieldError>}
+        <AnimatePresence initial={false}>
+          {selectionError && (
+            <motion.div
+              key="selection-error"
+              initial={{ opacity: 0, height: 0, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, height: 'auto', filter: 'blur(0px)' }}
+              exit={{ opacity: 0, height: 0, filter: 'blur(4px)' }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+              className="overflow-hidden"
+            >
+              <Field invalid>
+                <FieldError match role="alert">
+                  {selectionError}
+                </FieldError>
+              </Field>
+            </motion.div>
+          )}
+        </AnimatePresence>
         <TaskLineups
           view={taskRoles}
           models={models}

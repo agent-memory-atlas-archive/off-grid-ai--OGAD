@@ -1,14 +1,17 @@
 import { useState, type JSX } from 'react'
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react'
+import AnimatedStepper from '@offgrid/operator-ui/operator/animated-stepper'
 import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
 import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
 import { Card } from '@offgrid/operator-ui/operator/coss/card'
+import { SettingRow, StatePill } from '@offgrid/operator-ui/operator/presence'
 import { LampContainer } from './ui/lamp'
 import { OrbitingCircles } from './ui/orbiting-circles'
 import { GridBackdrop } from './ui/grid-backdrop'
 import { deviceNoun, isMac } from '@renderer/lib/device'
+import { cn } from '@renderer/lib/utils'
 import logo from '@/assets/logo.png'
 import { QuickConnections } from './QuickConnections'
 import { Button } from './ui/button'
@@ -34,7 +37,9 @@ import {
   Files,
   Package,
   Browser,
-  CursorClick
+  CursorClick,
+  Cpu,
+  Globe
 } from '@phosphor-icons/react'
 
 // Word-by-word blur-in, matching the brand's terminal feel. The library's TextEffect owns the
@@ -62,12 +67,12 @@ interface OnboardingProps {
 }
 
 const steps = [
-  { id: 'welcome' },
-  { id: 'capabilities' },
-  { id: 'pro' },
-  { id: 'sync' },
-  { id: 'connections' },
-  { id: 'private' }
+  { id: 'welcome', label: 'Welcome' },
+  { id: 'capabilities', label: 'Models' },
+  { id: 'pro', label: 'Pro' },
+  { id: 'sync', label: 'Sync' },
+  { id: 'connections', label: 'Connect' },
+  { id: 'private', label: 'Ready' }
 ]
 const ONBOARDING_STEP_KEY = 'onboarding_step'
 
@@ -471,19 +476,23 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 1, duration: 0.5 }}
-                className="mt-12 grid grid-cols-2 gap-3"
+                className="mx-auto mt-12 max-w-md divide-y divide-border/50 text-left"
               >
-                {/* One primary card: local is the default; remote stays neutral. */}
-                <Card className="border-green-500/50 bg-green-500/5 px-8 py-5 text-center">
-                  <div className="text-lg font-light text-emerald-600 dark:text-emerald-400">
-                    LOCAL
-                  </div>
-                  <div className="mt-1 text-xs text-neutral-500">Default</div>
-                </Card>
-                <Card className="px-8 py-5 text-center">
-                  <div className="text-lg font-light text-white">REMOTE</div>
-                  <div className="mt-1 text-xs text-neutral-500">Your choice</div>
-                </Card>
+                {/* Local is the default and reads on; remote stays a quiet choice. */}
+                <SettingRow
+                  icon={<Cpu aria-hidden="true" />}
+                  title="Local"
+                  description={`Runs in your ${deviceNoun()}'s memory.`}
+                >
+                  <StatePill tone="on" label="Default" />
+                </SettingRow>
+                <SettingRow
+                  icon={<Globe aria-hidden="true" />}
+                  title="Remote"
+                  description="A model server you add and select."
+                >
+                  <StatePill tone="off" label="Your choice" />
+                </SettingRow>
               </motion.div>
             </div>
           </motion.div>
@@ -505,19 +514,20 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
               : 'flex flex-col items-center gap-6'
           }
         >
-          <div className="flex gap-2">
-            {steps.map((_, idx) => (
-              <motion.div
-                key={idx}
-                initial={false}
-                animate={{
-                  width: currentStep === idx ? 24 : 6,
-                  backgroundColor: currentStep === idx ? 'rgb(52 211 153)' : 'rgb(64 64 64)'
-                }}
-                className="h-1 rounded-full"
-                transition={{ duration: 0.3 }}
-              />
-            ))}
+          <div
+            className={cn(
+              'w-[min(36rem,calc(100vw-4rem))] [&>[role=tabpanel]]:hidden',
+              '[&_[role=tab]]:size-7 [&_[role=tab]]:border [&_[role=tab]]:text-[11px] [&_[role=tab]]:font-normal',
+              '[&_[role=tab][aria-selected=true]]:bg-primary/15 [&_[role=tab][aria-selected=true]]:text-primary',
+              '[&_[role=tab][aria-selected=true]]:shadow-[0_0_18px_-4px_rgb(var(--og-rgb-primary)/0.8)]',
+              '[&_[role=tab]_svg]:size-3.5 [&_[role=tablist]_p]:text-[11.5px] [&_[role=tablist]_p]:font-normal'
+            )}
+          >
+            <AnimatedStepper
+              className="gap-0"
+              currentStep={currentStep}
+              steps={steps.map(({ label }) => ({ label }))}
+            />
           </div>
           <div className="flex items-center gap-3">
             {currentStep === 4 && (

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
-import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import { AnimatePresence, motion } from 'motion/react'
+import AIArtifact from '@offgrid/operator-ui/operator/ai-artifact'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { ARTIFACT_KIND_LABELS, type ArtifactKind } from '@renderer/lib/artifact-labels'
 import { resolveModelName } from '@renderer/lib/model-summary'
@@ -20,11 +20,6 @@ import { Button } from './ui/button'
 export type Artifact = { kind: ArtifactKind; code: string; title?: string }
 
 const KIND_LABEL = ARTIFACT_KIND_LABELS
-
-const VIEW_OPTIONS = [
-  { id: 'preview', label: 'Preview' },
-  { id: 'code', label: 'Code' }
-] as const
 
 function escapeForHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -91,7 +86,6 @@ export function ArtifactCanvas({
     libs: Record<string, string>
   } | null>(null)
   const runtime = loadedRuntime?.kind === artifact.kind ? loadedRuntime.libs : null
-  const [view, setView] = useState<'preview' | 'code'>('preview')
   const [resizing, setResizing] = useState(false)
   // The preview URL is tagged with the HTML it was built from, so the previous artifact's
   // preview is never shown while the new one is being registered.
@@ -307,10 +301,7 @@ else { __ogShow('No React component found — define a component named App or a 
           voices,
           models,
           activeModel: activeCatalogModel?.id ?? modalities.speech,
-          model: artifactSpeechModelName(
-            modalities.speech,
-            catalog.models as ArtifactModelLabel[]
-          )
+          model: artifactSpeechModelName(modalities.speech, catalog.models as ArtifactModelLabel[])
         })
       }
     }
@@ -321,10 +312,9 @@ else { __ogShow('No React component found — define a component named App or a 
         | undefined
       if (!message?.__ogComicTts) return
       if (message.__ogComicTts === 'catalog') {
-        void sendCatalog()
-          .catch(() => {
-            if (active) sendStatus({ state: 'error', message: 'SPEECH IS NOT AVAILABLE' })
-          })
+        void sendCatalog().catch(() => {
+          if (active) sendStatus({ state: 'error', message: 'SPEECH IS NOT AVAILABLE' })
+        })
         return
       }
       if (message.__ogComicTts === 'model' && typeof message.model === 'string') {
@@ -363,10 +353,7 @@ else { __ogShow('No React component found — define a component named App or a 
       stop()
       sendStatus({ state: 'loading' })
       void window.api
-        .speak(
-          message.text,
-          typeof message.voice === 'string' ? message.voice : undefined
-        )
+        .speak(message.text, typeof message.voice === 'string' ? message.voice : undefined)
         .then(({ dataUrl }) => {
           if (!active) return
           const audio = new Audio(dataUrl)
@@ -466,12 +453,44 @@ else { __ogShow('No React component found — define a component named App or a 
         const dataUrl = await window.api.fileDataUrl(capturePathFromUrl(url))
         if (dataUrl) embedded.set(url, dataUrl)
       }
-      downloadableDocument = documentHtml.replace(/ogcapture:\/\/[^'"\s<]+/gi, (url) =>
-        embedded.get(url) ?? url
+      downloadableDocument = documentHtml.replace(
+        /ogcapture:\/\/[^'"\s<]+/gi,
+        (url) => embedded.get(url) ?? url
       )
     }
     saveBlob(new Blob([downloadableDocument], { type: 'text/html' }), `${slug}.html`)
   }
+
+  // The artifact itself keeps its own colours: it is sandboxed user content, not app chrome. It is
+  // also a live canvas, so the conductor's light and click waves stay off it (data-og-still).
+  const previewPane =
+    artifact.kind === 'text' ? (
+      <div
+        data-og-still
+        className="prose prose-invert prose-sm h-full max-w-none overflow-auto bg-neutral-950 px-6 py-5 text-sm leading-relaxed text-neutral-200 [&_a]:text-emerald-400 [&_code]:rounded [&_code]:bg-neutral-800 [&_code]:px-1 [&_h1]:mb-3 [&_h1]:mt-1 [&_h1]:text-xl [&_h1]:font-semibold [&_h1]:text-white [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-white [&_li]:my-1 [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
+      >
+        <ReactMarkdown>{artifact.code}</ReactMarkdown>
+      </div>
+    ) : previewUrl ? (
+      <div data-og-still className="relative h-full bg-white">
+        <iframe
+          ref={previewFrameRef}
+          key={previewUrl}
+          title="artifact"
+          sandbox="allow-scripts"
+          src={previewUrl}
+          className="absolute inset-0 h-full w-full border-0"
+          style={{ background: '#fff' }}
+        />
+      </div>
+    ) : (
+      <div
+        aria-busy="true"
+        className="flex h-full items-center justify-center text-xs text-muted-foreground"
+      >
+        <TextShimmer as="span">Preparing preview…</TextShimmer>
+      </div>
+    )
 
   return (
     <SidePanel
@@ -481,34 +500,24 @@ else { __ogShow('No React component found — define a component named App or a 
       className="min-w-[360px] max-w-[90vw]"
       style={{ width: width ? `${width}px` : '30vw' }}
     >
-      {/* Resize handle — drag the left edge to slide the canvas wider/narrower. A pill grows
-          under the pointer, as the library's resizable divider does. */}
+      {/* Resize handle: drag the left edge to slide the canvas wider or narrower. The pill grows
+          and glows under the pointer exactly as the library's resizable divider does. */}
       <div
         onMouseDown={startResize}
         title="Drag to resize"
         data-active={resizing || undefined}
         className="group/handle absolute left-[-3px] top-0 z-20 flex h-full w-2.5 cursor-col-resize items-center justify-center"
       >
-        <span className="h-8 w-1 rounded-full bg-neutral-700 opacity-0 transition-[opacity,height,background-color] duration-300 group-hover/handle:h-12 group-hover/handle:bg-green-500/70 group-hover/handle:opacity-100 group-data-[active]/handle:h-16 group-data-[active]/handle:bg-green-500 group-data-[active]/handle:opacity-100" />
+        <span className="h-8 w-1 rounded-full bg-border opacity-0 transition-[opacity,height,background-color,box-shadow] duration-300 group-hover/handle:h-10 group-hover/handle:bg-primary/70 group-hover/handle:opacity-100 group-data-[active]/handle:h-12 group-data-[active]/handle:bg-primary group-data-[active]/handle:opacity-100 group-data-[active]/handle:shadow-[0_0_14px_rgb(var(--og-rgb-primary)/0.7)]" />
       </div>
       {/* While dragging, this overlay sits OVER the iframe so it can't swallow the
           mousemove events — without it the drag stalls and jumps. */}
       {resizing && <div className="fixed inset-0 z-[60] cursor-col-resize select-none" />}
-      <div className="flex items-center justify-between gap-4 border-b border-neutral-800 px-6 py-3">
-        <div className="flex min-w-0 items-center gap-2 text-sm text-neutral-200">
-          <Badge variant="success" size="sm" className="shrink-0">
-            {KIND_LABEL[artifact.kind]}
-          </Badge>
-          <span className="truncate">{artifact.title || 'Canvas'}</span>
-        </div>
+      <div className="flex items-center justify-between gap-4 border-b border-border/60 px-6 py-3">
+        <span className="min-w-0 truncate text-sm text-foreground">
+          {artifact.title || 'Canvas'}
+        </span>
         <div className="flex shrink-0 items-center gap-2">
-          <Segmented
-            label="Canvas view"
-            size="sm"
-            value={view}
-            options={VIEW_OPTIONS}
-            onValueChange={setView}
-          />
           <Button type="button" size="sm" variant="outline" onClick={download}>
             Download
           </Button>
@@ -517,30 +526,27 @@ else { __ogShow('No React component found — define a component named App or a 
           </Button>
         </div>
       </div>
-      <div className="relative min-h-0 flex-1 bg-white">
-        {view === 'code' ? (
-          <pre className="absolute inset-0 overflow-auto bg-neutral-950 p-4 text-xs text-neutral-300">
-            {artifact.code}
-          </pre>
-        ) : artifact.kind === 'text' ? (
-          <div className="prose prose-invert prose-sm absolute inset-0 max-w-none overflow-auto bg-neutral-950 px-6 py-5 text-sm leading-relaxed text-neutral-200 [&_a]:text-emerald-400 [&_code]:rounded [&_code]:bg-neutral-800 [&_code]:px-1 [&_h1]:mb-3 [&_h1]:mt-1 [&_h1]:text-xl [&_h1]:font-semibold [&_h1]:text-white [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-white [&_li]:my-1 [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-5">
-            <ReactMarkdown>{artifact.code}</ReactMarkdown>
-          </div>
-        ) : previewUrl ? (
-          <iframe
-            ref={previewFrameRef}
-            key={previewUrl}
-            title="artifact"
-            sandbox="allow-scripts"
-            src={previewUrl}
-            className="absolute inset-0 h-full w-full border-0"
-            style={{ background: '#fff' }}
-          />
-        ) : (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-neutral-400">
-            <TextShimmer as="span">Preparing preview…</TextShimmer>
-          </div>
-        )}
+      {/* The inspection chapter's artifact frame: preview and code travel along one axis, with
+          copy beside them. The frame fills the panel; its panes take the remaining height. */}
+      <div className="flex min-h-0 flex-1 flex-col p-3">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={`${artifact.kind}:${artifact.title ?? ''}`}
+            initial={{ opacity: 0, y: 10, filter: 'blur(6px)' }}
+            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, y: -6, filter: 'blur(6px)' }}
+            transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            <AIArtifact
+              title={KIND_LABEL[artifact.kind]}
+              preview={previewPane}
+              code={artifact.code}
+              copyText={artifact.code}
+              className="flex min-h-0 flex-1 flex-col border-border/60 bg-background/60 [&>div:last-child>div>div]:h-full [&>div:last-child>div>div]:p-0 [&>div:last-child>div]:h-full [&>div:last-child]:min-h-0 [&>div:last-child]:flex-1 [&_pre]:h-full [&_pre]:overflow-auto"
+            />
+          </motion.div>
+        </AnimatePresence>
       </div>
     </SidePanel>
   )

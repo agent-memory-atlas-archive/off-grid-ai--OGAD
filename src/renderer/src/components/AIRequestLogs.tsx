@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowSquareOut,
   MagnifyingGlass,
@@ -29,7 +29,16 @@ import { PageHeader } from '@offgrid/operator-ui/operator/experience'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
 import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
-import { Empty, EmptyDescription, EmptyMedia } from '@offgrid/operator-ui/operator/coss/empty'
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle
+} from '@offgrid/operator-ui/operator/coss/empty'
+import { Table, TableBody, TableHeader, TableRow } from '@offgrid/operator-ui/operator/coss/table'
+import { TableVirtuoso, type TableComponents } from '@offgrid/operator-ui/operator/virtual-list'
+import { AutoHeight, Highlight, LiveStatus } from '@offgrid/operator-ui/operator/presence'
 import {
   InputGroup,
   InputGroupAddon,
@@ -65,6 +74,60 @@ const duration = (ms?: number): string =>
   ms === undefined ? 'In progress' : `${(ms / 1000).toFixed(ms < 1000 ? 2 : 1)}s`
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : 'Could not load activity. Try Refresh.'
+const ease = [0.16, 1, 0.3, 1] as const
+const spring = { type: 'spring', stiffness: 420, damping: 36 } as const
+const STATUS_DOT: Record<string, string> = {
+  completed: 'bg-primary shadow-[0_0_6px_rgb(var(--og-rgb-primary)/0.8)]',
+  running: 'bg-primary/70 animate-pulse',
+  failed: 'bg-red-400',
+  interrupted: 'bg-amber-400',
+  cancelled: 'bg-muted-foreground/50'
+}
+
+/** What every visible request row needs to know besides its own data. */
+interface RowContext {
+  selectedId: string | null
+  freshIds: ReadonlySet<string>
+}
+
+// The virtual chapter's table: Coss parts, a header that stays put, rows that light on hover. The
+// Coss container scrolls on x, which would capture the sticky header, so it stays visible here.
+function RequestTable({
+  context: _context,
+  ...props
+}: React.ComponentProps<'table'> & { context?: RowContext }): React.ReactElement {
+  return (
+    <Table
+      {...props}
+      render={<div style={{ overflow: 'visible' }} />}
+      className="table-fixed border-separate border-spacing-0"
+    />
+  )
+}
+
+function RequestTableRow({
+  item,
+  context,
+  ...props
+}: React.ComponentProps<'tr'> & {
+  item: AIRequestSummary
+  context: RowContext
+}): React.ReactElement {
+  return (
+    <TableRow
+      {...props}
+      data-state={context.selectedId === item.id ? 'selected' : undefined}
+      className="relative border-0 transition-colors duration-200 hover:bg-foreground/[0.035] data-[state=selected]:bg-primary/[0.05] [&>td]:border-b [&>td]:border-border/40"
+    />
+  )
+}
+
+const requestTableComponents: TableComponents<AIRequestSummary, RowContext> = {
+  Table: RequestTable,
+  TableHead: TableHeader,
+  TableBody,
+  TableRow: RequestTableRow
+}
 
 function readDisplay(): Display {
   try {
@@ -403,6 +466,9 @@ export function AIRequestLogs({
   const [loading, setLoading] = useState(true)
   const [confirmClear, setConfirmClear] = useState(false)
   const [clearing, setClearing] = useState(false)
+  // Rows that arrived with the latest live refresh glow in once; the first page arrives quietly.
+  const [freshIds, setFreshIds] = useState<ReadonlySet<string>>(new Set())
+  const shownIds = useRef<ReadonlySet<string> | null>(null)
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search), 250)
     return () => clearTimeout(timer)
@@ -439,6 +505,12 @@ export function AIRequestLogs({
                 : undefined
         })
         if (disposed) return
+        const previous = shownIds.current
+        const ids = new Set(result.rows.map((row) => row.id))
+        setFreshIds(
+          previous ? new Set([...ids].filter((id) => !previous.has(id))) : new Set<string>()
+        )
+        shownIds.current = ids
         setPage(result)
         setError('')
         const selected = result.rows.some((row) => row.id === selectedId)
@@ -603,54 +675,63 @@ export function AIRequestLogs({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      {showFilters && (
-        <div
-          id="ai-log-filters"
-          className="flex shrink-0 flex-wrap items-end gap-3 rounded-md border border-border bg-muted/20 p-3"
-        >
-          <Filter
-            label="Status"
-            value={status}
-            onChange={setStatus}
-            options={['all', 'running', 'completed', 'failed', 'cancelled', 'interrupted']}
-          />
-          <Filter
-            label="Hardware"
-            value={hardware}
-            onChange={setHardware}
-            options={['all', 'gpu', 'cpu', 'unknown']}
-          />
-          <Filter
-            label="Time"
-            value={period}
-            onChange={setPeriod}
-            options={['all', 'hour', 'day']}
-          />
-          <label className="flex items-center gap-2 py-2 text-xs">
-            <input
-              type="checkbox"
-              className="accent-primary"
-              checked={slow}
-              onChange={(event) => setSlow(event.target.checked)}
-            />
-            Over 10 seconds
-          </label>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setSearch('')
-              setStatus('all')
-              setHardware('all')
-              setPeriod('all')
-              setSlow(false)
-              setModality('all')
-            }}
-          >
-            Reset filters
-          </Button>
-        </div>
-      )}
+      <AutoHeight className="shrink-0">
+        <AnimatePresence initial={false}>
+          {showFilters && (
+            <motion.div
+              key="filters"
+              id="ai-log-filters"
+              initial={{ opacity: 0, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, filter: 'blur(4px)' }}
+              transition={{ duration: 0.3, ease }}
+              className="flex flex-wrap items-end gap-3 rounded-md border border-border bg-muted/20 p-3"
+            >
+              <Filter
+                label="Status"
+                value={status}
+                onChange={setStatus}
+                options={['all', 'running', 'completed', 'failed', 'cancelled', 'interrupted']}
+              />
+              <Filter
+                label="Hardware"
+                value={hardware}
+                onChange={setHardware}
+                options={['all', 'gpu', 'cpu', 'unknown']}
+              />
+              <Filter
+                label="Time"
+                value={period}
+                onChange={setPeriod}
+                options={['all', 'hour', 'day']}
+              />
+              <label className="flex items-center gap-2 py-2 text-xs">
+                <input
+                  type="checkbox"
+                  className="accent-primary"
+                  checked={slow}
+                  onChange={(event) => setSlow(event.target.checked)}
+                />
+                Over 10 seconds
+              </label>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSearch('')
+                  setStatus('all')
+                  setHardware('all')
+                  setPeriod('all')
+                  setSlow(false)
+                  setModality('all')
+                }}
+              >
+                Reset filters
+              </Button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </AutoHeight>
       <Segmented
         label="Modality"
         size="sm"
@@ -662,11 +743,23 @@ export function AIRequestLogs({
           ...AI_MODALITIES.map((kind) => ({ id: kind as string, label: labels[kind] }))
         ]}
       />
-      {(error || page.storageError) && (
-        <p role="alert" className="rounded-md border border-border p-3 text-xs">
-          {error || page.storageError}
-        </p>
-      )}
+      <AutoHeight className="shrink-0">
+        <AnimatePresence initial={false}>
+          {(error || page.storageError) && (
+            <motion.p
+              key="error"
+              role="alert"
+              initial={{ opacity: 0, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, filter: 'blur(4px)' }}
+              transition={{ duration: 0.3, ease }}
+              className="rounded-md border border-border p-3 text-xs"
+            >
+              {error || page.storageError}
+            </motion.p>
+          )}
+        </AnimatePresence>
+      </AutoHeight>
       <div className="grid min-h-64 min-w-0 flex-1 grid-cols-1 overflow-auto rounded-md border border-border bg-background md:grid-cols-[minmax(16rem,1fr)_minmax(0,2fr)] md:overflow-hidden">
         <div
           aria-label="Request list"
@@ -694,76 +787,155 @@ export function AIRequestLogs({
               />
             </div>
           </div>
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
-            {loading && (
-              // Shaped like the request rows that replace it.
-              <div role="status" className="space-y-2 p-4">
-                <span className="sr-only">Loading activity...</span>
-                {Array.from({ length: 5 }, (_, index) => (
-                  <Skeleton key={index} className="h-16 w-full" />
-                ))}
-              </div>
-            )}
-            {!loading && !page.rows.length && (
-              <Empty className="p-6 md:py-6">
-                <EmptyMedia variant="icon">
-                  <ListMagnifyingGlass aria-hidden className="text-muted-foreground" />
-                </EmptyMedia>
-                <EmptyDescription className="max-w-xs">
-                  {search ||
-                  modality !== 'all' ||
-                  status !== 'all' ||
-                  hardware !== 'all' ||
-                  slow ||
-                  period !== 'all'
-                    ? 'No requests match these filters.'
-                    : 'No activity yet. Your next AI request will appear here.'}
-                </EmptyDescription>
-              </Empty>
-            )}
-            <div>
-              <AnimatePresence initial={false}>
-                {page.rows.map((row) => (
-                  <motion.button
-                    key={row.id}
-                    layout
-                    initial={{ opacity: 0, y: 6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-                    type="button"
-                    aria-pressed={selectedId === row.id}
-                    onClick={() => {
-                      setRecord(null)
-                      setSelectedId(row.id)
-                    }}
-                    className={`block w-full border-b border-l-2 border-b-border px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring ${selectedId === row.id ? 'border-l-primary bg-primary/5' : 'border-l-transparent'}`}
-                  >
-                    <span className="flex justify-between gap-2 text-[11px] text-muted-foreground">
-                      <span>
-                        {labels[row.modality]}
-                        {row.source ? ` · ${row.source}` : ''}
-                        {row.parentId ? ' · Attempt / child' : ''}
-                      </span>
-                      <time>{new Date(row.startedAt).toLocaleTimeString()}</time>
-                    </span>
-                    <span className="my-1 block truncate text-sm">{row.preview || row.source}</span>
-                    <span className="flex justify-between gap-2 text-xs text-muted-foreground">
-                      <span className="truncate">
-                        {display.model ? (row.model ?? row.source) : row.source}
-                      </span>
-                      {display.details && (
-                        <span className="shrink-0">{duration(row.durationMs)}</span>
-                      )}
-                    </span>
-                    <span className="mt-1 block text-[11px] text-muted-foreground">
-                      {row.status}
-                      {display.model ? ` · ${row.backend ?? 'Backend not reported'}` : ''}
-                    </span>
-                  </motion.button>
-                ))}
-              </AnimatePresence>
-            </div>
+          <div
+            aria-busy={loading || undefined}
+            className="relative flex min-h-0 flex-1 flex-col overscroll-contain"
+          >
+            <AnimatePresence mode="wait" initial={false}>
+              {loading ? (
+                // Shaped like the request rows that replace it.
+                <motion.div
+                  key="loading"
+                  role="status"
+                  exit={{ opacity: 0, filter: 'blur(4px)' }}
+                  transition={{ duration: 0.3, ease }}
+                  className="space-y-3 p-4"
+                >
+                  <span className="sr-only">Loading activity...</span>
+                  {Array.from({ length: 5 }, (_, index) => (
+                    <div key={index} className="space-y-1.5">
+                      <Skeleton className="h-2.5 w-1/3" />
+                      <Skeleton className="h-3.5" style={{ width: `${82 - index * 9}%` }} />
+                      <Skeleton className="h-2.5 w-1/2" />
+                    </div>
+                  ))}
+                </motion.div>
+              ) : !page.rows.length ? (
+                <motion.div
+                  key="empty"
+                  initial={{ opacity: 0, y: 8, filter: 'blur(4px)' }}
+                  animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                  exit={{ opacity: 0, y: -8, filter: 'blur(4px)' }}
+                  transition={{ duration: 0.35, ease }}
+                >
+                  <Empty className="p-6 md:py-6">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <ListMagnifyingGlass aria-hidden />
+                      </EmptyMedia>
+                      <EmptyTitle className="text-[13px] font-normal">No requests</EmptyTitle>
+                      <EmptyDescription className="max-w-xs">
+                        {search ||
+                        modality !== 'all' ||
+                        status !== 'all' ||
+                        hardware !== 'all' ||
+                        slow ||
+                        period !== 'all'
+                          ? 'No requests match these filters.'
+                          : 'No activity yet. Your next AI request will appear here.'}
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key={`rows-${offset}`}
+                  className="h-full min-h-0 flex-1"
+                  initial={{ opacity: 0, y: 6, filter: 'blur(4px)' }}
+                  animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                  exit={{ opacity: 0, y: -6, filter: 'blur(4px)' }}
+                  transition={{ duration: 0.3, ease }}
+                >
+                  <TableVirtuoso
+                    className="h-full"
+                    aria-label="Requests"
+                    data={page.rows}
+                    context={{ selectedId, freshIds }}
+                    computeItemKey={(_, row) => row.id}
+                    components={requestTableComponents}
+                    fixedHeaderContent={() => (
+                      <tr>
+                        {[
+                          ['Request', 'text-left'],
+                          ['Time', 'w-24 text-right']
+                        ].map(([label, align]) => (
+                          <th
+                            key={label}
+                            className={`border-b border-border/60 bg-background/80 px-4 pb-2 pt-2 font-mono text-[10px] font-normal uppercase tracking-[0.18em] text-muted-foreground backdrop-blur-md ${align}`}
+                          >
+                            {label}
+                          </th>
+                        ))}
+                      </tr>
+                    )}
+                    itemContent={(_, row, context) => (
+                      <>
+                        <td className="min-w-0 px-4 py-3 align-top">
+                          {context.freshIds.has(row.id) && (
+                            <motion.span
+                              aria-hidden
+                              initial={{ opacity: 1 }}
+                              animate={{ opacity: 0 }}
+                              transition={{ duration: 1.4, ease }}
+                              className="pointer-events-none absolute inset-0 bg-primary/10"
+                            />
+                          )}
+                          {context.selectedId === row.id && (
+                            <motion.span
+                              aria-hidden
+                              layoutId="ai-activity-selection"
+                              transition={spring}
+                              className="pointer-events-none absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary shadow-[0_0_8px_rgb(var(--og-rgb-primary)/0.8)]"
+                            />
+                          )}
+                          <button
+                            type="button"
+                            aria-pressed={context.selectedId === row.id}
+                            onClick={() => {
+                              setRecord(null)
+                              setSelectedId(row.id)
+                            }}
+                            className="group block w-full min-w-0 text-left outline-none after:absolute after:inset-0 focus-visible:after:outline-2 focus-visible:after:-outline-offset-2 focus-visible:after:outline-ring"
+                          >
+                            <span className="block truncate text-[11px] text-muted-foreground">
+                              {labels[row.modality]}
+                              {row.source ? ` · ${row.source}` : ''}
+                              {row.parentId ? ' · Attempt / child' : ''}
+                            </span>
+                            <span className="my-1 block truncate text-sm transition-transform duration-300 group-hover:translate-x-0.5">
+                              <Highlight
+                                text={row.preview || row.source}
+                                query={debouncedSearch.trim()}
+                              />
+                            </span>
+                            <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                              <span
+                                aria-hidden
+                                className={`size-1.5 shrink-0 rounded-full ${STATUS_DOT[row.status] ?? 'bg-muted-foreground/50'}`}
+                              />
+                              <span className="truncate">
+                                {row.status}
+                                {display.model
+                                  ? ` · ${row.model ?? row.source} · ${row.backend ?? 'Backend not reported'}`
+                                  : ''}
+                              </span>
+                            </span>
+                          </button>
+                        </td>
+                        <td className="px-4 py-3 text-right align-top font-mono text-[11px] tabular-nums text-muted-foreground">
+                          <time className="block">
+                            {new Date(row.startedAt).toLocaleTimeString()}
+                          </time>
+                          {display.details && (
+                            <span className="mt-1 block">{duration(row.durationMs)}</span>
+                          )}
+                        </td>
+                      </>
+                    )}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
           <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border px-3 py-2">
             <Button
@@ -812,15 +984,22 @@ export function AIRequestLogs({
           </div>
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-5">
             {record ? (
-              <RequestDetail key={record.id} record={record} display={display} raw={raw} />
+              <motion.div
+                key={record.id}
+                initial={{ opacity: 0, y: 6, filter: 'blur(4px)' }}
+                animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                transition={{ duration: 0.3, ease }}
+              >
+                <RequestDetail record={record} display={display} raw={raw} />
+              </motion.div>
             ) : (
-              <Empty className="p-6 md:py-6">
+              <Empty className="p-6 md:py-6" aria-busy={selectedId ? true : undefined}>
                 <EmptyMedia variant="icon">
-                  <ListMagnifyingGlass aria-hidden className="text-muted-foreground" />
+                  <ListMagnifyingGlass aria-hidden />
                 </EmptyMedia>
-                <EmptyDescription>
+                <LiveStatus className="text-sm text-muted-foreground">
                   {selectedId ? 'Loading request...' : 'Select a request to inspect it.'}
-                </EmptyDescription>
+                </LiveStatus>
               </Empty>
             )}
           </div>
@@ -848,26 +1027,40 @@ export function AIRequestLogs({
           Clear history
         </Button>
       </footer>
-      {confirmClear && (
-        <div
-          role="group"
-          aria-label="Confirm clear activity"
-          className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3"
-        >
-          <p className="flex-1 text-sm">Delete all saved AI activity and its media?</p>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={clearing}
-            onClick={() => setConfirmClear(false)}
-          >
-            Cancel
-          </Button>
-          <Button size="sm" variant="destructive" disabled={clearing} onClick={() => void clear()}>
-            <TextMorph as="span">{clearing ? 'Clearing...' : 'Delete history'}</TextMorph>
-          </Button>
-        </div>
-      )}
+      <AutoHeight className="shrink-0">
+        <AnimatePresence initial={false}>
+          {confirmClear && (
+            <motion.div
+              key="confirm-clear"
+              role="group"
+              aria-label="Confirm clear activity"
+              initial={{ opacity: 0, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, filter: 'blur(4px)' }}
+              transition={{ duration: 0.3, ease }}
+              className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3"
+            >
+              <p className="flex-1 text-sm">Delete all saved AI activity and its media?</p>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={clearing}
+                onClick={() => setConfirmClear(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={clearing}
+                onClick={() => void clear()}
+              >
+                <TextMorph as="span">{clearing ? 'Clearing...' : 'Delete history'}</TextMorph>
+              </Button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </AutoHeight>
     </section>
   )
 }

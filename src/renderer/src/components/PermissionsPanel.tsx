@@ -1,23 +1,37 @@
-import { ArrowsClockwise, Check, Eye, Shield, WifiHigh, X } from '@phosphor-icons/react'
+import { AnimatePresence, motion } from 'motion/react'
+import { ArrowsClockwise, Eye, Shield, WifiHigh } from '@phosphor-icons/react'
 import { cn } from '@renderer/lib/utils'
-import { Button } from './ui/button'
-import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import {
+  AutoHeight,
+  LiveStatus,
+  SettingRow,
+  StatePill,
+  type StateTone
+} from '@offgrid/operator-ui/operator/presence'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { usePermissionController, type PermissionController } from './use-permission-controller'
 
-interface PermissionCardProps {
+const ease = [0.16, 1, 0.3, 1] as const
+
+type PermissionState = 'checking' | 'granted' | 'denied'
+
+interface PermissionRowProps {
   title: string
   description: string
   instructions?: string
   actionLabel?: string
   actionAriaLabel?: string
   icon: React.ReactNode
-  state: 'checking' | 'granted' | 'denied'
+  state: PermissionState
+  /** A saved grant that needs a relaunch reads amber instead of neutral. */
+  pending?: boolean
   onOpenSettings: () => void
 }
 
-function PermissionCard({
+/** One permission as a quiet setting row: icon and words on the left, next step and state pill on the right. */
+function PermissionRow({
   title,
   description,
   instructions,
@@ -25,65 +39,61 @@ function PermissionCard({
   actionAriaLabel,
   icon,
   state,
+  pending = false,
   onOpenSettings
-}: PermissionCardProps): React.ReactElement {
+}: PermissionRowProps): React.ReactElement {
   const granted = state === 'granted'
   const checking = state === 'checking'
+  const tone: StateTone = granted ? 'on' : checking ? 'busy' : pending ? 'warn' : 'off'
   return (
-    <div
-      role="status"
-      aria-label={`${title} permission`}
-      className={cn(
-        'flex h-full min-h-44 flex-col border p-4 transition-colors duration-150',
-        granted ? 'border-neutral-700 bg-neutral-900/60' : 'border-neutral-800 bg-neutral-950/40'
-      )}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-neutral-800 bg-neutral-900 text-neutral-400">
-          {icon}
+    <div role="status" aria-label={`${title} permission`} aria-busy={checking || undefined}>
+      <SettingRow
+        icon={icon}
+        title={title}
+        description={
+          <>
+            {description}
+            {!granted && instructions ? (
+              <span className="mt-1 block text-[11px] text-muted-foreground/80">
+                {instructions}
+              </span>
+            ) : null}
+          </>
+        }
+      >
+        <div className="flex shrink-0 items-center gap-2">
+          <AnimatePresence mode="popLayout" initial={false}>
+            {!granted && !checking ? (
+              <motion.span
+                key="action"
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.96 }}
+                transition={{ duration: 0.3, ease }}
+              >
+                <Button
+                  type="button"
+                  onClick={onOpenSettings}
+                  aria-label={actionAriaLabel ?? `Open ${title} settings`}
+                  variant="outline"
+                  size="sm"
+                >
+                  {actionLabel}
+                </Button>
+              </motion.span>
+            ) : null}
+          </AnimatePresence>
+          <StatePill
+            tone={tone}
+            label={checking ? 'Checking' : granted ? 'Granted' : 'Permission needed'}
+          />
         </div>
-        <Badge variant={granted ? 'success' : 'outline'}>
-          <TextMorph as="span">
-            {checking ? 'Checking' : granted ? 'Granted' : 'Permission needed'}
-          </TextMorph>
-        </Badge>
-      </div>
-      <div className="mt-3 flex-1">
-        <div className="flex items-center gap-2">
-          <h3 className="text-sm text-neutral-100">{title}</h3>
-          <span
-            className="flex h-4 w-4 items-center justify-center rounded-full bg-neutral-800"
-            aria-hidden="true"
-          >
-            {granted ? (
-              <Check className="h-2.5 w-2.5 text-neutral-300" />
-            ) : (
-              <X className="h-2.5 w-2.5 text-neutral-600" />
-            )}
-          </span>
-        </div>
-        <p className="mt-1 text-xs leading-relaxed text-neutral-500">{description}</p>
-        {!granted && instructions ? (
-          <p className="mt-2 text-[10px] leading-4 text-neutral-600">{instructions}</p>
-        ) : null}
-      </div>
-      {!granted && !checking ? (
-        <Button
-          type="button"
-          onClick={onOpenSettings}
-          aria-label={actionAriaLabel ?? `Open ${title} settings`}
-          variant="outline"
-          size="sm"
-          className="mt-3 w-full rounded-none border-neutral-700 bg-neutral-900 text-xs text-neutral-300 active:scale-95"
-        >
-          {actionLabel}
-        </Button>
-      ) : null}
+      </SettingRow>
     </div>
   )
 }
 
-function permissionState(value: boolean | undefined): PermissionCardProps['state'] {
+function permissionState(value: boolean | undefined): PermissionState {
   if (value === undefined) return 'checking'
   return value ? 'granted' : 'denied'
 }
@@ -97,16 +107,16 @@ export function PermissionsPanel({
   const { status, checking, error, screenRecordingRestartRequired } = permissions
 
   return (
-    <div className="font-mono">
-      <AnimatedGroup preset="blur-slide" className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        <PermissionCard
+    <div>
+      <AnimatedGroup preset="blur-slide" className="divide-y divide-border/50">
+        <PermissionRow
           title="Accessibility"
           description="Read exact text, app names, and URLs when macOS exposes them."
-          icon={<Eye className="h-5 w-5" />}
+          icon={<Eye className="size-4" />}
           state={permissionState(status?.accessibility)}
           onOpenSettings={() => void permissions.openAccessibility()}
         />
-        <PermissionCard
+        <PermissionRow
           title="Screen Recording"
           description={
             screenRecordingRestartRequired
@@ -128,50 +138,60 @@ export function PermissionsPanel({
               ? 'Relaunch Off Grid AI Desktop for Screen Recording'
               : 'Enable Screen Recording'
           }
-          icon={<Shield className="h-5 w-5" />}
+          icon={<Shield className="size-4" />}
           state={permissionState(status?.screenRecording)}
+          pending={screenRecordingRestartRequired}
           onOpenSettings={() => void permissions.handleScreenRecording()}
         />
-        <PermissionCard
+        <PermissionRow
           title="Local Network"
           description="Find and sync directly with your devices on this network."
           instructions="Enable Off Grid AI Desktop. Development builds appear as Electron. If it is already on but still reads denied, toggle it off and on once."
           actionLabel="Open Privacy & Security"
           actionAriaLabel="Open Privacy & Security for Local Network access"
-          icon={<WifiHigh className="h-5 w-5" />}
+          icon={<WifiHigh className="size-4" />}
           state={permissionState(status?.localNetwork)}
           onOpenSettings={() => void permissions.openLocalNetwork()}
         />
       </AnimatedGroup>
 
-      {error ? (
-        <p
-          role="alert"
-          className="mt-3 border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300"
-        >
-          {error}
-        </p>
-      ) : null}
+      <AutoHeight>
+        <AnimatePresence initial={false}>
+          {error ? (
+            <motion.p
+              key="error"
+              role="alert"
+              initial={{ opacity: 0, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, filter: 'blur(4px)' }}
+              transition={{ duration: 0.4, ease }}
+              className="mt-3 rounded-xl px-3 py-2 text-xs text-red-300 shadow-[inset_0_0_0_1px_rgb(239_68_68/0.3)]"
+            >
+              {error}
+            </motion.p>
+          ) : null}
+        </AnimatePresence>
+      </AutoHeight>
 
-      <div className="mt-3 flex items-center justify-between gap-3 border-t border-neutral-800 pt-3">
-        <span className="text-[10px] uppercase tracking-widest text-neutral-600" aria-live="polite">
-          <TextMorph as="span">
-            {screenRecordingRestartRequired
-              ? 'Restart required'
-              : checking
-                ? 'Checking current grants'
-                : 'Current access status'}
-          </TextMorph>
-        </span>
+      <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/50 pt-4">
+        <LiveStatus
+          as="span"
+          className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground"
+        >
+          {screenRecordingRestartRequired
+            ? 'Restart required'
+            : checking
+              ? 'Checking current grants'
+              : 'Current access status'}
+        </LiveStatus>
         <Button
           type="button"
           variant="outline"
           size="sm"
           onClick={() => void permissions.check()}
           disabled={checking}
-          className="rounded-none border-neutral-700 active:scale-95"
         >
-          <ArrowsClockwise className={cn('h-4 w-4', checking && 'animate-spin')} />
+          <ArrowsClockwise className={cn('size-4', checking && 'animate-spin')} />
           <TextMorph as="span">{checking ? 'Checking' : 'Check permissions again'}</TextMorph>
         </Button>
       </div>
