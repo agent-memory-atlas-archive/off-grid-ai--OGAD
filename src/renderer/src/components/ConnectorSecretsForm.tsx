@@ -1,6 +1,12 @@
 import { useState } from 'react'
 import { Button } from '@offgrid/operator-ui/operator/coss/button'
-import { Input } from '@offgrid/operator-ui/operator/coss/input'
+import {
+  KeyValue,
+  KeyValueItem,
+  KeyValueKeyInput,
+  KeyValueList,
+  KeyValueValueInput
+} from '@offgrid/operator-ui/operator/dice/key-value'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 
 interface ConnectorSecret {
@@ -26,8 +32,9 @@ interface ConnectorSecretsFormProps {
  * live here for as long as the form is open: the screen receives them once, on Connect, and they
  * go with the form when it closes.
  *
- * Fixed, masked fields rather than dice/key-value: the catalog names the keys, and key-value's
- * value field is a plain textarea that would show a token on screen as it is typed.
+ * Each secret is a dice/key-value row with fixed keys (the catalog names them; nothing is added or
+ * removed) and a masked value with its own reveal. One KeyValue per secret, because a row's
+ * labels are per secret and the list's rows share one set of props.
  */
 export function ConnectorSecretsForm({
   secrets,
@@ -39,20 +46,38 @@ export function ConnectorSecretsForm({
 
   return (
     <>
-      {secrets.map((s) => (
-        <Input
-          key={s.key}
-          size="sm"
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          aria-label={s.label}
-          value={values[s.key] ?? ''}
-          onChange={(ev) => setValues((p) => ({ ...p, [s.key]: ev.target.value }))}
-          placeholder={s.label + (s.placeholder ? ` (${s.placeholder})` : '')}
-          className="font-mono text-xs"
-        />
-      ))}
+      {secrets.map((s) => {
+        const label = s.label + (s.placeholder ? ` (${s.placeholder})` : '')
+        return (
+          <KeyValue
+            key={s.key}
+            fixedKeys
+            masked
+            trim={false}
+            enablePaste={false}
+            value={[{ id: s.key, key: s.label, value: values[s.key] ?? '' }]}
+            onValueChange={(items) => setValues((p) => ({ ...p, [s.key]: items[0]?.value ?? '' }))}
+            valuePlaceholder={label}
+          >
+            <KeyValueList>
+              <KeyValueItem className="items-center">
+                <KeyValueKeyInput
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  className="w-2/5 shrink-0 text-xs text-muted-foreground"
+                />
+                <KeyValueValueInput
+                  aria-label={s.label}
+                  autoComplete="off"
+                  revealLabel={`Show ${s.label}`}
+                  hideLabel={`Hide ${s.label}`}
+                  className="font-mono text-xs"
+                />
+              </KeyValueItem>
+            </KeyValueList>
+          </KeyValue>
+        )
+      })}
       <div className="flex gap-2">
         <Button size="xs" onClick={() => onConnect(values)} disabled={connecting}>
           <TextMorph as="span">{connecting ? 'Connecting…' : 'Connect'}</TextMorph>

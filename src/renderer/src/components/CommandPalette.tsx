@@ -179,7 +179,9 @@ export function CommandPalette({
       <CommandItem key={id} value={id} onClick={() => open_(hit)} className="gap-3">
         <Icon className="h-4 w-4 shrink-0 text-neutral-500" aria-hidden />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm text-white">{hit.title}</div>
+          <div className="truncate text-sm text-white">
+            <Highlight text={hit.title} query={query.trim()} />
+          </div>
           <div className="truncate text-xs text-neutral-500">
             <Highlight text={hit.snippet} query={query.trim()} />
           </div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
 import { persistToggle } from '@renderer/lib/persist-toggle'
 import {
   DEFAULT_CTX_SIZE,
@@ -244,7 +244,8 @@ function SettingSlider({
 }
 
 /**
- * Rolling digits with a calm stepper either side (the preview's Values chapter). Each press drafts
+ * Rolling digits with a calm stepper either side (the preview's Values chapter); the counter
+ * follows the system's reduced-motion setting itself. Each press drafts
  * at once and saves after a short pause, so stepping 4 → 8 reconfigures the engine once, not four
  * times. A pending save still lands if the panel closes first.
  */
@@ -269,7 +270,6 @@ function SettingStepper({
   onDraft: (value: number) => void
   onCommit: (value: number) => void
 }): React.JSX.Element {
-  const reducedMotion = useReducedMotion()
   const pending = useRef<{ timer: ReturnType<typeof setTimeout>; value: number } | null>(null)
   const commitRef = useRef(onCommit)
   useEffect(() => {
@@ -332,19 +332,15 @@ function SettingStepper({
         }}
         className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
       >
-        {reducedMotion ? (
-          <span className="text-[22px] font-light tabular-nums text-foreground">{value}</span>
-        ) : (
-          <Counter
-            value={value}
-            fontSize={22}
-            gap={1}
-            horizontalPadding={2}
-            fontWeight={300}
-            gradientFrom="transparent"
-            textColor="var(--foreground)"
-          />
-        )}
+        <Counter
+          value={value}
+          fontSize={22}
+          gap={1}
+          horizontalPadding={2}
+          fontWeight={300}
+          gradientFrom="transparent"
+          textColor="var(--foreground)"
+        />
       </span>
       <Button
         size="icon-sm"
@@ -1196,30 +1192,33 @@ export function SettingsPanel({
                             </span>
                           </span>
                         </button>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-label={`Enable ${group.label} tools`}
-                          aria-checked={allEnabled}
-                          onClick={() => {
-                            const next = !allEnabled
-                            const names = new Set(group.tools.map((tool) => tool.name))
-                            const nextTools = tools.map((tool) =>
-                              names.has(tool.name) ? { ...tool, enabled: next } : tool
-                            )
-                            void persistToggle(nextTools, tools, setTools, async () => {
-                              for (const tool of group.tools) {
-                                await (window.api as Partial<typeof window.api>).setToolEnabled?.(
-                                  tool.name,
-                                  next
-                                )
-                              }
-                            })
-                          }}
-                          className={`shrink-0 rounded px-2 py-1 text-[11px] transition-all duration-150 active:scale-95 ${allEnabled ? 'text-green-500' : 'text-neutral-500'}`}
-                        >
-                          <TextMorph as="span">{groupState}</TextMorph>
-                        </button>
+                        <label className="flex shrink-0 cursor-pointer items-center gap-2">
+                          <span
+                            className={`text-[11px] transition-colors duration-300 ${allEnabled ? 'text-green-500' : 'text-neutral-500'}`}
+                          >
+                            <TextMorph as="span">{groupState}</TextMorph>
+                          </span>
+                          <Switch
+                            aria-label={`Enable ${group.label} tools`}
+                            checked={allEnabled ? true : enabledCount === 0 ? false : 'mixed'}
+                            onCheckedChange={() => {
+                              // Mixed turns the whole group on, as the switch reports it.
+                              const next = !allEnabled
+                              const names = new Set(group.tools.map((tool) => tool.name))
+                              const nextTools = tools.map((tool) =>
+                                names.has(tool.name) ? { ...tool, enabled: next } : tool
+                              )
+                              void persistToggle(nextTools, tools, setTools, async () => {
+                                for (const tool of group.tools) {
+                                  await (window.api as Partial<typeof window.api>).setToolEnabled?.(
+                                    tool.name,
+                                    next
+                                  )
+                                }
+                              })
+                            }}
+                          />
+                        </label>
                       </div>
                       <AutoHeight>
                         {isExpanded && (

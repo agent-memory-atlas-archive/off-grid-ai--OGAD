@@ -65,13 +65,10 @@ export function ConversationTitleActions({
   }
 
   // The title edits where it sits (the preview's Details chapter). Saving is async and can fail,
-  // so Enter and the check button run saveRename here and the editor stays open until it lands;
-  // leaving the field keeps the draft open, as before, rather than saving it.
+  // so the editor stays open until the save lands (closeOnSubmit off), and leaving the field keeps
+  // the draft open, as before, rather than saving it (submitOnBlur off).
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      void saveRename()
-    } else if (event.key === 'Escape') {
+    if (event.key === 'Escape') {
       // Handled here, not by the panel behind: Escape leaves the rename, nothing else.
       event.preventDefault()
       cancelRename()
@@ -90,10 +87,13 @@ export function ConversationTitleActions({
         <Editable
           value={draft}
           onValueChange={setDraft}
-          defaultEditing
+          editing
           onEditingChange={(next) => {
             if (!next) cancelRename()
           }}
+          closeOnSubmit={false}
+          submitOnBlur={false}
+          onSubmit={() => void saveRename()}
           disabled={saving}
           invalid={error !== null}
           className="gap-0"
@@ -104,7 +104,6 @@ export function ConversationTitleActions({
               <EditableInput
                 aria-label="Rename conversation"
                 onKeyDown={handleInputKeyDown}
-                onBlur={(event) => event.preventDefault()}
                 className="h-7 min-w-0 px-2 text-xs md:text-xs"
               />
             </EditableArea>
@@ -112,10 +111,6 @@ export function ConversationTitleActions({
               <EditableSubmit
                 aria-label="Save conversation name"
                 disabled={saving}
-                onClick={(event) => {
-                  event.preventDefault()
-                  void saveRename()
-                }}
                 render={<Button variant="ghost" size="icon-xs" />}
               >
                 <Check />
