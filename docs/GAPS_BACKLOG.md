@@ -83,6 +83,15 @@ and use the shared Kokoro catalog for labels and languages. Two HTTP boundary ch
 verify the voice list, language mapping, and the selected voice sent for synthesis.
 No new API fields or stored preferences are required.
 
+### CHAT-ARTIFACT-SCROLL-20261013 (P2) - Keep chat usable beside an artifact
+
+**Status:** source patch and renderer type check passed; installed verification pending.
+
+ArtifactCanvas used the modal SidePanel default. Its full-window backdrop caught the chat's
+wheel and click events. The existing panel now accepts an optional non-modal mode, used only
+by ArtifactCanvas. The chat can keep its own scroll and keyboard focus, while Close and Escape
+still dismiss the artifact. Other side panels retain their backdrop and focus trap.
+
 ### MODEL-REMOTE-NAME-20261013 (P2) - Show a model label instead of its file path
 
 **Status:** source patch and focused checks passed; installation verification pending.
