@@ -16,7 +16,11 @@ import {
   residencyStatusText,
   residencySwitchLabel
 } from '@renderer/lib/residency-rows'
-import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
+import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { AnimatePresence, motion } from 'motion/react'
+
+const ease = [0.16, 1, 0.3, 1] as const
 
 interface QueueCfg {
   enabled: boolean
@@ -63,16 +67,23 @@ export function RuntimeResidencySection(): React.ReactElement {
         {RESIDENCY_ROWS.map((row) => {
           const resident = row.locked || modes[row.modality] === 'resident'
           return (
-            <div key={row.modality} className="flex items-start justify-between gap-4 py-2.5">
-              <div>
-                <div className="text-sm text-neutral-200">{row.label}</div>
-                <div className="text-xs text-neutral-600">{row.hint}</div>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
+            // One quiet row, as in the preview: the words are the switch's hit area too.
+            <label
+              key={row.modality}
+              data-disabled={row.locked || undefined}
+              className="group flex cursor-pointer items-start justify-between gap-4 py-2.5 data-disabled:cursor-not-allowed"
+            >
+              <span className="min-w-0">
+                <span className="block text-sm text-neutral-200 transition-colors group-hover:text-foreground">
+                  {row.label}
+                </span>
+                <span className="block text-xs text-neutral-600">{row.hint}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
                 <span
-                  className={`text-[11px] tabular-nums ${resident ? 'text-emerald-400' : 'text-neutral-500'}`}
+                  className={`text-[11px] tabular-nums transition-colors duration-300 ${resident ? 'text-emerald-400' : 'text-neutral-500'}`}
                 >
-                  {residencyStatusText(row, resident)}
+                  <TextMorph as="span">{residencyStatusText(row, resident)}</TextMorph>
                 </span>
                 <Switch
                   checked={resident}
@@ -81,8 +92,8 @@ export function RuntimeResidencySection(): React.ReactElement {
                   aria-disabled={row.locked}
                   aria-label={residencySwitchLabel(row)}
                 />
-              </div>
-            </div>
+              </span>
+            </label>
           )
         })}
       </div>
@@ -149,34 +160,56 @@ export function ModelPipelineSection(): React.ReactElement {
       </p>
       <div className="flex flex-col divide-y divide-neutral-800/70">
         {rows.map((row) => (
-          <div key={row.key} className="flex items-start justify-between gap-4 py-2.5">
-            <div>
-              <div className="text-sm text-neutral-200">{row.label}</div>
-              <div className="text-xs text-neutral-600">{row.hint}</div>
-            </div>
+          <label
+            key={row.key}
+            className="group flex cursor-pointer items-start justify-between gap-4 py-2.5"
+          >
+            <span className="min-w-0">
+              <span className="block text-sm text-neutral-200 transition-colors group-hover:text-foreground">
+                {row.label}
+              </span>
+              <span className="block text-xs text-neutral-600">{row.hint}</span>
+            </span>
             <Switch
               checked={row.on}
               onCheckedChange={() => set({ [row.key]: !row.on })}
               aria-label={row.label}
             />
-          </div>
+          </label>
         ))}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-neutral-600">
         <span className="uppercase tracking-wide">Now</span>
-        {activity.length === 0 ? (
-          <span className="text-neutral-500">idle</span>
-        ) : (
-          activity.map((job, index) => (
-            <span
-              key={`${job.label}-${String(index)}`}
-              className={`rounded px-1.5 py-0.5 tabular-nums ${live.running.includes(job) ? 'bg-emerald-500/15 text-emerald-400' : 'bg-neutral-800 text-neutral-400'}`}
+        <AnimatePresence mode="popLayout" initial={false}>
+          {activity.length === 0 ? (
+            <motion.span
+              key="idle"
+              layout
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.4, ease }}
+              className="text-neutral-500"
             >
-              {job.label}
-              {live.queued.includes(job) ? ' · queued' : ''}
-            </span>
-          ))
-        )}
+              idle
+            </motion.span>
+          ) : (
+            activity.map((job, index) => (
+              <motion.span
+                key={`${job.label}-${String(index)}`}
+                layout
+                initial={{ opacity: 0, y: 4, filter: 'blur(3px)' }}
+                animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                exit={{ opacity: 0, filter: 'blur(3px)' }}
+                transition={{ duration: 0.4, ease, delay: index * 0.05 }}
+                className={`rounded px-1.5 py-0.5 tabular-nums transition-colors duration-300 ${live.running.includes(job) ? 'bg-emerald-500/15 text-emerald-400' : 'bg-neutral-800 text-neutral-400'}`}
+              >
+                {job.label}
+                {live.queued.includes(job) ? ' · queued' : ''}
+              </motion.span>
+            ))
+          )}
+        </AnimatePresence>
       </div>
     </section>
   )

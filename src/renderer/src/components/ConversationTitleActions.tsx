@@ -1,15 +1,18 @@
-import { useState, type FormEvent, type JSX, type KeyboardEvent } from 'react'
+import { useState, type JSX, type KeyboardEvent } from 'react'
 import { Check, DotsThree, PencilSimple, Trash, X } from '@phosphor-icons/react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { Input } from '@offgrid/operator-ui/operator/coss/input'
-import type { RagConversationContract } from '../../../shared/ipc-contracts'
-import { Button } from './ui/button'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from './ui/dropdown-menu'
+  Editable,
+  EditableArea,
+  EditableCancel,
+  EditableInput,
+  EditableLabel,
+  EditableSubmit,
+  EditableToolbar
+} from '@offgrid/operator-ui/operator/dice/editable'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@offgrid/operator-ui/operator/coss/menu'
+import type { RagConversationContract } from '../../../shared/ipc-contracts'
 
 interface ConversationTitleActionsProps {
   conversation: RagConversationContract
@@ -41,8 +44,7 @@ export function ConversationTitleActions({
     setEditing(false)
   }
 
-  const saveRename = async (event: FormEvent): Promise<void> => {
-    event.preventDefault()
+  const saveRename = async (): Promise<void> => {
     const title = draft.trim()
     if (!title) {
       setError('Enter a conversation name.')
@@ -62,8 +64,15 @@ export function ConversationTitleActions({
     }
   }
 
+  // The title edits where it sits (the preview's Details chapter). Saving is async and can fail,
+  // so Enter and the check button run saveRename here and the editor stays open until it lands;
+  // leaving the field keeps the draft open, as before, rather than saving it.
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
-    if (event.key === 'Escape') {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      void saveRename()
+    } else if (event.key === 'Escape') {
+      // Handled here, not by the panel behind: Escape leaves the rename, nothing else.
       event.preventDefault()
       cancelRename()
     }
@@ -78,40 +87,49 @@ export function ConversationTitleActions({
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: reduceMotion ? 0 : 0.3, ease: [0.16, 1, 0.3, 1] }}
       >
-        <form className="flex min-w-0 items-center gap-1" onSubmit={saveRename}>
-          <Input
-            autoFocus
-            size="sm"
-            aria-label="Rename conversation"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={handleInputKeyDown}
-            onFocus={(event) => event.currentTarget.select()}
-            disabled={saving}
-            className="min-w-0 flex-1 text-xs"
-          />
-          <Button
-            type="submit"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Save conversation name"
-            disabled={saving}
-            className="active:scale-95"
-          >
-            <Check />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Cancel rename"
-            disabled={saving}
-            onClick={cancelRename}
-            className="active:scale-95"
-          >
-            <X />
-          </Button>
-        </form>
+        <Editable
+          value={draft}
+          onValueChange={setDraft}
+          defaultEditing
+          onEditingChange={(next) => {
+            if (!next) cancelRename()
+          }}
+          disabled={saving}
+          invalid={error !== null}
+          className="gap-0"
+        >
+          <EditableLabel className="sr-only">Rename conversation</EditableLabel>
+          <div className="flex min-w-0 items-center gap-1">
+            <EditableArea className="min-w-0 flex-1">
+              <EditableInput
+                aria-label="Rename conversation"
+                onKeyDown={handleInputKeyDown}
+                onBlur={(event) => event.preventDefault()}
+                className="h-7 min-w-0 px-2 text-xs md:text-xs"
+              />
+            </EditableArea>
+            <EditableToolbar className="flex items-center gap-1">
+              <EditableSubmit
+                aria-label="Save conversation name"
+                disabled={saving}
+                onClick={(event) => {
+                  event.preventDefault()
+                  void saveRename()
+                }}
+                render={<Button variant="ghost" size="icon-xs" />}
+              >
+                <Check />
+              </EditableSubmit>
+              <EditableCancel
+                aria-label="Cancel rename"
+                disabled={saving}
+                render={<Button variant="ghost" size="icon-xs" />}
+              >
+                <X />
+              </EditableCancel>
+            </EditableToolbar>
+          </div>
+        </Editable>
         <AnimatePresence initial={false}>
           {error && (
             <motion.p
@@ -134,30 +152,32 @@ export function ConversationTitleActions({
   return (
     <div className="flex min-w-0 items-center gap-1">
       <p className="min-w-0 flex-1 truncate text-xs text-neutral-300">{displayTitle}</p>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label={`Conversation actions for ${displayTitle}`}
-            onClick={(event) => event.stopPropagation()}
-            className="opacity-0 transition-all group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 active:scale-95"
-          >
-            <DotsThree />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-36">
-          <DropdownMenuItem onSelect={beginRename}>
+      <Menu>
+        <MenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Conversation actions for ${displayTitle}`}
+              onClick={(event) => event.stopPropagation()}
+              className="opacity-0 transition-all group-hover:opacity-100 focus-visible:opacity-100 data-popup-open:opacity-100"
+            />
+          }
+        >
+          <DotsThree />
+        </MenuTrigger>
+        <MenuPopup align="end" className="w-36">
+          <MenuItem onClick={beginRename}>
             <PencilSimple />
             Rename
-          </DropdownMenuItem>
-          <DropdownMenuItem variant="destructive" onSelect={() => void onDelete()}>
+          </MenuItem>
+          <MenuItem variant="destructive" onClick={() => void onDelete()}>
             <Trash />
             Delete
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+          </MenuItem>
+        </MenuPopup>
+      </Menu>
     </div>
   )
 }

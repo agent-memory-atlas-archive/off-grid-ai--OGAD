@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { Input } from '@offgrid/operator-ui/operator/coss/input'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 
 interface ConnectorSecret {
@@ -23,6 +25,9 @@ interface ConnectorSecretsFormProps {
  * every connector row and the whole gallery, and the values outlived a cancelled connection. They
  * live here for as long as the form is open: the screen receives them once, on Connect, and they
  * go with the form when it closes.
+ *
+ * Fixed, masked fields rather than dice/key-value: the catalog names the keys, and key-value's
+ * value field is a plain textarea that would show a token on screen as it is typed.
  */
 export function ConnectorSecretsForm({
   secrets,
@@ -35,29 +40,26 @@ export function ConnectorSecretsForm({
   return (
     <>
       {secrets.map((s) => (
-        <input
+        <Input
           key={s.key}
+          size="sm"
           type="password"
+          autoComplete="off"
+          spellCheck={false}
+          aria-label={s.label}
           value={values[s.key] ?? ''}
           onChange={(ev) => setValues((p) => ({ ...p, [s.key]: ev.target.value }))}
           placeholder={s.label + (s.placeholder ? ` (${s.placeholder})` : '')}
-          className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-2.5 py-1.5 text-xs text-neutral-200 outline-none focus:border-neutral-600"
+          className="font-mono text-xs"
         />
       ))}
       <div className="flex gap-2">
-        <button
-          onClick={() => onConnect(values)}
-          disabled={connecting}
-          className="rounded-md bg-green-500 px-2.5 py-1 text-xs text-neutral-950 hover:bg-green-400 disabled:opacity-40"
-        >
+        <Button size="xs" onClick={() => onConnect(values)} disabled={connecting}>
           <TextMorph as="span">{connecting ? 'Connecting…' : 'Connect'}</TextMorph>
-        </button>
-        <button
-          onClick={onCancel}
-          className="rounded-md border border-neutral-700 px-2.5 py-1 text-xs text-neutral-400"
-        >
+        </Button>
+        <Button size="xs" variant="outline" onClick={onCancel}>
           Cancel
-        </button>
+        </Button>
       </div>
     </>
   )

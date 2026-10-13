@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { AnimatePresence, motion } from 'motion/react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { persistToggle } from '@renderer/lib/persist-toggle'
 import {
   DEFAULT_CTX_SIZE,
@@ -32,21 +32,25 @@ import { BestSettingsCard } from './BestSettingsCard'
 import { RemoteVisionSettingsTab } from './RemoteVisionSettingsTab'
 import { SettingsRow as Row } from './SettingsRow'
 import { SettingsSelect } from './SettingsSelect'
-import { NativeSelect } from '@offgrid/operator-ui/operator/forms'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { Input } from '@offgrid/operator-ui/operator/coss/input'
+import { Textarea } from '@offgrid/operator-ui/operator/coss/textarea'
+import Counter from '@offgrid/operator-ui/operator/bits/counter'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 import ElasticSlider from '@offgrid/operator-ui/operator/bits/elastic-slider'
-import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
+import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
 import { Stat, StatLabel, StatValue } from '@offgrid/operator-ui/operator/dice/stat'
 import { Empty, EmptyDescription, EmptyMedia } from '@offgrid/operator-ui/operator/coss/empty'
 import { ListRow } from '@offgrid/operator-ui/operator/list-row'
+import { AutoHeight, SettingRow } from '@offgrid/operator-ui/operator/presence'
 import { BackendPreferencesSection } from './ProcessingControls'
 import { useReplySound } from '../lib/reply-sound'
 import { SettingsSection } from './SettingsSection'
 import { groupConnectors } from '../../../shared/connector-groups'
 import type { SpeechLanguage } from '@offgrid/speech'
-import { CaretRight, Flame, Plugs, Snowflake, X } from '@phosphor-icons/react'
+import { CaretRight, Flame, Minus, Plugs, Plus, Snowflake, Wrench, X } from '@phosphor-icons/react'
 import { getSlot, SLOTS } from '@renderer/bootstrap/slotRegistry'
 
 import {
@@ -239,6 +243,122 @@ function SettingSlider({
   )
 }
 
+/**
+ * Rolling digits with a calm stepper either side (the preview's Values chapter). Each press drafts
+ * at once and saves after a short pause, so stepping 4 → 8 reconfigures the engine once, not four
+ * times. A pending save still lands if the panel closes first.
+ */
+function SettingStepper({
+  label,
+  value,
+  min,
+  max,
+  step,
+  disabled = false,
+  format = (next) => String(next),
+  onDraft,
+  onCommit
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  disabled?: boolean
+  format?: (value: number) => string
+  onDraft: (value: number) => void
+  onCommit: (value: number) => void
+}): React.JSX.Element {
+  const reducedMotion = useReducedMotion()
+  const pending = useRef<{ timer: ReturnType<typeof setTimeout>; value: number } | null>(null)
+  const commitRef = useRef(onCommit)
+  useEffect(() => {
+    commitRef.current = onCommit
+  })
+  useEffect(
+    () => () => {
+      if (!pending.current) return
+      clearTimeout(pending.current.timer)
+      commitRef.current(pending.current.value)
+    },
+    []
+  )
+  const change = (next: number): void => {
+    const clamped = Math.min(max, Math.max(min, next))
+    if (clamped === value) return
+    onDraft(clamped)
+    if (pending.current) clearTimeout(pending.current.timer)
+    pending.current = {
+      value: clamped,
+      timer: setTimeout(() => {
+        pending.current = null
+        commitRef.current(clamped)
+      }, 600)
+    }
+  }
+  return (
+    <div
+      data-disabled={disabled || undefined}
+      className="flex items-center gap-4 transition-opacity duration-300 data-disabled:opacity-40"
+    >
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        aria-label={`Decrease ${label}`}
+        disabled={disabled || value <= min}
+        onClick={() => change(value - step)}
+      >
+        <Minus />
+      </Button>
+      <span
+        role="spinbutton"
+        aria-label={label}
+        aria-valuenow={value}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuetext={format(value)}
+        aria-disabled={disabled || undefined}
+        tabIndex={disabled ? -1 : 0}
+        onKeyDown={(event) => {
+          if (disabled) return
+          if (event.key === 'ArrowUp' || event.key === 'ArrowRight') {
+            event.preventDefault()
+            change(value + step)
+          }
+          if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') {
+            event.preventDefault()
+            change(value - step)
+          }
+        }}
+        className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      >
+        {reducedMotion ? (
+          <span className="text-[22px] font-light tabular-nums text-foreground">{value}</span>
+        ) : (
+          <Counter
+            value={value}
+            fontSize={22}
+            gap={1}
+            horizontalPadding={2}
+            fontWeight={300}
+            gradientFrom="transparent"
+            textColor="var(--foreground)"
+          />
+        )}
+      </span>
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        aria-label={`Increase ${label}`}
+        disabled={disabled || value >= max}
+        onClick={() => change(value + step)}
+      >
+        <Plus />
+      </Button>
+    </div>
+  )
+}
+
 export function SettingsPanel({
   onClose,
   embedded = false,
@@ -263,6 +383,9 @@ export function SettingsPanel({
   const [dflashModels, setDflashModels] = useState<DraftModelOption[]>([])
   // Default hidden, like mobile: the numbers are for when you go looking, not a permanent fixture.
   const [showGenerationDetails, setShowGenerationDetails] = useState(false)
+  // The count a stepper returns to when "Choose automatically" is turned off again.
+  const [manualThreads, setManualThreads] = useState(8)
+  const [manualDraftMax, setManualDraftMax] = useState(4)
   // Remounts the tab content after "Use fastest settings" so every section re-reads its values.
   const [settingsVersion, setSettingsVersion] = useState(0)
   const reloadAfterBestSettings = (): void => {
@@ -449,19 +572,12 @@ export function SettingsPanel({
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={openActiveModels}
-              className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 transition-colors hover:text-white"
-            >
+            <Button size="sm" variant="outline" onClick={openActiveModels}>
               Active models
-            </button>
-            <button
-              onClick={onClose}
-              aria-label="Close"
-              className="text-neutral-500 transition-colors hover:text-white"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            </Button>
+            <Button size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close">
+              <X />
+            </Button>
           </div>
         </div>
       ) : null}
@@ -699,7 +815,7 @@ export function SettingsPanel({
                 label="System prompt"
                 hint="Prepended to every chat as a system message. Leave blank for the default."
               >
-                <textarea
+                <Textarea
                   value={s.systemPrompt ?? ''}
                   onChange={(e) =>
                     setS((current) => ({ ...current, systemPrompt: e.target.value }))
@@ -707,7 +823,7 @@ export function SettingsPanel({
                   onBlur={(e) => set({ systemPrompt: e.target.value })}
                   rows={5}
                   placeholder="e.g. You are a concise, technical assistant."
-                  className="w-full resize-none rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
+                  className="resize-none"
                 />
               </Row>
             </SettingsSection>
@@ -791,16 +907,17 @@ export function SettingsPanel({
               </Row>
               <Row
                 label="FlashAttention"
+                controlId="flash-attention-toggle"
                 value={(s.flashAttn ?? false) ? 'On' : 'Off'}
                 hint="Faster, lower memory. Required for a quantized KV cache."
               >
-                <button
-                  onClick={() => set({ flashAttn: !(s.flashAttn ?? false) })}
+                <Switch
+                  id="flash-attention-toggle"
+                  aria-label="FlashAttention"
+                  checked={s.flashAttn ?? false}
                   disabled={(s.kvCacheType ?? 'f16') !== 'f16'}
-                  className={`w-full rounded-md border px-2 py-1.5 text-xs transition-colors disabled:opacity-50 ${s.flashAttn ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}
-                >
-                  <TextMorph as="span">{s.flashAttn ? 'Enabled' : 'Disabled'}</TextMorph>
-                </button>
+                  onCheckedChange={() => set({ flashAttn: !(s.flashAttn ?? false) })}
+                />
               </Row>
               <Row
                 label="Speculative decoding"
@@ -823,19 +940,34 @@ export function SettingsPanel({
                   controlId="speculative-draft-max"
                   hint="Maximum tokens proposed per step. More is not always faster. Auto uses two for MTP and the engine default for Draft and DFlash."
                 >
-                  <NativeSelect
-                    id="speculative-draft-max"
-                    aria-label="Draft token limit"
-                    value={s.speculativeDraftMax ?? 0}
-                    onChange={(event) => set({ speculativeDraftMax: Number(event.target.value) })}
-                  >
-                    <option value={0}>Auto</option>
-                    {Array.from({ length: 16 }, (_, index) => index + 1).map((limit) => (
-                      <option key={limit} value={limit}>
-                        {limit} tokens
-                      </option>
-                    ))}
-                  </NativeSelect>
+                  <div id="speculative-draft-max" className="space-y-4">
+                    <SettingStepper
+                      label="Draft token limit"
+                      value={
+                        (s.speculativeDraftMax ?? 0) > 0 ? s.speculativeDraftMax! : manualDraftMax
+                      }
+                      min={1}
+                      max={16}
+                      step={1}
+                      disabled={(s.speculativeDraftMax ?? 0) === 0}
+                      format={(value) => `${value} tokens`}
+                      onDraft={(value) => {
+                        setManualDraftMax(value)
+                        setS((current) => ({ ...current, speculativeDraftMax: value }))
+                      }}
+                      onCommit={(value) => set({ speculativeDraftMax: value })}
+                    />
+                    <label className="flex w-fit cursor-pointer items-center gap-3 text-[12px] text-muted-foreground">
+                      <Switch
+                        aria-label="Choose the draft token limit automatically"
+                        checked={(s.speculativeDraftMax ?? 0) === 0}
+                        onCheckedChange={(auto) =>
+                          set({ speculativeDraftMax: auto ? 0 : manualDraftMax })
+                        }
+                      />
+                      Auto
+                    </label>
+                  </div>
                 </Row>
               )}
               {(s.speculativeDecoding === 'draft' || s.speculativeDecoding === 'dflash') && (
@@ -872,17 +1004,34 @@ export function SettingsPanel({
                   onCommit={(value) => set({ gpuLayers: value })}
                 />
               </Row>
-              <Row label="CPU threads" hint="0 = auto (let llama.cpp choose).">
-                <SettingSlider
-                  label="CPU threads"
-                  value={s.threads ?? 0}
-                  min={0}
-                  max={16}
-                  step={1}
-                  format={(value) => (value === 0 ? 'auto' : String(value))}
-                  onDraft={(value) => setS((current) => ({ ...current, threads: value }))}
-                  onCommit={(value) => set({ threads: value })}
-                />
+              <Row
+                label="CPU threads"
+                value={(s.threads ?? 0) === 0 ? 'Auto' : undefined}
+                hint="Auto lets llama.cpp choose."
+              >
+                <div className="space-y-4">
+                  <SettingStepper
+                    label="CPU threads"
+                    value={(s.threads ?? 0) > 0 ? s.threads! : manualThreads}
+                    min={1}
+                    max={16}
+                    step={1}
+                    disabled={(s.threads ?? 0) === 0}
+                    onDraft={(value) => {
+                      setManualThreads(value)
+                      setS((current) => ({ ...current, threads: value }))
+                    }}
+                    onCommit={(value) => set({ threads: value })}
+                  />
+                  <label className="flex w-fit cursor-pointer items-center gap-3 text-[12px] text-muted-foreground">
+                    <Switch
+                      aria-label="Choose CPU threads automatically"
+                      checked={(s.threads ?? 0) === 0}
+                      onCheckedChange={(auto) => set({ threads: auto ? 0 : manualThreads })}
+                    />
+                    Choose automatically
+                  </label>
+                </div>
               </Row>
               <Row label="Batch size" hint="Tokens processed per batch during prompt ingest.">
                 <SettingSlider
@@ -898,12 +1047,9 @@ export function SettingsPanel({
               </Row>
             </SettingsSection>
 
-            <button
-              onClick={resetDefaults}
-              className="mt-2 w-full rounded-md border border-neutral-800 px-3 py-2 text-xs text-neutral-400 transition-colors hover:border-neutral-700 hover:text-white"
-            >
+            <Button variant="outline" onClick={resetDefaults} className="mt-2 w-full">
               Reset to defaults
-            </button>
+            </Button>
           </>
         )}
 
@@ -975,13 +1121,12 @@ export function SettingsPanel({
 
         {tab === 'tools' && (
           <>
-            <div className="mb-3 flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2">
-              <div>
-                <div className="text-sm">Enable tools</div>
-                <div className="text-[11px] text-neutral-500">
-                  Controls whether any tools are sent to the chat model.
-                </div>
-              </div>
+            <SettingRow
+              icon={<Wrench />}
+              title="Enable tools"
+              description="Controls whether any tools are sent to the chat model."
+              className="mb-3 pt-0"
+            >
               <Switch
                 aria-label="Enable tools"
                 checked={toolsEnabled}
@@ -994,7 +1139,7 @@ export function SettingsPanel({
                   )
                 }}
               />
-            </div>
+            </SettingRow>
             <p className="mb-3 text-[11px] text-neutral-500">
               Built-in tools the model can call when “Tools” is on in the composer.
             </p>
@@ -1076,49 +1221,51 @@ export function SettingsPanel({
                           <TextMorph as="span">{groupState}</TextMorph>
                         </button>
                       </div>
-                      {isExpanded && (
-                        <div
-                          id={`tool-group-items-${groupId}`}
-                          className="divide-y divide-neutral-800/70"
-                        >
-                          {group.tools.map((tool) => (
-                            <div
-                              key={tool.name}
-                              className="flex items-start justify-between gap-3 px-3 py-2 transition-colors duration-150 hover:bg-neutral-800/30"
-                            >
-                              <div className="min-w-0">
-                                <div
-                                  className={`text-sm ${tool.enabled === false ? 'text-neutral-500' : 'text-green-500'}`}
-                                >
-                                  {tool.name}
+                      <AutoHeight>
+                        {isExpanded && (
+                          <div
+                            id={`tool-group-items-${groupId}`}
+                            className="divide-y divide-neutral-800/70"
+                          >
+                            {group.tools.map((tool) => (
+                              <div
+                                key={tool.name}
+                                className="flex items-start justify-between gap-3 px-3 py-2 transition-colors duration-150 hover:bg-neutral-800/30"
+                              >
+                                <div className="min-w-0">
+                                  <div
+                                    className={`text-sm ${tool.enabled === false ? 'text-neutral-500' : 'text-green-500'}`}
+                                  >
+                                    {tool.name}
+                                  </div>
+                                  <div className="text-[11px] text-neutral-500">
+                                    {tool.description}
+                                  </div>
                                 </div>
-                                <div className="text-[11px] text-neutral-500">
-                                  {tool.description}
-                                </div>
+                                <Switch
+                                  aria-label={`Enable ${tool.name}`}
+                                  checked={tool.enabled !== false}
+                                  onCheckedChange={() => {
+                                    const next = tool.enabled === false
+                                    void persistToggle(
+                                      tools.map((item) =>
+                                        item.name === tool.name ? { ...item, enabled: next } : item
+                                      ),
+                                      tools,
+                                      setTools,
+                                      () =>
+                                        (window.api as Partial<typeof window.api>).setToolEnabled?.(
+                                          tool.name,
+                                          next
+                                        )
+                                    )
+                                  }}
+                                />
                               </div>
-                              <Switch
-                                aria-label={`Enable ${tool.name}`}
-                                checked={tool.enabled !== false}
-                                onCheckedChange={() => {
-                                  const next = tool.enabled === false
-                                  void persistToggle(
-                                    tools.map((item) =>
-                                      item.name === tool.name ? { ...item, enabled: next } : item
-                                    ),
-                                    tools,
-                                    setTools,
-                                    () =>
-                                      (window.api as Partial<typeof window.api>).setToolEnabled?.(
-                                        tool.name,
-                                        next
-                                      )
-                                  )
-                                }}
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                            ))}
+                          </div>
+                        )}
+                      </AutoHeight>
                     </section>
                   )
                 })}
@@ -1141,25 +1288,26 @@ export function SettingsPanel({
               HTTP MCP endpoint:
             </p>
             <div className="mb-4 flex flex-col gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 p-3">
-              <input
+              <Input
+                size="sm"
                 value={newConn.name}
                 onChange={(e) => setNewConn({ ...newConn, name: e.target.value })}
                 placeholder="Name (e.g. Brave Search)"
-                className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
               />
-              <input
+              <Input
+                size="sm"
                 value={newConn.url}
                 onChange={(e) => setNewConn({ ...newConn, url: e.target.value })}
                 placeholder="https://… (MCP HTTP URL)"
-                className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
               />
-              <button
+              <Button
+                size="sm"
                 onClick={addConnector}
                 disabled={!newConn.name.trim() || !newConn.url.trim()}
-                className="self-start rounded-md bg-green-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-green-500 disabled:opacity-40"
+                className="self-start"
               >
                 Add connector
-              </button>
+              </Button>
             </div>
             {connectors.length === 0 ? (
               <Empty className="px-0 py-6 md:py-6">
@@ -1198,30 +1346,37 @@ export function SettingsPanel({
                               description={c.url ?? undefined}
                               // On/Off is state, so it stays visible; only Remove waits for hover.
                               meta={
-                                <button
-                                  onClick={async () => {
-                                    await (
-                                      window.api as Partial<typeof window.api>
-                                    ).mcpSetEnabled?.(c.id, !c.enabled)
-                                    refreshConnectors()
-                                  }}
-                                  className={`rounded px-2 py-1 text-[11px] ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
-                                >
-                                  <TextMorph as="span">{c.enabled ? 'On' : 'Off'}</TextMorph>
-                                </button>
+                                <label className="flex cursor-pointer items-center gap-2">
+                                  <span
+                                    className={`text-[11px] transition-colors duration-300 ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
+                                  >
+                                    <TextMorph as="span">{c.enabled ? 'On' : 'Off'}</TextMorph>
+                                  </span>
+                                  <Switch
+                                    aria-label={`Enable ${c.name}`}
+                                    checked={Boolean(c.enabled)}
+                                    onCheckedChange={async () => {
+                                      await (
+                                        window.api as Partial<typeof window.api>
+                                      ).mcpSetEnabled?.(c.id, !c.enabled)
+                                      refreshConnectors()
+                                    }}
+                                  />
+                                </label>
                               }
                               actions={
-                                <button
+                                <Button
+                                  size="xs"
+                                  variant="destructive-outline"
                                   onClick={async () => {
                                     await (window.api as Partial<typeof window.api>).mcpRemove?.(
                                       c.id
                                     )
                                     refreshConnectors()
                                   }}
-                                  className="rounded px-2 py-1 text-[11px] text-red-400 hover:bg-red-500/10"
                                 >
                                   Remove
-                                </button>
+                                </Button>
                               }
                             />
                           </motion.div>

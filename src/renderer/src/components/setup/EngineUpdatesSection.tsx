@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Button } from '../ui/button'
 import type { EngineUpdateStatus } from '../../../../shared/engine-updates'
 import { formatStorageBytes } from './storage-format'
-import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
+import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
+import { LiveStatus, SettingRow } from '@offgrid/operator-ui/operator/presence'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 
@@ -51,29 +52,30 @@ export function EngineUpdatesSection(): React.ReactElement | null {
 
   return (
     <div className="mt-4 border-t border-neutral-800 pt-4">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-xs text-neutral-200">Keep engines up to date</p>
-          <p className="mt-1 text-[11px] leading-5 text-neutral-500">
-            Installs newer GPU engines in the background so new models work without waiting for an
-            app update.
-          </p>
-        </div>
+      <SettingRow
+        title="Keep engines up to date"
+        description="Installs newer GPU engines in the background so new models work without waiting for an app update."
+        className="py-0"
+      >
         <Switch
-          className="mt-1"
           aria-label="Keep engines up to date"
           checked={status.enabled}
           onCheckedChange={() =>
             void window.api.engineUpdates.setEnabled(!status.enabled).then(setStatus)
           }
         />
-      </div>
-      <p
-        role="status"
-        className={`mt-2 text-[11px] ${status.phase === 'failed' ? 'text-red-400' : 'text-neutral-500'}`}
-      >
-        {busy ? <TextShimmer as="span">{phaseText(status)}</TextShimmer> : phaseText(status)}
-      </p>
+      </SettingRow>
+      {busy ? (
+        <p role="status" aria-busy="true" className="mt-2 text-[11px] text-neutral-500">
+          <TextShimmer as="span">{phaseText(status)}</TextShimmer>
+        </p>
+      ) : (
+        <LiveStatus
+          className={`mt-2 text-[11px] ${status.phase === 'failed' ? 'text-red-400' : 'text-neutral-500'}`}
+        >
+          {phaseText(status)}
+        </LiveStatus>
+      )}
       {installed.length ? (
         <p className="mt-1 text-[11px] text-neutral-500">
           {installed.map(([id, version]) => `${ENGINE_NAMES[id] ?? id}: ${version}`).join(' · ')}

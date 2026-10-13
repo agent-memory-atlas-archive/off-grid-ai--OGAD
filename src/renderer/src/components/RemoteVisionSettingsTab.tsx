@@ -16,7 +16,8 @@ import { SettingsRow as Row } from './SettingsRow'
 import { SettingsSelect } from './SettingsSelect'
 import { SettingsSection } from './SettingsSection'
 import { AnimatePresence, motion } from 'motion/react'
-import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
+import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
+import { LiveStatus } from '@offgrid/operator-ui/operator/presence'
 import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
 import { ListRow } from '@offgrid/operator-ui/operator/list-row'
 import { Section } from '@offgrid/operator-ui/operator/experience'
@@ -667,19 +668,9 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
       ) : null}
 
       <div className="mt-3 flex items-center justify-between gap-3 border-t border-neutral-800 pt-3">
-        <p role="status" aria-live="polite" className="min-w-0 flex-1 text-[10px] text-neutral-500">
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.span
-              key={status}
-              className="block"
-              initial={{ opacity: 0, filter: 'blur(4px)' }}
-              animate={{ opacity: 1, filter: 'blur(0px)' }}
-              exit={{ opacity: 0, filter: 'blur(4px)' }}
-            >
-              {status}
-            </motion.span>
-          </AnimatePresence>
-        </p>
+        <div className="min-w-0 flex-1">
+          <LiveStatus className="text-[10px] text-neutral-500">{status}</LiveStatus>
+        </div>
         {remoteEnabled ? (
           <button
             type="button"

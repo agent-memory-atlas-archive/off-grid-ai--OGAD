@@ -4,7 +4,8 @@ import { Button } from './ui/button'
 import { formatTransferSpeed } from '@offgrid/sync'
 import { projectProgress } from '@offgrid/ui'
 import { formatStorageBytes } from './setup/storage-format'
-import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
+import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
+import { LiveStatus, SettingRow } from '@offgrid/operator-ui/operator/presence'
 import {
   Progress,
   ProgressIndicator,
@@ -322,29 +323,20 @@ export function SoftwareUpdateSection(): React.ReactElement {
 
   return (
     <div>
-      <div className="flex items-start justify-between gap-4">
-        <p className="text-sm text-neutral-500">
-          Off Grid AI Desktop checks for updates in the background and installs them when you quit.
-          Turn this off to update only when you choose.
-        </p>
-        <Switch
-          className="mt-1"
-          aria-label="Automatic updates"
-          checked={auto}
-          onCheckedChange={toggle}
-        />
-      </div>
-      <div className="mt-4 flex items-start justify-between gap-4 border-t border-neutral-800 pt-4">
-        <p className="text-sm text-neutral-500">
-          Get nightly builds. New features land here first, on every change, before they reach
-          stable. These are pre-release - expect rough edges. Off by default.
-        </p>
-        <Switch
-          className="mt-1"
-          aria-label="Nightly builds"
-          checked={beta}
-          onCheckedChange={toggleBeta}
-        />
+      <div className="divide-y divide-neutral-800">
+        <SettingRow
+          title="Automatic updates"
+          description="Off Grid AI Desktop checks for updates in the background and installs them when you quit. Turn this off to update only when you choose."
+          className="pt-0"
+        >
+          <Switch aria-label="Automatic updates" checked={auto} onCheckedChange={toggle} />
+        </SettingRow>
+        <SettingRow
+          title="Nightly builds"
+          description="Get nightly builds. New features land here first, on every change, before they reach stable. These are pre-release - expect rough edges. Off by default."
+        >
+          <Switch aria-label="Nightly builds" checked={beta} onCheckedChange={toggleBeta} />
+        </SettingRow>
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button size="xs" variant="outline" onClick={() => void check()} disabled={checking}>
@@ -385,21 +377,7 @@ export function SoftwareUpdateSection(): React.ReactElement {
           onSelect={setSelectedVersion}
         />
       ) : null}
-      {status && (
-        <p className="mt-2 text-xs text-neutral-500" aria-live="polite">
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.span
-              key={status}
-              className="block"
-              initial={{ opacity: 0, filter: 'blur(4px)' }}
-              animate={{ opacity: 1, filter: 'blur(0px)' }}
-              exit={{ opacity: 0, filter: 'blur(4px)' }}
-            >
-              {status}
-            </motion.span>
-          </AnimatePresence>
-        </p>
-      )}
+      {status && <LiveStatus className="mt-2 text-xs text-neutral-500">{status}</LiveStatus>}
       {downloadProgress && downloadProgress.status !== 'failed' ? (
         <div className="mt-3 border border-neutral-800 bg-neutral-950/40 px-3 py-2.5">
           <div className="flex items-center justify-between gap-3 text-xs text-neutral-400">

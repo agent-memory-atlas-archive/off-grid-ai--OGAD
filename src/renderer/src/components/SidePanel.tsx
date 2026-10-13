@@ -17,6 +17,11 @@ type SidePanelProps = {
 /**
  * Shared frame for dismissible Desktop side panels.
  *
+ * Dressed as the library's sheet (animate/sheet in the overlays chapter): a glass layer over the
+ * living background that arrives on the same spring. It stays OGAD's own frame because callers
+ * mount and unmount it (exit runs in their AnimatePresence), it must sit above every other
+ * renderer layer, it can be non-modal, and it holds native child views below it.
+ *
  * The backdrop owns outside-click dismissal and the shared hook owns Escape.
  * Content stays in a sibling dialog, so clicks inside never reach the backdrop.
  */
@@ -101,7 +106,7 @@ export function SidePanel({
         role="dialog"
         aria-modal={modal || undefined}
         aria-label={ariaLabel}
-        className={`pointer-events-auto fixed inset-y-0 right-0 z-[2147483647] flex max-w-full flex-col border-l border-neutral-800 bg-neutral-950 font-mono shadow-2xl ${className}`}
+        className={`pointer-events-auto fixed inset-y-0 right-0 z-[2147483647] flex max-w-full flex-col border-l border-border/60 bg-background/85 font-mono shadow-2xl backdrop-blur-xl ${className}`}
         style={style}
         initial={reduceMotion ? false : { x: '100%', opacity: 0.7 }}
         animate={{ x: '0%', opacity: 1 }}

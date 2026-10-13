@@ -1,18 +1,24 @@
 import { useEffect, useState } from 'react'
-import { Button } from '@offgrid/operator-ui/operator/button'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { Field, FieldDescription, FieldError } from '@offgrid/operator-ui/operator/coss/field'
+import { Input } from '@offgrid/operator-ui/operator/coss/input'
+import { Label } from '@offgrid/operator-ui/operator/coss/label'
 import {
-  Field,
-  FieldDescription,
-  FieldError,
-  Input,
-  Label,
-} from '@offgrid/operator-ui/operator/forms'
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle
+} from '@offgrid/operator-ui/operator/animate/alert-dialog'
 import type { GatewayApiKeySettingsContract } from '../../../shared/ipc-contracts'
 import { AnimatePresence, motion } from 'motion/react'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { SettingsSelect } from './SettingsSelect'
 import { ListRow } from '@offgrid/operator-ui/operator/list-row'
+import { LiveStatus, StatePill } from '@offgrid/operator-ui/operator/presence'
 
 export function GatewayApiKeysSettings(): React.JSX.Element {
   const [settings, setSettings] = useState<GatewayApiKeySettingsContract | null>(null)
@@ -73,7 +79,11 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
   }
 
   if (!settings)
-    return error ? <FieldError>{error}</FieldError> : <p role="status">
+    return error ? (
+      <FieldError match role="alert">
+        {error}
+      </FieldError>
+    ) : <p role="status">
         <TextShimmer as="span">Loading API keys...</TextShimmer>
       </p>
 
@@ -85,9 +95,10 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
       </p>
       <div className="flex flex-wrap items-center gap-3">
         <span role="status">
-          <TextMorph as="span">
-            {settings.enabled ? 'API key required' : 'API key not required'}
-          </TextMorph>
+          <StatePill
+            tone={settings.enabled ? 'on' : 'off'}
+            label={settings.enabled ? 'API key required' : 'API key not required'}
+          />
         </span>
         <Button
           size="sm"
@@ -193,23 +204,38 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
           </div>
         </section>
       )}
-      {confirm && (
-        <section
-          className="space-y-2 rounded-md border border-neutral-800 p-3"
-          aria-label="Confirm API key change"
-        >
-          <p>
-            {confirm.action === 'disable'
-              ? 'Allow model API requests without a key?'
-              : confirm.action === 'replace'
-                ? `Replace ${confirm.name}? The old key will stop working. The new key uses the expiry selected above.`
-                : `Revoke ${confirm.name}? Requests with this key will be rejected.`}
-          </p>
-          <div className="flex gap-2">
+      <AlertDialog open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
+        <AlertDialogPopup className="sm:max-w-md" aria-label="Confirm API key change">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-[17px] font-normal">
+              {confirm?.action === 'disable'
+                ? 'Turn off authentication?'
+                : confirm?.action === 'replace'
+                  ? `Replace ${confirm.name}?`
+                  : `Revoke ${confirm?.name ?? 'this key'}?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-[13px]">
+              {confirm?.action === 'disable'
+                ? 'Allow model API requests without a key?'
+                : confirm?.action === 'replace'
+                  ? `Replace ${confirm.name}? The old key will stop working. The new key uses the expiry selected above.`
+                  : `Revoke ${confirm?.name}? Requests with this key will be rejected.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose
+              disabled={busy}
+              render={<Button size="sm" variant="ghost" />}
+            >
+              Cancel
+            </AlertDialogClose>
             <Button
               size="sm"
-              disabled={busy || (confirm.action === 'replace' && !!createdKey)}
-              onClick={() =>
+              variant={confirm?.action === 'replace' ? 'default' : 'destructive'}
+              loading={busy}
+              disabled={busy || (confirm?.action === 'replace' && !!createdKey)}
+              onClick={() => {
+                if (!confirm) return
                 void run(async () => {
                   if (confirm.action === 'disable')
                     setSettings(await window.api.setGatewayApiKeyRequired(false))
@@ -218,18 +244,19 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
                   else await create(confirm.id, confirm.name)
                   setConfirm(null)
                 })
-              }
+              }}
             >
               Confirm
             </Button>
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirm(null)}>
-              Cancel
-            </Button>
-          </div>
-        </section>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+      {error && (
+        <FieldError match role="alert">
+          {error}
+        </FieldError>
       )}
-      {error && <FieldError>{error}</FieldError>}
-      {notice && <p role="status">{notice}</p>}
+      {notice && <LiveStatus travel="across">{notice}</LiveStatus>}
       {!settings.keys.length && (
         <p className="text-neutral-500">No API keys. Create a separate key for each client.</p>
       )}

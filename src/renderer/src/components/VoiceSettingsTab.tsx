@@ -31,6 +31,7 @@ import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 import ElasticSlider from '@offgrid/operator-ui/operator/bits/elastic-slider'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
+import { LiveStatus } from '@offgrid/operator-ui/operator/presence'
 import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
 import { formatTransferSpeed } from '@offgrid/sync'
 import { projectProgress } from '@offgrid/ui'
@@ -491,16 +492,14 @@ export function VoiceSettingsTab(): React.JSX.Element {
               Retry
             </button>
           </div>
-        ) : remoteVoice && !voices.length ? (
-          <p role="status" className="mb-4 text-xs text-neutral-500">
-            Speaker choices are not available for this remote model.
-          </p>
         ) : (
-          <p role="status" className="mb-4 text-xs text-neutral-500">
-            {remoteVoice
-              ? 'Speaker selected.'
-              : `${runtimeVoiceLanguage({ id: voice })?.label ?? language} voice ready.`}
-          </p>
+          <LiveStatus className="mb-4 text-xs text-neutral-500">
+            {remoteVoice && !voices.length
+              ? 'Speaker choices are not available for this remote model.'
+              : remoteVoice
+                ? 'Speaker selected.'
+                : `${runtimeVoiceLanguage({ id: voice })?.label ?? language} voice ready.`}
+          </LiveStatus>
         )}
 
         {(!remoteVoice || voices.length > 0) && (

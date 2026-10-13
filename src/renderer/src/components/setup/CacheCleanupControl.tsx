@@ -3,6 +3,8 @@ import { Broom } from '@phosphor-icons/react'
 import type { CacheCleanupResultContract } from '../../../../shared/ipc-contracts'
 import { formatStorageBytes } from './storage-format'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { LiveStatus } from '@offgrid/operator-ui/operator/presence'
 
 /** Temporary Storage control. Durable-store reassurance stays beside the action. */
 export function CacheCleanupControl(): React.ReactElement {
@@ -33,19 +35,15 @@ export function CacheCleanupControl(): React.ReactElement {
           Clears app cache and incomplete model downloads. Installed models and your data stay.
         </div>
         {notice && (
-          <div role="status" className="mt-1 text-[10px] text-neutral-500">
+          <LiveStatus as="div" className="mt-1 text-[10px] text-neutral-500">
             {notice}
-          </div>
+          </LiveStatus>
         )}
       </div>
-      <button
-        onClick={clear}
-        disabled={busy}
-        className="flex shrink-0 items-center gap-1.5 rounded-md border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500/60 hover:text-white active:scale-95 disabled:opacity-50"
-      >
-        <Broom className="h-3 w-3" />{' '}
+      <Button size="xs" variant="outline" onClick={clear} disabled={busy} className="shrink-0">
+        <Broom />
         <TextMorph as="span">{busy ? 'Clearing…' : 'Clear storage'}</TextMorph>
-      </button>
+      </Button>
     </div>
   )
 }

@@ -18,6 +18,7 @@ import {
 } from '../../../../shared/ipc-contracts'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
+import { LiveStatus, StatePill, type StateTone } from '@offgrid/operator-ui/operator/presence'
 
 // Emerald is the only accent (DESIGN): healthy = emerald, everything else reads
 // through opacity tiers + icon shape, never a status color palette.
@@ -30,6 +31,17 @@ const STATUS_TEXT: Record<SystemHealthComponentStatusContract, string> = {
   installed: 'text-neutral-300',
   granted: 'text-green-500',
   denied: 'text-neutral-300'
+}
+
+const STATUS_TONE: Record<SystemHealthComponentStatusContract, StateTone> = {
+  ready: 'on',
+  granted: 'on',
+  starting: 'busy',
+  down: 'warn',
+  denied: 'warn',
+  idle: 'off',
+  not_installed: 'off',
+  installed: 'off'
 }
 
 function StatusIcon({
@@ -205,9 +217,11 @@ export function HealthPanel(): React.ReactElement {
                       :{c.port}
                     </span>
                   )}
-                  <span className={cn('shrink-0 text-[10px]', STATUS_TEXT[c.status])}>
-                    {SYSTEM_HEALTH_STATUS_LABELS[c.status]}
-                  </span>
+                  <StatePill
+                    tone={STATUS_TONE[c.status]}
+                    label={SYSTEM_HEALTH_STATUS_LABELS[c.status]}
+                    className={cn('shrink-0', STATUS_TEXT[c.status])}
+                  />
                   {canRestart && (
                     <button
                       onClick={() => restart(c.id)}
@@ -233,12 +247,12 @@ export function HealthPanel(): React.ReactElement {
         )}
 
         {freeMsg && (
-          <div
-            role="status"
+          <LiveStatus
+            as="div"
             className="border-t border-neutral-800/60 px-4 py-2 text-[10px] text-neutral-400"
           >
             {freeMsg}
-          </div>
+          </LiveStatus>
         )}
 
         {health && (

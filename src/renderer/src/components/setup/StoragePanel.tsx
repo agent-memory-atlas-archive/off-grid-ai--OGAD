@@ -1,5 +1,4 @@
-import { Button } from '@offgrid/operator-ui/operator/button'
-import '@offgrid/operator-ui/styles.css'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   HardDrives,
@@ -334,21 +333,14 @@ export function StoragePanel(): React.ReactElement {
               type="button"
               onClick={chooseDirectory}
               disabled={busy === 'directory' || active.length > 0}
-              className="min-h-0 shadow-none flex items-center gap-1.5 rounded-md border border-neutral-700 px-2.5 py-1 text-[11px] text-neutral-300 transition-colors hover:border-green-500 hover:text-white focus-visible:outline focus-visible:outline-green-500 disabled:opacity-50"
             >
-              <FolderOpen className="h-3.5 w-3.5" />{' '}
+              <FolderOpen />
               <TextMorph as="span">
                 {busy === 'directory' ? 'Choosing...' : 'Choose folder'}
               </TextMorph>
             </Button>
             {pendingDirectory && (
-              <Button
-                size="sm"
-                variant="outline"
-                type="button"
-                onClick={() => api.restartForModelDirectory()}
-                className="min-h-0 shadow-none rounded-md bg-green-500 px-2.5 py-1 text-[11px] text-neutral-950 transition-colors hover:bg-green-400 focus-visible:outline focus-visible:outline-green-500"
-              >
+              <Button size="sm" type="button" onClick={() => api.restartForModelDirectory()}>
                 Restart now
               </Button>
             )}
@@ -372,9 +364,9 @@ export function StoragePanel(): React.ReactElement {
               type="button"
               onClick={addScanFolder}
               disabled={busy === 'scan'}
-              className="min-h-0 shadow-none flex shrink-0 items-center gap-1.5 rounded-md border border-neutral-700 px-2.5 py-1 text-[11px] text-neutral-300 transition-colors hover:border-green-500 hover:text-white focus-visible:outline focus-visible:outline-green-500 disabled:opacity-50"
+              className="shrink-0"
             >
-              <FolderOpen className="h-3.5 w-3.5" /> Add folder
+              <FolderOpen /> Add folder
             </Button>
           </div>
           {scanFolders.length > 0 && (
@@ -386,15 +378,15 @@ export function StoragePanel(): React.ReactElement {
                 >
                   <span className="min-w-0 flex-1 break-all">{directory}</span>
                   <Button
-                    size="sm"
-                    variant="outline"
+                    size="icon-xs"
+                    variant="ghost"
                     type="button"
                     onClick={() => removeScanFolder(directory)}
                     disabled={busy === 'scan'}
                     aria-label={`Remove ${directory}`}
-                    className="min-h-0 shadow-none rounded p-1 text-neutral-500 transition-colors hover:text-red-400 focus-visible:outline focus-visible:outline-green-500 disabled:opacity-50"
+                    className="text-neutral-500 hover:text-red-400"
                   >
-                    <X className="h-3.5 w-3.5" />
+                    <X />
                   </Button>
                 </div>
               ))}

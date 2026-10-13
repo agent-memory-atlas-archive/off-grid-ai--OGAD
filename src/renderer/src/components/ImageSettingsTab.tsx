@@ -17,7 +17,7 @@ import {
   NumberFieldIncrement,
   NumberFieldInput
 } from '@offgrid/operator-ui/operator/coss/number-field'
-import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
+import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
 
 type ImageSettings = {
   imageParams?: ImageParamStore
