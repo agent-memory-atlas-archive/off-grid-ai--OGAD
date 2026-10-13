@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// One-time packager for verified CUDA directories extracted from a build artifact.
+// Packager for the CUDA directories staged by .github/workflows/publish-performance-pack.yml.
 // The versioned archive is immutable. Publish its hash and byte count in the app.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -22,7 +22,7 @@ for (const relative of required) {
 }
 
 fs.mkdirSync(path.dirname(path.resolve(archive)), { recursive: true })
-// Stream straight from the extracted installer. A second full copy can exhaust
+// Stream straight from the staged folders. A second full copy can exhaust
 // the runner disk before the archive is ready.
 const tar = spawnSync('tar', [
   '-czf', path.resolve(archive), '--dereference',
