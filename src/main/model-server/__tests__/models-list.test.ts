@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { tagLlmEntry, tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries, installedTextModelEntries } from '../models-list'
+import { tagLlmEntry, tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries, installedTextModelEntries, installedImageModelEntries } from '../models-list'
 
 describe('remote specialist discovery', () => {
   it('advertises installed grounding and decision models without exposing missing models or Chat twice', () => {
@@ -112,5 +112,25 @@ describe('downloaded chat inventory', () => {
       { id: 'text', name: 'Text', kind: 'chat', object: 'model', owned_by: 'off-grid', created: 1, capabilities: [] },
       { id: 'vision', name: 'Vision', kind: 'vision', object: 'model', owned_by: 'off-grid', created: 1, capabilities: ['vision'] }
     ])
+  })
+})
+
+describe('installed image inventory', () => {
+  it('lists every installed image model with the active pick first', () => {
+    expect(
+      installedImageModelEntries(
+        ['flux-schnell-Q4_K_S.gguf', 'qwen-image-2.1-turbo-Q4_K_M.gguf', 'z-image-turbo-Q4_K.gguf'],
+        'qwen-image-2.1-turbo-Q4_K_M.gguf',
+        1
+      ).map((entry) => [entry.id, entry.kind])
+    ).toEqual([
+      ['qwen-image-2.1-turbo-Q4_K_M.gguf', 'image'],
+      ['flux-schnell-Q4_K_S.gguf', 'image'],
+      ['z-image-turbo-Q4_K.gguf', 'image']
+    ])
+  })
+
+  it('lists nothing when no image model is installed', () => {
+    expect(installedImageModelEntries([], null, 1)).toEqual([])
   })
 })

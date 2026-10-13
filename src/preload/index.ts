@@ -1,5 +1,6 @@
 import type { RuntimeBackend } from '../shared/runtime-backends'
 import type { PerformancePackStatus } from '../shared/performance-pack'
+import type { EngineUpdateStatus } from '../shared/engine-updates'
 import { contextBridge, ipcRenderer } from 'electron'
 import {
   CACHE_CLEANUP_CHANNEL,
@@ -265,20 +266,22 @@ const offGridApi = {
   onRagStream: (
     callback: (data: {
       streamId: string
-      type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'done'
+      type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'image_request' | 'done'
       text?: string
       step?: unknown
       call?: { name: string; result: string; status: 'completed' | 'failed' | 'pending' }
+      request?: { prompt: string; enhancePrompt?: boolean }
     }) => void
   ) => {
     const sub = (
       _: unknown,
       data: {
         streamId: string
-        type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'done'
+        type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'image_request' | 'done'
         text?: string
         step?: unknown
         call?: { name: string; result: string; status: 'completed' | 'failed' | 'pending' }
+        request?: { prompt: string; enhancePrompt?: boolean }
       }
     ): void => callback(data)
     ipcRenderer.on('rag:stream', sub)
@@ -624,6 +627,17 @@ const offGridApi = {
         callback(status)
       ipcRenderer.on('performance-pack:changed', subscription)
       return unsubscribe('performance-pack:changed', subscription)
+    }
+  },
+  engineUpdates: {
+    status: (): Promise<EngineUpdateStatus> => ipcRenderer.invoke('engine-updates:status'),
+    check: (): Promise<EngineUpdateStatus> => ipcRenderer.invoke('engine-updates:check'),
+    setEnabled: (enabled: boolean): Promise<EngineUpdateStatus> =>
+      ipcRenderer.invoke('engine-updates:set-enabled', enabled),
+    onChanged: (callback: (status: EngineUpdateStatus) => void): (() => void) => {
+      const subscription = (_event: unknown, status: EngineUpdateStatus): void => callback(status)
+      ipcRenderer.on('engine-updates:changed', subscription)
+      return unsubscribe('engine-updates:changed', subscription)
     }
   },
   systemHealth: (): Promise<SystemHealthContract> => ipcRenderer.invoke('system:health'),

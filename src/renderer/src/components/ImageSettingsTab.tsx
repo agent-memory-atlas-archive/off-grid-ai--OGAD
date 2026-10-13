@@ -95,6 +95,19 @@ export function ImageSettingsTab(): React.JSX.Element {
     persist('imageParams', next)
   }
 
+  // Save each complete value as it is typed. Closing Settings with Esc or an outside click
+  // removes the field without a blur, so a blur-only save silently dropped the edit.
+  const saveTypedOverride = (
+    key: keyof ImageParamOverride,
+    raw: string,
+    min: number,
+    max: number
+  ): void => {
+    const value = Number(raw)
+    if (raw.trim() && Number.isFinite(value) && value >= min && value <= max)
+      saveOverride(key, value)
+  }
+
   const processing = (
     <SettingsSection
       id="image.processing"
@@ -173,6 +186,7 @@ export function ImageSettingsTab(): React.JSX.Element {
               min={4}
               max={50}
               defaultValue={effective.steps}
+              onChange={(event) => saveTypedOverride('steps', event.target.value, 4, 50)}
               onBlur={(event) => {
                 const steps = Math.max(4, Math.min(50, Number(event.target.value) || 4))
                 event.target.value = String(steps)
@@ -193,6 +207,7 @@ export function ImageSettingsTab(): React.JSX.Element {
               max={20}
               step={0.5}
               defaultValue={effective.cfgScale}
+              onChange={(event) => saveTypedOverride('cfgScale', event.target.value, 0, 20)}
               onBlur={(event) => {
                 const guidance = Math.max(0, Math.min(20, Number(event.target.value) || 0))
                 event.target.value = String(guidance)

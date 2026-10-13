@@ -35,7 +35,13 @@ import type { GatewayApiKeyContract, GatewayApiKeySettingsContract } from '../sh
 import { getActiveTranscription } from './transcription/select'
 import { transcriptionRequestOptions } from './model-server/transcription-request'
 import * as tts from './tts'
-import { generateImage, imageGenStatus, activeImageModel, type ImageGenParams } from './imagegen'
+import {
+  generateImage,
+  imageGenStatus,
+  activeImageModel,
+  listImageModels,
+  type ImageGenParams
+} from './imagegen'
 import { whisperModel } from './rag/extractors'
 import { getActiveModal } from './active-models'
 import { embeddings } from './embeddings'
@@ -62,7 +68,7 @@ import { isAsync, matchPollRoute } from './model-server/async-request'
 import { sanitizeChatMessages, parseDecisionChatMessages } from './model-server/chat-messages'
 import { applyThinkingPayload, requestedThinking } from './llm/chat-payload'
 import { parseMultipart } from './model-server/multipart'
-import { tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries, installedTextModelEntries } from './model-server/models-list'
+import { tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries, installedTextModelEntries, installedImageModelEntries } from './model-server/models-list'
 import { buildGatewayModalities, type GatewayModalities } from './model-server/health'
 import { safeProxyResponse } from './model-server/proxy-response'
 import { writeDiagnosticLog } from './diagnostics-log'
@@ -1047,10 +1053,10 @@ async function handleEmbeddings(
 // ─── Models list (all modalities) ────────────────────────────────────────────
 // One ACTIVE model per modality is served on demand: a request loads it, returns,
 // then it's offloaded — models never co-reside in RAM (that's why long calls hand
-// back a request id to poll). So /v1/models reports the *active* pick per modality
-// — what an incoming request would actually load — not every installed file.
+// back a request id to poll). Text, vision and image list every installed model so a
+// client can choose one per request; speech and transcription report the active pick.
 // llama-server's own /v1/models only knows the loaded text/vision LLM; we fetch
-// that and fold in the active image, speech (TTS), and transcription (STT) models.
+// that and fold in the image, speech (TTS), and transcription (STT) models.
 // Each entry carries a non-standard `kind` (chat/vision/image/speech/transcription).
 function fetchUpstreamModels(): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
@@ -1128,9 +1134,13 @@ async function handleModelsList(
     extra: Record<string, unknown> = {}
   ): Record<string, unknown> => modelEntry(id, kind, now, extra)
 
-  // Active image model (chosen pick, else the resolver default).
+  // Every installed image model, active pick first. A request names the one it wants and
+  // generation loads that file; a remote image server stays the single routed pick.
   const imgId = activeImageModel()
-  const images = imgId ? [tag(imgId, 'image')] : []
+  const remoteImage = getActiveRemoteVisionServerForModality('image')
+  const images = remoteImage
+    ? [tag(imgId ?? remoteVisionModelId(remoteImage.id, remoteImage.selectedModel), 'image')]
+    : installedImageModelEntries(listImageModels(), imgId, now)
 
   // Active speech (TTS) model + its available voices.
   let voices: string[] = []

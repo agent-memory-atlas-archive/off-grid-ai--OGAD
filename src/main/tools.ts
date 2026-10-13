@@ -746,6 +746,22 @@ function standingRules(rules: readonly string[] | undefined): string {
   return `\n\nThe user's standing rules. Follow every one in every reply, including how you speak and the persona you take:\n${kept.map((rule) => `- ${rule}`).join('\n')}`
 }
 
+/** A complete generate_image call's request, or null when its arguments are not usable yet. */
+function earlyImageRequest(
+  rawArguments: string
+): { prompt: string; enhancePrompt?: boolean } | null {
+  try {
+    const args = JSON.parse(rawArguments) as { prompt?: unknown; enhance_prompt?: unknown }
+    const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : ''
+    if (!prompt) return null
+    return typeof args.enhance_prompt === 'boolean'
+      ? { prompt, enhancePrompt: args.enhance_prompt }
+      : { prompt }
+  } catch {
+    return null
+  }
+}
+
 export async function toolChat(
   query: string,
   history: { role: string; content: string }[] = [],
@@ -785,6 +801,12 @@ export async function toolChat(
     onActivity?: (activity: ToolActivity) => void
     /** The orchestrator's plan for this turn, emitted once before its steps run. */
     onPlan?: (steps: { tool: string; why: string }[]) => void
+    /**
+     * Each image request as soon as the model finishes writing its call, before the round ends.
+     * Only for callers whose image generation can run beside this chat turn; the final result
+     * still lists every request, so a caller matches these against it.
+     */
+    onImageRequest?: (request: { prompt: string; enhancePrompt?: boolean }) => void
   } = {}
 ): Promise<{
   answer: string
@@ -958,6 +980,7 @@ export async function toolChat(
   // the turn so we never evict the LLM mid-loop, and one model round that asks for two pictures does
   // not silently replace the first request with the last.
   const imageRequests: { prompt: string; enhancePrompt?: boolean }[] = []
+  const earlyImagePrompts = new Set<string>()
   let finishAfterDeferredImages = false
   const toolRoundAnswers: string[] = []
   const resultWithImages = (result: {
@@ -1083,7 +1106,25 @@ export async function toolChat(
       thinking: opts.thinking,
       signal: opts.signal,
       onToolCallStart: (name) =>
-        opts.onActivity?.({ kind: 'preparing_tool_calls', label: 'Preparing actions…', name })
+        opts.onActivity?.({ kind: 'preparing_tool_calls', label: 'Preparing actions…', name }),
+      onToolCallReady:
+        opts.onImageRequest &&
+        roundTools.some(
+          (tool) => (tool as { function?: { name?: unknown } }).function?.name === 'generate_image'
+        )
+          ? (call) => {
+              if (call.name !== 'generate_image' || opts.signal?.aborted) return
+              const request = earlyImageRequest(call.arguments)
+              if (
+                !request ||
+                earlyImagePrompts.has(request.prompt) ||
+                earlyImagePrompts.size >= requestedImageCount
+              )
+                return
+              earlyImagePrompts.add(request.prompt)
+              opts.onImageRequest?.(request)
+            }
+          : undefined
     })
 
     // Stop pressed during the round: streamCompletion resolves with the partial

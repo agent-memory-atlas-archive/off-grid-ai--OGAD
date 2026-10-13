@@ -60,3 +60,13 @@ export function installedTextModelEntries(
     capabilities: model.kind === 'vision' ? ['vision'] : []
   }))
 }
+
+/** Every installed image model can be selected; the active pick leads so it stays the default. */
+export function installedImageModelEntries(
+  installed: readonly string[],
+  active: string | null,
+  now: number
+): Record<string, unknown>[] {
+  const ids = active ? [active, ...installed.filter((id) => id !== active)] : [...installed]
+  return ids.map((id) => modelEntry(id, 'image', now))
+}

@@ -21,6 +21,7 @@ import {
   readVoicePreferences,
   type VoicePreferences
 } from '@renderer/lib/voice-preferences'
+import { parseRemoteVisionModelId } from '../../../shared/remote-vision-server'
 import { SettingsRow } from './SettingsRow'
 import { SettingsSelect } from './SettingsSelect'
 import { BackendPreferencesSection } from './ProcessingControls'
@@ -105,11 +106,18 @@ export function VoiceSettingsTab(): React.JSX.Element {
         setMiniMaxSpeech28(
           remote && /:minimax%2fspeech-2\.8-(?:hd|turbo)$/i.test(active?.speech ?? '')
         )
-        return window.api.ttsVoices().then((runtimeVoices) => ({ remote, runtimeVoices }))
+        // A remote Kokoro model legitimately offers the same speakers as the local runtime.
+        const remoteKokoro = /kokoro/i.test(
+          parseRemoteVisionModelId(active?.speech ?? '')?.modelId ?? ''
+        )
+        return window.api
+          .ttsVoices()
+          .then((runtimeVoices) => ({ remote, remoteKokoro, runtimeVoices }))
       })
-      .then(({ remote, runtimeVoices }) => {
+      .then(({ remote, remoteKokoro, runtimeVoices }) => {
         if (
           remote &&
+          !remoteKokoro &&
           runtimeVoices.length &&
           runtimeVoices.every(({ id }: RuntimeSpeechVoice) =>
             KOKORO_VOICE_CATALOG.some((local) => local.id === id)

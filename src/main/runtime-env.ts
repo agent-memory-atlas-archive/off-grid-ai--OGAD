@@ -115,7 +115,10 @@ export function binRoots(): string[] {
   const e = electron()
   const bundledRoots = e?.binRoots ?? developmentBinRoots(process.cwd())
   const performancePack = process.env.OFFGRID_PERFORMANCE_PACK_BIN
-  return performancePack ? [performancePack, ...bundledRoots] : bundledRoots
+  // Engines updated from the runtime store come first; the pack's own engines stay behind them
+  // as the fallback (see engine-updates.ts).
+  const updatedEngines = (process.env.OFFGRID_ENGINE_ROOTS ?? '').split(path.delimiter).filter(Boolean)
+  return [...updatedEngines, ...(performancePack ? [performancePack] : []), ...bundledRoots]
 }
 
 /** Append the platform executable extension to a bundled binary's base name:

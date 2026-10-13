@@ -67,12 +67,10 @@ describe('<SettingsPanel/> image settings', () => {
       ])
     )
 
-    const savesBeforeGuidance = saved.length
+    // A complete typed value saves at once, so closing Settings without a blur keeps it.
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Image guidance' }), {
       target: { value: '4' }
     })
-    expect(saved).toHaveLength(savesBeforeGuidance)
-    fireEvent.blur(screen.getByRole('spinbutton', { name: 'Image guidance' }))
     await waitFor(() =>
       expect(saved).toContainEqual([
         'imageParams',

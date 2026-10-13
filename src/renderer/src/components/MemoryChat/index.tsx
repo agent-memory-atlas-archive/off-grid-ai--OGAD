@@ -891,6 +891,11 @@ export function MemoryChat({
   useEffect(() => queueStore.subscribe(renderQueuedByConv), [queueStore])
   // Map streamId → convId so the onRagStream handler can route tokens to the right
   // conversation regardless of which tab is active when the event fires.
+  // Image requests a turn receives while the model is still writing, by stream. Only comic turns
+  // whose images run on a remote server register here (see the tools:chat handler).
+  const earlyImageRequestByStream = useRef(
+    new Map<string, (request: { prompt: string; enhancePrompt?: boolean }) => void>()
+  )
   const streamConvRef = useRef<Map<string, string>>(new Map())
   // The async sender survives navigation. Its listener owns cancellation and the final
   // save; mounted views only observe it. No model "done" event releases this reservation.
@@ -2141,7 +2146,54 @@ export function MemoryChat({
         }
       }
       if (comicPageTotal) await updateComicReader()
-      const tr = await window.api.toolChat(modelQuery, fullHistory.slice(0, -1), {
+      // The hero reference is kept before the turn so a page can start as soon as its prompt is
+      // written.
+      const comicHeroSource = comicPageTotal ? comicBookHeroImage(modelQuery) : null
+      const keptComicHero = comicHeroSource
+        ? await window.api.keepInitImage(comicHeroSource).catch(() => null)
+        : null
+      const comicHeroPath = keptComicHero?.path ?? comicHeroSource
+      const imageGenerationParams = (imageRequest: { prompt: string; enhancePrompt?: boolean }) => {
+        const comicPage = comicPageTotal ? comicBookPageFromPrompt(imageRequest.prompt) : null
+        return {
+          prompt: comicPage?.prompt ?? imageRequest.prompt,
+          ...(imageRequest.enhancePrompt === undefined
+            ? {}
+            : { enhancePrompt: imageRequest.enhancePrompt }),
+          ...(comicHeroPath
+            ? { initImage: comicHeroPath, strength: 0.72 }
+            : keptInit?.path || imagePaths[0] || imgInit
+              ? {
+                  initImage: keptInit?.path ?? imagePaths[0] ?? imgInit ?? undefined,
+                  strength: imgStrength
+                }
+              : {}),
+          conversationId: convId,
+          projectId: projectId
+        }
+      }
+      // Comic pages still generate one at a time. With a remote image server, each page starts
+      // when the model finishes writing its prompt instead of after every prompt is written; the
+      // finished turn then shows these results in page order.
+      const earlyComicImages = new Map<string, ReturnType<typeof window.api.generateImage>>()
+      let earlyComicChain: Promise<unknown> = Promise.resolve()
+      if (comicPageTotal) {
+        earlyImageRequestByStream.current.set(toolStreamId, (request) => {
+          if (cancelledRef.current.has(convId) || earlyComicImages.has(request.prompt)) return
+          const image = earlyComicChain.then(() =>
+            cancelledRef.current.has(convId)
+              ? Promise.reject(new Error('Image generation cancelled.'))
+              : window.api.generateImage(imageGenerationParams(request))
+          )
+          image.catch(() => {
+            /* The finished turn reports this page's failure in place. */
+          })
+          earlyComicChain = image.catch(() => undefined)
+          earlyComicImages.set(request.prompt, image)
+        })
+      }
+      const tr = await window.api
+        .toolChat(modelQuery, fullHistory.slice(0, -1), {
         assistantOnly: assistantForTurn,
         connectors: god ? true : connectorsOn,
         conversationId: convId,
@@ -2155,7 +2207,8 @@ export function MemoryChat({
         imageAvailable,
         streamId: toolStreamId,
         thinking: god ? true : thinkingEnabled
-      })
+        })
+        .finally(() => earlyImageRequestByStream.current.delete(toolStreamId))
       const toolCalls: ProjectedSyncedTool[] = (tr?.toolCalls || []).map(
         (c: { name: string; result: string; status?: 'completed' | 'failed' | 'pending' }) => ({
           name: c.name,
@@ -2170,6 +2223,8 @@ export function MemoryChat({
           ? { unified: tr?.unified ?? [], toolCalls, toolsOffered: tr?.toolsOffered }
           : undefined
       if (cancelledRef.current.has(convId)) {
+        // Stop also ends a comic page that started while the model was writing.
+        if (earlyComicImages.size) void window.api.cancelImageGen().catch(() => {})
         // The tool calls made before the stop are kept, exactly as a completed tool turn keeps
         // them: rendered from `toolCalls`, stored in `toolCtx` beside the citation sources.
         await finalizeStoppedTurn(convId, toolStreamId, {
@@ -2284,11 +2339,6 @@ export function MemoryChat({
           comicTitle = comicBookTitle(imageRequests[0]?.prompt ?? '') ?? comicTitle
           await updateComicReader()
         }
-        const comicHeroSource = comicPageTotal ? comicBookHeroImage(modelQuery) : null
-        const keptComicHero = comicHeroSource
-          ? await window.api.keepInitImage(comicHeroSource).catch(() => null)
-          : null
-        const comicHeroPath = keptComicHero?.path ?? comicHeroSource
         const setComicImageToolStatus = (
           requestIndex: number,
           status: 'completed' | 'failed'
@@ -2314,24 +2364,12 @@ export function MemoryChat({
             if (cancelledRef.current.has(convId)) break
             setImgProgress(null)
             const comicPage = comicPageTotal ? comicBookPageFromPrompt(imageRequest.prompt) : null
-            const generationPrompt = comicPage?.prompt ?? imageRequest.prompt
+            const generationParams = imageGenerationParams(imageRequest)
+            const generationPrompt = generationParams.prompt
+            const earlyImage = earlyComicImages.get(imageRequest.prompt)
+            earlyComicImages.delete(imageRequest.prompt)
             try {
-              const img = await window.api.generateImage({
-                prompt: generationPrompt,
-                ...(imageRequest.enhancePrompt === undefined
-                  ? {}
-                  : { enhancePrompt: imageRequest.enhancePrompt }),
-                ...(comicHeroPath
-                  ? { initImage: comicHeroPath, strength: 0.72 }
-                  : keptInit?.path || imagePaths[0] || imgInit
-                    ? {
-                        initImage: keptInit?.path ?? imagePaths[0] ?? imgInit ?? undefined,
-                        strength: imgStrength
-                      }
-                    : {}),
-                conversationId: convId,
-                projectId: projectId
-              })
+              const img = await (earlyImage ?? window.api.generateImage(generationParams))
               const imageMetadata: ImageGenerationMetadata | undefined =
                 typeof img.width === 'number' &&
                 typeof img.height === 'number' &&
@@ -3106,7 +3144,14 @@ export function MemoryChat({
   useEffect(() => {
     console.log('MemoryChat effect: RAG stream subscription')
     let disposed = false
-    const off = window.api.onRagStream((data) => {
+    const off = window.api.onRagStream((incoming) => {
+      // An early image request belongs to the comic turn waiting for it, not to the stream view.
+      if (incoming.type === 'image_request') {
+        if (incoming.request)
+          earlyImageRequestByStream.current.get(incoming.streamId)?.(incoming.request)
+        return
+      }
+      const data = { ...incoming, type: incoming.type }
       const cid = streamConvRef.current.get(data.streamId)
       if (!cid) return
       if (unownedTerminal(data.type, rendererOwnsRun(cid))) {

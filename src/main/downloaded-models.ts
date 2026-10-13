@@ -15,6 +15,25 @@ import { modelMetadataFile, modelReadDirectories, resolveModelReference } from '
 import { modelsDir } from './runtime-env'
 import { modelPackageIdentity } from '@offgrid/sync'
 import { isProjectorFileName } from './models/catalog-logic'
+import { isImageModelFile } from './imagegen/model-filter'
+
+/**
+ * The role of a free-form download, judged from its files. A Hugging Face repo resolves to the
+ * chat-engine default ('text', or 'vision' when a companion looks like a projector) because the
+ * hub search does not carry the tab the user searched from. The image runtime already decides
+ * which weights are image models by filename (isImageModelFile); a download whose primary weight
+ * is one of those, and which ships no real mmproj projector, is an image model everywhere else
+ * too. Any other declared role is kept.
+ */
+export function downloadedModelKind<K extends string>(
+  kind: K,
+  files: readonly string[]
+): K | 'image' {
+  if (kind !== 'text' && kind !== 'vision') return kind
+  if (files.some((name) => isProjectorFileName(name))) return kind
+  const primary = files[0]
+  return primary && isImageModelFile(path.basename(primary)) ? 'image' : kind
+}
 
 export interface DownloadedModel {
   /** Exact installed variant key. Legacy entries use the Hugging Face family id. */
@@ -80,7 +99,13 @@ export function reconcileDownloadedModelRegistry(
   const current = readDownloaded(dir)
   let changed = false
   const migrated: DownloadedModel[] = []
-  for (const model of current) {
+  for (const recorded of current) {
+    // Older builds recorded every free-form GGUF download as 'text', including image weights.
+    // Repair the stored role so Storage, the per-kind tabs and the chat model lists agree with
+    // the image runtime.
+    const kind = downloadedModelKind(recorded.kind, recorded.files)
+    const model = kind === recorded.kind ? recorded : { ...recorded, kind }
+    if (model !== recorded) changed = true
     if (model.familyId || model.packageIdentity) {
       const family = model.familyId
         ? catalog.find((entry) => entry.id === model.familyId)

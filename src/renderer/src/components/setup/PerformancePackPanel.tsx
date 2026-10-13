@@ -5,6 +5,7 @@ import { Button } from '../ui/button'
 import type { PerformancePackStatus } from '../../../../shared/performance-pack'
 import { currentPlatform } from '@renderer/lib/device'
 import { formatStorageBytes } from './storage-format'
+import { EngineUpdatesSection } from './EngineUpdatesSection'
 
 interface PerformancePackPanelProps {
   onSkip?: () => void
@@ -109,6 +110,7 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
           <Button size="sm" variant="outline" onClick={onSkip}>Skip for now</Button>
         ) : null}
       </div>
+      {installed && showUnavailable ? <EngineUpdatesSection /> : null}
     </section>
   )
 }

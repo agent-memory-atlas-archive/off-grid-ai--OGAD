@@ -34,6 +34,11 @@ describe('isImageModelFile', () => {
     expect(isImageModelFile('model-t5xxl.safetensors')).toBe(false)
   })
 
+  it('excludes a companion whose marker is followed by more of the name', () => {
+    expect(isImageModelFile('qwen_image_2.1_vae_bf16.safetensors')).toBe(false)
+    expect(isImageModelFile('qwen-image-2.1-turbo-Q4_K_M.gguf')).toBe(true)
+  })
+
   it('excludes non-diffusion companions (whisper .bin, TTS .onnx, mmproj)', () => {
     expect(isImageModelFile('ggml-base.bin')).toBe(false)
     expect(isImageModelFile('kokoro.onnx')).toBe(false)

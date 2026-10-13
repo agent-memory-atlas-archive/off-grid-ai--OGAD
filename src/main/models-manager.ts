@@ -32,6 +32,7 @@ import {
   installedDownloadedIds,
   downloadedProtectedNames,
   reconcileDownloadedModelRegistry,
+  downloadedModelKind,
   type DownloadedModel
 } from './downloaded-models'
 import {
@@ -760,6 +761,10 @@ async function downloadModelInner(
   if (!entry) {
     writeDiagnosticLog('models.download', 'request.rejected', { modelId, reason: 'unknown_model' })
     return publishRefusal(modelId, 'unknown model', onProgress)
+  }
+  // A free-form repo resolves to the chat default; its files decide whether it is an image model.
+  if (!inCatalog) {
+    entry = { ...entry, kind: downloadedModelKind(entry.kind, entry.files.map((file) => file.name)) }
   }
   if (inCatalog?.availability === 'coming_soon') {
     const error = inCatalog.availabilityNote ?? 'This model is coming soon.'
@@ -1539,7 +1544,21 @@ export async function setActiveModalChoice(
       try {
         const CATALOG = await desktopCatalog()
         const e = CATALOG.find((m) => m.id === modelId)
-        const fname = e ? primaryFileName(e as unknown as CatalogEntry) : undefined
+        // A free-form Hugging Face image download is keyed by its repo id, not a catalog id.
+        const downloaded = e
+          ? undefined
+          : downloadedVariant(
+              reconcileDownloadedModelRegistry(
+                llm.getModelsDir(),
+                CATALOG as unknown as CatalogEntry[]
+              ),
+              modelId
+            )
+        const fname = e
+          ? primaryFileName(e as unknown as CatalogEntry)
+          : downloaded
+            ? downloadedPrimary(downloaded)
+            : undefined
         if (fname) stored = fname
       } catch {
         /* keep modelId as-is */

@@ -795,6 +795,22 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
     expect(r.imageRequests).toEqual([{ prompt: 'first' }, { prompt: 'second' }])
   })
 
+  it('reports each image request as its call completes, matching the final request list', async () => {
+    enqueueReactiveAfterEmptyPlan({
+      toolCalls: [
+        { name: 'generate_image', args: { prompt: 'page one', enhance_prompt: false } },
+        { name: 'generate_image', args: { prompt: 'page two', enhance_prompt: false } }
+      ]
+    })
+    const early: { prompt: string; enhancePrompt?: boolean }[] = []
+    const r = await toolChat('generate_image two pictures', [], {
+      imageAvailable: true,
+      onImageRequest: (request) => early.push(request)
+    })
+    expect(early).toEqual(r.imageRequests)
+    expect(early.map((request) => request.prompt)).toEqual(['page one', 'page two'])
+  })
+
   it('does not record an imageRequest when the prompt is empty', async () => {
     enqueueReactiveAfterEmptyPlan(
       { toolCalls: [{ name: 'generate_image', args: { prompt: '   ' } }] },

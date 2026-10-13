@@ -59,6 +59,7 @@ import { modelStartupQuietLimit, startupStalled } from './llm/startup-timeout'
 import { getBackendPreference } from './backend-preferences'
 import { prioritizeBackend, type BackendPreference } from '../shared/backend-preferences'
 import { streamCompletion, type StreamResult } from './llm/stream'
+import type { AssembledToolCall } from './llm/sse-stream'
 import {
   nativeToolPlannerUnavailableMessage,
   remoteNativeToolCapability,
@@ -1724,6 +1725,7 @@ export class LLMService {
       tools?: unknown[]
       toolChoice?: string
       onToolCallStart?: (name?: string) => void
+      onToolCallReady?: (call: AssembledToolCall) => void
     }
   ): Promise<StreamResult> {
     return streamRemoteChatCompletion({
@@ -1749,7 +1751,8 @@ export class LLMService {
       options: {
         signal: options.signal,
         timeoutMs: options.timeoutMs,
-        onToolCallStart: options.onToolCallStart
+        onToolCallStart: options.onToolCallStart,
+        onToolCallReady: options.onToolCallReady
       }
     })
   }
@@ -2065,6 +2068,7 @@ export class LLMService {
       maxTokens?: number
       responseFormat?: unknown
       onToolCallStart?: (name?: string) => void
+      onToolCallReady?: (call: AssembledToolCall) => void
     } = {},
     timeoutMs?: number
   ): Promise<StreamResult> {
@@ -2093,7 +2097,8 @@ export class LLMService {
             responseFormat: opts.responseFormat,
             tools: opts.tools,
             toolChoice: opts.toolChoice,
-            onToolCallStart: opts.onToolCallStart
+            onToolCallStart: opts.onToolCallStart,
+            onToolCallReady: opts.onToolCallReady
           })
           return withContextMetrics(result, messages, {
             contextWindowTokens: this.effectiveContextSize(),
@@ -2142,7 +2147,8 @@ export class LLMService {
           const result = await streamCompletion(this.port, body, onDelta, {
             signal: opts.signal,
             timeoutMs,
-            onToolCallStart: opts.onToolCallStart
+            onToolCallStart: opts.onToolCallStart,
+            onToolCallReady: opts.onToolCallReady
           })
           return withContextMetrics(result, messages, {
             contextWindowTokens: this.effectiveContextSize(),

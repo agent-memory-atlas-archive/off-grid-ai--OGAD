@@ -43,9 +43,19 @@ import {
   VoiceMessageActions
 } from './MessageActions'
 import { MessageMarkdown } from './MessageMarkdown'
-import { AssistantMessageActions, MessageTime, speechControlState } from './AssistantMessageActions'
+import {
+  AssistantMessageActions,
+  MessageTime,
+  speechControlState,
+  VariantNavigation
+} from './AssistantMessageActions'
 import { ContextDisclosure, hasInlineMemorySources, UnifiedContextSection } from './MessageContext'
 import { useStreamViewMessage } from '../stream-view-store'
+import {
+  answerVersionsNavigable,
+  liveAnswerVersionView,
+  nextLiveVersionIndex
+} from '@renderer/lib/live-answer-versions'
 
 /** The pause before the first reaction on a message just sent: a beat, as a person takes, between
  *  one and three seconds. Fixed per message (from its id), so it never jumps on a re-render. */
@@ -501,8 +511,12 @@ function StandardMessageRow({
   continuation,
   state,
   actions,
-  navigation
-}: Omit<MessageRowProps, 'voiceMode'>): React.JSX.Element {
+  navigation,
+  onBrowseVersion
+}: Omit<MessageRowProps, 'voiceMode'> & {
+  /** Set while the newest version streams: the arrows only change which version is read. */
+  onBrowseVersion?: (direction: -1 | 1) => void
+}): React.JSX.Element {
   console.log('MemoryChat StandardMessageRow rendered')
   const artifact = message.role === 'assistant' ? parseArtifact(message.content) : null
   const copied = state.copiedKey === message.id
@@ -524,9 +538,12 @@ function StandardMessageRow({
   const isFinalAssistantResponse =
     message.role === 'assistant' &&
     !message.streaming &&
+    !onBrowseVersion &&
     nextMessageRole !== 'assistant' &&
     nextMessageRole !== 'tool' &&
     !isSupportingMessage(message)
+  const showVersionsOnly =
+    !isFinalAssistantResponse && answerVersionsNavigable(message, nextMessageRole)
   const memorySources = hasInlineMemorySources(message)
     ? {
         count: message.context.unified.length,
@@ -627,6 +644,16 @@ function StandardMessageRow({
           />
         </div>
       ) : null}
+      {showVersionsOnly ? (
+        <div className="flex w-full min-w-0 items-center pr-1">
+          <VariantNavigation
+            message={message}
+            onSelect={
+              onBrowseVersion ?? ((direction) => actions.selectVariant(message.id, direction))
+            }
+          />
+        </div>
+      ) : null}
       {isFinalAssistantResponse ? (
         <ContextDisclosure
           context={memorySources ? { ...message.context, unified: [] } : message.context}
@@ -679,7 +706,15 @@ function MessageRowComponent({
   navigation
 }: MessageRowProps): React.JSX.Element {
   console.log('MemoryChat MessageRow rendered')
-  const currentMessage = useStreamViewMessage(message)
+  const liveMessage = useStreamViewMessage(message)
+  // While a new version streams, an earlier one can be read without touching the live row.
+  const [viewedVersion, setViewedVersion] = useState<number | null>(null)
+  const currentMessage = liveAnswerVersionView(liveMessage, viewedVersion)
+  const browseLiveVersion =
+    liveMessage.streaming && liveMessage.variants?.length
+      ? (direction: -1 | 1): void =>
+          setViewedVersion((viewed) => nextLiveVersionIndex(liveMessage, viewed, direction))
+      : undefined
   useEffect(() => {
     if (currentMessage.streaming) onStreamRender?.()
   }, [currentMessage, onStreamRender])
@@ -733,6 +768,7 @@ function MessageRowComponent({
         state={state}
         actions={actions}
         navigation={navigation}
+        onBrowseVersion={browseLiveVersion}
       />
     )
   }

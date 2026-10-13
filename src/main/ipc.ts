@@ -80,6 +80,7 @@ import {
   performancePackStatus,
   startPerformancePack
 } from './performance-pack'
+import { engineUpdater } from './engine-updates-service'
 import { sampleProgressRate, type ProgressRateSample } from '@offgrid/ui'
 import { notifyRagConversationChanged } from './rag-conversation-events'
 import { parseRemoteVisionModelId, remoteVisionModelId } from '../shared/remote-vision-server'
@@ -596,6 +597,18 @@ export function setupIPC(): void {
   ipcMain.handle('performance-pack:start', startPerformancePack)
   ipcMain.handle('performance-pack:pause', pausePerformancePack)
   ipcMain.handle('performance-pack:restart', () => requestApplicationRelaunch(app))
+  // Engines published between releases install in the background unless the user turns it off.
+  engineUpdater.onChanged((status) => {
+    BrowserWindow.getAllWindows().forEach((window) =>
+      window.webContents.send('engine-updates:changed', status)
+    )
+  })
+  ipcMain.handle('engine-updates:status', () => engineUpdater.status())
+  ipcMain.handle('engine-updates:check', () => engineUpdater.check())
+  ipcMain.handle('engine-updates:set-enabled', (_event, enabled: unknown) =>
+    engineUpdater.setEnabled(enabled !== false)
+  )
+  engineUpdater.start()
   setupAIRequestLogIPC()
   setupChatNextActionIpc()
   setupVoiceTranscriptionIpc()
@@ -2236,6 +2249,7 @@ export function setupIPC(): void {
     ) => {
       const { toolChat } = await import('./tools')
       const { modalityQueue, CHAT_JOB } = await import('./modality-queue/queue')
+      const { imageGenerationRunsBesideChat } = await import('./imagegen')
       const streamId = opts?.streamId
       const sender = event.sender
       // Non-stream fallback (no streamId): buffer, no live deltas (matches streamAnswer).
@@ -2298,7 +2312,19 @@ export function setupIPC(): void {
                   } catch {
                     /* window gone */
                   }
-                }
+                },
+                // A remote image server can start each picture while the model writes the next.
+                ...(imageGenerationRunsBesideChat()
+                  ? {
+                      onImageRequest: (request: { prompt: string; enhancePrompt?: boolean }) => {
+                        try {
+                          sender.send('rag:stream', { streamId, type: 'image_request', request })
+                        } catch {
+                          /* window gone */
+                        }
+                      }
+                    }
+                  : {})
               }),
             {
               signal: controller.signal,

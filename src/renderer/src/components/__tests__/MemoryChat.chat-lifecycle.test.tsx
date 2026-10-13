@@ -1508,6 +1508,115 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
     })
   })
 
+  it('shows the version arrows while a regenerated answer streams and lets the user flip back', async () => {
+    const boundary = new ChatBoundary()
+    boundary.messages['conversation-a'] = [
+      { id: 20, role: 'user', content: 'Explain the release gate' },
+      { id: 21, role: 'assistant', content: 'Original explanation', context: { unified: [] } }
+    ]
+    boundary.conversations[0]!.message_count = 2
+    installBoundary(boundary)
+    const user = userEvent.setup()
+    renderChat({ conversationId: 'conversation-a' })
+
+    await screen.findByText('Original explanation')
+    openActionsFor('Original explanation')
+    await user.click(screen.getByRole('menuitem', { name: /^regenerate$/i }))
+    await waitFor(() => expect(boundary.calls).toHaveLength(1))
+    act(() => boundary.emit(0, 'Streaming replacement'))
+    await screen.findByText('Streaming replacement')
+
+    // The in-progress answer is the newest version while it streams.
+    expect(screen.getByText('2/2')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Previous response' }))
+    expect(await screen.findByText('Original explanation')).toBeTruthy()
+    expect(screen.getByText('1/2')).toBeTruthy()
+    expect(screen.queryByText('Streaming replacement')).toBeNull()
+    act(() => boundary.emit(0, ' keeps arriving'))
+    await user.click(screen.getByRole('button', { name: 'Next response' }))
+    expect(await screen.findByText('Streaming replacement keeps arriving')).toBeTruthy()
+    expect(screen.getByText('2/2')).toBeTruthy()
+
+    boundary.resolve(0, 'Streaming replacement keeps arriving')
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /stop generating/i })).toBeNull()
+    )
+    expect(screen.getByText('2/2')).toBeTruthy()
+  })
+
+  it('keeps every earlier version on a stopped answer, including after a reload', async () => {
+    const boundary = new ChatBoundary()
+    boundary.messages['conversation-a'] = [
+      { id: 20, role: 'user', content: 'Explain the release gate' },
+      { id: 21, role: 'assistant', content: 'Original explanation', context: { unified: [] } }
+    ]
+    boundary.conversations[0]!.message_count = 2
+    installBoundary(boundary)
+    const user = userEvent.setup()
+    renderChat({ conversationId: 'conversation-a' })
+
+    await screen.findByText('Original explanation')
+    openActionsFor('Original explanation')
+    await user.click(screen.getByRole('menuitem', { name: /^regenerate$/i }))
+    await waitFor(() => expect(boundary.calls).toHaveLength(1))
+    act(() => boundary.emit(0, 'Stopped halfway'))
+    await screen.findByText('Stopped halfway')
+    await user.click(screen.getByRole('button', { name: /stop generating/i }))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /stop generating/i })).toBeNull()
+    )
+
+    expect(await screen.findByText('2/2')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Previous response' }))
+    expect(await screen.findByText('Original explanation')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Next response' }))
+    expect(await screen.findByText('Stopped halfway')).toBeTruthy()
+
+    cleanup()
+    renderChat({ conversationId: 'conversation-a' })
+    expect(await screen.findByText('Stopped halfway')).toBeTruthy()
+    expect(screen.getByText('2/2')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Previous response' }))
+    expect(await screen.findByText('Original explanation')).toBeTruthy()
+  })
+
+  it('keeps the version arrows on an answer stopped while it was still thinking', async () => {
+    const boundary = new ChatBoundary()
+    boundary.messages['conversation-a'] = [
+      { id: 20, role: 'user', content: 'Explain the release gate' },
+      { id: 21, role: 'assistant', content: 'Original explanation', context: { unified: [] } }
+    ]
+    boundary.conversations[0]!.message_count = 2
+    installBoundary(boundary)
+    const user = userEvent.setup()
+    renderChat({ conversationId: 'conversation-a' })
+
+    await screen.findByText('Original explanation')
+    openActionsFor('Original explanation')
+    await user.click(screen.getByRole('menuitem', { name: /^regenerate$/i }))
+    await waitFor(() => expect(boundary.calls).toHaveLength(1))
+    act(() => boundary.emitReasoning(0, 'Weighing which gate matters most.'))
+    expect(await screen.findByText('2/2')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: /stop generating/i }))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /stop generating/i })).toBeNull()
+    )
+
+    expect(await screen.findByText('2/2')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Previous response' }))
+    expect(await screen.findByText('Original explanation')).toBeTruthy()
+    const saved = boundary.messages['conversation-a']!.filter(
+      (message) => message.role === 'assistant'
+    )
+    expect(saved).toHaveLength(1)
+    expect(saved[0]!.context).toMatchObject({
+      variants: [
+        expect.objectContaining({ content: 'Original explanation' }),
+        expect.objectContaining({ content: '' })
+      ]
+    })
+  })
+
   it('Stop after remount saves an unclaimed partial once and clears both queued drafts', async () => {
     const boundary = new ChatBoundary()
     boundary.activeRagStreams.push({

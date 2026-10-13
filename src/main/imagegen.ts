@@ -355,6 +355,14 @@ function ggufIsFullCheckpoint(p: string): boolean {
 /** Pick a model: the requested filename if present, else prefer the higher-quality v2.1, else any. */
 /** The image model an incoming request would actually load (active pick, else the
  *  resolver's default), as a bare filename — or null if none installed. */
+/**
+ * Whether an image can generate while a chat turn is still running. Only a remote image server
+ * can: locally the image job evicts the chat model and waits behind the turn in the queue.
+ */
+export function imageGenerationRunsBesideChat(): boolean {
+  return getActiveRemoteVisionServerForModality('image') !== null
+}
+
 export function activeImageModel(): string | null {
   const remote = getActiveRemoteVisionServerForModality('image')
   if (remote) return remoteVisionModelId(remote.id, remote.selectedModel)
