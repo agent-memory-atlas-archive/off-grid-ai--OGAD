@@ -1,9 +1,8 @@
 // Off Grid AI local inference gateway — ONE OpenAI-compatible endpoint for every
 // modality, on :7878. Any local tool (IDE, app, script) points here and gets the
 // on-device models, and so does a phone on the same LAN - Off Grid AI Mobile scans the
-// subnet for this port. No cloud, no keys. It listens on every interface and does NOT
-// authenticate, so treat the machine's network as the trust boundary; the routes that
-// must stay private (settings mutations) check the peer address themselves.
+// subnet for this port. API keys are optional until enabled in Gateway > API keys.
+// Local-only settings mutations and the paired extension retain their own checks.
 //
 //   GET  /                       -> gateway info + live modality status
 //   GET  /v1/models              -> the ACTIVE model per modality (text/vision +
@@ -29,7 +28,10 @@ import https from 'https'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { randomUUID } from 'crypto'
+import { randomUUID, randomBytes, createHash } from 'crypto'
+import { getSecret, setSecret, listSecretKeys } from './secrets'
+import { authorizeBearer } from './mcp-auth-logic'
+import type { GatewayApiKeyContract, GatewayApiKeySettingsContract } from '../shared/ipc-contracts'
 import { getActiveTranscription } from './transcription/select'
 import { transcriptionRequestOptions } from './model-server/transcription-request'
 import * as tts from './tts'
@@ -86,6 +88,126 @@ const upstreamPort = (): number => llm.getPort()
 const MAX_UPLOAD = 200 * 1024 * 1024 // 200MB upload cap (audio / init image)
 
 let server: http.Server | null = null
+
+// The gateway owns its credentials. Reuse the OS-encrypted secret store; do not
+// put credentials in generic settings, return stored hashes to IPC, or log them.
+const GATEWAY_KEYS_SECRET = 'gateway:api-keys'
+type StoredGatewayKeys = { enabled: boolean; keys: (GatewayApiKeyContract & { digest: string })[] }
+
+function readGatewayKeys(): StoredGatewayKeys {
+  const raw = getSecret(GATEWAY_KEYS_SECRET)
+  if (raw === null) {
+    if (listSecretKeys().includes(GATEWAY_KEYS_SECRET))
+      throw new Error('API key storage is locked. Unlock system key storage and try again.')
+    return { enabled: false, keys: [] }
+  }
+  const value = JSON.parse(raw) as StoredGatewayKeys
+  if (
+    typeof value.enabled !== 'boolean' ||
+    !Array.isArray(value.keys) ||
+    value.keys.some(
+      (key) =>
+        typeof key.id !== 'string' ||
+        typeof key.name !== 'string' ||
+        typeof key.digest !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(key.digest) ||
+        (key.expiresAt !== null && !Number.isFinite(key.expiresAt)) ||
+        (key.revokedAt !== null && !Number.isFinite(key.revokedAt))
+    )
+  )
+    throw new Error('API key storage could not be read.')
+  return value
+}
+
+function writeGatewayKeys(value: StoredGatewayKeys): void {
+  if (!setSecret(GATEWAY_KEYS_SECRET, JSON.stringify(value))) {
+    throw new Error('API keys require system encryption. Unlock system key storage and try again.')
+  }
+}
+
+export function gatewayApiKeySettings(): GatewayApiKeySettingsContract {
+  const state = readGatewayKeys()
+  return { enabled: state.enabled, keys: state.keys.map(({ digest: _digest, ...key }) => key) }
+}
+
+export function setGatewayApiKeyRequired(enabled: boolean): GatewayApiKeySettingsContract {
+  if (typeof enabled !== 'boolean') throw new Error('Authentication must be on or off.')
+  const state = readGatewayKeys()
+  state.enabled = enabled
+  writeGatewayKeys(state)
+  return gatewayApiKeySettings()
+}
+
+export function createGatewayApiKey(
+  name: string,
+  expiresAt: number | null,
+  replaceId?: string
+): { key: string; settings: GatewayApiKeySettingsContract } {
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > 80)
+    throw new Error('Enter a key name of 1 to 80 characters.')
+  const now = Date.now()
+  if (
+    expiresAt !== null &&
+    (!Number.isSafeInteger(expiresAt) || expiresAt <= now || expiresAt > 8640000000000000)
+  )
+    throw new Error('Choose an expiry date in the future.')
+  const state = readGatewayKeys()
+  if (replaceId !== undefined) {
+    const previous = state.keys.find((key) => key.id === replaceId)
+    if (!previous || previous.revokedAt !== null) throw new Error('This key is no longer active.')
+    previous.revokedAt = now
+  }
+  const key = `ogad_${randomBytes(32).toString('hex')}`
+  state.keys.push({
+    id: randomUUID(),
+    name: name.trim(),
+    prefix: key.slice(0, 13),
+    digest: createHash('sha256').update(key).digest('hex'),
+    createdAt: now,
+    expiresAt,
+    revokedAt: null,
+    lastUsedAt: null
+  })
+  state.enabled = true
+  writeGatewayKeys(state)
+  return { key, settings: gatewayApiKeySettings() }
+}
+
+export function revokeGatewayApiKey(id: string): GatewayApiKeySettingsContract {
+  const state = readGatewayKeys()
+  const key = state.keys.find((key) => key.id === id)
+  if (!key) throw new Error('API key not found.')
+  key.revokedAt ??= Date.now()
+  writeGatewayKeys(state)
+  return gatewayApiKeySettings()
+}
+
+function authorizeGateway(req: http.IncomingMessage): boolean {
+  const state = readGatewayKeys()
+  if (!state.enabled) return true
+  const header = req.headers.authorization
+  // Preserve the existing strict Bearer parser and constant-time comparison.
+  const credential = header?.match(/^Bearer[ \t]+([^\s]+)$/i)?.[1]
+  if (!credential) return false
+  const digest = createHash('sha256').update(credential).digest('hex')
+  const now = Date.now()
+  let match: StoredGatewayKeys['keys'][number] | undefined
+  for (const key of state.keys) {
+    if (
+      authorizeBearer(`Bearer ${digest}`, key.digest) &&
+      key.revokedAt === null &&
+      (key.expiresAt === null || now < key.expiresAt)
+    )
+      match = key
+  }
+  if (!match) return false
+  // Limit disk writes without caching credentials: revocation applies on the next request.
+  if (match.lastUsedAt === null || now - match.lastUsedAt >= 60_000) {
+    match.lastUsedAt = now
+    writeGatewayKeys(state)
+  }
+  return true
+}
 
 async function liveGatewayModalities(imageAvailable: boolean): Promise<GatewayModalities> {
   let installed: string[] = []
@@ -248,6 +370,7 @@ function proxyToLlama(
   targetPort?: number
 ): void {
   const headers = { ...req.headers, host: `${UPSTREAM_HOST}:${targetPort ?? upstreamPort()}` }
+  delete headers.authorization
   if (bodyOverride) {
     headers['content-length'] = String(bodyOverride.length)
     delete headers['transfer-encoding']
@@ -1516,7 +1639,7 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
       res.setHeader('Vary', 'Origin')
       res.setHeader('Access-Control-Allow-Private-Network', 'true')
     }
-    res.setHeader('Access-Control-Allow-Headers', '*')
+    res.setHeader('Access-Control-Allow-Headers', '*, Authorization')
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
     if (req.method === 'OPTIONS') {
       res.writeHead(204)
@@ -1526,6 +1649,24 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
 
     const url = (req.url || '/').split('?')[0]! // split() always yields >= 1 element
     const method = req.method || 'GET'
+
+    // Check before reading bodies, starting work, serving results, or forwarding aliases.
+    // MCP and paired extension traffic use their existing, separate credentials.
+    const publicRoute =
+      ['/', '/health', '/docs', '/openapi.json', '/mcp'].includes(url) ||
+      url.startsWith('/v1/extension/')
+    if (!publicRoute) {
+      try {
+        if (!authorizeGateway(req)) {
+          res.setHeader('WWW-Authenticate', 'Bearer realm="Off Grid AI API"')
+          json(res, 401, errBody('A valid API key is required.', 'authentication_error'))
+          return
+        }
+      } catch {
+        json(res, 503, errBody('API key storage is unavailable.', 'server_error'))
+        return
+      }
+    }
 
     // Every request gets a stable id — returned as X-Request-Id and reused as the
     // poll id for async work, so any request can be tracked/polled by the same id.
@@ -1849,7 +1990,7 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
     if (!handleExtensionUpgrade(req, socket, head)) socket.destroy()
   })
 
-  // The gateway has no authentication. Bind the socket itself to loopback so no
+  // API authentication is optional. Keep the existing bind policy so no
   // route can become LAN-accessible through a missing per-handler authorization check.
   // Resolve only AFTER the socket actually binds; a bind failure must reject and clear state so
   // callers (which .catch it) can surface the failure and a later restart can retry — rather than a

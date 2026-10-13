@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ogad-specialist-api-'))
 vi.mock('electron', () => ({
   app: { getPath: () => directory, getAppPath: () => process.cwd(), isPackaged: false },
+  BrowserWindow: { getAllWindows: () => [] },
   safeStorage: { isEncryptionAvailable: () => false }
 }))
 import { startModelServer, stopModelServer } from '../model-server'
@@ -24,6 +25,9 @@ import {
 import { decisionRuntime } from '../accessibility/decision-runtime'
 import { grounderRuntime } from '../vision/grounder-runtime'
 import { llm } from '../llm'
+import { activateModel, KEV_4B_ID } from '../models-manager'
+import { getComputerUseSettings, setComputerUseSettings } from '../computer-use-settings'
+import { getWebUseSettings, setWebUseSettings } from '../web-use-settings'
 
 const grounder = 'bartowski/tencent_UI-Mate-27B-GGUF'
 const chat = 'HuggingFaceTB/SmolLM2-135M-Instruct-GGUF'
@@ -199,5 +203,33 @@ it('downloads complete shards and serves decision, grounding, and selected chat 
   ).toBe('fixture answer')
   const chatResponse = await request(chat, [{ role: 'user', content: 'Hi' }], { stream: true })
   expect(await chatResponse.text()).toContain('fixture answer')
+  const asyncChat = await completed(
+    await request(chat, [{ role: 'user', content: 'Hi' }], { async: true })
+  )
+  expect(asyncChat.choices[0]!.message.content).toBe('fixture answer')
   expect(getActiveModel()).toBe(chat)
 }, 30_000)
+
+it.each([
+  ['same_as_chat', 'decision_plus_reasoning'],
+  ['separate_specialist', 'decision_plus_specialist'],
+  ['text_plus_specialist', 'decision_plus_specialist'],
+  ['decision_plus_specialist', 'decision_plus_specialist'],
+  ['decision_plus_reasoning', 'decision_plus_reasoning']
+])('Use Kev enables decisions from %s and preserves grounding', async (before, after) => {
+  setComputerUseSettings({ modelStrategy: before, groundingModelId: grounder, context: '16k' })
+  setWebUseSettings({ modelStrategy: before, groundingModelId: grounder, context: '32k' })
+  expect(await activateModel(KEV_4B_ID, 'computer_use')).toEqual({ success: true })
+  expect(getComputerUseSettings()).toMatchObject({
+    modelStrategy: after,
+    decisionModelId: KEV_4B_ID,
+    groundingModelId: grounder,
+    context: '16k'
+  })
+  expect(getWebUseSettings()).toMatchObject({
+    modelStrategy: after,
+    decisionModelId: KEV_4B_ID,
+    groundingModelId: grounder,
+    context: '32k'
+  })
+})
