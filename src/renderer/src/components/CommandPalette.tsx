@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   IconPhoto,
   IconUser,
@@ -68,18 +68,6 @@ export function CommandPalette({
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
   const seq = useRef(0)
-  // Native child views stay below the bar from the moment it opens until its exit has finished.
-  const releaseOcclusion = useRef<(() => void) | null>(null)
-  useLayoutEffect(() => {
-    if (open && !releaseOcclusion.current)
-      releaseOcclusion.current = acquireNativeSurfaceOcclusion()
-  }, [open])
-  useEffect(() => () => releaseOcclusion.current?.(), [])
-  const settleOcclusion = (isOpen: boolean): void => {
-    if (isOpen) return
-    releaseOcclusion.current?.()
-    releaseOcclusion.current = null
-  }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -194,8 +182,9 @@ export function CommandPalette({
   }
 
   return (
-    <CommandDialog open={open} onOpenChange={setOpen} onOpenChangeComplete={settleOcclusion}>
-      <CommandDialogPopup className="border-border/60">
+    <CommandDialog open={open} onOpenChange={setOpen}>
+      {/* Native child views stay below the bar from the moment it opens until its exit ends. */}
+      <CommandDialogPopup className="border-border/60" occlusion={acquireNativeSurfaceOcclusion}>
         <CommandDialogPrimitive.Title className="sr-only">
           Search Off Grid AI
         </CommandDialogPrimitive.Title>

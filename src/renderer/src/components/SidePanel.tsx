@@ -1,6 +1,16 @@
-import { useLayoutEffect, useRef, type CSSProperties, type ReactNode, type RefObject } from 'react'
-import { createPortal } from 'react-dom'
-import { motion, useReducedMotion } from 'motion/react'
+import {
+  useRef,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject
+} from 'react'
+import {
+  Sheet,
+  SheetContent,
+  SheetOverlay,
+  SheetPortal
+} from '@offgrid/operator-ui/operator/animate-ui/primitives/radix/sheet'
 import { useEscapeToClose } from '@renderer/lib/use-escape-to-close'
 import { acquireNativeSurfaceOcclusion } from '@renderer/lib/native-surface-occlusion'
 
@@ -14,16 +24,23 @@ type SidePanelProps = {
   modal?: boolean
 }
 
+// The renderer's top layer: side panels sit above every other surface, the backdrop just under.
+const PANEL_LAYER = 2147483647
+
+const FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
 /**
- * Shared frame for dismissible Desktop side panels.
+ * Shared frame for dismissible Desktop side panels, on the library's animate sheet: it portals,
+ * slides in and out on the sheet's spring (the exit also plays when a caller's AnimatePresence
+ * removes the panel), holds native child views below it until the exit has finished, and returns
+ * focus where the panel was opened from (or to restoreFocusRef).
  *
- * Dressed as the library's sheet (animate/sheet in the overlays chapter): a glass layer over the
- * living background that arrives on the same spring. It stays OGAD's own frame because callers
- * mount and unmount it (exit runs in their AnimatePresence), it must sit above every other
- * renderer layer, it can be non-modal, and it holds native child views below it.
- *
- * The backdrop owns outside-click dismissal and the shared hook owns Escape.
- * Content stays in a sibling dialog, so clicks inside never reach the backdrop.
+ * The sheet runs non-modal at the Radix level on purpose: a Radix modal blocks pointer events and
+ * pulls focus out of every popup that is not a Radix layer, and the settings pickers inside these
+ * panels are base-ui popups portalled to the body. The modal behaviour is therefore OGAD's own, as
+ * before: the backdrop owns outside-click dismissal, the shared hook owns Escape, and Tab cycles
+ * inside a modal panel.
  */
 export function SidePanel({
   ariaLabel,
@@ -35,25 +52,13 @@ export function SidePanel({
   modal = true
 }: SidePanelProps): React.JSX.Element {
   useEscapeToClose(onClose)
-  const reduceMotion = useReducedMotion()
   const panelRef = useRef<HTMLDivElement>(null)
 
-  useLayoutEffect(() => acquireNativeSurfaceOcclusion(), [])
-
-  useLayoutEffect(() => {
-    const previousFocus =
-      restoreFocusRef?.current ??
-      (document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  const trapFocus = (event: KeyboardEvent<HTMLDivElement>): void => {
     const panel = panelRef.current
-    panel?.focus()
-
-    const trapFocus = (event: KeyboardEvent): void => {
-      if (!modal || event.key !== 'Tab' || !panel) return
-      const focusable = Array.from(
-        panel.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-        )
-      ).filter((element) => {
+    if (!modal || event.key !== 'Tab' || !panel) return
+    const focusable = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+      (element) => {
         const computedStyle = window.getComputedStyle(element)
         return (
           !element.matches(':disabled') &&
@@ -62,65 +67,60 @@ export function SidePanel({
           computedStyle.display !== 'none' &&
           computedStyle.visibility !== 'hidden'
         )
-      })
-      if (focusable.length === 0) {
-        event.preventDefault()
-        panel.focus()
-        return
       }
-      const first = focusable[0]
-      const last = focusable.at(-1)
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last?.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first?.focus()
-      }
+    )
+    if (focusable.length === 0) {
+      event.preventDefault()
+      panel.focus()
+      return
     }
-
-    panel?.addEventListener('keydown', trapFocus)
-    return () => {
-      panel?.removeEventListener('keydown', trapFocus)
-      if (modal || panel?.contains(document.activeElement)) previousFocus?.focus()
+    const first = focusable[0]
+    const last = focusable.at(-1)
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last?.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first?.focus()
     }
-  }, [restoreFocusRef, modal])
+  }
 
-  return createPortal(
-    <div className="pointer-events-none" data-testid="side-panel-layer">
-      {modal && (
-        <motion.div
-          className="pointer-events-auto fixed inset-0 z-[2147483646] bg-black/30 backdrop-blur-[2px]"
-          onClick={onClose}
-          aria-hidden="true"
-          data-testid="side-panel-backdrop"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: reduceMotion ? 0 : 0.32, ease: [0.16, 1, 0.3, 1] }}
-        />
-      )}
-      <motion.div
-        ref={panelRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal={modal || undefined}
-        aria-label={ariaLabel}
-        className={`pointer-events-auto fixed inset-y-0 right-0 z-[2147483647] flex max-w-full flex-col border-l border-border/60 bg-background/85 font-mono shadow-2xl backdrop-blur-xl ${className}`}
-        style={style}
-        initial={reduceMotion ? false : { x: '100%', opacity: 0.7 }}
-        animate={{ x: '0%', opacity: 1 }}
-        exit={reduceMotion ? { opacity: 0 } : { x: '100%', opacity: 0.7 }}
-        // The page recedes while the panel arrives on a spring, as the library's sheet does.
-        transition={
-          reduceMotion
-            ? { duration: 0 }
-            : { type: 'spring', stiffness: 380, damping: 38, mass: 0.9 }
-        }
-      >
-        {children}
-      </motion.div>
-    </div>,
-    document.body
+  return (
+    <Sheet open modal={false} onOpenChange={(open) => !open && onClose()}>
+      <SheetPortal>
+        {modal && (
+          <SheetOverlay
+            aria-hidden="true"
+            data-testid="side-panel-backdrop"
+            className="fixed inset-0 bg-black/30 backdrop-blur-[2px]"
+            style={{ zIndex: PANEL_LAYER - 1, pointerEvents: 'auto' }}
+            // Keep focus in the panel through the click, so closing still hands it back.
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={onClose}
+          />
+        )}
+        <SheetContent
+          ref={panelRef}
+          side="right"
+          aria-label={ariaLabel}
+          aria-modal={modal || undefined}
+          data-testid="side-panel-layer"
+          restoreFocusRef={restoreFocusRef}
+          occlusion={acquireNativeSurfaceOcclusion}
+          // Escape and outside clicks belong to the hook and the backdrop above.
+          onEscapeKeyDown={(event) => event.preventDefault()}
+          onInteractOutside={(event) => event.preventDefault()}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault()
+            panelRef.current?.focus()
+          }}
+          onKeyDown={trapFocus}
+          className={`flex h-full max-h-svh max-w-full flex-col border-l border-border/60 bg-background/85 font-mono shadow-2xl outline-none backdrop-blur-xl ${className}`}
+          style={{ zIndex: PANEL_LAYER, pointerEvents: 'auto', ...style }}
+        >
+          {children}
+        </SheetContent>
+      </SheetPortal>
+    </Sheet>
   )
 }

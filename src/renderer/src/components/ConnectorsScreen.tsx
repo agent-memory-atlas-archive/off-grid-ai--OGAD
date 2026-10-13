@@ -29,6 +29,13 @@ import { PageHeader } from '@offgrid/operator-ui/operator/experience'
 import { Button } from './ui/button'
 import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
 import { AnimatePresence, motion } from 'motion/react'
+import {
+  TagsInput,
+  TagsInputInput,
+  TagsInputItem,
+  TagsInputLabel,
+  TagsInputList
+} from '@offgrid/operator-ui/operator/dice/tags-input'
 
 // Brands Simple Icons dropped (trademark) → bundled local logos, keyed by catalog id.
 const LOGO_OVERRIDE: Record<string, string> = { slack: slackLogo }
@@ -248,6 +255,55 @@ async function settleConnectionAttempt(
   if (result?.ok) return { connected: true }
   await removePendingConnector(id)
   return { connected: false, error: cleanError(result?.error ?? 'Could not connect') }
+}
+
+
+/**
+ * A stdio server's arguments as tags, in order, repeats kept (`--allow a --allow b`). The stored
+ * form stays the space-separated string the save path splits on whitespace, so a tag is one
+ * argument: space finishes it, a pasted line splits on spaces, and text left in the field is kept
+ * when it loses focus.
+ */
+function ArgsTagsField({
+  value,
+  onChange,
+  label,
+  placeholder
+}: {
+  value: string
+  onChange: (value: string) => void
+  label?: string
+  placeholder?: string
+}): ReactElement {
+  const args = value.trim() ? value.trim().split(/\s+/) : []
+  return (
+    <TagsInput
+      allowDuplicates
+      value={args}
+      onValueChange={(next) => onChange(next.join(' '))}
+      delimiter=" "
+      addOnPaste
+      blurBehavior="add"
+      className="w-full gap-1"
+    >
+      {label ? (
+        <TagsInputLabel className="text-[11px] font-normal text-neutral-500">{label}</TagsInputLabel>
+      ) : null}
+      <TagsInputList className="min-h-9 border-neutral-800 bg-neutral-950 px-2 py-1.5 transition-[border-color,box-shadow] duration-300 focus-within:border-neutral-600 focus-within:ring-0">
+        {args.map((arg, index) => (
+          <TagsInputItem
+            key={`${index}:${arg}`}
+            value={arg}
+            index={index}
+            className="animate-[og-rise_420ms_var(--og-ease-spring)_both] rounded-md border-neutral-700 py-0.5 pl-2 font-mono text-[12px] text-neutral-200"
+          >
+            {arg}
+          </TagsInputItem>
+        ))}
+        <TagsInputInput placeholder={placeholder} className="min-w-24 px-1 text-sm text-neutral-200" />
+      </TagsInputList>
+    </TagsInput>
+  )
 }
 
 export function ConnectorsScreen(): ReactElement {
@@ -697,14 +753,11 @@ export function ConnectorsScreen(): ReactElement {
                             className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 outline-none focus:border-neutral-600"
                           />
                         </label>
-                        <label className="block space-y-1 text-[11px] text-neutral-500">
-                          Arguments
-                          <input
-                            value={edit.args}
-                            onChange={(e) => setEdit((p) => ({ ...p, args: e.target.value }))}
-                            className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 outline-none focus:border-neutral-600"
-                          />
-                        </label>
+                        <ArgsTagsField
+                          label="Arguments"
+                          value={edit.args}
+                          onChange={(args) => setEdit((p) => ({ ...p, args }))}
+                        />
                       </>
                     )}
                     <p className="text-[11px] leading-4 text-neutral-500">
@@ -883,12 +936,7 @@ export function ConnectorsScreen(): ReactElement {
                         placeholder="command (e.g. npx)"
                         className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 outline-none focus:border-neutral-600"
                       />
-                      <input
-                        value={args}
-                        onChange={(e) => setArgs(e.target.value)}
-                        placeholder="args"
-                        className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 outline-none focus:border-neutral-600"
-                      />
+                      <ArgsTagsField value={args} onChange={setArgs} placeholder="args" />
                     </>
                   )}
                   <div className="flex gap-2">

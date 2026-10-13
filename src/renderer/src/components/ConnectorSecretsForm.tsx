@@ -32,9 +32,8 @@ interface ConnectorSecretsFormProps {
  * live here for as long as the form is open: the screen receives them once, on Connect, and they
  * go with the form when it closes.
  *
- * Each secret is a dice/key-value row with fixed keys (the catalog names them; nothing is added or
- * removed) and a masked value with its own reveal. One KeyValue per secret, because a row's
- * labels are per secret and the list's rows share one set of props.
+ * The secrets are one dice/key-value list with fixed keys (the catalog names them; nothing is
+ * added or removed) and masked values, each row with its own reveal and its own labels.
  */
 export function ConnectorSecretsForm({
   secrets,
@@ -46,20 +45,28 @@ export function ConnectorSecretsForm({
 
   return (
     <>
-      {secrets.map((s) => {
-        const label = s.label + (s.placeholder ? ` (${s.placeholder})` : '')
-        return (
-          <KeyValue
-            key={s.key}
-            fixedKeys
-            masked
-            trim={false}
-            enablePaste={false}
-            value={[{ id: s.key, key: s.label, value: values[s.key] ?? '' }]}
-            onValueChange={(items) => setValues((p) => ({ ...p, [s.key]: items[0]?.value ?? '' }))}
-            valuePlaceholder={label}
-          >
-            <KeyValueList>
+      <KeyValue
+        fixedKeys
+        masked
+        trim={false}
+        enablePaste={false}
+        value={secrets.map((secret) => ({
+          id: secret.key,
+          key: secret.label,
+          value: values[secret.key] ?? ''
+        }))}
+        onValueChange={(items) =>
+          setValues((p) => ({
+            ...p,
+            ...Object.fromEntries(items.map((item) => [item.id, item.value]))
+          }))
+        }
+      >
+        <KeyValueList>
+          {(_item, index) => {
+            const s = secrets[index]
+            if (!s) return null
+            return (
               <KeyValueItem className="items-center">
                 <KeyValueKeyInput
                   tabIndex={-1}
@@ -69,15 +76,16 @@ export function ConnectorSecretsForm({
                 <KeyValueValueInput
                   aria-label={s.label}
                   autoComplete="off"
+                  placeholder={s.label + (s.placeholder ? ` (${s.placeholder})` : '')}
                   revealLabel={`Show ${s.label}`}
                   hideLabel={`Hide ${s.label}`}
                   className="font-mono text-xs"
                 />
               </KeyValueItem>
-            </KeyValueList>
-          </KeyValue>
-        )
-      })}
+            )
+          }}
+        </KeyValueList>
+      </KeyValue>
       <div className="flex gap-2">
         <Button size="xs" onClick={() => onConnect(values)} disabled={connecting}>
           <TextMorph as="span">{connecting ? 'Connecting…' : 'Connect'}</TextMorph>
