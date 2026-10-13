@@ -60,10 +60,11 @@ import { isAsync, matchPollRoute } from './model-server/async-request'
 import { sanitizeChatMessages, parseDecisionChatMessages } from './model-server/chat-messages'
 import { applyThinkingPayload, requestedThinking } from './llm/chat-payload'
 import { parseMultipart } from './model-server/multipart'
-import { tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries } from './model-server/models-list'
+import { tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries, installedTextModelEntries } from './model-server/models-list'
 import { buildGatewayModalities, type GatewayModalities } from './model-server/health'
 import { safeProxyResponse } from './model-server/proxy-response'
 import { writeDiagnosticLog } from './diagnostics-log'
+import { modalityQueue, CHAT_JOB } from './modality-queue/queue'
 import { IMAGE_CANCELLED_MESSAGE } from './imagegen/generation-lifecycle'
 import { parseRemoteVisionModelId, remoteVisionModelId } from '../shared/remote-vision-server'
 import {
@@ -798,6 +799,20 @@ async function handleChat(
     json(res, failure.status, errBody(failure.message, failure.type))
     return
   }
+  await modalityQueue.run(CHAT_JOB, async () => {
+    const requested = typeof body.model === 'string' ? body.model : ''
+    if (requested && !parseRemoteVisionModelId(requested)) {
+      const { getCatalog, listInstalled, setActiveModel } = await import('./models-manager')
+      const installed = await listInstalled()
+      const catalog = (await getCatalog()).models as { id: string; kind: string; remoteServerId?: string }[]
+      const selected = catalog.find((model) => model.id === requested && !model.remoteServerId &&
+        (model.kind === 'text' || model.kind === 'vision') && installed.includes(model.id))
+      if (selected && llm.activeModelInfo()?.id !== requested) {
+        const result = await setActiveModel(requested)
+        if (!result.success) { json(res, 400, errBody(result.error ?? 'Model could not be selected.')); return }
+      }
+      if (selected) await llm.init()
+    }
   try {
     let changed = await inlineChatImages(body)
     // Gemma 4 (and others) reject system messages that aren't at position 0.
@@ -828,13 +843,14 @@ async function handleChat(
   // Async chat: run a non-streaming completion in the background and poll for it.
   if (isAsync(req, body)) {
     const inlined = body
+    let completion: Promise<unknown> | undefined
     await serve(
       res,
       rid,
       'chat',
       '/v1/chat/completions',
       true,
-      async () => {
+      () => completion = (async () => {
         try {
           const result = await callLlamaJson(inlined, Date.now() + 45_000)
           activity.finish(result)
@@ -843,15 +859,26 @@ async function handleChat(
           activity.finish(undefined, error)
           throw error
         }
-      },
+      })(),
       () => {}
     )
+    await completion?.catch(() => {})
     return
   }
 
   // Sync: stream straight through. Retry for up to 45s if llama-server is mid-reload
   // (e.g. just after an image generation freed and is respawning it, ~16s).
-  proxyToLlama(req, res, forward, Date.now() + 45_000, activity)
+  await new Promise<void>((resolve) => {
+    res.once('close', resolve)
+    res.once('finish', resolve)
+    proxyToLlama(req, res, forward, Date.now() + 45_000, activity)
+  })
+  }).catch((error) => {
+    if (!res.headersSent && !res.destroyed) {
+      const failure = errMeta(error)
+      json(res, failure.status, errBody(failure.message, failure.type))
+    }
+  })
 }
 
 // ─── Embeddings (local MiniLM) ───────────────────────────────────────────────
@@ -1012,8 +1039,14 @@ async function handleModelsList(
       (whisperModel() ? path.basename(whisperModel() as string) : null)
   const transcription = sttId ? [tag(sttId, 'transcription')] : []
 
-  const { desktopCatalog, listInstalled } = await import('./models-manager')
-  const specialists = specialistModelEntries(await desktopCatalog(), await listInstalled(), now)
+  const { desktopCatalog, listInstalled, getCatalog } = await import('./models-manager')
+  const installed = await listInstalled()
+  const catalog = (await getCatalog()).models as { id: string; name: string; kind: string; remoteServerId?: string }[]
+  if (!activeRemote) {
+    const downloaded = installedTextModelEntries(catalog, installed, now)
+    if (downloaded.length) text = downloaded
+  }
+  const specialists = specialistModelEntries(await desktopCatalog(), installed, now)
   const data: Record<string, unknown>[] = [
     ...text,
     ...specialists.filter((model) => !text.some((entry) => entry.id === model.id)),

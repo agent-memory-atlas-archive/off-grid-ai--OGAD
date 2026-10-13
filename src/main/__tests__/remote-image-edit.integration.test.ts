@@ -32,6 +32,9 @@ beforeEach(async () => {
       fields.model === 'qwen_image_2.1-Q4_K.gguf' &&
       fields.prompt === 'Make it blue' &&
       fields.size === '64x64' &&
+      Number(fields.steps) === 5 &&
+      Number(fields.cfg_scale) === 1 &&
+      Number(fields.seed) === 42 &&
       String(fields.allow_unsafe_memory_override) === 'false' &&
       (!edit || form?.files.image?.data.equals(png))
     if (!valid) {
@@ -72,7 +75,8 @@ it.each([true, false])('supports image requests with source image=%s', async (ed
     64,
     false,
     undefined,
-    edit ? path.join(directory, 'source.png') : undefined
+    edit ? path.join(directory, 'source.png') : undefined,
+    { steps: 5, cfgScale: 1, seed: 42 }
   )
   expect(result.mime).toBe('image/png')
   expect(result.bytes).toEqual(png)

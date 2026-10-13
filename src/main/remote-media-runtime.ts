@@ -111,12 +111,17 @@ export async function generateRemoteImage(
   height: number | undefined,
   allowUnsafeMemoryOverride: boolean,
   signal?: AbortSignal,
-  initImage?: string
+  initImage?: string,
+  parameters?: { steps?: number; cfgScale?: number; seed?: number; negativePrompt?: string }
 ): Promise<{ bytes: Buffer; mime: string }> {
   const fields = {
     model: server.selectedModel,
     prompt,
     ...(width && height ? { size: `${width}x${height}` } : {}),
+    ...(parameters?.steps !== undefined ? { steps: parameters.steps } : {}),
+    ...(parameters?.cfgScale !== undefined ? { cfg_scale: parameters.cfgScale } : {}),
+    ...(parameters?.seed !== undefined ? { seed: parameters.seed } : {}),
+    ...(parameters?.negativePrompt ? { negative_prompt: parameters.negativePrompt } : {}),
     allow_unsafe_memory_override: allowUnsafeMemoryOverride
   }
   let requestBody: string | FormData = JSON.stringify(fields)

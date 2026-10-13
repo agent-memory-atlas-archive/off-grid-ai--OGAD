@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { tagLlmEntry, tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries } from '../models-list'
+import { tagLlmEntry, tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries, installedTextModelEntries } from '../models-list'
 
 describe('remote specialist discovery', () => {
   it('advertises installed grounding and decision models without exposing missing models or Chat twice', () => {
@@ -95,5 +95,22 @@ describe('ollamaMirror', () => {
 
   it('mirrors an empty list', () => {
     expect(ollamaMirror([])).toEqual([])
+  })
+})
+
+
+describe('downloaded chat inventory', () => {
+  it('includes inactive downloaded chat models and excludes task, missing and remote entries', () => {
+    const catalog = [
+      { id: 'text', name: 'Text', kind: 'text' },
+      { id: 'vision', name: 'Vision', kind: 'vision' },
+      { id: 'missing', name: 'Missing', kind: 'text' },
+      { id: 'kev', name: 'Kev', kind: 'computer_use' },
+      { id: 'remote', name: 'Remote', kind: 'text', remoteServerId: 'server' }
+    ]
+    expect(installedTextModelEntries(catalog, ['text', 'vision', 'kev', 'remote'], 1)).toEqual([
+      { id: 'text', name: 'Text', kind: 'chat', object: 'model', owned_by: 'off-grid', created: 1, capabilities: [] },
+      { id: 'vision', name: 'Vision', kind: 'vision', object: 'model', owned_by: 'off-grid', created: 1, capabilities: ['vision'] }
+    ])
   })
 })

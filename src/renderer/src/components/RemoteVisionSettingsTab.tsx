@@ -159,6 +159,7 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
       .filter(
         (model) =>
           model.kind === 'text' &&
+          !model.outputModalities?.includes('decisions') && !isGrounderModel(model.id) &&
           (!query || `${model.name} ${model.id}`.toLowerCase().includes(query))
       )
       .slice(0, 75)

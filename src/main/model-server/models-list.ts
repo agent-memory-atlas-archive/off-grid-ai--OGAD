@@ -47,3 +47,16 @@ export function specialistModelEntries(
       })
     )
 }
+
+/** Complete installed chat models can be selected independently of the active pick. */
+export function installedTextModelEntries(
+  catalog: readonly { id: string; name: string; kind: string; remoteServerId?: string }[],
+  installed: readonly string[], now: number
+): Record<string, unknown>[] {
+  return catalog.filter((model) => !model.remoteServerId &&
+    (model.kind === 'text' || model.kind === 'vision') && installed.includes(model.id)
+  ).map((model) => modelEntry(model.id, model.kind === 'vision' ? 'vision' : 'chat', now, {
+    name: model.name,
+    capabilities: model.kind === 'vision' ? ['vision'] : []
+  }))
+}
