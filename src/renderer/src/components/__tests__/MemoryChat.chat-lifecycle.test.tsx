@@ -1617,6 +1617,186 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
     })
   })
 
+  /** Regenerate a saved answer and leave the new version streaming, as main reports it. */
+  async function regenerateThenRemount(
+    boundary: ChatBoundary,
+    user: ReturnType<typeof userEvent.setup>
+  ): Promise<void> {
+    boundary.messages['conversation-a'] = [
+      { id: 20, role: 'user', content: 'Explain the release gate' },
+      { id: 21, role: 'assistant', content: 'Original explanation', context: { unified: [] } }
+    ]
+    boundary.conversations[0]!.message_count = 2
+    installBoundary(boundary)
+    const view = renderChat({ conversationId: 'conversation-a' })
+    await screen.findByText('Original explanation')
+    openActionsFor('Original explanation')
+    await user.click(screen.getByRole('menuitem', { name: /^regenerate$/i }))
+    await waitFor(() => expect(boundary.calls).toHaveLength(1))
+    act(() => boundary.emit(0, 'Streaming replacement'))
+    await screen.findByText('Streaming replacement')
+    // Main names the reply with an id it minted; it does not know which saved answer is replaced.
+    boundary.activeRagStreams.push({
+      streamId: boundary.calls[0]!.streamId,
+      conversationId: 'conversation-a',
+      messageId: 'reply-minted-by-main',
+      content: 'Streaming replacement',
+      reasoning: '',
+      reasoningRequested: false,
+      phase: 'answering'
+    })
+    view.unmount()
+    renderChat({ conversationId: 'conversation-a' })
+    await screen.findByText('Streaming replacement')
+    expect(await screen.findByText('2/2')).toBeTruthy()
+  }
+
+  it('keeps the versions of a regenerated answer that is still streaming after a remount', async () => {
+    const boundary = new ChatBoundary()
+    const user = userEvent.setup()
+    await regenerateThenRemount(boundary, user)
+
+    expect(await screen.findByText('2/2')).toBeTruthy()
+    expect(screen.queryByText('Original explanation')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Previous response' }))
+    expect(await screen.findByText('Original explanation')).toBeTruthy()
+    expect(screen.getByText('1/2')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Next response' }))
+    expect(await screen.findByText('Streaming replacement')).toBeTruthy()
+
+    boundary.activeRagStreams.length = 0
+    boundary.resolve(0, 'Finished replacement')
+    await screen.findByText('Finished replacement')
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /stop generating/i })).toBeNull()
+    )
+    expect(screen.getByText('2/2')).toBeTruthy()
+    const saved = boundary.messages['conversation-a']!.filter(
+      (message) => message.role === 'assistant'
+    )
+    expect(saved).toHaveLength(1)
+    expect(saved[0]!.context).toMatchObject({
+      variants: [
+        expect.objectContaining({ content: 'Original explanation' }),
+        expect.objectContaining({ content: 'Finished replacement' })
+      ]
+    })
+    await user.click(screen.getByRole('button', { name: 'Previous response' }))
+    expect(await screen.findByText('Original explanation')).toBeTruthy()
+  })
+
+  it('keeps every version when a regenerated answer is stopped after a remount', async () => {
+    const boundary = new ChatBoundary()
+    const user = userEvent.setup()
+    await regenerateThenRemount(boundary, user)
+    act(() => boundary.emit(0, ' and more'))
+    await screen.findByText('Streaming replacement and more')
+    await user.click(screen.getByRole('button', { name: /stop generating/i }))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /stop generating/i })).toBeNull()
+    )
+
+    expect(await screen.findByText('2/2')).toBeTruthy()
+    const saved = boundary.messages['conversation-a']!.filter(
+      (message) => message.role === 'assistant'
+    )
+    expect(saved).toHaveLength(1)
+    expect(saved[0]!.content).toBe('Streaming replacement and more')
+    expect(saved[0]!.context).toMatchObject({
+      variants: [
+        expect.objectContaining({ content: 'Original explanation' }),
+        expect.objectContaining({ content: 'Streaming replacement and more' })
+      ]
+    })
+
+    cleanup()
+    renderChat({ conversationId: 'conversation-a' })
+    expect(await screen.findByText('Streaming replacement and more')).toBeTruthy()
+    expect(screen.getByText('2/2')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Previous response' }))
+    expect(await screen.findByText('Original explanation')).toBeTruthy()
+  })
+
+  it('keeps the earlier image as a version when an image answer is regenerated', async () => {
+    const boundary = new ChatBoundary()
+    boundary.messages['conversation-a'] = [
+      { id: 20, role: 'user', content: 'a red fox' },
+      {
+        id: 21,
+        role: 'assistant',
+        content: 'Generated for: a red fox',
+        context: { imageRef: { id: 'fox-1', path: '/images/fox-1.png' } }
+      }
+    ]
+    boundary.conversations[0]!.message_count = 2
+    const generateImage = vi.fn(async (request: { prompt: string }) => ({
+      dataUrl: 'data:image/png;base64,Rk9YMg==',
+      path: '/images/fox-2.png',
+      syncId: 'fox-2',
+      prompt: request.prompt
+    }))
+    Object.assign(boundary.api, {
+      imageGenStatus: vi.fn(async () => ({
+        available: true,
+        models: ['image.gguf'],
+        active: 'image.gguf'
+      })),
+      generateImage,
+      imageGenConversationPersisted: vi.fn(async () => {})
+    })
+    installBoundary(boundary)
+    const user = userEvent.setup()
+    renderChat({ conversationId: 'conversation-a' })
+    const imageSources = (): string[] =>
+      [...document.querySelectorAll('img')].map((image) => image.getAttribute('src') ?? '')
+
+    await screen.findByText('Generated for: a red fox')
+    expect(imageSources().some((src) => src.includes('fox-1.png'))).toBe(true)
+    await user.click(await screen.findByRole('button', { name: /^image$/i }))
+    openActionsFor('a red fox')
+    await user.click(screen.getByRole('menuitem', { name: 'Resend' }))
+    await waitFor(() => expect(generateImage).toHaveBeenCalledTimes(1))
+
+    expect(await screen.findByText('2/2')).toBeTruthy()
+    expect(imageSources()).toContain('data:image/png;base64,Rk9YMg==')
+    expect(imageSources().some((src) => src.includes('fox-1.png'))).toBe(false)
+    await user.click(screen.getByRole('button', { name: 'Previous response' }))
+    expect(await screen.findByText('1/2')).toBeTruthy()
+    expect(imageSources().some((src) => src.includes('fox-1.png'))).toBe(true)
+    await user.click(screen.getByRole('button', { name: 'Next response' }))
+    expect(await screen.findByText('2/2')).toBeTruthy()
+    expect(imageSources().some((src) => src.includes('fox-2.png'))).toBe(true)
+
+    const saved = boundary.messages['conversation-a']!.filter(
+      (message) => message.role === 'assistant'
+    )
+    expect(saved).toHaveLength(1)
+    expect(saved[0]!.context).toMatchObject({
+      imageRef: { id: 'fox-2', path: '/images/fox-2.png' },
+      variants: [
+        expect.objectContaining({
+          context: expect.objectContaining({
+            imageRef: expect.objectContaining({ path: '/images/fox-1.png' })
+          })
+        }),
+        expect.objectContaining({
+          context: expect.objectContaining({
+            imageRef: expect.objectContaining({ path: '/images/fox-2.png' })
+          })
+        })
+      ]
+    })
+    expect(JSON.stringify(saved[0]!.context)).not.toContain('base64')
+
+    cleanup()
+    renderChat({ conversationId: 'conversation-a' })
+    expect(await screen.findByText('2/2')).toBeTruthy()
+    expect(imageSources().some((src) => src.includes('fox-2.png'))).toBe(true)
+    await user.click(screen.getByRole('button', { name: 'Previous response' }))
+    expect(await screen.findByText('1/2')).toBeTruthy()
+    expect(imageSources().some((src) => src.includes('fox-1.png'))).toBe(true)
+  })
+
   it('Stop after remount saves an unclaimed partial once and clears both queued drafts', async () => {
     const boundary = new ChatBoundary()
     boundary.activeRagStreams.push({

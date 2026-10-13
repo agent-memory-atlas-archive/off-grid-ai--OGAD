@@ -14,6 +14,11 @@ export function seedStreamViewMessage(message: ChatMessage): void {
   notifyStream(message.id)
 }
 
+/** The live view of a stream, held for as long as its sender runs (it outlives a remount). */
+export function streamViewMessage(streamId: string): ChatMessage | undefined {
+  return streamMessages.get(streamId)
+}
+
 export function applyStreamViewEvent(streamId: string, event: StreamEvent): void {
   const current = streamMessages.get(streamId)
   if (!current) return

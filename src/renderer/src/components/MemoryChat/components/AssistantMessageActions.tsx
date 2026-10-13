@@ -150,7 +150,9 @@ function AssistantMessageActionsComponent({
   onSpeak: () => void
 }>): React.JSX.Element | null {
   console.log('MemoryChat AssistantMessageActions rendered')
-  if (message.image || isSupportingMessage(message)) return null
+  if (isSupportingMessage(message)) return null
+  // An image answer has its own controls, but its earlier versions stay reachable.
+  if (message.image) return <VariantNavigation message={message} onSelect={onSelectVariant} />
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       <MessageActionsMenu>

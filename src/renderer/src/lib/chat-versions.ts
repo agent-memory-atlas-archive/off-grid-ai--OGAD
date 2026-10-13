@@ -7,6 +7,7 @@ import {
   readReasoning,
   readResponseCutoff
 } from './message-persistence'
+import { captureUrlForPath } from '../../../shared/ogcapture-url'
 
 export function answerVersion(message: ChatMessage): AnswerVersion {
   const context = buildAssistantContext(
@@ -38,7 +39,12 @@ export function answerVersion(message: ChatMessage): AnswerVersion {
     replacementMessageId: _replacement,
     ...fields
   } = message
-  return { content: message.content, context, fields: { ...fields, context } }
+  // A version names its image file; the pixels of a just-generated one never ride in the context.
+  const image =
+    message.imagePath && message.image?.startsWith('data:')
+      ? { image: captureUrlForPath(message.imagePath) }
+      : {}
+  return { content: message.content, context, fields: { ...fields, ...image, context } }
 }
 
 /** Capture the current answer too, including legacy text-only versions. */
@@ -56,6 +62,18 @@ export function appendAnswerVersion(
   message: ChatMessage
 ): ResponseVersion[] | undefined {
   return prior ? [...prior, answerVersion(message)] : undefined
+}
+
+/** A replacement answer that keeps the answers it replaces, in memory and in its stored context. */
+export function withAnswerVersions(
+  message: ChatMessage,
+  prior: ResponseVersion[] | undefined
+): ChatMessage {
+  const variants = appendAnswerVersion(prior, message)
+  if (!variants) return message
+  const variantIndex = variants.length - 1
+  const context = buildAssistantContext(message.context, { variants, variantIndex }) as RagContext
+  return { ...message, variants, variantIndex, context }
 }
 
 /** One projection supplies UI, durable content, and model history. */

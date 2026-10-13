@@ -1,4 +1,4 @@
-import { restoredStreamMessage } from '@renderer/lib/chat-stream-restore'
+import { restoredStreamMessage, withRestoredStream } from '@renderer/lib/chat-stream-restore'
 import { stopChatRun } from '@renderer/lib/chat-stop'
 import { observeOwnedRun, type RunEvent } from '@renderer/lib/chat-run-owner'
 import { persistObservedTurn } from '@renderer/lib/chat-turn-persistence'
@@ -6,7 +6,8 @@ import type { ResponseVersion } from '../../../../shared/chat-versions'
 import {
   appendAnswerVersion,
   selectAnswerVersion,
-  failedAnswerVersion
+  failedAnswerVersion,
+  withAnswerVersions
 } from '@renderer/lib/chat-versions'
 import { replaceChatTurn, type ReplacementDependencies } from '@renderer/lib/chat-turn-replacement'
 import {
@@ -211,7 +212,8 @@ import {
   applyStreamViewEvent,
   clearStreamViewMessage,
   resetStreamViewMessage,
-  seedStreamViewMessage
+  seedStreamViewMessage,
+  streamViewMessage
 } from './stream-view-store'
 
 import { stopLiveTask, stopLiveWebUseForConversation } from './helper'
@@ -1959,39 +1961,44 @@ export function MemoryChat({
             imageRequest.prompt,
             img.prompt
           )
-          const assistantMessage: ChatMessage = {
-            id: `a-${Date.now()}`,
-            role: 'assistant',
-            ...completedImage,
-            image: img.dataUrl,
-            imagePath: img.path,
-            imageMetadata,
-            ...(img.durationMs === undefined ? {} : { generationTimeMs: img.durationMs }),
-            ...(imageMetrics ? { metrics: imageMetrics } : {})
-          }
+          const imageContext = withGeneratedImageReference(
+            {
+              imageMetadata,
+              ...(img.durationMs === undefined ? {} : { durationMs: img.durationMs }),
+              ...(imageMetrics ? { metrics: imageMetrics } : {})
+            },
+            { id: img.syncId, path: img.path }
+          )
+          // A regenerate keeps the answers it replaces as earlier versions of this one.
+          const assistantMessage = withAnswerVersions(
+            {
+              id: `a-${Date.now()}`,
+              role: 'assistant',
+              ...completedImage,
+              image: img.dataUrl,
+              imagePath: img.path,
+              imageMetadata,
+              context: imageContext as RagContext,
+              ...(img.durationMs === undefined ? {} : { generationTimeMs: img.durationMs }),
+              ...(imageMetrics ? { metrics: imageMetrics } : {})
+            },
+            opts?.priorVariants
+          )
           setConvMessages(convId, (prev) => [...prev, assistantMessage])
           if (voiceMode) setAutoPlayId(assistantMessage.id)
           try {
-            const imageContext = withGeneratedImageReference(
-              {
-                imageMetadata,
-                ...(img.durationMs === undefined ? {} : { durationMs: img.durationMs }),
-                ...(imageMetrics ? { metrics: imageMetrics } : {})
-              },
-              { id: img.syncId, path: img.path }
-            )
             const stored = opts?.replacementMessageId
               ? await window.api.updateRagMessage(
                   convId,
                   opts.replacementMessageId,
                   completedImage.storedContent,
-                  imageContext
+                  assistantMessage.context
                 )
               : await window.api.addRagMessage(
                   convId,
                   'assistant',
                   completedImage.storedContent,
-                  imageContext
+                  assistantMessage.context
                 )
             if (!stored) throw new Error('Saved response was not found')
             const storedId = stored === true ? opts!.replacementMessageId! : stored.uuid
@@ -3304,19 +3311,16 @@ export function MemoryChat({
           attachRendererRun(stream.conversationId)
           streamConvRef.current.set(stream.streamId, stream.conversationId)
           reasoningByStream.current[stream.streamId] = stream.reasoning
-          const restored = restoredStreamMessage(stream)
+          // The sender's view still names the answer a regenerate replaces and its versions.
+          const restored = restoredStreamMessage(stream, streamViewMessage(stream.streamId))
           timelineByStream.current[stream.streamId] = restored.timeline ?? []
           toolCallsByStream.current[stream.streamId] = restored.toolCalls ?? []
           answerByStream.current[stream.streamId] = stream.content
           markGenerating(stream.conversationId, true)
           seedStreamViewMessage(restored)
-          setConvMessages(stream.conversationId, (previous) => {
-            const index = previous.findIndex((message) => message.id === stream.streamId)
-            if (index < 0) return [...previous, restored]
-            return previous.map((message, messageIndex) =>
-              messageIndex === index ? { ...message, ...restored } : message
-            )
-          })
+          setConvMessages(stream.conversationId, (previous) =>
+            withRestoredStream(previous, restored)
+          )
         }
         for (const cid of Object.keys(queuedRef.current)) {
           if (!generatingRef.current.has(cid)) drainQueue(cid)
