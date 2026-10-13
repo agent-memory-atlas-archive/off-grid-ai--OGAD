@@ -5,6 +5,7 @@ import { CopyButton } from './ui/CopyButton'
 import { GatewayApiKeysSettings } from './GatewayApiKeysSettings'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
+import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
 
 // Explains the local OpenAI-compatible gateway with copyable quick-start snippets
 // and a link to the interactive playground the gateway serves. Core feature.
@@ -100,14 +101,16 @@ export function GatewayScreen(): React.ReactElement {
 
   return (
     <div className="relative h-full overflow-y-auto font-mono">
-      <div className="flex w-full flex-col gap-6 px-8 py-1 pb-16">
+      <div className="flex w-full flex-col gap-10 px-8 pt-8 pb-16">
         {/* Header */}
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-neutral-700 bg-neutral-800">
             <IconServer2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-white">Gateway</h2>
+            <TextEffect as="h1" preset="fade-in-blur" per="char" className="text-lg text-white">
+              Gateway
+            </TextEffect>
             <p className="text-sm text-neutral-500">
               One local, OpenAI-compatible API for every model you download — text, vision, image,
               voice. Runs on your device; nothing leaves it.

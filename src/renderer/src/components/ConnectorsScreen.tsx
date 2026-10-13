@@ -499,16 +499,16 @@ export function ConnectorsScreen(): ReactElement {
 
   return (
     <div className="flex h-full flex-col bg-neutral-950 font-mono">
-      <div className="flex items-center justify-between border-b border-neutral-900 px-6 py-4">
+      <div className="flex items-center justify-between px-8 pt-8 pb-6">
         <div className="flex items-center gap-3">
           <IconPlug className="h-5 w-5 text-green-500" />
           <div>
             <TextEffect as="h1" preset="fade-in-blur" per="char" className="text-lg font-light tracking-tight text-white">
               Integrations
             </TextEffect>
-            <div className="text-[11px] uppercase tracking-wide text-neutral-600">
-              Connect a tool · authorized actions run only after approval
-            </div>
+            <p className="text-sm text-neutral-500">
+              Connect a tool. Actions it takes run only after you approve them.
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -541,9 +541,9 @@ export function ConnectorsScreen(): ReactElement {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-10">
         {detailId == null && tab !== 'connected' && (
-          <div className="mb-6">
+          <div className="mb-10">
             <QuickConnections />
           </div>
         )}
@@ -856,7 +856,7 @@ export function ConnectorsScreen(): ReactElement {
             )
           }
           return (
-            <div className="mx-auto max-w-[1600px] space-y-8">
+            <div className="mx-auto max-w-[1600px] space-y-10">
               {/* Custom (advanced) form */}
               {adding && (
                 <div className="space-y-3 rounded-md border border-neutral-800 bg-neutral-900/40 p-4">
@@ -924,7 +924,7 @@ export function ConnectorsScreen(): ReactElement {
                   if (entries.length === 0) return null
                   return (
                     <section key={cat}>
-                      <h2 className="mb-3 text-[11px] uppercase tracking-wide text-neutral-500">
+                      <h2 className="mb-3 text-[10px] uppercase tracking-widest text-neutral-500">
                         {cat}
                       </h2>
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
@@ -1003,7 +1003,7 @@ export function ConnectorsScreen(): ReactElement {
               {/* INSTALLED (Connected) */}
               {tab !== 'disconnected' && (
                 <section>
-                  <h2 className="mb-3 text-[11px] uppercase tracking-wide text-neutral-500">
+                  <h2 className="mb-3 text-[10px] uppercase tracking-widest text-neutral-500">
                     Connected
                   </h2>
                   {loading && items.length === 0 ? (

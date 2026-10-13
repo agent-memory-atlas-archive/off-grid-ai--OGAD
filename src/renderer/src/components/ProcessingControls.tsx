@@ -16,6 +16,7 @@ import {
   residencyStatusText,
   residencySwitchLabel
 } from '@renderer/lib/residency-rows'
+import { Switch } from '@offgrid/operator-ui/operator/coss/switch'
 
 interface QueueCfg {
   enabled: boolean
@@ -73,20 +74,13 @@ export function RuntimeResidencySection(): React.ReactElement {
                 >
                   {residencyStatusText(row, resident)}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => toggle(row.modality, row.locked)}
-                  role="switch"
-                  aria-checked={resident}
-                  aria-disabled={row.locked}
+                <Switch
+                  checked={resident}
+                  onCheckedChange={() => toggle(row.modality, row.locked)}
                   disabled={row.locked}
+                  aria-disabled={row.locked}
                   aria-label={residencySwitchLabel(row)}
-                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-all duration-150 active:scale-95 ${resident ? 'bg-emerald-500' : 'bg-neutral-700'} ${row.locked ? 'cursor-not-allowed opacity-50' : ''}`}
-                >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${resident ? 'translate-x-6' : 'translate-x-1'}`}
-                  />
-                </button>
+                />
               </div>
             </div>
           )
@@ -160,18 +154,11 @@ export function ModelPipelineSection(): React.ReactElement {
               <div className="text-sm text-neutral-200">{row.label}</div>
               <div className="text-xs text-neutral-600">{row.hint}</div>
             </div>
-            <button
-              type="button"
-              onClick={() => set({ [row.key]: !row.on })}
-              role="switch"
-              aria-checked={row.on}
+            <Switch
+              checked={row.on}
+              onCheckedChange={() => set({ [row.key]: !row.on })}
               aria-label={row.label}
-              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-all duration-150 active:scale-95 ${row.on ? 'bg-emerald-500' : 'bg-neutral-700'}`}
-            >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${row.on ? 'translate-x-6' : 'translate-x-1'}`}
-              />
-            </button>
+            />
           </div>
         ))}
       </div>
