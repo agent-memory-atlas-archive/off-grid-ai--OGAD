@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { kokoroVoiceLanguage, type RuntimeSpeechVoice } from '@offgrid/speech'
+import { kokoroVoiceLanguage, kokoroVoiceLabel, type RuntimeSpeechVoice } from '@offgrid/speech'
 import { IMAGE_MEMORY_GUARD_ERROR_CODE, imageMemoryGuardErrorMessage } from '../shared/image-generation-contract'
 import { getActiveRemoteVisionServerForModality } from './vision/remote-vision-server'
 
@@ -14,6 +14,24 @@ export async function listRemoteVoices(server: RemoteServer): Promise<RuntimeSpe
   const key = `${server.id}:${server.endpoint}:${server.selectedModel}`
   if (cachedRemoteVoices?.key === key && cachedRemoteVoices.expiresAt > Date.now()) {
     return cachedRemoteVoices.voices
+  }
+  if (server.provider === 'ogad') {
+    const response = await checked(
+      await fetch(`${server.endpoint}/audio/voices`, { headers: headers(server) })
+    )
+    const body = (await response.json()) as { voices?: unknown }
+    const voices = (Array.isArray(body.voices) ? body.voices : [])
+      .filter((id): id is string => typeof id === 'string' && !!id)
+      .map((id) => {
+        const language = /kokoro/i.test(server.selectedModel) ? kokoroVoiceLanguage(id) : undefined
+        return {
+          id,
+          label: language ? kokoroVoiceLabel(id) : id,
+          ...(language ? { language: language.code, languageLabel: language.label } : {})
+        }
+      })
+    cachedRemoteVoices = { key, voices, expiresAt: Date.now() + 5 * 60_000 }
+    return voices
   }
   const response = await checked(
     await fetch(`${server.endpoint}/models?output_modalities=speech`, {

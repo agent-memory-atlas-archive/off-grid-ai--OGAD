@@ -32,7 +32,9 @@ returned a UI-Mate result; Kev chose Save with 0.9916 probability through the pr
 logs and GPU process memory confirm CUDA for both. Role dropdowns now filter grounding specialists
 and decision outputs separately, using the existing catalog and output-modalities contract.
 A renderer integration check covers UI-Mate, Kev, a provider decider, and a general vision model.
-The Mac dropdown change still requires installation of the updated client.
+The patched Mac client is installed. Its Grounding and Decision dropdowns were checked separately.
+The Kev Use action now enables a decision strategy while preserving each task's grounding choice.
+A real Electron check with a temporary profile passed all five starting strategies.
 
 ### MODEL-SPLIT-20261013 (P1) - Download all GGUF shards with one file-picker action
 
@@ -57,7 +59,8 @@ A full GUI transfer was not repeated. Release and GUI download checks remain ope
 
 ### MODEL-IMAGE-REMOTE-20261013 (P1) - Forward source images to remote editing endpoints
 
-**Status:** client source patch prepared; installation and a real image-edit run remain open.
+**Status:** patched Mac client installed; a small real remote image edit returned HTTP 200.
+PR merge and release remain open.
 
 **Evidence:** a selected remote Qwen Image 2.1 model was rejected in the Mac client before the
 request reached the server. The client unconditionally rejected every remote init image.
@@ -67,6 +70,39 @@ retain JSON `/v1/images/generations` for requests without a source image. Preser
 cancellation, and provider error handling. A small HTTP boundary fixture verifies source bytes,
 model, prompt, size, and the returned image for edit and generation requests.
 The separate chat claim that ten pages were generated after tool failures is not fixed here.
+
+### MODEL-TTS-REMOTE-20261013 (P1) - Load remote OGAD voices and languages
+
+**Status:** installed on Mac and Runpod. Remote synthesis returned WAV audio.
+The Mac Keychain approval blocks the final packaged language/voice control check.
+
+The remote OGAD server returns 20 voices, but Desktop returned an empty list for every
+remote provider except OpenRouter. Read the existing `/audio/voices` endpoint for OGAD,
+and use the shared Kokoro catalog for labels and languages. Two HTTP boundary checks
+verify the voice list, language mapping, and the selected voice sent for synthesis.
+No new API fields or stored preferences are required.
+
+### MODEL-IMAGE-CUDA-20261013 (P1) - Select CUDA with a nonzero Linux GPU index
+
+**Status:** installed on Runpod. A 256 × 256, one-step image edit returned HTTP 200.
+The live `sd-cuda/sd-cli` process used 10,600 MiB of GPU memory with no CPU-offload flag.
+The complete request took 39.2 seconds; this does not establish full-page generation latency.
+
+The CUDA pack is installed, but the image loader checked only `/dev/nvidia0`. Runpod
+exposes `/dev/nvidia1`, so it selected Vulkan. Reuse the existing NVIDIA driver check
+that accepts numbered GPU nodes. The earlier driver detection patch did not fix this
+separate image-runtime selector. An active real image request used the Vulkan sd-cli
+with CPU offload; successful CUDA use by Chat and specialists did not prove image CUDA.
+
+### MODEL-COMIC-PROMPT-20261013 (P2) - Include only selected comic options
+
+**Status:** source checks passed; installed in both Mac and Runpod renderers.
+The Mac final UI check awaits Keychain approval.
+
+The comic prompt included all six art treatments. Filter catalog option instructions against
+the approved choices and omit unanswered optional comic fields. Keep page count, format,
+reference image, and continuity rules when supplied. Tests cover all 24 style/format pairs
+and supplied optional inputs. Existing form submission checks also pass (27 tests total).
 
 ### REC-F6-001 (P1) - Desktop recovery backlog items need final review
 

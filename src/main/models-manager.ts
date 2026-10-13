@@ -71,8 +71,8 @@ import {
   deactivateRemoteVisionMediaModel,
   getRemoteVisionServerSettings
 } from './vision/remote-vision-server'
-import { getComputerUseSettings } from './computer-use-settings'
-import { getWebUseSettings } from './web-use-settings'
+import { getComputerUseSettings, setComputerUseSettings } from './computer-use-settings'
+import { getWebUseSettings, setWebUseSettings } from './web-use-settings'
 import { clearTaskRolesFor, setTaskRoleModel } from './task-role-models'
 import { strategyTaskRoles } from '../shared/computer-use-settings'
 import { binRoots, dataDir, modelStorageError, requireModelStorage } from './runtime-env'
@@ -1434,8 +1434,24 @@ function useForTasks(role: 'decision' | 'grounding', modelId: string): void {
     setTaskRoleModel('computer_use', 'grounding', modelId)
     return
   }
-  setTaskRoleModel('computer_use', 'decision', modelId)
-  setTaskRoleModel('web_use', 'decision', modelId)
+  // "Use" must enable the role, not only save an unused preference. Keep each
+  // task's existing grounding choice and all settings outside its model strategy.
+  const computer = getComputerUseSettings()
+  setComputerUseSettings({
+    ...computer,
+    decisionModelId: modelId,
+    modelStrategy: strategyTaskRoles(computer.modelStrategy).includes('grounding')
+      ? 'decision_plus_specialist'
+      : 'decision_plus_reasoning'
+  })
+  const web = getWebUseSettings()
+  setWebUseSettings({
+    ...web,
+    decisionModelId: modelId,
+    modelStrategy: strategyTaskRoles(web.modelStrategy).includes('grounding')
+      ? 'decision_plus_specialist'
+      : 'decision_plus_reasoning'
+  })
 }
 
 export async function activateModel(
