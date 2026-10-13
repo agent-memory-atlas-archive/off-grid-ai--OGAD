@@ -74,13 +74,23 @@ The separate chat claim that ten pages were generated after tool failures is not
 ### MODEL-TTS-REMOTE-20261013 (P1) - Load remote OGAD voices and languages
 
 **Status:** installed on Mac and Runpod. Remote synthesis returned WAV audio.
-The Mac Keychain approval blocks the final packaged language/voice control check.
+After Keychain approval, the installed Mac comic reader shows English (US), Heart,
+and an enabled Read aloud control. The empty-selector check is complete.
 
 The remote OGAD server returns 20 voices, but Desktop returned an empty list for every
 remote provider except OpenRouter. Read the existing `/audio/voices` endpoint for OGAD,
 and use the shared Kokoro catalog for labels and languages. Two HTTP boundary checks
 verify the voice list, language mapping, and the selected voice sent for synthesis.
 No new API fields or stored preferences are required.
+
+### MODEL-REMOTE-NAME-20261013 (P2) - Show a model label instead of its file path
+
+**Status:** source patch and focused checks passed; installation verification pending.
+
+Remote providers can return a GGUF path as the model ID and as its name. The remote inventory
+now removes the directory, extension, and split suffix from filename labels. It preserves
+explicit display names and provider IDs, and keeps the full routing ID unchanged.
+Seventeen remote inventory tests passed, including six label and routing cases.
 
 ### MODEL-IMAGE-CUDA-20261013 (P1) - Select CUDA with a nonzero Linux GPU index
 
@@ -97,7 +107,7 @@ with CPU offload; successful CUDA use by Chat and specialists did not prove imag
 ### MODEL-COMIC-PROMPT-20261013 (P2) - Include only selected comic options
 
 **Status:** source checks passed; installed in both Mac and Runpod renderers.
-The Mac final UI check awaits Keychain approval.
+Prompt selection checks passed in source. No new comic run was started for verification.
 
 The comic prompt included all six art treatments. Filter catalog option instructions against
 the approved choices and omit unanswered optional comic fields. Keep page count, format,
