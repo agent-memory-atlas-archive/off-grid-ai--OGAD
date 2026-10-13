@@ -13,7 +13,7 @@
 
 import { modalityQueue, type ModalityQueue } from './modality-queue/queue'
 import { getResidencyMode, type Modality, type ResidencyMode } from './runtime-residency'
-import { llm } from './llm'
+import type { RuntimeBackend } from '../shared/runtime-backends'
 import { sdServer } from './sd-server'
 import { findSdBinaries, imageBackendForRuntime } from './imagegen/sd-runtime'
 import { getBackendPreference } from './backend-preferences'
@@ -48,6 +48,7 @@ let shuttingDown = false
 export interface RegisterDeps {
   queue?: ModalityQueue
   readMode?: (m: Modality) => ResidencyMode
+  readChatBackend?: () => RuntimeBackend
 }
 
 /** Register a runtime into the queue through the ONE mode-aware policy. The queue
@@ -74,7 +75,7 @@ export function registerRuntime(rt: ManagedRuntime, deps: RegisterDeps = {}): vo
         const imageBinary = rt.modality === 'image'
           ? sdServer.getBinaryPath()
           : findSdBinaries('sd-server', getBackendPreference('image'))[0]
-        const chat = rt.modality === 'llm' ? llm.runtimeBackend() : undefined
+        const chat = rt.modality === 'llm' ? deps.readChatBackend?.() : undefined
         if (
           imageBinary && imageBackendForRuntime(process.platform, imageBinary) === 'CUDA' &&
           (rt.modality === 'image' || (chat?.state === 'loaded' && chat.backend?.includes('CUDA')))

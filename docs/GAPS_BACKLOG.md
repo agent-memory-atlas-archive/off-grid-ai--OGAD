@@ -1796,13 +1796,9 @@ Local evidence on commit `bcb86a09675cca8a60da68ff2afb571510454b9f` plus this di
 4. Web Use lifecycle and semantic evidence tests: 2 files, 7 tests, all pass.
 
 
-### 2026-10-13: Runpod resident image engine and model discovery follow-up
+### 2026-10-13: Preserve comic prose across image tool rounds
 
-- Resident Qwen-Image generation and edits use the existing SD server, including the language encoder, vision projector, and VAE. API progress no longer forces a fresh CLI process.
-- On dedicated CUDA hosts, resident chat and image engines remain loaded across their queue transitions. Explicit Unload, model changes, shutdown, and on-demand behavior retain their existing paths. Mac unified-memory eviction is unchanged.
-- Remote image requests now carry saved size, steps, guidance, seed, and negative prompt settings.
-- The API advertises all complete downloaded chat models; Text + Vision excludes grounding and decision specialists. Image search retains matching local catalog entries and uses the Shared search correction.
-- Installed on Runpod and the signed per-user Mac app. Runpod synthetic 256 × 256, one-step generation → chat → generation returned success, retaining the same image PID 69919 and chat PID 69781. The image requests took 4.50 s and 2.56 s including transport. This is not a full comic-page benchmark.
-- 38 focused Desktop checks passed on the main-based PR candidate. The workspace main type check passes. The isolated main-based type check has the existing Shared video-phase mismatch; no new diagnostics were reported in the changed code.
-- Shared search contract checks passed (4). Live Qwen search returned Turbo image repositories and excluded the AtomicChat encoder-only result after honoring its text-encoder tag. Repositories with incomplete metadata can still be misclassified; full artifact compatibility must be checked separately.
-- Remaining work: expose all downloaded image, speech, and transcription choices through their existing runtime routing; validate complete arbitrary Hugging Face image packs before offering them for image generation. The AtomicChat Uncensored download is an encoder and is kept under Vision, with the user's active image choice unchanged.
+- Keep visible prose from all tool-calling rounds in the returned answer. Save that answer with the final comic reader so the title, continuity notes, and tables remain after image generation.
+- Six transport checks pass, including native and text-form image calls. Both new regression cases fail against the previous tool loop. A separate public API integration check covers split downloads, specialist discovery, decision JSON/SSE/async replies, grounding sync/async replies, and selecting downloaded chat models through a synthetic native inference boundary.
+- Remove the runtime-manager/LLM import cycle by passing the existing chat backend reader at startup. Shared PR #49 retains per-shard checksum metadata and types image-search metadata.
+- Deployment of this follow-up is pending: Runpod is offline after its credits ran out. The Mac archive update stopped when the disk filled; the prior archive and a backup remain, but the app signature needs repair before use. Do not mark this follow-up as installed.
