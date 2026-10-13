@@ -10,6 +10,8 @@ import {
   IconLayoutSidebar,
   IconLock
 } from '@tabler/icons-react'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
+import { Kbd, KbdGroup } from '@offgrid/operator-ui/operator/coss/kbd'
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 import {
   Command,
@@ -161,9 +163,9 @@ export function CommandPalette({
                         <div className="truncate text-sm text-white">{h.title}</div>
                         <div className="truncate text-xs text-neutral-500">{h.snippet}</div>
                       </div>
-                      <span className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase text-neutral-400">
+                      <Badge variant="outline" size="sm" className="shrink-0">
                         {h.kind}
-                      </span>
+                      </Badge>
                     </CommandItem>
                   )
                 })}
@@ -179,6 +181,22 @@ export function CommandPalette({
             )}
           </CommandList>
         </Command>
+        {/* Keyboard hints, as the library's command bar shows them. */}
+        <div className="flex items-center justify-between gap-4 border-t border-neutral-900 px-3 py-2 text-xs text-neutral-500">
+          <span className="flex items-center gap-2">
+            <KbdGroup>
+              <Kbd>↑</Kbd>
+              <Kbd>↓</Kbd>
+            </KbdGroup>
+            to move
+            <Kbd className="ms-2">↵</Kbd>
+            to open
+          </span>
+          <span className="flex items-center gap-2">
+            <Kbd>Esc</Kbd>
+            to close
+          </span>
+        </div>
       </DialogContent>
     </Dialog>
   )

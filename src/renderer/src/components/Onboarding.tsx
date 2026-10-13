@@ -1,9 +1,13 @@
-import { useState, useEffect, type JSX } from 'react'
-import { motion, AnimatePresence, stagger, useAnimate, useReducedMotion } from 'motion/react'
+import { useState, type JSX } from 'react'
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react'
+import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
+import { Card } from '@offgrid/operator-ui/operator/coss/card'
 import { LampContainer } from './ui/lamp'
 import { OrbitingCircles } from './ui/orbiting-circles'
 import { GridBackdrop } from './ui/grid-backdrop'
-import { cn } from '@renderer/lib/utils'
 import { deviceNoun, isMac } from '@renderer/lib/device'
 import logo from '@/assets/logo.png'
 import { QuickConnections } from './QuickConnections'
@@ -33,39 +37,23 @@ import {
   CursorClick
 } from '@phosphor-icons/react'
 
-// Word-by-word blur-in, matching the brand's terminal feel.
+// Word-by-word blur-in, matching the brand's terminal feel. The library's TextEffect owns the
+// motion (and drops it under reduced motion); this keeps the step markup reading as before.
 function TextGenerate({
   words,
   className,
-  delay = 0
+  delay = 0,
+  as = 'div'
 }: {
   words: string
   className?: string
   delay?: number
+  as?: 'div' | 'h2' | 'p'
 }): JSX.Element {
-  const [scope, animate] = useAnimate()
-  const reducedMotion = useReducedMotion()
-  const wordsArray = words.split(' ')
-  useEffect(() => {
-    if (reducedMotion) return
-    const timer = setTimeout(() => {
-      animate('span', { opacity: 1, filter: 'blur(0px)' }, { duration: 0.4, delay: stagger(0.08) })
-    }, delay * 1000)
-    return () => clearTimeout(timer)
-  }, [animate, delay, reducedMotion])
   return (
-    <motion.div ref={scope} className={cn('inline', className)}>
-      {wordsArray.map((word, idx) => (
-        <motion.span
-          key={word + idx}
-          className={cn('inline-block', !reducedMotion && 'opacity-0')}
-          style={reducedMotion ? undefined : { filter: 'blur(8px)' }}
-        >
-          {word}
-          {idx < wordsArray.length - 1 ? ' ' : ''}
-        </motion.span>
-      ))}
-    </motion.div>
+    <TextEffect as={as} per="word" preset="blur" delay={delay} className={className}>
+      {words}
+    </TextEffect>
   )
 }
 
@@ -173,6 +161,7 @@ const SYNC_GRID = [
 export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
   const [currentStep, setCurrentStep] = useState(restoredStep)
   const [connectionBusy, setConnectionBusy] = useState(false)
+  const reducedMotion = useReducedMotion()
 
   const handleNext = (): void => {
     if (currentStep < steps.length - 1) {
@@ -232,13 +221,15 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
               <div className="mb-6 text-center">
                 <TextGenerate
                   words={`Choose what runs on your ${deviceNoun()}.`}
+                  as="h2"
                   className="text-3xl font-semibold tracking-tight text-white md:text-5xl"
                   delay={0}
                 />
                 <div className="mt-4">
                   <TextGenerate
                     words="Chat, read images, generate images, transcribe, speak, browse with Web Use, and run Computer Use with local models. Add a model server only when you want one."
-                    className="text-neutral-400"
+                    as="p"
+                    className="mx-auto max-w-2xl text-neutral-400"
                     delay={0.4}
                   />
                 </div>
@@ -307,13 +298,12 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
             <GridBackdrop className="opacity-70" />
             <div className="relative z-10 mx-auto max-w-5xl">
               <div className="mb-2 text-center">
-                <span className="rounded-full border border-green-500/30 bg-green-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-400">
-                  Off Grid AI Pro · live now
-                </span>
+                <Badge variant="success">Off Grid AI Pro · live now</Badge>
               </div>
               <div className="mb-3 text-center">
                 <TextGenerate
                   words="Then it starts remembering."
+                  as="h2"
                   className="text-3xl font-semibold tracking-tight text-white md:text-4xl"
                   delay={0}
                 />
@@ -329,28 +319,26 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
                 approval. Every one runs on-device. Nothing is uploaded.
               </motion.p>
 
-              <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
-                {PRO_GRID.map(({ icon: Icon, label, line }, i) => (
-                  <motion.div
+              <AnimatedGroup
+                preset="blur-slide"
+                className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+              >
+                {PRO_GRID.map(({ icon: Icon, label, line }) => (
+                  <Card
                     key={label}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.3 + i * 0.06, duration: 0.4 }}
-                    className="group relative overflow-hidden rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 transition-colors hover:border-green-500/30"
+                    className="group h-full w-full p-5 transition-colors hover:border-green-500/30"
                   >
-                    <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg border border-neutral-700 bg-neutral-800 transition-colors group-hover:border-green-500/30 group-hover:bg-green-500/10">
+                    <div className="mb-4 flex h-9 w-9 items-center justify-center rounded-lg border border-neutral-700 bg-neutral-800 transition-colors group-hover:border-green-500/30 group-hover:bg-green-500/10">
                       <Icon
                         className="h-4 w-4 text-neutral-400 transition-colors group-hover:text-emerald-500"
                         weight="regular"
                       />
                     </div>
-                    <h3 className="mb-1 text-[13px] font-medium uppercase tracking-wide text-white">
-                      {label}
-                    </h3>
+                    <h3 className="mb-1.5 text-[13px] font-medium text-white">{label}</h3>
                     <p className="text-xs leading-relaxed text-neutral-500">{line}</p>
-                  </motion.div>
+                  </Card>
                 ))}
-              </div>
+              </AnimatedGroup>
 
               <motion.p
                 initial={{ opacity: 0 }}
@@ -382,6 +370,7 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
                 </div>
                 <TextGenerate
                   words="Your devices work as one."
+                  as="h2"
                   className="text-3xl font-semibold tracking-tight text-white md:text-5xl"
                   delay={0}
                 />
@@ -407,26 +396,21 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
                 </motion.p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                {SYNC_GRID.map(({ icon: Icon, label, line }, index) => (
-                  <motion.div
+              <AnimatedGroup preset="blur-slide" className="grid grid-cols-2 gap-3">
+                {SYNC_GRID.map(({ icon: Icon, label, line }) => (
+                  <Card
                     key={label}
-                    initial={{ opacity: 0, y: 16 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.35 + index * 0.08, duration: 0.35 }}
-                    className="min-h-36 border border-neutral-800 bg-neutral-900/60 p-4 transition-colors duration-150 hover:border-green-500/30"
+                    className="h-full min-h-36 w-full p-5 transition-colors duration-300 hover:border-green-500/30"
                   >
                     <Icon
                       className="mb-5 h-5 w-5 text-emerald-600 dark:text-emerald-400"
                       weight="regular"
                     />
-                    <h3 className="text-xs font-medium uppercase tracking-wide text-white">
-                      {label}
-                    </h3>
+                    <h3 className="text-[13px] font-medium text-white">{label}</h3>
                     <p className="mt-2 text-xs leading-5 text-neutral-500">{line}</p>
-                  </motion.div>
+                  </Card>
                 ))}
-              </div>
+              </AnimatedGroup>
             </div>
           </motion.div>
         )}
@@ -468,6 +452,7 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
             <div className="relative z-10 mx-auto max-w-2xl text-center">
               <TextGenerate
                 words="You choose where each model runs."
+                as="h2"
                 className="text-3xl font-semibold tracking-tight text-white md:text-5xl"
                 delay={0}
               />
@@ -486,22 +471,19 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 1, duration: 0.5 }}
-                className="mt-12 grid grid-cols-2 gap-px overflow-hidden border border-neutral-800 bg-neutral-800"
+                className="mt-12 grid grid-cols-2 gap-3"
               >
-                <div className="bg-neutral-950 px-8 py-5 text-center">
+                {/* One primary card: local is the default; remote stays neutral. */}
+                <Card className="border-green-500/50 bg-green-500/5 px-8 py-5 text-center">
                   <div className="text-lg font-light text-emerald-600 dark:text-emerald-400">
                     LOCAL
                   </div>
-                  <div className="mt-1 text-xs uppercase tracking-wider text-neutral-600">
-                    Default
-                  </div>
-                </div>
-                <div className="bg-neutral-950 px-8 py-5 text-center">
+                  <div className="mt-1 text-xs text-neutral-500">Default</div>
+                </Card>
+                <Card className="px-8 py-5 text-center">
                   <div className="text-lg font-light text-white">REMOTE</div>
-                  <div className="mt-1 text-xs uppercase tracking-wider text-neutral-600">
-                    Your choice
-                  </div>
-                </div>
+                  <div className="mt-1 text-xs text-neutral-500">Your choice</div>
+                </Card>
               </motion.div>
             </div>
           </motion.div>
@@ -548,17 +530,32 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
               disabled={currentStep === 4 && connectionBusy}
               className="group"
             >
-              <span className="text-sm font-medium">
+              <TextMorph as="span" className="text-sm font-medium">
                 {currentStep === steps.length - 1 ? 'Start using Off Grid AI' : 'Continue'}
-              </span>
-              {currentStep === steps.length - 1 ? (
-                <Check className="h-4 w-4" weight="bold" />
-              ) : (
-                <ArrowRight
-                  className="h-4 w-4 transition-transform group-hover:translate-x-0.5"
-                  weight="bold"
-                />
-              )}
+              </TextMorph>
+              <AnimatePresence mode="popLayout" initial={false}>
+                <motion.span
+                  key={currentStep === steps.length - 1 ? 'finish' : 'next'}
+                  className="flex"
+                  initial={reducedMotion ? false : { opacity: 0, scale: 0.5, rotate: -30 }}
+                  animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                  exit={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.5, rotate: 30 }}
+                  transition={
+                    reducedMotion
+                      ? { duration: 0 }
+                      : { type: 'spring', stiffness: 500, damping: 28 }
+                  }
+                >
+                  {currentStep === steps.length - 1 ? (
+                    <Check className="h-4 w-4" weight="bold" />
+                  ) : (
+                    <ArrowRight
+                      className="h-4 w-4 transition-transform group-hover:translate-x-0.5"
+                      weight="bold"
+                    />
+                  )}
+                </motion.span>
+              </AnimatePresence>
             </Button>
           </div>
         </div>

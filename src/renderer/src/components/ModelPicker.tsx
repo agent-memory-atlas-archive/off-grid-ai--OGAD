@@ -5,9 +5,13 @@ import {
   type RuntimeId
 } from '../../../shared/runtime-backends'
 import { useCallback, useEffect, useState } from 'react'
-import { IconLoader2, IconCheck, IconCpu, IconPower } from '@tabler/icons-react'
-import { X } from '@phosphor-icons/react'
+import { Check, CircleNotch, Cpu, Power, X } from '@phosphor-icons/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
+import { Section } from '@offgrid/operator-ui/operator/experience'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { SidePanel } from './SidePanel'
+import { Button } from './ui/button'
 import { openModelSettingsPanel } from '@renderer/lib/model-settings-panel'
 import { TaskLineups } from './TaskLineups'
 import { useTaskRoles } from '../lib/task-roles'
@@ -70,6 +74,8 @@ function primaryVariant(m: ModelEntry): string | null {
   return file.slice(0, -'.gguf'.length).split('-').at(-1) ?? null
 }
 
+const EASE = [0.16, 1, 0.3, 1] as const
+
 function openSettings(onClose: () => void): void {
   onClose()
   openModelSettingsPanel('model')
@@ -88,6 +94,24 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
   const [selectionError, setSelectionError] = useState<string | null>(null)
   const [unload, setUnload] = useState<Record<string, UnloadStatus>>({})
   const [taskRoles, reloadTaskRoles] = useTaskRoles()
+  const reduceMotion = useReducedMotion()
+  // Rows rise in as the catalog arrives; status marks pop between states.
+  const rowMotion = reduceMotion
+    ? { initial: false as const, transition: { duration: 0 } }
+    : {
+        initial: { opacity: 0, y: 6 },
+        animate: { opacity: 1, y: 0 },
+        exit: { opacity: 0 },
+        transition: { duration: 0.4, ease: EASE }
+      }
+  const markMotion = reduceMotion
+    ? { initial: false as const, transition: { duration: 0 } }
+    : {
+        initial: { opacity: 0, scale: 0.5 },
+        animate: { opacity: 1, scale: 1 },
+        exit: { opacity: 0, scale: 0.5 },
+        transition: { type: 'spring' as const, stiffness: 500, damping: 28 }
+      }
 
   const load = useCallback(async () => {
     const cat = await api().getModelCatalog?.()
@@ -186,27 +210,20 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
 
   return (
     <SidePanel ariaLabel="Active models" onClose={onClose} className="w-[30vw] min-w-[420px]">
-      <div className="flex items-center justify-between border-b border-neutral-900 px-4 py-3">
+      <div className="flex items-center justify-between gap-4 border-b border-neutral-900 px-6 py-4">
         <div className="flex items-center gap-2 text-sm text-white">
-          <IconCpu className="h-4 w-4 text-green-500" aria-hidden /> Active models
+          <Cpu className="h-4 w-4 text-green-500" aria-hidden /> Active models
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => openSettings(onClose)}
-            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 transition-colors hover:text-white"
-          >
+        <div className="flex items-center gap-1">
+          <Button type="button" size="sm" variant="outline" onClick={() => openSettings(onClose)}>
             Settings
-          </button>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="text-neutral-500 hover:text-white"
-          >
+          </Button>
+          <Button type="button" size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close">
             <X className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
       </div>
-      <div className="flex-1 space-y-5 overflow-y-auto p-4">
+      <div className="flex-1 space-y-10 overflow-y-auto px-6 py-6">
         {selectionError && <FieldError>{selectionError}</FieldError>}
         <TaskLineups
           view={taskRoles}
@@ -248,14 +265,15 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                 : cur === m.id
               : cur === primaryFile(m)
           return (
-            <div key={mode}>
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-[10px] uppercase tracking-wide text-neutral-600">
-                  {label}
-                </span>
-                {cur && (
-                  <button
+            <Section
+              key={mode}
+              label={label}
+              actions={
+                cur ? (
+                  <Button
                     type="button"
+                    size="xs"
+                    variant="ghost"
                     onClick={() => void unloadModel(mode)}
                     disabled={status === 'unloading' || status === 'unloaded'}
                     title={
@@ -265,94 +283,107 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                           ? 'Already unloaded — reloads on next use'
                           : 'Unload from memory now — frees RAM; reloads on next use'
                     }
-                    className={`flex items-center gap-1 text-[10px] uppercase tracking-wide transition-colors disabled:opacity-40 ${
+                    className={
                       status === 'error' ? 'text-amber-400' : 'text-neutral-500 hover:text-red-400'
-                    }`}
+                    }
                   >
                     {status === 'unloading' ? (
-                      <IconLoader2 className="h-3 w-3 animate-spin" />
+                      <CircleNotch className="h-3 w-3 animate-spin" />
                     ) : (
-                      <IconPower className="h-3 w-3" />
+                      <Power className="h-3 w-3" />
                     )}
-                    {status === 'error' ? 'Restart to unload' : 'Unload'}
-                  </button>
-                )}
-              </div>
+                    <TextMorph as="span">
+                      {status === 'error' ? 'Restart to unload' : 'Unload'}
+                    </TextMorph>
+                  </Button>
+                ) : null
+              }
+            >
               {list.length === 0 ? (
-                <p className="px-2 py-1.5 text-xs text-neutral-600">
+                <p className="text-xs text-neutral-500">
                   No {label.toLowerCase()} model downloaded — get one in Models.
                 </p>
               ) : (
-                <div className="space-y-1">
-                  {list.map((m) => (
-                    <button
-                      key={m.id}
-                      aria-pressed={isActive(m)}
-                      disabled={busy !== null}
-                      onClick={() => choose(mode, m)}
-                      className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-xs transition-colors ${
-                        isActive(m)
-                          ? 'border-green-500/60 bg-neutral-900 text-white'
-                          : 'border-neutral-800 text-neutral-300 hover:bg-neutral-900/60'
-                      }`}
-                    >
-                      <span className="flex min-w-0 items-center gap-2">
-                        <span className="min-w-0">
-                          <span className="block truncate">{m.name}</span>
-                          {!m.remoteServerId && (
-                            <span className="block whitespace-normal text-[10px] text-neutral-500">
-                              {backendFor(mode === 'text' ? 'chat' : mode, [
-                                m.id,
-                                primaryFile(m),
-                                ...(mode === 'speech' ? ['Kokoro'] : [])
-                              ])}
+                <div className="space-y-2">
+                  <AnimatePresence initial={false}>
+                    {list.map((m) => (
+                      <motion.div key={m.id} layout={!reduceMotion} {...rowMotion}>
+                        <button
+                          aria-pressed={isActive(m)}
+                          disabled={busy !== null}
+                          onClick={() => choose(mode, m)}
+                          className={`flex w-full items-center justify-between gap-3 rounded-lg border px-4 py-3 text-left text-xs transition-colors duration-300 ${
+                            isActive(m)
+                              ? 'border-green-500/50 bg-green-500/5 text-white'
+                              : 'border-neutral-800 text-neutral-300 hover:bg-neutral-900/60'
+                          }`}
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span className="min-w-0">
+                              <span className="block truncate text-[13px]">{m.name}</span>
+                              {!m.remoteServerId && (
+                                <span className="mt-0.5 block whitespace-normal text-xs text-neutral-500">
+                                  {backendFor(mode === 'text' ? 'chat' : mode, [
+                                    m.id,
+                                    primaryFile(m),
+                                    ...(mode === 'speech' ? ['Kokoro'] : [])
+                                  ])}
+                                </span>
+                              )}
                             </span>
-                          )}
-                        </span>
-                        {duplicateNames.has(m.name) && primaryVariant(m) ? (
-                          <span
-                            className="shrink-0 text-[10px] text-neutral-500"
-                            title={primaryFile(m)}
-                          >
-                            {primaryVariant(m)}
+                            {duplicateNames.has(m.name) && primaryVariant(m) ? (
+                              <span
+                                className="shrink-0 text-xs text-neutral-500"
+                                title={primaryFile(m)}
+                              >
+                                {primaryVariant(m)}
+                              </span>
+                            ) : null}
+                            {m.remoteServerId ? (
+                              <Badge variant="success" size="sm" className="shrink-0">
+                                Remote
+                              </Badge>
+                            ) : null}
                           </span>
-                        ) : null}
-                        {m.remoteServerId ? (
-                          <span className="shrink-0 rounded-sm border border-green-500/50 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-                            Remote
-                          </span>
-                        ) : null}
-                      </span>
-                      {busy === m.id ? (
-                        <IconLoader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-500" />
-                      ) : isActive(m) && status === 'unloaded' ? (
-                        // Still the active selection, but freed from memory — one coherent
-                        // state, not a green check next to an "unloaded" label.
-                        <span className="flex shrink-0 items-center gap-1 text-[10px] uppercase tracking-wide text-neutral-500">
-                          <IconPower className="h-3 w-3" /> Unloaded
-                        </span>
-                      ) : isActive(m) ? (
-                        <IconCheck className="h-3.5 w-3.5 shrink-0 text-green-500" />
-                      ) : null}
-                    </button>
-                  ))}
+                          <AnimatePresence mode="popLayout" initial={false}>
+                            {busy === m.id ? (
+                              <motion.span key="busy" className="flex shrink-0" {...markMotion}>
+                                <CircleNotch className="h-3.5 w-3.5 animate-spin text-neutral-500" />
+                              </motion.span>
+                            ) : isActive(m) && status === 'unloaded' ? (
+                              // Still the active selection, but freed from memory — one coherent
+                              // state, not a green check next to an "unloaded" label.
+                              <motion.span key="unloaded" className="flex shrink-0" {...markMotion}>
+                                <Badge variant="outline" size="sm">
+                                  <Power className="h-3 w-3" /> Unloaded
+                                </Badge>
+                              </motion.span>
+                            ) : isActive(m) ? (
+                              <motion.span key="active" className="flex shrink-0" {...markMotion}>
+                                <Check className="h-3.5 w-3.5 text-green-500" weight="bold" />
+                              </motion.span>
+                            ) : null}
+                          </AnimatePresence>
+                        </button>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
                 </div>
               )}
-            </div>
+            </Section>
           )
         })}
         <section aria-label="Embeddings">
-          <div className="mb-1.5 text-[10px] uppercase tracking-wide text-neutral-600">
-            Embeddings
-          </div>
-          <div className="rounded-md border border-neutral-800 px-3 py-2 text-xs text-neutral-300">
-            <span className="block">Search and RAG</span>
-            <span className="block text-[10px] text-neutral-500">
-              {runtimeBackendLabel(backends.find((value) => value.id === 'embeddings'))}
-            </span>
-          </div>
+          <Section label="Embeddings">
+            <div className="rounded-lg border border-neutral-800 px-4 py-3 text-xs text-neutral-300">
+              <span className="block text-[13px]">Search and RAG</span>
+              <span className="mt-0.5 block text-xs text-neutral-500">
+                {runtimeBackendLabel(backends.find((value) => value.id === 'embeddings'))}
+              </span>
+            </div>
+          </Section>
         </section>
-        <p className="px-1 pt-1 text-[10px] leading-relaxed text-neutral-600">
+        <p className="text-xs leading-relaxed text-neutral-500">
           Your selected Text &amp; Vision model handles chat and supported vision work. Image,
           Voice, and Transcription use their selected models.
         </p>

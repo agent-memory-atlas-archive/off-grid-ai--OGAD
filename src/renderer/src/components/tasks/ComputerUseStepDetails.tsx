@@ -34,8 +34,8 @@ function DetailBlock({
   if (!value) return null
   return (
     <div>
-      <p className="text-[9px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-muted-foreground">
+      <p className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</p>
+      <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-muted-foreground">
         {value}
       </pre>
     </div>
@@ -55,8 +55,8 @@ export function ComputerUseStepDetails({
   if (!details?.length) return null
   return (
     <>
-      <div className="mt-2 space-y-1 border-t border-border pt-2">
-        <p className="text-[9px] uppercase tracking-wide text-muted-foreground">
+      <div className="mt-3 space-y-0.5 border-t border-border pt-3">
+        <p className="mb-1.5 text-[10px] uppercase tracking-widest text-muted-foreground">
           Computer Use details
         </p>
         {details.map((detail, index) => {
@@ -73,30 +73,30 @@ export function ComputerUseStepDetails({
           return (
             <Collapsible key={`${detail.stepId}:${detail.at}:${index}`}>
               <CollapsibleTrigger
-                className="group flex w-full items-center gap-2 py-1 text-left text-[10px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                className="group flex w-full items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-xs text-muted-foreground transition-colors duration-300 hover:bg-foreground/[0.035] hover:text-foreground data-[state=open]:text-foreground"
                 aria-label={`Computer Use step ${index + 1}: ${stepSummary}, ${detail.phase ?? detail.execution?.status ?? 'recorded'}`}
               >
-                <span className="min-w-0 flex-1 truncate">
+                <span className="min-w-0 flex-1 truncate transition-transform duration-300 group-hover:translate-x-0.5">
                   Step {index + 1} | {stepSummary}
                 </span>
                 <span
-                  className={
+                  className={`shrink-0 font-mono text-[11px] tabular-nums ${
                     detail.execution?.status === 'failed' ? 'text-red-500' : 'text-muted-foreground'
-                  }
+                  }`}
                 >
                   {timing !== undefined ? `${Math.round(timing)} ms | ` : ''}
                   {detail.phase ?? detail.execution?.status ?? 'recorded'}
                 </span>
                 <CaretDown
-                  className="h-3 w-3 transition-transform group-data-[state=open]:rotate-180"
+                  className="h-3 w-3 shrink-0 transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] group-data-[state=open]:rotate-180"
                   aria-hidden="true"
                 />
               </CollapsibleTrigger>
-              <CollapsibleContent className="space-y-3 border-l border-border py-2 pl-3">
+              <CollapsibleContent className="ml-1.5 space-y-3 border-l border-border py-3 pl-4">
                 {showScreenshots && screenshotIsLocal && detail.screenshot?.path ? (
                   <button
                     type="button"
-                    className="block w-full cursor-zoom-in focus:outline-none focus:ring-1 focus:ring-green-500"
+                    className="group/shot block w-full cursor-zoom-in overflow-hidden rounded-lg focus:outline-none focus:ring-1 focus:ring-green-500"
                     aria-label={`Open screenshot for Computer Use step ${index + 1}`}
                     onClick={() =>
                       setSelectedScreenshot({
@@ -108,23 +108,21 @@ export function ComputerUseStepDetails({
                     <img
                       src={captureUrlForPath(detail.screenshot.path)}
                       alt={`Computer Use step ${index + 1}`}
-                      className="max-h-40 w-full object-contain"
+                      className="max-h-40 w-full object-contain transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover/shot:scale-[1.02]"
                       loading="lazy"
                       decoding="async"
                       fetchPriority="low"
                     />
                   </button>
                 ) : showScreenshots && detail.screenshot ? (
-                  <p className="border border-border px-2 py-1.5 text-[10px] text-muted-foreground">
+                  <p className="rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground">
                     Screenshot stays on {deviceName || 'the execution device'}.
                   </p>
                 ) : null}
                 {dimensions(detail) ? (
-                  <p className="text-[10px] text-muted-foreground">{dimensions(detail)}</p>
+                  <p className="text-xs text-muted-foreground">{dimensions(detail)}</p>
                 ) : null}
-                {tokens ? (
-                  <p className="text-[10px] text-muted-foreground">Tokens: {tokens}</p>
-                ) : null}
+                {tokens ? <p className="text-xs text-muted-foreground">Tokens: {tokens}</p> : null}
                 <DetailBlock
                   label="Retrieved facts and context"
                   value={detail.retrievedFacts?.join('\n')}

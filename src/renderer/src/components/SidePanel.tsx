@@ -85,14 +85,14 @@ export function SidePanel({
     <div className="pointer-events-none" data-testid="side-panel-layer">
       {modal && (
         <motion.div
-          className="pointer-events-auto fixed inset-0 z-[2147483646] bg-black/30"
+          className="pointer-events-auto fixed inset-0 z-[2147483646] bg-black/30 backdrop-blur-[2px]"
           onClick={onClose}
           aria-hidden="true"
           data-testid="side-panel-backdrop"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: reduceMotion ? 0 : 0.28, ease: [0.22, 1, 0.36, 1] }}
+          transition={{ duration: reduceMotion ? 0 : 0.32, ease: [0.16, 1, 0.3, 1] }}
         />
       )}
       <motion.div
@@ -106,7 +106,12 @@ export function SidePanel({
         initial={reduceMotion ? false : { x: '100%', opacity: 0.7 }}
         animate={{ x: '0%', opacity: 1 }}
         exit={reduceMotion ? { opacity: 0 } : { x: '100%', opacity: 0.7 }}
-        transition={{ duration: reduceMotion ? 0 : 0.38, ease: [0.22, 1, 0.36, 1] }}
+        // The page recedes while the panel arrives on a spring, as the library's sheet does.
+        transition={
+          reduceMotion
+            ? { duration: 0 }
+            : { type: 'spring', stiffness: 380, damping: 38, mass: 0.9 }
+        }
       >
         {children}
       </motion.div>

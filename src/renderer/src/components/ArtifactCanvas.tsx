@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
+import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { ARTIFACT_KIND_LABELS, type ArtifactKind } from '@renderer/lib/artifact-labels'
 import { resolveModelName } from '@renderer/lib/model-summary'
 import { capturePathFromUrl } from '../../../shared/ogcapture-url'
 import { SidePanel } from './SidePanel'
+import { Button } from './ui/button'
 
 // Renders a model-generated artifact (HTML / SVG / Mermaid / React) in a SANDBOXED
 // iframe with sandbox="allow-scripts" only and no same-origin access, so generated
@@ -16,6 +20,11 @@ import { SidePanel } from './SidePanel'
 export type Artifact = { kind: ArtifactKind; code: string; title?: string }
 
 const KIND_LABEL = ARTIFACT_KIND_LABELS
+
+const VIEW_OPTIONS = [
+  { id: 'preview', label: 'Preview' },
+  { id: 'code', label: 'Code' }
+] as const
 
 function escapeForHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -472,49 +481,40 @@ else { __ogShow('No React component found — define a component named App or a 
       className="min-w-[360px] max-w-[90vw]"
       style={{ width: width ? `${width}px` : '30vw' }}
     >
-      {/* Resize handle — drag the left edge to slide the canvas wider/narrower. */}
+      {/* Resize handle — drag the left edge to slide the canvas wider/narrower. A pill grows
+          under the pointer, as the library's resizable divider does. */}
       <div
         onMouseDown={startResize}
         title="Drag to resize"
-        className="absolute left-[-3px] top-0 z-20 h-full w-2.5 cursor-col-resize transition-colors hover:bg-green-500/40"
-      />
+        data-active={resizing || undefined}
+        className="group/handle absolute left-[-3px] top-0 z-20 flex h-full w-2.5 cursor-col-resize items-center justify-center"
+      >
+        <span className="h-8 w-1 rounded-full bg-neutral-700 opacity-0 transition-[opacity,height,background-color] duration-300 group-hover/handle:h-12 group-hover/handle:bg-green-500/70 group-hover/handle:opacity-100 group-data-[active]/handle:h-16 group-data-[active]/handle:bg-green-500 group-data-[active]/handle:opacity-100" />
+      </div>
       {/* While dragging, this overlay sits OVER the iframe so it can't swallow the
           mousemove events — without it the drag stalls and jumps. */}
       {resizing && <div className="fixed inset-0 z-[60] cursor-col-resize select-none" />}
-      <div className="flex items-center justify-between border-b border-neutral-800 px-4 py-2.5">
-        <div className="flex items-center gap-2 text-sm text-neutral-200">
-          <span className="rounded-sm bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-green-500">
+      <div className="flex items-center justify-between gap-4 border-b border-neutral-800 px-6 py-3">
+        <div className="flex min-w-0 items-center gap-2 text-sm text-neutral-200">
+          <Badge variant="success" size="sm" className="shrink-0">
             {KIND_LABEL[artifact.kind]}
-          </span>
+          </Badge>
           <span className="truncate">{artifact.title || 'Canvas'}</span>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 rounded-md border border-neutral-800 p-0.5">
-            <button
-              onClick={() => setView('preview')}
-              className={`rounded px-3 py-1 text-xs transition-colors ${view === 'preview' ? 'bg-neutral-800 text-green-500' : 'text-neutral-500 hover:text-neutral-300'}`}
-            >
-              Preview
-            </button>
-            <button
-              onClick={() => setView('code')}
-              className={`rounded px-3 py-1 text-xs transition-colors ${view === 'code' ? 'bg-neutral-800 text-green-500' : 'text-neutral-500 hover:text-neutral-300'}`}
-            >
-              Code
-            </button>
-          </div>
-          <button
-            onClick={download}
-            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 transition-colors hover:border-green-500 hover:text-green-500"
-          >
+        <div className="flex shrink-0 items-center gap-2">
+          <Segmented
+            label="Canvas view"
+            size="sm"
+            value={view}
+            options={VIEW_OPTIONS}
+            onValueChange={setView}
+          />
+          <Button type="button" size="sm" variant="outline" onClick={download}>
             Download
-          </button>
-          <button
-            onClick={onClose}
-            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 transition-colors hover:text-white"
-          >
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={onClose}>
             Close
-          </button>
+          </Button>
         </div>
       </div>
       <div className="relative min-h-0 flex-1 bg-white">
@@ -538,7 +538,7 @@ else { __ogShow('No React component found — define a component named App or a 
           />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-neutral-400">
-            Preparing preview…
+            <TextShimmer as="span">Preparing preview…</TextShimmer>
           </div>
         )}
       </div>

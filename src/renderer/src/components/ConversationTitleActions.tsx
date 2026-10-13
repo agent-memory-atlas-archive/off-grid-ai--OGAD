@@ -1,5 +1,7 @@
 import { useState, type FormEvent, type JSX, type KeyboardEvent } from 'react'
 import { Check, DotsThree, PencilSimple, Trash, X } from '@phosphor-icons/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { Input } from '@offgrid/operator-ui/operator/coss/input'
 import type { RagConversationContract } from '../../../shared/ipc-contracts'
 import { Button } from './ui/button'
 import {
@@ -25,6 +27,7 @@ export function ConversationTitleActions({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const displayTitle = conversation.title || 'Untitled'
+  const reduceMotion = useReducedMotion()
 
   const beginRename = (): void => {
     setDraft(conversation.title || '')
@@ -68,17 +71,24 @@ export function ConversationTitleActions({
 
   if (editing) {
     return (
-      <div className="min-w-0" onClick={(event) => event.stopPropagation()}>
+      <motion.div
+        className="min-w-0"
+        onClick={(event) => event.stopPropagation()}
+        initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: reduceMotion ? 0 : 0.3, ease: [0.16, 1, 0.3, 1] }}
+      >
         <form className="flex min-w-0 items-center gap-1" onSubmit={saveRename}>
-          <input
+          <Input
             autoFocus
+            size="sm"
             aria-label="Rename conversation"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={handleInputKeyDown}
             onFocus={(event) => event.currentTarget.select()}
             disabled={saving}
-            className="h-6 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+            className="min-w-0 flex-1 text-xs"
           />
           <Button
             type="submit"
@@ -102,12 +112,22 @@ export function ConversationTitleActions({
             <X />
           </Button>
         </form>
-        {error && (
-          <p role="alert" className="mt-1 text-[10px] text-destructive">
-            {error}
-          </p>
-        )}
-      </div>
+        <AnimatePresence initial={false}>
+          {error && (
+            <motion.p
+              key="rename-error"
+              role="alert"
+              className="mt-1 text-[10px] text-destructive"
+              initial={reduceMotion ? false : { opacity: 0, y: -4, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4, filter: 'blur(4px)' }}
+              transition={{ duration: reduceMotion ? 0 : 0.3, ease: [0.16, 1, 0.3, 1] }}
+            >
+              {error}
+            </motion.p>
+          )}
+        </AnimatePresence>
+      </motion.div>
     )
   }
 

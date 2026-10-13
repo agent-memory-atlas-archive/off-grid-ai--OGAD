@@ -7,6 +7,8 @@ import {
   PlugsConnected,
   Sparkle
 } from '@phosphor-icons/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { Card } from '@offgrid/operator-ui/operator/coss/card'
 import { Button } from '@/components/ui/button'
 import { LoadingDots } from '@/components/ui/loading-dots'
 import { captureUrlForPath } from '../../../../shared/ogcapture-url'
@@ -38,7 +40,9 @@ interface IntakeFieldProps {
 }
 
 const inputClass =
-  'mt-1 w-full rounded-md border border-border bg-background px-2.5 py-2 text-xs text-foreground outline-none transition-colors focus:border-primary'
+  'mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-xs text-foreground outline-none transition-[border-color,box-shadow] duration-300 focus:border-primary focus:ring-[3px] focus:ring-primary/15'
+const FIELD_LABEL = 'text-[10px] uppercase tracking-widest text-muted-foreground'
+const EASE = [0.16, 1, 0.3, 1] as const
 
 function IntakeField({
   field,
@@ -50,6 +54,7 @@ function IntakeField({
   styleThumbs
 }: IntakeFieldProps): React.ReactElement {
   const controlId = `preset-field-${field.id}`
+  const reduceMotion = useReducedMotion()
   const labelId = `${controlId}-label`
   const helpId = `${controlId}-help`
   const chooseFolder = async (): Promise<void> => {
@@ -76,7 +81,7 @@ function IntakeField({
           styleThumbs={styleThumbs}
           onChange={(style) => onChange(style ?? '')}
         />
-        <p id={helpId} className="mt-1 text-[10px] leading-4 text-muted-foreground">
+        <p id={helpId} className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
           {field.help}
         </p>
       </div>
@@ -152,12 +157,12 @@ function IntakeField({
           role="group"
           aria-labelledby={labelId}
           aria-describedby={helpId}
-          className="mt-1 grid gap-2 rounded-md border border-border bg-background p-3 @2xl:grid-cols-2"
+          className="mt-2 grid gap-2.5 @2xl:grid-cols-2"
         >
           {field.options?.map((option) => (
             <label
               key={option.value}
-              className="flex items-start gap-2 text-[11px] text-foreground"
+              className="flex cursor-pointer items-start gap-2 text-xs text-foreground"
             >
               <input
                 type="checkbox"
@@ -178,7 +183,7 @@ function IntakeField({
     }
     if (field.kind === 'folder') {
       return (
-        <div className="mt-1 flex gap-2">
+        <div className="mt-2 flex gap-2">
           <input
             id={controlId}
             value={value}
@@ -204,12 +209,12 @@ function IntakeField({
     }
     if (field.kind === 'image') {
       return (
-        <div className="mt-1 flex gap-2">
+        <div className="mt-2 flex gap-3">
           {value ? (
             <img
               src={captureUrlForPath(value)}
               alt="Selected hero reference"
-              className="h-16 w-16 shrink-0 rounded-md border border-border object-cover"
+              className="h-16 w-16 shrink-0 rounded-lg border border-border object-cover"
             />
           ) : null}
           <div className="min-w-0 flex-1">
@@ -222,12 +227,7 @@ function IntakeField({
               className={`${inputClass} mt-0 min-w-0`}
             />
             <div className="mt-2 flex gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => void chooseImage()}
-              >
+              <Button type="button" size="sm" variant="outline" onClick={() => void chooseImage()}>
                 <ImageSquare />
                 Choose image
               </Button>
@@ -296,29 +296,35 @@ function IntakeField({
       className={field.kind === 'textarea' || field.kind === 'checkboxes' ? '@3xl:col-span-2' : ''}
     >
       {field.kind === 'checkboxes' ? (
-        <p id={labelId} className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        <p id={labelId} className={FIELD_LABEL}>
           {field.label}
           {field.required ? ' *' : ''}
         </p>
       ) : (
-        <label
-          id={labelId}
-          htmlFor={controlId}
-          className="text-[10px] uppercase tracking-wide text-muted-foreground"
-        >
+        <label id={labelId} htmlFor={controlId} className={FIELD_LABEL}>
           {field.label}
           {field.required ? ' *' : ''}
         </label>
       )}
       {control}
-      <p id={helpId} className="mt-1 text-[10px] leading-4 text-muted-foreground">
+      <p id={helpId} className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
         {field.help}
       </p>
-      {enhancementError ? (
-        <p className="mt-1 text-[10px] leading-4 text-destructive" role="alert">
-          {enhancementError}
-        </p>
-      ) : null}
+      <AnimatePresence initial={false}>
+        {enhancementError ? (
+          <motion.p
+            key="enhancement-error"
+            className="mt-1 text-xs leading-relaxed text-destructive"
+            role="alert"
+            initial={reduceMotion ? false : { opacity: 0, y: -4, filter: 'blur(4px)' }}
+            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.3, ease: EASE }}
+          >
+            {enhancementError}
+          </motion.p>
+        ) : null}
+      </AnimatePresence>
     </div>
   )
 }
@@ -339,6 +345,7 @@ export function PresetSetup({
   const [connectorReady, setConnectorReady] = useState<boolean | null>(null)
   const canStart = useMemo(() => hasRequiredPresetAnswers(preset, answers), [answers, preset])
   const recommendedConnector = preset.intake.recommendedConnector
+  const reduceMotion = useReducedMotion()
 
   const enhanceField = async (field: PresetIntakeField): Promise<void> => {
     if (enhancingFieldId) return
@@ -441,91 +448,107 @@ Keep the result under 240 characters. Return only the answer.`
   }
 
   return (
-    <form
-      onSubmit={submit}
-      className="w-full max-w-4xl rounded-md border border-border bg-card p-4 text-left text-card-foreground"
-      data-testid={`preset-intake-${preset.id}`}
-      aria-labelledby={`preset-intake-title-${preset.id}`}
-    >
-      <div className="mb-4 border-b border-border pb-3">
-        <div className="flex items-start gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-background text-primary">
+    <Card className="w-full max-w-4xl text-left">
+      <form
+        onSubmit={submit}
+        className="p-6"
+        data-testid={`preset-intake-${preset.id}`}
+        aria-labelledby={`preset-intake-title-${preset.id}`}
+      >
+        <div className="mb-6 flex items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-primary">
             <preset.icon className="h-4 w-4" />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-              {preset.title}
-            </p>
-            <h2 id={`preset-intake-title-${preset.id}`} className="mt-0.5 text-sm text-foreground">
+            <p className={FIELD_LABEL}>{preset.title}</p>
+            <h2
+              id={`preset-intake-title-${preset.id}`}
+              className="mt-1.5 text-base text-foreground"
+            >
               {preset.intake.title}
             </h2>
-            <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+            <p className="mt-1 text-sm leading-relaxed text-neutral-500">
               {preset.intake.description}
             </p>
           </div>
         </div>
-      </div>
 
-      {recommendedConnector && connectorReady !== null ? (
-        <div className="mb-4 flex items-center gap-3 rounded-md border border-border bg-background px-3 py-2.5">
-          {connectorReady ? (
-            <CheckCircle className="h-4 w-4 shrink-0 text-primary" weight="fill" />
-          ) : (
-            <PlugsConnected className="h-4 w-4 shrink-0 text-primary" />
-          )}
-          <div className="min-w-0 flex-1">
-            <p className="text-[11px] text-foreground">
-              {connectorReady
-                ? `${recommendedConnector} is connected`
-                : `Connect ${recommendedConnector} for direct access`}
-            </p>
-            <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
-              {connectorReady
-                ? `Off Grid AI can use ${recommendedConnector} to find the right item.`
-                : 'You can continue without it. Off Grid AI will use Computer Use instead.'}
-            </p>
-          </div>
-          {!connectorReady && onOpenConnectors ? (
-            <Button type="button" size="sm" variant="outline" onClick={onOpenConnectors}>
-              Connect
-            </Button>
+        <AnimatePresence initial={false}>
+          {recommendedConnector && connectorReady !== null ? (
+            <motion.div
+              key="connector"
+              className="overflow-hidden"
+              initial={reduceMotion ? false : { opacity: 0, height: 0, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, height: 'auto', filter: 'blur(0px)' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: reduceMotion ? 0 : 0.4, ease: EASE }}
+            >
+              <div
+                className={`mb-6 flex items-center gap-3 rounded-lg border px-4 py-3 ${
+                  connectorReady ? 'border-green-500/50 bg-green-500/5' : 'border-border'
+                }`}
+              >
+                {connectorReady ? (
+                  <CheckCircle className="h-4 w-4 shrink-0 text-primary" weight="fill" />
+                ) : (
+                  <PlugsConnected className="h-4 w-4 shrink-0 text-primary" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13px] text-foreground">
+                    {connectorReady
+                      ? `${recommendedConnector} is connected`
+                      : `Connect ${recommendedConnector} for direct access`}
+                  </p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                    {connectorReady
+                      ? `Off Grid AI can use ${recommendedConnector} to find the right item.`
+                      : 'You can continue without it. Off Grid AI will use Computer Use instead.'}
+                  </p>
+                </div>
+                {!connectorReady && onOpenConnectors ? (
+                  <Button type="button" size="sm" variant="outline" onClick={onOpenConnectors}>
+                    Connect
+                  </Button>
+                ) : null}
+              </div>
+            </motion.div>
           ) : null}
-        </div>
-      ) : null}
+        </AnimatePresence>
 
-      <div className="grid gap-3 @3xl:grid-cols-2">
-        {preset.intake.fields.map((field) => (
-          <IntakeField
-            key={field.id}
-            field={field}
-            value={answers[field.id] ?? ''}
-            onChange={(value) => setAnswers((current) => ({ ...current, [field.id]: value }))}
-            onEnhance={
-              field.kind === 'text' || field.kind === 'textarea'
-                ? () => void enhanceField(field)
-                : undefined
-            }
-            enhancing={enhancingFieldId === field.id}
-            enhancementError={
-              enhancementError?.fieldId === field.id ? enhancementError.message : undefined
-            }
-            styleThumbs={styleThumbs}
-          />
-        ))}
-      </div>
-
-      <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-3">
-        <span className="text-[10px] text-muted-foreground">* Required before the run starts</span>
-        <div className="flex gap-2">
-          <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
-            <ArrowLeft />
-            Back
-          </Button>
-          <Button type="submit" size="sm" disabled={!canStart || enhancingFieldId !== null}>
-            Start in chat
-          </Button>
+        <div className="grid gap-x-6 gap-y-5 @3xl:grid-cols-2">
+          {preset.intake.fields.map((field) => (
+            <IntakeField
+              key={field.id}
+              field={field}
+              value={answers[field.id] ?? ''}
+              onChange={(value) => setAnswers((current) => ({ ...current, [field.id]: value }))}
+              onEnhance={
+                field.kind === 'text' || field.kind === 'textarea'
+                  ? () => void enhanceField(field)
+                  : undefined
+              }
+              enhancing={enhancingFieldId === field.id}
+              enhancementError={
+                enhancementError?.fieldId === field.id ? enhancementError.message : undefined
+              }
+              styleThumbs={styleThumbs}
+            />
+          ))}
         </div>
-      </div>
-    </form>
+
+        <div className="mt-6 flex items-center justify-between gap-3 border-t border-neutral-900 pt-4">
+          <span className="text-xs text-muted-foreground">* Required before the run starts</span>
+          <div className="flex gap-2">
+            <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+              <ArrowLeft />
+              Back
+            </Button>
+            <Button type="submit" size="sm" disabled={!canStart || enhancingFieldId !== null}>
+              Start in chat
+            </Button>
+          </div>
+        </div>
+      </form>
+    </Card>
   )
 }

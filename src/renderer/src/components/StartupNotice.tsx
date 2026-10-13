@@ -1,7 +1,10 @@
 import { WarningCircle } from '@phosphor-icons/react'
 import { useCallback, useEffect, useState } from 'react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import type { StartupSnapshot } from '../../../shared/startup-contract'
-import { LoadingDots } from './ui/loading-dots'
+
+const EASE = [0.16, 1, 0.3, 1] as const
 
 const STAGE_LABELS: Readonly<Record<string, string>> = {
   'pro.entitlement.load-cached': 'Checking your license',
@@ -43,8 +46,9 @@ function degradedText(snapshot: StartupSnapshot): string {
     : 'Part of the app took longer than expected, but it is ready.'
 }
 
-export function StartupNotice(): React.JSX.Element | null {
+export function StartupNotice(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<StartupSnapshot | null>(null)
+  const reduceMotion = useReducedMotion()
   const applySnapshot = useCallback((next: StartupSnapshot): void => {
     setSnapshot((current) => (!current || next.revision >= current.revision ? next : current))
   }, [])
@@ -67,42 +71,56 @@ export function StartupNotice(): React.JSX.Element | null {
     }
   }, [applySnapshot])
 
-  if (!snapshot || snapshot.phase === 'ready') return null
+  const phase = snapshot && snapshot.phase !== 'ready' ? snapshot.phase : null
 
-  if (snapshot.phase === 'failed') {
-    return (
-      <div
-        role="status"
-        aria-live="assertive"
-        className="pointer-events-none absolute inset-x-0 top-0 z-50 flex items-center justify-center gap-2 bg-red-950/90 px-4 py-1.5 font-mono text-[11px] text-red-200"
-      >
-        <WarningCircle size={13} weight="bold" aria-hidden />
-        <span>Off Grid AI Desktop could not finish startup. Restart the app.</span>
-      </div>
-    )
-  }
-
-  if (snapshot.phase === 'degraded') {
-    return (
-      <div
-        role="status"
-        aria-live="polite"
-        className="pointer-events-none absolute inset-x-0 top-0 z-50 flex items-center justify-center gap-2 bg-amber-950/80 px-4 py-1.5 font-mono text-[11px] text-amber-200"
-      >
-        <WarningCircle size={13} aria-hidden />
-        <span>{degradedText(snapshot)}</span>
-      </div>
-    )
-  }
-
+  // The banner drops in from the top edge and lifts away when startup settles; each stage's
+  // label dissolves into the next instead of swapping.
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="pointer-events-none absolute inset-x-0 top-0 z-50 flex items-center justify-center gap-2 bg-neutral-900/85 px-4 py-1.5 font-mono text-[11px] text-neutral-400"
-    >
-      <span>{pendingText(snapshot)}</span>
-      <LoadingDots size="small" />
-    </div>
+    <AnimatePresence>
+      {snapshot && phase ? (
+        <motion.div
+          key={phase}
+          role="status"
+          aria-live={phase === 'failed' ? 'assertive' : 'polite'}
+          initial={reduceMotion ? false : { opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
+          transition={{ duration: reduceMotion ? 0 : 0.4, ease: EASE }}
+          className={`pointer-events-none absolute inset-x-0 top-0 z-50 flex items-center justify-center gap-2 px-4 py-1.5 font-mono text-[11px] ${
+            phase === 'failed'
+              ? 'bg-red-950/90 text-red-200'
+              : phase === 'degraded'
+                ? 'bg-amber-950/80 text-amber-200'
+                : 'bg-neutral-900/85 text-neutral-400'
+          }`}
+        >
+          {phase === 'failed' ? (
+            <>
+              <WarningCircle size={13} weight="bold" aria-hidden />
+              <span>Off Grid AI Desktop could not finish startup. Restart the app.</span>
+            </>
+          ) : (
+            <>
+              {phase === 'degraded' ? <WarningCircle size={13} aria-hidden /> : null}
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span
+                  key={phase === 'degraded' ? degradedText(snapshot) : pendingText(snapshot)}
+                  initial={reduceMotion ? false : { opacity: 0, y: 4, filter: 'blur(4px)' }}
+                  animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4, filter: 'blur(4px)' }}
+                  transition={{ duration: reduceMotion ? 0 : 0.3, ease: EASE }}
+                >
+                  {phase === 'degraded' ? (
+                    degradedText(snapshot)
+                  ) : (
+                    <TextShimmer as="span">{pendingText(snapshot)}</TextShimmer>
+                  )}
+                </motion.span>
+              </AnimatePresence>
+            </>
+          )}
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
   )
 }

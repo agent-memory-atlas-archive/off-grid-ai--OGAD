@@ -6,6 +6,10 @@
 
 import { useState, type ReactNode } from 'react'
 import type { TaskRoleSlot, TaskRolesView } from '../../../shared/task-roles-view'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
+import { Card } from '@offgrid/operator-ui/operator/coss/card'
+import { Section } from '@offgrid/operator-ui/operator/experience'
+import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
 import { SettingsSelect } from './SettingsSelect'
 import { isDecisionModel, isGroundingSpecialist, type TaskModelChoice } from '../lib/task-roles'
 
@@ -58,61 +62,63 @@ export function TaskLineups(props: {
     }
   }
   return (
-    <div className="space-y-4">
+    <div className="space-y-8">
       {props.view.tasks.map((lineup) => (
+        // The named region stays on a plain section; the library Section owns label and arrival.
         <section key={lineup.task} aria-label={lineup.taskLabel}>
-          <div className="mb-1.5 flex items-baseline justify-between gap-3">
-            <span className="text-[10px] uppercase tracking-wide text-neutral-500">
-              {lineup.taskLabel}
-            </span>
-            <span className="text-[10px] text-neutral-500">
-              {lineup.slots.length > 1
-                ? `${lineup.strategyLabel} · ${lineup.slots.length} models work together`
-                : lineup.strategyLabel}
-            </span>
-          </div>
-          {lineup.slots.length ? (
-            <div className="grid gap-1.5 sm:grid-cols-[repeat(auto-fit,minmax(12rem,1fr))]">
-              {lineup.slots.map((slot) => (
-                <div
-                  key={slot.role}
-                  className="min-w-0 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-xs"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[9px] uppercase tracking-wide text-neutral-500">
-                      {slot.label}
-                    </span>
-                    {slot.remote ? (
-                      <span className="shrink-0 rounded-sm border border-green-500/50 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-                        Remote
+          <Section
+            label={lineup.taskLabel}
+            actions={
+              <span className="text-xs text-neutral-500">
+                {lineup.slots.length > 1
+                  ? `${lineup.strategyLabel} · ${lineup.slots.length} models work together`
+                  : lineup.strategyLabel}
+              </span>
+            }
+          >
+            {lineup.slots.length ? (
+              <AnimatedGroup
+                preset="blur-slide"
+                className="grid gap-3 sm:grid-cols-[repeat(auto-fit,minmax(12rem,1fr))]"
+              >
+                {lineup.slots.map((slot) => (
+                  <Card key={slot.role} className="h-full w-full min-w-0 gap-2 p-4 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] uppercase tracking-widest text-neutral-500">
+                        {slot.label}
+                      </span>
+                      {slot.remote ? (
+                        <Badge variant="success" size="sm">
+                          Remote
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-neutral-500">
+                          On device{props.localDetail ? <> · {props.localDetail(slot)}</> : null}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs leading-relaxed text-neutral-500">{slot.does}</p>
+                    {slot.role === 'reasoner' ? (
+                      <span className="block truncate text-[13px] text-neutral-200">
+                        {slot.modelName}
                       </span>
                     ) : (
-                      <span className="text-[9px] text-neutral-500">
-                        On device{props.localDetail ? <> · {props.localDetail(slot)}</> : null}
-                      </span>
+                      <SettingsSelect<string>
+                        id={`task-${lineup.task}-${slot.role}`}
+                        label={`${lineup.taskLabel} ${slot.label}`}
+                        value={slot.modelId}
+                        disabled={busy !== null}
+                        onValueChange={(modelId) => void choose(lineup.task, slot, modelId)}
+                        options={options(slot, props.models, props.installed)}
+                      />
                     )}
-                  </div>
-                  <p className="mb-1 text-[10px] text-neutral-600">{slot.does}</p>
-                  {slot.role === 'reasoner' ? (
-                    <span className="block truncate text-neutral-200">{slot.modelName}</span>
-                  ) : (
-                    <SettingsSelect<string>
-                      id={`task-${lineup.task}-${slot.role}`}
-                      label={`${lineup.taskLabel} ${slot.label}`}
-                      value={slot.modelId}
-                      disabled={busy !== null}
-                      onValueChange={(modelId) => void choose(lineup.task, slot, modelId)}
-                      options={options(slot, props.models, props.installed)}
-                    />
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="px-2 py-1.5 text-xs text-neutral-600">
-              {lineup.taskLabel} uses the Chat model.
-            </p>
-          )}
+                  </Card>
+                ))}
+              </AnimatedGroup>
+            ) : (
+              <p className="text-xs text-neutral-500">{lineup.taskLabel} uses the Chat model.</p>
+            )}
+          </Section>
         </section>
       ))}
     </div>

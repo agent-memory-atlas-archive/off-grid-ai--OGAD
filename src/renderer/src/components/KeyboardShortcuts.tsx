@@ -1,4 +1,7 @@
 import React from 'react'
+import { Kbd, KbdGroup } from '@offgrid/operator-ui/operator/coss/kbd'
+import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
+import { ListRow } from '@offgrid/operator-ui/operator/list-row'
 import { useRendererEntitlement } from '@renderer/bootstrap/useRendererEntitlement'
 import { isMac } from '@renderer/lib/device'
 
@@ -36,30 +39,26 @@ export function KeyboardShortcuts(): React.ReactElement {
   const { isPro } = useRendererEntitlement()
   const rows = SHORTCUTS.filter((s) => !s.pro || isPro)
   return (
-    <div className="flex flex-col gap-1.5">
-      {rows.map((s) => (
-        <div
-          key={s.action}
-          className="flex items-center justify-between gap-3 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2"
-        >
-          <span className="text-xs text-neutral-300">
-            {s.action}
-            {s.note ? <span className="ml-2 text-[10px] text-neutral-600">· {s.note}</span> : null}
-          </span>
-          <span className="flex shrink-0 items-center gap-1">
-            {s.keys.map((k) => (
-              <kbd
-                key={k}
-                className="rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 text-[11px] leading-none text-neutral-300"
-              >
-                {k}
-              </kbd>
-            ))}
-          </span>
-        </div>
-      ))}
+    <div className="space-y-3">
+      {/* Rows sit inside a SettingsCard: quiet list rows, no nested borders. */}
+      <AnimatedGroup as="ul" asChild="li" preset="blur-slide" className="-mx-1 space-y-0.5">
+        {rows.map((s) => (
+          <ListRow
+            key={s.action}
+            title={s.action}
+            description={s.note}
+            meta={
+              <KbdGroup>
+                {s.keys.map((k) => (
+                  <Kbd key={k}>{k}</Kbd>
+                ))}
+              </KbdGroup>
+            }
+          />
+        ))}
+      </AnimatedGroup>
       {!isPro ? (
-        <p className="px-1 pt-1 text-[10px] text-neutral-600">
+        <p className="text-xs text-neutral-500">
           Clipboard and dictation shortcuts unlock with Pro.
         </p>
       ) : null}

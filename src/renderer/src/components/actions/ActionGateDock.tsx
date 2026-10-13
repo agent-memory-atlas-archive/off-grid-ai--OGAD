@@ -13,6 +13,10 @@
  * touches the chat's message model, so non-action turns are untouched.
  */
 import { useEffect, useState } from 'react'
+import { X } from '@phosphor-icons/react'
+import { motion, useReducedMotion } from 'motion/react'
+import { Card } from '@offgrid/operator-ui/operator/coss/card'
+import { Input } from '@offgrid/operator-ui/operator/coss/input'
 import { Button } from '@renderer/components/ui/button'
 import { presentActionApproval } from './action-approval-presentation'
 
@@ -47,6 +51,16 @@ export function ActionGateDock({
   const [outcomes, setOutcomes] = useState<OutcomeEvent[]>([])
   const [edits, setEdits] = useState<Record<string, Record<string, string>>>({})
   const [undone, setUndone] = useState<Record<string, string>>({})
+  const reduceMotion = useReducedMotion()
+  // Cards and outcome rows rise in. They leave at once: a decided card is gone the instant
+  // the user decides, so no exit lingers over the composer.
+  const arrive = reduceMotion
+    ? { initial: false as const }
+    : {
+        initial: { opacity: 0, y: 6 },
+        animate: { opacity: 1, y: 0 },
+        transition: { duration: 0.4, ease: [0.16, 1, 0.3, 1] as const }
+      }
 
   useEffect(() => {
     const offPending = window.api.actions?.onGatePending((request) => {
@@ -97,104 +111,109 @@ export function ActionGateDock({
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-2 px-4 pb-2 font-mono">
+    <div className="mx-auto w-full max-w-3xl space-y-3 px-4 pb-3 font-mono">
       {visiblePending.map((request) => {
         const editing = edits[request.actionId]
         const presentation = presentActionApproval(request)
         return (
-          <div
-            key={request.actionId}
-            data-testid="gate-card"
-            className="rounded-md border border-border bg-card p-3 text-sm"
-          >
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-              Approval needed
-            </div>
-            <div className="mt-1 font-medium text-foreground">{presentation.title}</div>
-            <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              {presentation.description}
-            </div>
-            <div className="mt-3 space-y-2">
-              {presentation.details.map((detail) => (
-                <div key={detail.key} className="grid grid-cols-[7rem_minmax(0,1fr)] gap-2 text-xs">
-                  <span className="text-muted-foreground">{detail.label}</span>
-                  {editing ? (
-                    <input
-                      aria-label={`edit ${detail.label.toLowerCase()}`}
-                      className="w-full rounded border border-border bg-background px-1.5 py-0.5"
-                      value={editing[detail.key] ?? detail.editValue}
-                      onChange={(e) =>
-                        setEdits((current) => ({
-                          ...current,
-                          [request.actionId]: {
-                            ...current[request.actionId],
-                            [detail.key]: e.target.value
-                          }
-                        }))
-                      }
-                    />
-                  ) : (
-                    <span className="break-words text-foreground">{detail.value}</span>
-                  )}
-                </div>
-              ))}
-            </div>
-            {presentation.warning ? (
-              <div className="mt-3 text-xs text-amber-600 dark:text-amber-400">
-                {presentation.warning}
+          <motion.div key={request.actionId} {...arrive}>
+            <Card data-testid="gate-card" className="gap-0 p-4 text-sm">
+              <div className="text-[10px] uppercase tracking-widest text-muted-foreground">
+                Approval needed
               </div>
-            ) : null}
-            <div className="mt-3 flex items-center gap-2">
-              {editing ? (
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    const args = { ...request.args, ...editing }
-                    setEdits((current) => {
-                      const { [request.actionId]: _dropped, ...rest } = current
-                      return rest
-                    })
-                    resolve(request.actionId, { kind: 'edit', args })
-                  }}
-                >
-                  Save changes
-                </Button>
-              ) : (
-                <>
+              <div className="mt-2 font-medium text-foreground">{presentation.title}</div>
+              <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {presentation.description}
+              </div>
+              <div className="mt-4 divide-y divide-neutral-900">
+                {presentation.details.map((detail) => (
+                  <div
+                    key={detail.key}
+                    className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-2 py-2 text-xs"
+                  >
+                    <span className="text-muted-foreground">{detail.label}</span>
+                    {editing ? (
+                      <Input
+                        size="sm"
+                        aria-label={`edit ${detail.label.toLowerCase()}`}
+                        className="text-xs"
+                        value={editing[detail.key] ?? detail.editValue}
+                        onChange={(e) =>
+                          setEdits((current) => ({
+                            ...current,
+                            [request.actionId]: {
+                              ...current[request.actionId],
+                              [detail.key]: e.target.value
+                            }
+                          }))
+                        }
+                      />
+                    ) : (
+                      <span className="break-words text-foreground">{detail.value}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {presentation.warning ? (
+                <div className="mt-4 text-xs text-amber-600 dark:text-amber-400">
+                  {presentation.warning}
+                </div>
+              ) : null}
+              <div className="mt-4 flex items-center gap-2">
+                {editing ? (
                   <Button
                     size="sm"
-                    disabled={!presentation.canApprove}
-                    onClick={() => resolve(request.actionId, { kind: 'approve' })}
+                    onClick={() => {
+                      const args = { ...request.args, ...editing }
+                      setEdits((current) => {
+                        const { [request.actionId]: _dropped, ...rest } = current
+                        return rest
+                      })
+                      resolve(request.actionId, { kind: 'edit', args })
+                    }}
                   >
-                    Approve
+                    Save changes
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setEdits((current) => ({ ...current, [request.actionId]: {} }))}
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() =>
-                      resolve(request.actionId, { kind: 'reject', reason: 'declined in chat' })
-                    }
-                  >
-                    Reject
-                  </Button>
-                </>
-              )}
-            </div>
-          </div>
+                ) : (
+                  <>
+                    <Button
+                      size="sm"
+                      disabled={!presentation.canApprove}
+                      onClick={() => resolve(request.actionId, { kind: 'approve' })}
+                    >
+                      Approve
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setEdits((current) => ({ ...current, [request.actionId]: {} }))
+                      }
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        resolve(request.actionId, { kind: 'reject', reason: 'declined in chat' })
+                      }
+                    >
+                      Reject
+                    </Button>
+                  </>
+                )}
+              </div>
+            </Card>
+          </motion.div>
         )
       })}
       {visibleOutcomes.map((event) => (
-        <div
+        <motion.div
           key={event.id}
+          {...arrive}
           data-testid="outcome-row"
-          className="flex items-center justify-between gap-2 rounded-md border border-border bg-card px-3 py-2 text-xs"
+          className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-xs"
         >
           <span className={event.outcome === 'done' ? 'text-primary' : 'text-muted-foreground'}>
             {event.record?.intent ? `${event.record.intent} - ` : ''}
@@ -208,15 +227,15 @@ export function ActionGateDock({
               </Button>
             ) : null}
             <Button
-              size="sm"
+              size="icon-sm"
               variant="ghost"
               aria-label="Dismiss"
               onClick={() => setOutcomes((current) => current.filter((o) => o.id !== event.id))}
             >
-              x
+              <X />
             </Button>
           </span>
-        </div>
+        </motion.div>
       ))}
     </div>
   )

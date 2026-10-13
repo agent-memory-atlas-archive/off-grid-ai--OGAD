@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { motion, useReducedMotion } from 'motion/react'
+import { Input } from '@offgrid/operator-ui/operator/coss/input'
 
 /**
  * Focus lands AFTER the dropdown returns focus to its trigger. Without the delay, Radix's
@@ -26,6 +28,7 @@ export function NewProjectNameField({
 }: NewProjectNameFieldProps): React.JSX.Element {
   const [name, setName] = useState('')
   const input = useRef<HTMLInputElement>(null)
+  const reduceMotion = useReducedMotion()
 
   useEffect(() => {
     const timer = setTimeout(() => input.current?.focus(), FOCUS_DELAY_MS)
@@ -33,9 +36,15 @@ export function NewProjectNameField({
   }, [])
 
   return (
-    <div className="mb-2">
-      <input
+    <motion.div
+      className="mb-2"
+      initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+    >
+      <Input
         ref={input}
+        size="sm"
         value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => {
@@ -44,8 +53,8 @@ export function NewProjectNameField({
         }}
         onBlur={() => onCreate(name)}
         placeholder="New project name…  (Enter to create, Esc to cancel)"
-        className="w-full rounded-md border border-green-500 bg-neutral-900 px-3 py-2 text-xs text-white placeholder-neutral-600 outline-none"
+        className="text-xs"
       />
-    </div>
+    </motion.div>
   )
 }
