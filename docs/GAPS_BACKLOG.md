@@ -85,7 +85,8 @@ No new API fields or stored preferences are required.
 
 ### CHAT-ARTIFACT-SCROLL-20261013 (P2) - Keep chat usable beside an artifact
 
-**Status:** source patch and renderer type check passed; installed verification pending.
+**Status:** installed and restarted on Mac and Runpod. Renderer type check passed.
+A focused Mac UI check scrolled the chat while the artifact remained open.
 
 ArtifactCanvas used the modal SidePanel default. Its full-window backdrop caught the chat's
 wheel and click events. The existing panel now accepts an optional non-modal mode, used only
@@ -94,7 +95,8 @@ still dismiss the artifact. Other side panels retain their backdrop and focus tr
 
 ### MODEL-REMOTE-NAME-20261013 (P2) - Show a model label instead of its file path
 
-**Status:** source patch and focused checks passed; installation verification pending.
+**Status:** installed and restarted on Mac and Runpod. Seventeen focused checks passed.
+The Mac composer displays Qwen3.8 Flash Next GSQ RCO IQ3_XXS without the server path.
 
 Remote providers can return a GGUF path as the model ID and as its name. The remote inventory
 now removes the directory, extension, and split suffix from filename labels. It preserves
