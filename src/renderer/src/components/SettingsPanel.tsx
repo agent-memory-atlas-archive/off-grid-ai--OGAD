@@ -582,6 +582,7 @@ export function SettingsPanel({
       transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
     >
       <ListRow
+        density="compact"
         title={c.name}
         description={c.url ?? undefined}
         // On/Off is state, so it stays visible; only Remove waits for hover.

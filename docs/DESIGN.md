@@ -107,6 +107,23 @@ Never hard-code hex or shadows in components; the skin and tokens own them.
 
 ---
 
+## Space and density
+
+Use these rules across the product, including panels and settings:
+
+- Put names on the left, short facts in aligned columns, and state and controls on the right.
+  Use `ListRow` metadata and trailing slots. Use compact rows when the content fits on one line.
+- Use the width before adding height. A short status belongs beside a name when there is room.
+  Keep useful space between groups, but avoid large empty areas inside repeated rows.
+- Keep labels readable. Let controls wrap when a panel is narrow; do not squeeze several cards
+  side by side until their labels disappear. Use the available panel width, not only window width.
+- Keep long descriptions and detail in the appropriate panel. Do not hide required facts just to
+  make a row shorter. Preserve keyboard focus, clear actions, and loading and error states.
+- Apply a repeated layout change in its shared component so each use has the same behavior.
+  Keep its motion and reduced-motion support.
+
+---
+
 ## Interaction and motion
 
 **Nothing pops. Every state change animates, and the parts move together.**

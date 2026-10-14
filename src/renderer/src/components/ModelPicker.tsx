@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Check, CircleNotch, Cpu, GearSix, Power, X } from '@phosphor-icons/react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
+import { ListRow } from '@offgrid/operator-ui/operator/list-row'
 import { Section } from '@offgrid/operator-ui/operator/experience'
 import { SidePanel } from './SidePanel'
 import { Button } from './ui/button'
@@ -348,7 +349,7 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                           aria-pressed={isActive(m)}
                           disabled={busy !== null}
                           onClick={() => choose(mode, m)}
-                          className={`flex w-full items-center justify-between gap-3 border-l-2 px-3 py-2 text-left text-xs transition-colors duration-300 ${
+                          className={`flex min-h-9 w-full items-center justify-between gap-3 border-l-2 px-3 py-1.5 text-left text-xs transition-colors duration-300 ${
                             isActive(m)
                               ? 'border-l-green-500 bg-green-500/5 text-white'
                               : 'border-l-transparent text-neutral-300 hover:bg-neutral-900/60'
@@ -357,15 +358,6 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                           <span className="flex min-w-0 items-center gap-2">
                             <span className="min-w-0">
                               <span className="block truncate text-[13px]">{m.name}</span>
-                              {!m.remoteServerId && (
-                                <span className="block truncate text-xs text-neutral-500">
-                                  {backendFor(mode === 'text' ? 'chat' : mode, [
-                                    m.id,
-                                    primaryFile(m),
-                                    ...(mode === 'speech' ? ['Kokoro'] : [])
-                                  ])}
-                                </span>
-                              )}
                             </span>
                             {duplicateNames.has(m.name) && primaryVariant(m) ? (
                               <span
@@ -381,25 +373,40 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                               </Badge>
                             ) : null}
                           </span>
-                          <AnimatePresence mode="popLayout" initial={false}>
-                            {busy === m.id ? (
-                              <motion.span key="busy" className="flex shrink-0" {...markMotion}>
-                                <CircleNotch className="h-3.5 w-3.5 animate-spin text-neutral-500" />
-                              </motion.span>
-                            ) : isActive(m) && status === 'unloaded' ? (
-                              // Still the active selection, but freed from memory — one coherent
-                              // state, not a green check next to an "unloaded" label.
-                              <motion.span key="unloaded" className="flex shrink-0" {...markMotion}>
-                                <Badge variant="outline" size="sm">
-                                  <Power className="h-3 w-3" /> Unloaded
-                                </Badge>
-                              </motion.span>
-                            ) : isActive(m) ? (
-                              <motion.span key="active" className="flex shrink-0" {...markMotion}>
-                                <Check className="h-3.5 w-3.5 text-green-500" weight="bold" />
-                              </motion.span>
-                            ) : null}
-                          </AnimatePresence>
+                          <span className="flex shrink-0 items-center justify-end gap-2">
+                            {!m.remoteServerId && (
+                              <span className="text-xs text-neutral-500">
+                                {backendFor(mode === 'text' ? 'chat' : mode, [
+                                  m.id,
+                                  primaryFile(m),
+                                  ...(mode === 'speech' ? ['Kokoro'] : [])
+                                ])}
+                              </span>
+                            )}
+                            <AnimatePresence mode="popLayout" initial={false}>
+                              {busy === m.id ? (
+                                <motion.span key="busy" className="flex shrink-0" {...markMotion}>
+                                  <CircleNotch className="h-3.5 w-3.5 animate-spin text-neutral-500" />
+                                </motion.span>
+                              ) : isActive(m) && status === 'unloaded' ? (
+                                // Still the active selection, but freed from memory — one coherent
+                                // state, not a green check next to an "unloaded" label.
+                                <motion.span
+                                  key="unloaded"
+                                  className="flex shrink-0"
+                                  {...markMotion}
+                                >
+                                  <Badge variant="outline" size="sm">
+                                    <Power className="h-3 w-3" /> Unloaded
+                                  </Badge>
+                                </motion.span>
+                              ) : isActive(m) ? (
+                                <motion.span key="active" className="flex shrink-0" {...markMotion}>
+                                  <Check className="h-3.5 w-3.5 text-green-500" weight="bold" />
+                                </motion.span>
+                              ) : null}
+                            </AnimatePresence>
+                          </span>
                         </button>
                       </motion.div>
                     ))}
@@ -411,12 +418,11 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
         })}
         <section aria-label="Embeddings">
           <Section label="Embeddings">
-            <div className="rounded-lg border border-neutral-800 px-4 py-3 text-xs text-neutral-300">
-              <span className="block text-[13px]">Search and RAG</span>
-              <span className="mt-0.5 block text-xs text-neutral-500">
-                {runtimeBackendLabel(backends.find((value) => value.id === 'embeddings'))}
-              </span>
-            </div>
+            <ListRow
+              title="Search and RAG"
+              meta={runtimeBackendLabel(backends.find((value) => value.id === 'embeddings'))}
+              density="compact"
+            />
           </Section>
         </section>
         <p className="text-xs leading-relaxed text-neutral-500">

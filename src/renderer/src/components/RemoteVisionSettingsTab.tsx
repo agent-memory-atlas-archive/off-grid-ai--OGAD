@@ -382,6 +382,7 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
                   transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
                 >
                   <ListRow
+                    density="compact"
                     title={server.name}
                     description={`${server.endpoint} · ${server.model}`}
                     onSelect={() => selectServer(server)}
