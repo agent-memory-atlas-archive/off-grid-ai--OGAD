@@ -195,7 +195,7 @@ jobs:
               git config --local http.https://github.com/wednesday-solutions/.extraheader ""
             fi
           fi
-          # npm skips an optional package it cannot read without saying so: say it here, plainly.
+          # Check access before installation so authentication failures are clear.
           if ! git ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/component-library-animations.git" HEAD >/dev/null 2>&1; then
             status="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${UI_TOKEN}" https://api.github.com/repos/wednesday-solutions/component-library-animations)"
             echo "::error::CI cannot read wednesday-solutions/component-library-animations (GitHub answered ${status}: 401 bad token, 403 org policy or IP allow list, 404 no access to the repo). Pro will not build without it."
@@ -365,7 +365,7 @@ jobs:
               git config --local http.https://github.com/wednesday-solutions/.extraheader ""
             fi
           fi
-          # npm skips an optional package it cannot read without saying so: say it here, plainly.
+          # Check access before installation so authentication failures are clear.
           if ! git ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/component-library-animations.git" HEAD >/dev/null 2>&1; then
             status="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${UI_TOKEN}" https://api.github.com/repos/wednesday-solutions/component-library-animations)"
             echo "::error::CI cannot read wednesday-solutions/component-library-animations (GitHub answered ${status}: 401 bad token, 403 org policy or IP allow list, 404 no access to the repo). Pro will not build without it."

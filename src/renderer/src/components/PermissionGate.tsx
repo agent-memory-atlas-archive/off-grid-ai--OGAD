@@ -3,7 +3,11 @@ import { useState, useEffect, useCallback } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { GridBackdrop } from './ui/grid-backdrop'
 import { X, Cpu, ArrowLeft } from '@phosphor-icons/react'
-import { Progress } from '@offgrid/operator-ui/operator/coss/progress'
+import {
+  Progress,
+  ProgressTrack,
+  ProgressIndicator
+} from '@offgrid/operator-ui/operator/coss/progress'
 import { PageHeader, Section } from '@offgrid/operator-ui/operator/experience'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
@@ -456,7 +460,11 @@ function SetupNudge({
                 aria-label="Vision support download progress"
                 value={percent}
                 className="mt-2"
-              />
+              >
+                <ProgressTrack>
+                  <ProgressIndicator />
+                </ProgressTrack>
+              </Progress>
               <div className="mt-1.5 tabular-nums text-muted-foreground">
                 {presentedProgress.totalBytes !== undefined
                   ? `${formatStorageBytes(presentedProgress.currentBytes)} / ${formatStorageBytes(presentedProgress.totalBytes)}`

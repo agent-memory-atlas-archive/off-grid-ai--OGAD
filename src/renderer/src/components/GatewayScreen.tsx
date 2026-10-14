@@ -111,7 +111,7 @@ export function GatewayScreen(): React.ReactElement {
       <div className="flex w-full flex-col px-8 pt-8 pb-16">
         <PageHeader
           title="Gateway"
-          description="One local, OpenAI-compatible API for every model you download: text, vision, image and voice. It runs on your device, and nothing leaves it."
+          description="One OpenAI-compatible API for text, vision, image and voice. Local models process data on your device. If you select a remote model server, requests go to that server."
           actions={
             <IconTip label="Interactive playground">
               <Button

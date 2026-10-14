@@ -13,6 +13,37 @@ afterEach(() => {
 })
 
 describe('<SettingsPanel/> tool settings', () => {
+  it('shows the stored group state after a partial save fails', async () => {
+    const stored = [
+      { name: 'calendar_create_event', description: 'Create an event.', enabled: true },
+      { name: 'calendar_list_events', description: 'List events.', enabled: true }
+    ]
+    ;(window as unknown as { api: Record<string, unknown> }).api = {
+      getLlmSettings: async () => ({}),
+      getModelCatalog: async () => ({ models: [] }),
+      getActiveModel: async () => null,
+      getSettings: async () => ({}),
+      getTranscriptionInfo: async () => null,
+      listTools: async () => stored.map((tool) => ({ ...tool })),
+      setToolEnabled: async (name: string, enabled: boolean) => {
+        if (name === 'calendar_list_events') throw new Error('Save failed')
+        stored.find((tool) => tool.name === name)!.enabled = enabled
+      },
+      mcpList: async () => []
+    }
+    const user = userEvent.setup()
+    const view = render(<SettingsPanel embedded initialTab="tools" onClose={() => {}} />)
+    await user.click(await screen.findByRole('switch', { name: 'Enable Calendar tools' }))
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: 'Enable Calendar tools' }).getAttribute('aria-checked')).toBe('mixed')
+    )
+    view.unmount()
+    render(<SettingsPanel embedded initialTab="tools" onClose={() => {}} />)
+    await user.click(await screen.findByRole('button', { name: /^Calendar/ }))
+    expect(screen.getByRole('switch', { name: 'Enable calendar_create_event' }).getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByRole('switch', { name: 'Enable calendar_list_events' }).getAttribute('aria-checked')).toBe('true')
+  })
+
   it('turns all chat tools off from the side panel', async () => {
     const saved: Array<[string, unknown]> = []
     ;(window as unknown as { api: Record<string, unknown> }).api = {

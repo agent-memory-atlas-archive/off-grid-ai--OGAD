@@ -1275,11 +1275,14 @@ export function SettingsPanel({
                                 names.has(tool.name) ? { ...tool, enabled: next } : tool
                               )
                               void persistToggle(nextTools, tools, setTools, async () => {
-                                for (const tool of group.tools) {
-                                  await (window.api as Partial<typeof window.api>).setToolEnabled?.(
-                                    tool.name,
-                                    next
-                                  )
+                                try {
+                                  for (const tool of group.tools) {
+                                    await (
+                                      window.api as Partial<typeof window.api>
+                                    ).setToolEnabled?.(tool.name, next)
+                                  }
+                                } catch {
+                                  setTools(await window.api.listTools())
                                 }
                               })
                             }}
