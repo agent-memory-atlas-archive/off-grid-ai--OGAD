@@ -381,8 +381,12 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     const user = userEvent.setup()
     renderChat({ conversationId: 'conversation-a' })
 
+    // This journey stops recording explicitly; Auto's silence deadline is tested separately.
+    const turns = await screen.findByRole('group', { name: 'Voice turn mode' })
+    await user.click(within(turns).getByRole('button', { name: 'Manual' }))
+
     await user.click(await screen.findByRole('button', { name: 'Start voice recording' }))
-    await user.click(screen.getByRole('button', { name: 'Stop voice recording' }))
+    await user.click(await screen.findByRole('button', { name: 'Stop voice recording' }))
     await waitFor(() => expect(boundary.calls).toHaveLength(1))
 
     boundary.emitReasoning(0, 'Check the calendar before answering.')
@@ -415,9 +419,13 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     const user = userEvent.setup()
     renderChat({ conversationId: 'conversation-a' })
 
+    // This journey stops recording explicitly; Auto's silence deadline is tested separately.
+    const turns = await screen.findByRole('group', { name: 'Voice turn mode' })
+    await user.click(within(turns).getByRole('button', { name: 'Manual' }))
+
     await user.click(await screen.findByRole('button', { name: 'Thinking' }))
     await user.click(screen.getByRole('button', { name: 'Start voice recording' }))
-    await user.click(screen.getByRole('button', { name: 'Stop voice recording' }))
+    await user.click(await screen.findByRole('button', { name: 'Stop voice recording' }))
     await waitFor(() => expect(boundary.calls).toHaveLength(1))
 
     boundary.resolve(0, 'I am doing well. How can I help?')
