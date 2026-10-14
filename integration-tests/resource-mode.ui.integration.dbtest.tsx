@@ -71,14 +71,14 @@ describe('resource mode in Desktop setup', () => {
     // A directory at the destination makes the real atomic rename fail.
     const settingsFile = path.join(profile, 'models', 'llm-settings.json')
     fs.mkdirSync(settingsFile, { recursive: true })
-    await user.click(screen.getByRole('button', { name: 'Conservative' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Balanced' }).getAttribute('aria-pressed')).toBe('true'))
+    await user.click(screen.getByRole('radio', { name: 'Conservative' }))
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Balanced' }).getAttribute('aria-checked')).toBe('true'))
     expect(llm.getSettings().performanceMode).toBe('balanced')
     expect(planModes.at(-1)).toBe('balanced')
 
     fs.rmdirSync(settingsFile)
-    await user.click(screen.getByRole('button', { name: 'Conservative' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Conservative' }).getAttribute('aria-pressed')).toBe('true'))
+    await user.click(screen.getByRole('radio', { name: 'Conservative' }))
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Conservative' }).getAttribute('aria-checked')).toBe('true'))
     expect(llm.getSettings().performanceMode).toBe('conservative')
     expect(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).performanceMode).toBe('conservative')
   })
