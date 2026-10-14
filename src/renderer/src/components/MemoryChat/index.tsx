@@ -3798,20 +3798,29 @@ export function MemoryChat({
       />
     ) : undefined
   const activeImageProgress = showGenerationProgress ? (
-    <div className="w-full rounded-md border border-neutral-800 bg-neutral-900/40 p-3">
+    <div
+      className={
+        imgProgress?.preview
+          ? 'w-full rounded-md border border-neutral-800 bg-neutral-900/40 p-3'
+          : 'w-fit max-w-full py-1'
+      }
+    >
       {imgProgress?.preview ? (
         <img
           src={imgProgress.preview}
           alt="forming"
           className={`mb-2 aspect-square w-full rounded-md border border-neutral-800 object-cover ${qwenLatentPreview ? 'grayscale' : ''}`}
         />
-      ) : (
-        <div className="mb-2 flex aspect-square w-full items-center justify-center rounded-md border border-neutral-800 text-[11px] text-neutral-600">
-          Preparing image…
-        </div>
-      )}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-neutral-500">
-        <span>{imageProgressLabel(imageJobStage, imgProgress)}</span>
+      ) : null}
+      <div
+        role="status"
+        className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-neutral-500"
+      >
+        <TextShimmer as="span">
+          {imgProgress || imageJobStage
+            ? imageProgressLabel(imageJobStage, imgProgress)
+            : 'Preparing image…'}
+        </TextShimmer>
         {imgProgress && imgProgress.step < imgProgress.total ? (
           <span className="text-neutral-600">
             · ~
