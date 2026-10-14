@@ -37,7 +37,6 @@ function ConversationSidebarComponent({
   onConversationRenamed,
   onDeleteConversation
 }: ConversationSidebarProps): React.JSX.Element {
-  console.log('MemoryChat ConversationSidebar rendered')
   // The text being typed lives here, so a keystroke re-renders this sidebar only. The chat screen
   // receives the query once typing pauses, and a clear or an outside change applies at once.
   const [draft, setDraft] = useState(search)

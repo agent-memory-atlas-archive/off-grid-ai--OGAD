@@ -28,7 +28,6 @@ function SpeechActionComponent({
   state: SpeechControlState
   onSpeak: () => void
 }>): React.JSX.Element {
-  console.log('MemoryChat SpeechAction rendered')
   let label = 'Speak'
   let icon: React.JSX.Element = (
     <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -89,7 +88,6 @@ function VariantNavigationComponent({
   message: ChatMessage
   onSelect: (direction: -1 | 1) => void
 }>): React.JSX.Element | null {
-  console.log('MemoryChat VariantNavigation rendered')
   if (!message.variants || message.variants.length <= 1) return null
   const index = message.variantIndex ?? 0
   return (
@@ -144,7 +142,6 @@ function AssistantMessageActionsComponent({
   onSelectVariant: (direction: -1 | 1) => void
   onSpeak: () => void
 }>): React.JSX.Element | null {
-  console.log('MemoryChat AssistantMessageActions rendered')
   if (isSupportingMessage(message)) return null
   // An image answer has its own controls, but its earlier versions stay reachable.
   if (message.image) return <VariantNavigation message={message} onSelect={onSelectVariant} />
@@ -176,7 +173,6 @@ function AssistantMessageActionsComponent({
 function MessageTimeComponent({
   message
 }: Readonly<{ message: ChatMessage }>): React.JSX.Element | null {
-  console.log('MemoryChat MessageTime rendered')
   if (message.createdAt === undefined) return null
   const time = new Date(message.createdAt).toLocaleTimeString(undefined, {
     hour: 'numeric',

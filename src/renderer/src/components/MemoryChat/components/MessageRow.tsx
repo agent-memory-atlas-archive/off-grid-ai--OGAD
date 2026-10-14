@@ -162,7 +162,6 @@ function VoiceMessageRow({
   onSaveEdit: (messageId: string, text: string) => void
   onUpdateTranscript: (message: ChatMessage, text: string) => Promise<void>
 }>): React.JSX.Element {
-  console.log('MemoryChat VoiceMessageRow rendered')
   const [transcribing, setTranscribing] = useState(false)
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null)
   const [openFooterDetail, setOpenFooterDetail] = useState<'tools' | 'generation' | null>(null)
@@ -442,7 +441,6 @@ function MessageBubble({
   actions: MessageRowActions
   navigation: ContextNavigation
 }>): React.JSX.Element {
-  console.log('MemoryChat MessageBubble rendered')
   const editing = state.editingId === message.id
   const artifact = message.role === 'assistant' ? parseArtifact(message.content) : null
   const ask = message.role === 'assistant' ? parseAsk(message.content) : null
@@ -526,7 +524,6 @@ function StandardMessageRow({
   /** Set while the newest version streams: the arrows only change which version is read. */
   onBrowseVersion?: (direction: -1 | 1) => void
 }): React.JSX.Element {
-  console.log('MemoryChat StandardMessageRow rendered')
   const artifact = message.role === 'assistant' ? parseArtifact(message.content) : null
   const copied = state.copiedKey === message.id
   const [openFooterDetail, setOpenFooterDetail] = useState<'tools' | 'generation' | null>(null)
@@ -720,7 +717,6 @@ function MessageRowComponent({
   actions,
   navigation
 }: MessageRowProps): React.JSX.Element {
-  console.log('MemoryChat MessageRow rendered')
   const liveMessage = useStreamViewMessage(message)
   // While a new version streams, an earlier one can be read without touching the live row.
   const [viewedVersion, setViewedVersion] = useState<number | null>(null)

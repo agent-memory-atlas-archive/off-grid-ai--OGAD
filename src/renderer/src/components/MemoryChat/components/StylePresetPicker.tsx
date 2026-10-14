@@ -109,7 +109,6 @@ function StylePresetPickerComponent({
   styleThumbs: Record<string, string>
   onChange: (style: string | null) => void
 }>): React.JSX.Element {
-  console.log('MemoryChat StylePresetPicker rendered')
   return (
     <div className={compact ? 'mb-2 w-full' : 'mt-4 w-full'}>
       <div className="mb-2 flex items-center justify-between">

@@ -15,7 +15,6 @@ function ImageMemoryRetryActionComponent({
   loading: boolean
   onRetry: (retry: NonNullable<ChatMessage['imageMemoryRetry']>) => void
 }>): React.JSX.Element | null {
-  console.log('MemoryChat ImageMemoryRetryAction rendered')
   const retry = message.imageMemoryRetry
   if (!retry) return null
   return (
@@ -44,7 +43,6 @@ function ArtifactCardComponent({
   artifact: Artifact | null
   onOpen: (artifact: Artifact) => void
 }>): React.JSX.Element | null {
-  console.log('MemoryChat ArtifactCard rendered')
   if (!artifact) return null
   return (
     <button
@@ -83,7 +81,6 @@ function AskCardComponent({
   onSelect: (option: string, selected: boolean) => void
   onSubmit: () => void
 }>): React.JSX.Element | null {
-  console.log('MemoryChat AskCard rendered')
   if (!ask) return null
   return (
     <div className="mt-2 flex flex-col gap-1.5">

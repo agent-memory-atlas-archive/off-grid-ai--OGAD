@@ -13,7 +13,6 @@ import type { OpenImage, StoredMessageAttachment } from '../types'
 function IncomingFileRowsComponent({
   files
 }: Readonly<{ files: readonly IncomingSharedFile[] }>): React.JSX.Element {
-  console.log('MemoryChat IncomingFileRows rendered')
   return (
     <AnimatePresence initial={false}>
       {files.map((incoming) => (
@@ -46,7 +45,6 @@ function MessageAttachmentsComponent({
   onOpenAttachment: (attachment: StoredMessageAttachment) => void
   onOpenImage: (image: OpenImage) => void
 }>): React.JSX.Element {
-  console.log('MemoryChat MessageAttachments rendered')
   return (
     <div className="@container mb-2 flex w-full flex-wrap gap-1.5">
       {attachments.map((attachment, index) => {
@@ -118,7 +116,6 @@ function MessageEditorComponent({
   onCancel: () => void
   onSave: (messageId: string, text: string) => void
 }>): React.JSX.Element {
-  console.log('MemoryChat MessageEditor rendered')
   const [text, setText] = useState(initialText)
   return (
     <div className="flex flex-col gap-2">

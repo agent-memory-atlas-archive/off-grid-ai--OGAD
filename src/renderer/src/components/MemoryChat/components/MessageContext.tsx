@@ -72,7 +72,6 @@ function UnifiedContextSectionComponent({
   items?: readonly UnifiedContextItem[]
   navigation: ContextNavigation
 }>): React.JSX.Element | null {
-  console.log('MemoryChat UnifiedContextSection rendered')
   if (!items?.length) return null
   return (
     <div className="mb-3">
@@ -125,7 +124,6 @@ function SourceScoresSectionComponent({
 }: Readonly<{
   sources?: readonly NonNullable<RagContext['sources']>[number][]
 }>): React.JSX.Element | null {
-  console.log('MemoryChat SourceScoresSection rendered')
   if (!sources?.length) return null
   return (
     <div className="mb-3">
@@ -150,7 +148,6 @@ function SourceScoresSectionComponent({
 function MasterMemorySectionComponent({
   content
 }: Readonly<{ content?: string | null }>): React.JSX.Element | null {
-  console.log('MemoryChat MasterMemorySection rendered')
   if (!content) return null
   return (
     <div className="mb-3 rounded-md border border-neutral-800 p-3">
@@ -171,7 +168,6 @@ function MemoriesContextSectionComponent({
   memories?: readonly RagMemory[]
   onNavigate?: (memoryId: number) => void
 }>): React.JSX.Element | null {
-  console.log('MemoryChat MemoriesContextSection rendered')
   if (!memories?.length) return null
   return (
     <div className="mb-3">
@@ -203,7 +199,6 @@ function SummariesContextSectionComponent({
   summaries?: readonly RagSummary[]
   onNavigate?: (sessionId: string) => void
 }>): React.JSX.Element | null {
-  console.log('MemoryChat SummariesContextSection rendered')
   if (!summaries?.length) return null
   return (
     <div className="mb-3">
@@ -238,7 +233,6 @@ function EntitiesContextSectionComponent({
   entities?: readonly RagEntity[]
   onNavigate?: (entityId: number) => void
 }>): React.JSX.Element | null {
-  console.log('MemoryChat EntitiesContextSection rendered')
   if (!entities?.length) return null
   return (
     <div className="mb-3">
@@ -264,7 +258,6 @@ function EntitiesContextSectionComponent({
 function EntityFactsContextSectionComponent({
   facts
 }: Readonly<{ facts?: readonly RagEntityFact[] }>): React.JSX.Element | null {
-  console.log('MemoryChat EntityFactsContextSection rendered')
   if (!facts?.length) return null
   return (
     <div>
@@ -291,7 +284,6 @@ function ContextDisclosureComponent({
   context?: RagContext
   navigation: ContextNavigation
 }>): React.JSX.Element | null {
-  console.log('MemoryChat ContextDisclosure rendered')
   if (!context) return null
   const resultCount = contextResultCount(context)
   if (resultCount === 0) return null
