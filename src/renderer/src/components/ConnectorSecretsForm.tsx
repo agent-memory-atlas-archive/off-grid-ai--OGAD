@@ -1,5 +1,7 @@
 import { useState } from 'react'
+import { X } from '@phosphor-icons/react'
 import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { IconTip } from './IconTip'
 import {
   KeyValue,
   KeyValueItem,
@@ -86,13 +88,15 @@ export function ConnectorSecretsForm({
           }}
         </KeyValueList>
       </KeyValue>
-      <div className="flex gap-2">
+      <div className="flex items-center gap-2">
         <Button size="xs" onClick={() => onConnect(values)} disabled={connecting}>
           <TextMorph as="span">{connecting ? 'Connecting…' : 'Connect'}</TextMorph>
         </Button>
-        <Button size="xs" variant="outline" onClick={onCancel}>
-          Cancel
-        </Button>
+        <IconTip label="Cancel">
+          <Button size="icon-xs" variant="outline" aria-label="Cancel" onClick={onCancel}>
+            <X />
+          </Button>
+        </IconTip>
       </div>
     </>
   )

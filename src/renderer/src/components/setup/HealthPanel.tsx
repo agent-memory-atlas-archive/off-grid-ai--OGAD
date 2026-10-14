@@ -6,6 +6,7 @@ import {
   CircleNotch,
   WarningCircle,
   Circle,
+  ArrowClockwise,
   ArrowsClockwise
 } from '@phosphor-icons/react'
 import { cn } from '@renderer/lib/utils'
@@ -17,6 +18,8 @@ import {
   type SystemHealthContract
 } from '../../../../shared/ipc-contracts'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { Button } from '../ui/button'
+import { GlyphSwap, IconTip } from '../IconTip'
 import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
 import { LiveStatus, StatePill, type StateTone } from '@offgrid/operator-ui/operator/presence'
 
@@ -152,13 +155,17 @@ export function HealthPanel(): React.ReactElement {
           >
             <TextMorph as="span">{freeing ? 'Freeing...' : 'Free engine'}</TextMorph>
           </button>
-          <button
-            onClick={refresh}
-            className="flex items-center gap-1.5 text-[11px] text-neutral-500 transition-colors hover:text-white"
-          >
-            <ArrowsClockwise className="h-3 w-3" />
-            Refresh
-          </button>
+          <IconTip label="Refresh">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Refresh"
+              onClick={refresh}
+              className="text-neutral-500 hover:text-white"
+            >
+              <ArrowsClockwise className="h-3.5 w-3.5" />
+            </Button>
+          </IconTip>
         </div>
       }
     >
@@ -223,13 +230,25 @@ export function HealthPanel(): React.ReactElement {
                     className={cn('shrink-0', STATUS_TEXT[c.status])}
                   />
                   {canRestart && (
-                    <button
-                      onClick={() => restart(c.id)}
-                      disabled={restarting === c.id}
-                      className="shrink-0 rounded border border-neutral-700 px-1.5 py-0.5 text-[9px] leading-4 text-neutral-300 transition-all duration-150 hover:border-green-500/60 hover:text-white active:scale-95 disabled:opacity-50"
-                    >
-                      {restarting === c.id ? '…' : 'Restart'}
-                    </button>
+                    <IconTip label="Restart">
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        aria-label="Restart"
+                        aria-busy={restarting === c.id || undefined}
+                        onClick={() => restart(c.id)}
+                        disabled={restarting === c.id}
+                        className="shrink-0 text-neutral-300 hover:text-white disabled:opacity-50"
+                      >
+                        <GlyphSwap glyphKey={restarting === c.id ? 'busy' : 'idle'}>
+                          {restarting === c.id ? (
+                            <CircleNotch className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <ArrowClockwise className="h-3.5 w-3.5" />
+                          )}
+                        </GlyphSwap>
+                      </Button>
+                    </IconTip>
                   )}
                 </div>
               )

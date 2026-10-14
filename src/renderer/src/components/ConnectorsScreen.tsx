@@ -11,6 +11,7 @@ import {
   IconRefresh,
   IconChevronRight,
   IconChevronLeft,
+  IconPencil,
   IconX
 } from '@tabler/icons-react'
 import {
@@ -27,6 +28,7 @@ import { CONNECTIONS_CHANGED_EVENT } from './useQuickConnection'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 import { PageHeader } from '@offgrid/operator-ui/operator/experience'
 import { Button } from './ui/button'
+import { GlyphSwap, IconTip } from './IconTip'
 import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
 import { AnimatePresence, motion } from 'motion/react'
 import {
@@ -581,9 +583,17 @@ export function ConnectorsScreen(): ReactElement {
                 }))}
               />
             )}
-            <Button variant="outline" size="sm" onClick={() => setAdding((v) => !v)}>
-              <IconPlus className="h-4 w-4" /> Custom
-            </Button>
+            <IconTip label="Custom">
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label="Custom"
+                aria-expanded={adding}
+                onClick={() => setAdding((v) => !v)}
+              >
+                <IconPlus className="h-4 w-4" />
+              </Button>
+            </IconTip>
           </div>
         }
       />
@@ -607,18 +617,23 @@ export function ConnectorsScreen(): ReactElement {
               : []
             return (
               <div className="mx-auto max-w-[1500px] space-y-5">
-                <button
-                  onClick={() => {
-                    setDetailId(null)
-                    setEditing(false)
-                    setChangingToken(false)
-                    setConfirmRemove(false)
-                    load()
-                  }}
-                  className="flex items-center gap-1 text-xs text-neutral-400 hover:text-white"
-                >
-                  <IconChevronLeft className="h-4 w-4" /> All integrations
-                </button>
+                <IconTip label="All integrations">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="All integrations"
+                    onClick={() => {
+                      setDetailId(null)
+                      setEditing(false)
+                      setChangingToken(false)
+                      setConfirmRemove(false)
+                      load()
+                    }}
+                    className="text-neutral-400 hover:text-white"
+                  >
+                    <IconChevronLeft className="h-4 w-4" />
+                  </Button>
+                </IconTip>
                 <div className="flex items-start gap-3">
                   {dcat ? (
                     <Badge id={dcat.id} color={dcat.color} letter={dcat.letter} />
@@ -649,18 +664,25 @@ export function ConnectorsScreen(): ReactElement {
                   <div className="flex shrink-0 items-center gap-1">
                     {!dNotReady && (
                       <>
-                        <button
-                          onClick={() => test(detail.id)}
-                          disabled={testingId === detail.id}
-                          className="flex items-center gap-1 rounded-md border border-neutral-700 px-2.5 py-1 text-xs text-neutral-300 hover:border-green-500 hover:text-green-500 disabled:opacity-50"
-                        >
-                          {testingId === detail.id ? (
-                            <IconLoader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <IconPlugConnected className="h-3.5 w-3.5" />
-                          )}{' '}
-                          Test
-                        </button>
+                        <IconTip label="Test">
+                          <Button
+                            variant="outline"
+                            size="icon-sm"
+                            aria-label="Test"
+                            aria-busy={testingId === detail.id || undefined}
+                            onClick={() => test(detail.id)}
+                            disabled={testingId === detail.id}
+                            className="border-neutral-700 text-neutral-300 hover:border-green-500 hover:text-green-500 disabled:opacity-50"
+                          >
+                            <GlyphSwap glyphKey={testingId === detail.id ? 'busy' : 'idle'}>
+                              {testingId === detail.id ? (
+                                <IconLoader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <IconPlugConnected className="h-3.5 w-3.5" />
+                              )}
+                            </GlyphSwap>
+                          </Button>
+                        </IconTip>
                         <button
                           onClick={() => toggle(detail.id, !detail.enabled)}
                           className={`rounded-md px-2.5 py-1 text-xs ${detail.enabled ? 'text-green-500' : 'text-neutral-500'} hover:bg-neutral-800`}
@@ -669,22 +691,29 @@ export function ConnectorsScreen(): ReactElement {
                         </button>
                       </>
                     )}
-                    <button
-                      onClick={() => startEdit(detail)}
-                      className="rounded-md px-2.5 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      aria-label={`Remove ${detail.name}`}
-                      onClick={() => {
-                        setEditing(false)
-                        setConfirmRemove(true)
-                      }}
-                      className="rounded-md p-1 text-neutral-600 hover:text-red-400"
-                    >
-                      <IconTrash className="h-4 w-4" />
-                    </button>
+                    <IconTip label="Edit">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="Edit"
+                        onClick={() => startEdit(detail)}
+                        className="text-neutral-300"
+                      >
+                        <IconPencil className="h-4 w-4" />
+                      </Button>
+                    </IconTip>
+                    <IconTip label={`Remove ${detail.name}`}>
+                      <button
+                        aria-label={`Remove ${detail.name}`}
+                        onClick={() => {
+                          setEditing(false)
+                          setConfirmRemove(true)
+                        }}
+                        className="rounded-md p-1 text-neutral-600 hover:text-red-400"
+                      >
+                        <IconTrash className="h-4 w-4" />
+                      </button>
+                    </IconTip>
                   </div>
                 </div>
                 {confirmRemove && (
@@ -765,20 +794,25 @@ export function ConnectorsScreen(): ReactElement {
                       after saving.
                     </p>
                     {editError && <p className="text-[11px] text-red-400/80">{editError}</p>}
-                    <div className="flex gap-2">
+                    <div className="flex items-center gap-2">
                       <button
                         type="submit"
                         className="rounded-md bg-green-500 px-3 py-1.5 text-xs text-neutral-950 hover:bg-green-400"
                       >
                         Save
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditing(false)}
-                        className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300"
-                      >
-                        Cancel
-                      </button>
+                      <IconTip label="Cancel">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon-sm"
+                          aria-label="Cancel"
+                          onClick={() => setEditing(false)}
+                          className="border-neutral-700 text-neutral-300"
+                        >
+                          <IconX className="h-3.5 w-3.5" />
+                        </Button>
+                      </IconTip>
                     </div>
                   </form>
                 )}
@@ -819,18 +853,20 @@ export function ConnectorsScreen(): ReactElement {
                 )}
                 {!dNotReady && detail.status === 'ok' && !detail.liveOnly && (
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => sync(detail.id)}
-                      disabled={syncingId === detail.id}
-                      className="flex items-center gap-1 rounded-md bg-green-500/90 px-3 py-1.5 text-xs text-neutral-950 hover:bg-green-400 disabled:opacity-50"
-                    >
-                      {syncingId === detail.id ? (
-                        <IconLoader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <IconRefresh className="h-3.5 w-3.5" />
-                      )}{' '}
-                      Sync recent
-                    </button>
+                    <IconTip label="Sync recent">
+                      <Button
+                        size="icon-sm"
+                        aria-label="Sync recent"
+                        aria-busy={syncingId === detail.id || undefined}
+                        onClick={() => sync(detail.id)}
+                        disabled={syncingId === detail.id}
+                        className="shrink-0 bg-green-500/90 text-neutral-950 hover:bg-green-400 disabled:opacity-50"
+                      >
+                        <IconRefresh
+                          className={`h-3.5 w-3.5 ${syncingId === detail.id ? 'animate-spin' : ''}`}
+                        />
+                      </Button>
+                    </IconTip>
                     <ConnectorPullQueryField
                       key={detail.id}
                       connectorName={detail.name}
@@ -939,19 +975,24 @@ export function ConnectorsScreen(): ReactElement {
                       <ArgsTagsField value={args} onChange={setArgs} placeholder="args" />
                     </>
                   )}
-                  <div className="flex gap-2">
+                  <div className="flex items-center gap-2">
                     <button
                       onClick={addCustom}
                       className="rounded-md bg-green-500 px-3 py-1.5 text-xs text-neutral-950 hover:bg-green-400"
                     >
                       Add
                     </button>
-                    <button
-                      onClick={() => setAdding(false)}
-                      className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300"
-                    >
-                      Cancel
-                    </button>
+                    <IconTip label="Cancel">
+                      <Button
+                        variant="outline"
+                        size="icon-sm"
+                        aria-label="Cancel"
+                        onClick={() => setAdding(false)}
+                        className="border-neutral-700 text-neutral-300"
+                      >
+                        <IconX className="h-3.5 w-3.5" />
+                      </Button>
+                    </IconTip>
                   </div>
                 </div>
               )}
@@ -1048,7 +1089,7 @@ export function ConnectorsScreen(): ReactElement {
                   {loading && items.length === 0 ? (
                     <div className="space-y-2" aria-busy="true" aria-label="Loading connections">
                       {[0, 1, 2].map((i) => (
-                        <Skeleton key={i} className="h-[62px] w-full rounded-md" />
+                        <Skeleton key={i} className="h-[52px] w-full rounded-md" />
                       ))}
                     </div>
                   ) : items.length === 0 ? (
@@ -1056,7 +1097,7 @@ export function ConnectorsScreen(): ReactElement {
                       Nothing connected yet. Pick one above.
                     </p>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="divide-y divide-neutral-800 overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/40">
                       <AnimatePresence initial={false}>
                         {items.map((c) => {
                           const cat = CONNECTOR_CATALOG.find((x) => x.name === c.name)
@@ -1075,7 +1116,7 @@ export function ConnectorsScreen(): ReactElement {
                               exit={{ opacity: 0 }}
                               transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
                               onClick={() => openDetail(c)}
-                              className={`flex w-full items-center gap-3 rounded-md border border-neutral-800 bg-neutral-900/40 p-3 text-left transition-colors hover:border-neutral-700 ${notReady ? 'opacity-55' : ''}`}
+                              className={`flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-neutral-800/40 ${notReady ? 'opacity-55' : ''}`}
                             >
                               {cat ? (
                                 <Badge id={cat.id} color={cat.color} letter={cat.letter} />

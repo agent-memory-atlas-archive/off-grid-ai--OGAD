@@ -5,13 +5,13 @@ import {
   type RuntimeId
 } from '../../../shared/runtime-backends'
 import { useCallback, useEffect, useState } from 'react'
-import { Check, CircleNotch, Cpu, Power, X } from '@phosphor-icons/react'
+import { Check, CircleNotch, Cpu, GearSix, Power, X } from '@phosphor-icons/react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
 import { Section } from '@offgrid/operator-ui/operator/experience'
-import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { SidePanel } from './SidePanel'
 import { Button } from './ui/button'
+import { GlyphSwap, IconTip } from './IconTip'
 import { openModelSettingsPanel } from '@renderer/lib/model-settings-panel'
 import { TaskLineups } from './TaskLineups'
 import { useTaskRoles } from '../lib/task-roles'
@@ -215,9 +215,17 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
           <Cpu className="h-4 w-4 text-green-500" aria-hidden /> Active models
         </div>
         <div className="flex items-center gap-1">
-          <Button type="button" size="sm" variant="outline" onClick={() => openSettings(onClose)}>
-            Settings
-          </Button>
+          <IconTip label="Settings">
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Settings"
+              onClick={() => openSettings(onClose)}
+            >
+              <GearSix className="h-4 w-4" />
+            </Button>
+          </IconTip>
           <Button type="button" size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close">
             <X className="h-4 w-4" />
           </Button>
@@ -287,32 +295,43 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
               label={label}
               actions={
                 cur ? (
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="ghost"
-                    onClick={() => void unloadModel(mode)}
-                    disabled={status === 'unloading' || status === 'unloaded'}
-                    title={
-                      status === 'error'
-                        ? 'Unload unavailable — restart the app'
-                        : status === 'unloaded'
-                          ? 'Already unloaded — reloads on next use'
-                          : 'Unload from memory now — frees RAM; reloads on next use'
-                    }
-                    className={
-                      status === 'error' ? 'text-amber-400' : 'text-neutral-500 hover:text-red-400'
+                  <IconTip
+                    label={
+                      <>
+                        {status === 'error' ? 'Restart to unload' : 'Unload'}
+                        <span className="block text-muted-foreground">
+                          {status === 'error'
+                            ? 'Unload unavailable — restart the app'
+                            : status === 'unloaded'
+                              ? 'Already unloaded — reloads on next use'
+                              : 'Unload from memory now — frees RAM; reloads on next use'}
+                        </span>
+                      </>
                     }
                   >
-                    {status === 'unloading' ? (
-                      <CircleNotch className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Power className="h-3 w-3" />
-                    )}
-                    <TextMorph as="span">
-                      {status === 'error' ? 'Restart to unload' : 'Unload'}
-                    </TextMorph>
-                  </Button>
+                    <Button
+                      type="button"
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label={status === 'error' ? 'Restart to unload' : 'Unload'}
+                      aria-busy={status === 'unloading' || undefined}
+                      onClick={() => void unloadModel(mode)}
+                      disabled={status === 'unloading' || status === 'unloaded'}
+                      className={
+                        status === 'error'
+                          ? 'text-amber-400'
+                          : 'text-neutral-500 hover:text-red-400'
+                      }
+                    >
+                      <GlyphSwap glyphKey={status === 'unloading' ? 'busy' : 'idle'}>
+                        {status === 'unloading' ? (
+                          <CircleNotch className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Power className="h-3.5 w-3.5" />
+                        )}
+                      </GlyphSwap>
+                    </Button>
+                  </IconTip>
                 ) : null
               }
             >
@@ -321,7 +340,7 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                   No {label.toLowerCase()} model downloaded — get one in Models.
                 </p>
               ) : (
-                <div className="space-y-2">
+                <div className="divide-y divide-neutral-800 overflow-hidden rounded-lg border border-neutral-800">
                   <AnimatePresence initial={false}>
                     {list.map((m) => (
                       <motion.div key={m.id} layout={!reduceMotion} {...rowMotion}>
@@ -329,17 +348,17 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                           aria-pressed={isActive(m)}
                           disabled={busy !== null}
                           onClick={() => choose(mode, m)}
-                          className={`flex w-full items-center justify-between gap-3 rounded-lg border px-4 py-3 text-left text-xs transition-colors duration-300 ${
+                          className={`flex w-full items-center justify-between gap-3 border-l-2 px-3 py-2 text-left text-xs transition-colors duration-300 ${
                             isActive(m)
-                              ? 'border-green-500/50 bg-green-500/5 text-white'
-                              : 'border-neutral-800 text-neutral-300 hover:bg-neutral-900/60'
+                              ? 'border-l-green-500 bg-green-500/5 text-white'
+                              : 'border-l-transparent text-neutral-300 hover:bg-neutral-900/60'
                           }`}
                         >
                           <span className="flex min-w-0 items-center gap-2">
                             <span className="min-w-0">
                               <span className="block truncate text-[13px]">{m.name}</span>
                               {!m.remoteServerId && (
-                                <span className="mt-0.5 block whitespace-normal text-xs text-neutral-500">
+                                <span className="block truncate text-xs text-neutral-500">
                                   {backendFor(mode === 'text' ? 'chat' : mode, [
                                     m.id,
                                     primaryFile(m),

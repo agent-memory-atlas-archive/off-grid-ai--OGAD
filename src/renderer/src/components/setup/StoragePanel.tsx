@@ -7,7 +7,11 @@ import {
   X,
   Broom,
   FolderOpen,
-  Cube
+  FolderPlus,
+  Cube,
+  ArrowClockwise,
+  CircleNotch,
+  GearSix
 } from '@phosphor-icons/react'
 import { AnimatePresence, motion } from 'motion/react'
 import { Meter, MeterIndicator, MeterTrack } from '@offgrid/operator-ui/operator/coss/meter'
@@ -17,7 +21,6 @@ import {
   ProgressTrack
 } from '@offgrid/operator-ui/operator/coss/progress'
 import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
-import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { Empty, EmptyDescription, EmptyMedia } from '@offgrid/operator-ui/operator/coss/empty'
 import { cn } from '@renderer/lib/utils'
@@ -29,6 +32,7 @@ import {
   supportsModelSettings
 } from '@renderer/lib/model-settings-panel'
 import { CacheCleanupControl } from './CacheCleanupControl'
+import { GlyphSwap, IconTip } from '../IconTip'
 import { Section } from '@offgrid/operator-ui/operator/experience'
 import { formatStorageBytes } from './storage-format'
 import { formatTransferSpeed } from '@offgrid/sync'
@@ -263,12 +267,17 @@ export function StoragePanel(): React.ReactElement {
         </span>
       }
       actions={
-        <button
-          onClick={refresh}
-          className="flex items-center gap-1.5 text-[11px] text-neutral-500 transition-colors hover:text-white"
-        >
-          <ArrowsClockwise className="h-3 w-3" /> Refresh
-        </button>
+        <IconTip label="Refresh">
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Refresh"
+            onClick={refresh}
+            className="text-neutral-500 hover:text-white"
+          >
+            <ArrowsClockwise className="h-3.5 w-3.5" />
+          </Button>
+        </IconTip>
       }
       className="font-mono"
     >
@@ -327,18 +336,19 @@ export function StoragePanel(): React.ReactElement {
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              type="button"
-              onClick={chooseDirectory}
-              disabled={busy === 'directory' || active.length > 0}
-            >
-              <FolderOpen />
-              <TextMorph as="span">
-                {busy === 'directory' ? 'Choosing...' : 'Choose folder'}
-              </TextMorph>
-            </Button>
+            <IconTip label={busy === 'directory' ? 'Choosing...' : 'Choose folder'}>
+              <Button
+                size="icon-sm"
+                variant="outline"
+                type="button"
+                aria-label={busy === 'directory' ? 'Choosing...' : 'Choose folder'}
+                aria-busy={busy === 'directory' || undefined}
+                onClick={chooseDirectory}
+                disabled={busy === 'directory' || active.length > 0}
+              >
+                <FolderOpen />
+              </Button>
+            </IconTip>
             {pendingDirectory && (
               <Button size="sm" type="button" onClick={() => api.restartForModelDirectory()}>
                 Restart now
@@ -358,16 +368,19 @@ export function StoragePanel(): React.ReactElement {
                 stay in their current folder.
               </div>
             </div>
-            <Button
-              size="sm"
-              variant="outline"
-              type="button"
-              onClick={addScanFolder}
-              disabled={busy === 'scan'}
-              className="shrink-0"
-            >
-              <FolderOpen /> Add folder
-            </Button>
+            <IconTip label="Add folder">
+              <Button
+                size="icon-sm"
+                variant="outline"
+                type="button"
+                aria-label="Add folder"
+                onClick={addScanFolder}
+                disabled={busy === 'scan'}
+                className="shrink-0"
+              >
+                <FolderPlus />
+              </Button>
+            </IconTip>
           </div>
           {scanFolders.length > 0 && (
             <div className="mt-2 space-y-1">
@@ -407,15 +420,25 @@ export function StoragePanel(): React.ReactElement {
                 </span>
               )}
               {incomplete.length > 0 && (
-                <button
-                  onClick={clearAllIncomplete}
-                  disabled={busy === 'clear-dl'}
-                  className="text-[10px] text-neutral-500 transition-colors hover:text-white disabled:opacity-50"
+                <IconTip
+                  label={
+                    busy === 'clear-dl' ? 'Clearing…' : `Clear ${incomplete.length} interrupted`
+                  }
                 >
-                  <TextMorph as="span">
-                    {busy === 'clear-dl' ? 'Clearing…' : `Clear ${incomplete.length} interrupted`}
-                  </TextMorph>
-                </button>
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label={
+                      busy === 'clear-dl' ? 'Clearing…' : `Clear ${incomplete.length} interrupted`
+                    }
+                    aria-busy={busy === 'clear-dl' || undefined}
+                    onClick={clearAllIncomplete}
+                    disabled={busy === 'clear-dl'}
+                    className="text-neutral-500 hover:text-white disabled:opacity-50"
+                  >
+                    <Broom className="h-3.5 w-3.5" />
+                  </Button>
+                </IconTip>
               )}
             </div>
             <AnimatePresence initial={false}>
@@ -509,13 +532,25 @@ export function StoragePanel(): React.ReactElement {
                       {d.error ?? d.status}
                     </div>
                   </div>
-                  <button
-                    onClick={() => retry(d.modelId)}
-                    disabled={busy === d.modelId}
-                    className="rounded-md border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 hover:border-green-500/60 hover:text-white disabled:opacity-50"
-                  >
-                    {busy === d.modelId ? '…' : 'Retry'}
-                  </button>
+                  <IconTip label="Retry">
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label="Retry"
+                      aria-busy={busy === d.modelId || undefined}
+                      onClick={() => retry(d.modelId)}
+                      disabled={busy === d.modelId}
+                      className="text-neutral-300 hover:text-white disabled:opacity-50"
+                    >
+                      <GlyphSwap glyphKey={busy === d.modelId ? 'busy' : 'idle'}>
+                        {busy === d.modelId ? (
+                          <CircleNotch className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <ArrowClockwise className="h-3.5 w-3.5" />
+                        )}
+                      </GlyphSwap>
+                    </Button>
+                  </IconTip>
                   <button
                     onClick={() => clearOne(d.modelId)}
                     disabled={busy === d.modelId}
@@ -602,15 +637,16 @@ export function StoragePanel(): React.ReactElement {
                                 {formatStorageBytes(m.bytes)}
                               </span>
                               {m.active && (
-                                <button
-                                  type="button"
-                                  onClick={() => openModelSettings(m.kind)}
-                                  aria-label={`Settings for ${m.name}`}
-                                  title="Open settings for the active model"
-                                  className="shrink-0 rounded border border-neutral-700 px-1.5 text-[9px] leading-4 text-neutral-400 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
-                                >
-                                  Settings
-                                </button>
+                                <IconTip label="Open settings for the active model">
+                                  <button
+                                    type="button"
+                                    onClick={() => openModelSettings(m.kind)}
+                                    aria-label={`Settings for ${m.name}`}
+                                    className="shrink-0 rounded p-0.5 text-neutral-400 transition-all duration-150 hover:text-emerald-500 active:scale-95"
+                                  >
+                                    <GearSix className="h-3 w-3" />
+                                  </button>
+                                </IconTip>
                               )}
                               {!m.id.startsWith('external:') && (
                                 <button
@@ -641,17 +677,28 @@ export function StoragePanel(): React.ReactElement {
               {info.orphans.length} unused file{info.orphans.length > 1 ? 's' : ''} ·{' '}
               {formatStorageBytes(orphanBytes)}
             </span>
-            <button
-              onClick={cleanOrphans}
-              disabled={busy === 'orphans'}
-              className={cn(
-                'flex items-center gap-1.5 rounded-md border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300',
-                'transition-colors hover:border-green-500/60 hover:text-white disabled:opacity-50'
-              )}
-            >
-              <Broom className="h-3 w-3" />{' '}
-              <TextMorph as="span">{busy === 'orphans' ? 'Cleaning…' : 'Clean up'}</TextMorph>
-            </button>
+            <IconTip label={busy === 'orphans' ? 'Cleaning…' : 'Clean up'}>
+              <Button
+                size="icon-xs"
+                variant="outline"
+                aria-label={busy === 'orphans' ? 'Cleaning…' : 'Clean up'}
+                aria-busy={busy === 'orphans' || undefined}
+                onClick={cleanOrphans}
+                disabled={busy === 'orphans'}
+                className={cn(
+                  'border-neutral-700 text-neutral-300',
+                  'hover:border-green-500/60 hover:text-white disabled:opacity-50'
+                )}
+              >
+                <GlyphSwap glyphKey={busy === 'orphans' ? 'busy' : 'idle'}>
+                  {busy === 'orphans' ? (
+                    <CircleNotch className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Broom className="h-3 w-3" />
+                  )}
+                </GlyphSwap>
+              </Button>
+            </IconTip>
           </div>
         )}
 

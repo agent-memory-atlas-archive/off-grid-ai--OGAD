@@ -9,6 +9,7 @@ import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
 import { Button } from './ui/button'
+import { IconTip } from './IconTip'
 import { SetupPanel } from './setup/SetupPanel'
 import { deviceNoun } from '@renderer/lib/device'
 import { PermissionsPanel } from './PermissionsPanel'
@@ -240,15 +241,18 @@ export function PermissionGate({ children }: PermissionGateProps): React.JSX.Ele
   return (
     <div className="h-screen w-screen bg-neutral-950 fixed inset-0 overflow-hidden">
       <GridBackdrop className="z-0" />
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={() => setShowSetup(false)}
-        className="absolute left-4 top-4 z-20"
-      >
-        <ArrowLeft /> Back to app
-      </Button>
+      <IconTip label="Back to app">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Back to app"
+          onClick={() => setShowSetup(false)}
+          className="absolute left-4 top-4 z-20"
+        >
+          <ArrowLeft />
+        </Button>
+      </IconTip>
 
       <div className="relative z-10 h-full w-full flex flex-col items-center overflow-y-auto px-8 pb-12 pt-16">
         <div className="w-full max-w-3xl my-auto">

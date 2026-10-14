@@ -26,6 +26,7 @@ import {
   EmptyMedia
 } from '@offgrid/operator-ui/operator/coss/empty'
 import { Button } from './ui/button'
+import { GlyphSwap, IconTip } from './IconTip'
 import { ArtifactCanvas, type Artifact } from './ArtifactCanvas'
 import { artifactKindLabel } from '@renderer/lib/artifact-labels'
 import { timeAgo } from '@renderer/lib/time'
@@ -64,23 +65,21 @@ function ProjectArtifacts({ projectId }: { projectId: string }): React.ReactElem
           project and they’ll appear here.
         </p>
       ) : (
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <div className="divide-y divide-neutral-800/80 overflow-hidden rounded-lg border border-neutral-800/80 bg-neutral-900/30">
           {items.map((a) => (
             <button
               key={a.id}
               onClick={() => setOpen(a)}
-              className="group flex flex-col gap-2 rounded-lg border border-neutral-800/80 bg-neutral-900/30 p-4 text-left transition-colors hover:border-green-500/50 hover:bg-neutral-900/60"
+              className="group flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-neutral-900/60"
             >
-              <div className="flex items-center justify-between">
-                <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-400">
-                  {artifactKindLabel(a.kind)}
-                </span>
-                <span className="text-[10px] text-neutral-600">
-                  {a.created ? timeAgo(new Date(a.created).toISOString()) : ''}
-                </span>
-              </div>
-              <span className="min-w-0 truncate text-sm text-neutral-200 group-hover:text-white">
+              <span className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-400">
+                {artifactKindLabel(a.kind)}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-sm text-neutral-200 group-hover:text-white">
                 {a.title}
+              </span>
+              <span className="shrink-0 text-[10px] text-neutral-600">
+                {a.created ? timeAgo(new Date(a.created).toISOString()) : ''}
               </span>
             </button>
           ))}
@@ -393,12 +392,17 @@ function ProjectChats({
         <span className="text-[11px] uppercase tracking-widest text-neutral-600">
           {chats.length} {chats.length === 1 ? 'chat' : 'chats'}
         </span>
-        <button
-          onClick={() => onOpenChat({ projectId: project.id })}
-          className="flex items-center gap-2 rounded-md border border-neutral-800 px-3 py-2 text-sm text-neutral-300 transition-colors hover:border-green-500 hover:text-green-500"
-        >
-          <IconPlus className="h-4 w-4" /> New chat
-        </button>
+        <IconTip label="New chat">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="New chat"
+            onClick={() => onOpenChat({ projectId: project.id })}
+            className="border-neutral-800 text-neutral-300 hover:border-green-500 hover:text-green-500"
+          >
+            <IconPlus className="h-4 w-4" />
+          </Button>
+        </IconTip>
       </div>
       {chats.length === 0 ? (
         <p className="py-10 text-center text-sm text-neutral-600">
@@ -406,22 +410,20 @@ function ProjectChats({
           this project.
         </p>
       ) : (
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <div className="divide-y divide-neutral-800/80 overflow-hidden rounded-lg border border-neutral-800/80 bg-neutral-900/30">
           {chats.map((c) => (
             <button
               key={c.id}
               onClick={() => onOpenChat({ conversationId: c.id })}
-              className="group flex items-start gap-3 rounded-lg border border-neutral-800/80 bg-neutral-900/30 px-4 py-3.5 text-left transition-colors hover:border-green-500/50 hover:bg-neutral-900/60"
+              className="group flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-neutral-900/60"
             >
-              <IconMessage className="mt-0.5 h-4 w-4 shrink-0 text-neutral-600 group-hover:text-green-500" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm text-neutral-200">
-                  {c.title || 'Untitled chat'}
-                </div>
-                <div className="mt-0.5 text-[11px] text-neutral-600">
-                  {c.message_count ? `${c.message_count} messages · ` : ''}
-                  {timeAgo(c.updated_at)}
-                </div>
+              <IconMessage className="h-4 w-4 shrink-0 text-neutral-600 group-hover:text-green-500" />
+              <div className="min-w-0 flex-1 truncate text-sm text-neutral-200">
+                {c.title || 'Untitled chat'}
+              </div>
+              <div className="shrink-0 text-[11px] text-neutral-600">
+                {c.message_count ? `${c.message_count} messages · ` : ''}
+                {timeAgo(c.updated_at)}
               </div>
             </button>
           ))}
@@ -472,25 +474,34 @@ function ProjectConfig({
     <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
       <div className="flex items-center justify-end gap-3 border-b border-neutral-800 px-6 py-3">
         {savedAt && !dirty && <span className="text-[11px] text-neutral-600">{savedAt}</span>}
-        <button
-          onClick={save}
-          disabled={!dirty || saving}
-          className="flex items-center gap-1 rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-white transition-colors hover:border-green-500 hover:text-green-500 disabled:opacity-40"
-        >
-          {saving ? (
-            <IconLoader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <IconDeviceFloppy className="h-4 w-4" />
-          )}{' '}
-          Save
-        </button>
-        <button
-          onClick={onDelete}
-          title="Delete project"
-          className="rounded-md p-1.5 text-neutral-500 transition-colors hover:text-red-500"
-        >
-          <IconTrash className="h-4 w-4" />
-        </button>
+        <IconTip label="Save">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="Save"
+            aria-busy={saving || undefined}
+            onClick={save}
+            disabled={!dirty || saving}
+            className="border-neutral-700 text-white hover:border-green-500 hover:text-green-500 disabled:opacity-40"
+          >
+            <GlyphSwap glyphKey={saving ? 'busy' : 'idle'}>
+              {saving ? (
+                <IconLoader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <IconDeviceFloppy className="h-4 w-4" />
+              )}
+            </GlyphSwap>
+          </Button>
+        </IconTip>
+        <IconTip label="Delete project">
+          <button
+            onClick={onDelete}
+            title="Delete project"
+            className="rounded-md p-1.5 text-neutral-500 transition-colors hover:text-red-500"
+          >
+            <IconTrash className="h-4 w-4" />
+          </button>
+        </IconTip>
       </div>
 
       <div className="mx-auto w-full max-w-2xl space-y-6 px-6 py-6">
@@ -621,18 +632,25 @@ function KnowledgeBase({ projectId }: { projectId: string }): React.JSX.Element 
     <div>
       <div className="mb-3 flex items-center justify-between">
         <div className="text-[11px] uppercase tracking-wide text-neutral-500">Knowledge base</div>
-        <button
-          onClick={add}
-          disabled={busy}
-          className="flex shrink-0 items-center gap-1 rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-white transition-colors hover:border-green-500 hover:text-green-500 disabled:opacity-50"
-        >
-          {busy ? (
-            <IconLoader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <IconPlus className="h-4 w-4" />
-          )}{' '}
-          Add files
-        </button>
+        <IconTip label="Add files">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="Add files"
+            aria-busy={busy || undefined}
+            onClick={add}
+            disabled={busy}
+            className="shrink-0 border-neutral-700 text-white hover:border-green-500 hover:text-green-500 disabled:opacity-50"
+          >
+            <GlyphSwap glyphKey={busy ? 'busy' : 'idle'}>
+              {busy ? (
+                <IconLoader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <IconPlus className="h-4 w-4" />
+              )}
+            </GlyphSwap>
+          </Button>
+        </IconTip>
       </div>
       <p className="mb-3 text-[11px] text-neutral-600">
         Documents (txt, md, PDF, DOCX), images, audio, or video. Audio is transcribed; video frames
@@ -640,21 +658,16 @@ function KnowledgeBase({ projectId }: { projectId: string }): React.JSX.Element 
       </p>
       {status && <div className="mb-3 text-[11px] text-neutral-500">{status}</div>}
 
-      <div className="grid grid-cols-1 gap-2">
-        {docs.length === 0 && <p className="text-sm text-neutral-600">No documents yet.</p>}
+      {docs.length === 0 && <p className="text-sm text-neutral-600">No documents yet.</p>}
+      <div className="divide-y divide-neutral-800 overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60 empty:hidden">
         {docs.map((d) => {
           const Icon = KIND_ICON[d.kind] ?? IconFile
           return (
-            <div
-              key={d.id}
-              className="flex items-center gap-3 rounded-md border border-neutral-800 bg-neutral-900/60 p-3"
-            >
+            <div key={d.id} className="flex items-center gap-3 px-3 py-2">
               <Icon className="h-4 w-4 shrink-0 text-neutral-500" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm text-white">{d.name}</div>
-                <div className="text-[10px] uppercase tracking-wide text-neutral-600">
-                  {[d.kind, fmtSize(d.size)].filter(Boolean).join('  ·  ')}
-                </div>
+              <div className="min-w-0 flex-1 truncate text-sm text-white">{d.name}</div>
+              <div className="shrink-0 text-[10px] uppercase tracking-wide text-neutral-600">
+                {[d.kind, fmtSize(d.size)].filter(Boolean).join('  ·  ')}
               </div>
               <button
                 onClick={async () => {

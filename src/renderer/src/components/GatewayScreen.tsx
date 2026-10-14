@@ -12,6 +12,7 @@ import {
   InputGroupInput
 } from '@offgrid/operator-ui/operator/coss/input-group'
 import { Button } from './ui/button'
+import { IconTip } from './IconTip'
 
 // Explains the local OpenAI-compatible gateway with copyable quick-start snippets
 // and a link to the interactive playground the gateway serves. Core feature.
@@ -112,9 +113,16 @@ export function GatewayScreen(): React.ReactElement {
           title="Gateway"
           description="One local, OpenAI-compatible API for every model you download: text, vision, image and voice. It runs on your device, and nothing leaves it."
           actions={
-            <Button variant="outline" size="sm" onClick={() => open('/docs')}>
-              <IconExternalLink className="h-4 w-4" /> Interactive playground
-            </Button>
+            <IconTip label="Interactive playground">
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label="Interactive playground"
+                onClick={() => open('/docs')}
+              >
+                <IconExternalLink className="h-4 w-4" />
+              </Button>
+            </IconTip>
           }
         />
 

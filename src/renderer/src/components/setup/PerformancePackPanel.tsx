@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { DownloadSimple, Pause, Play, ArrowClockwise, CheckCircle } from '@phosphor-icons/react'
 import { projectProgress } from '@offgrid/ui'
 import { Button } from '../ui/button'
+import { GlyphSwap, IconTip } from '../IconTip'
 import type { PerformancePackStatus } from '../../../../shared/performance-pack'
 import { currentPlatform } from '@renderer/lib/device'
 import { formatStorageBytes } from './storage-format'
@@ -49,6 +50,13 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
   })
   const installed = status.phase === 'installed'
   const downloading = status.phase === 'downloading'
+  const packActionLabel = downloading
+    ? 'Pause'
+    : status.phase === 'paused'
+      ? 'Resume'
+      : status.phase === 'failed'
+        ? 'Try again'
+        : 'Download'
   const action = downloading ? window.api.performancePack.pause : window.api.performancePack.start
 
   return (
@@ -100,18 +108,31 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
           </Progress>
         </div>
       ) : null}
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         {installed && status.restartRequired ? (
           <Button size="sm" onClick={() => void window.api.performancePack.restart()}>
             <ArrowClockwise className="h-4 w-4" /> Restart app
           </Button>
         ) : !installed ? (
-          <Button size="sm" onClick={() => void action().then(setStatus)}>
-            {downloading ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-            <TextMorph as="span">
-              {downloading ? 'Pause' : status.phase === 'paused' ? 'Resume' : status.phase === 'failed' ? 'Try again' : 'Download'}
-            </TextMorph>
-          </Button>
+          <IconTip label={packActionLabel}>
+            <Button
+              size="icon-sm"
+              aria-label={packActionLabel}
+              onClick={() => void action().then(setStatus)}
+            >
+              <GlyphSwap glyphKey={packActionLabel}>
+                {downloading ? (
+                  <Pause className="h-4 w-4" weight="fill" />
+                ) : status.phase === 'paused' ? (
+                  <Play className="h-4 w-4" weight="fill" />
+                ) : status.phase === 'failed' ? (
+                  <ArrowClockwise className="h-4 w-4" />
+                ) : (
+                  <DownloadSimple className="h-4 w-4" />
+                )}
+              </GlyphSwap>
+            </Button>
+          </IconTip>
         ) : null}
         {onSkip ? (
           <Button size="sm" variant="outline" onClick={onSkip}>Skip for now</Button>

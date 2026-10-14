@@ -11,7 +11,10 @@ import {
   HardDrives,
   Pulse,
   Pause,
-  ListMagnifyingGlass
+  ListMagnifyingGlass,
+  ArrowCounterClockwise,
+  CaretLeft,
+  CaretRight
 } from '@phosphor-icons/react'
 import {
   AI_LOG_POLICY,
@@ -23,6 +26,7 @@ import {
   type AIRequestSummary
 } from '@offgrid/core/shared/ai-request-log'
 import { Button } from './ui/button'
+import { GlyphSwap, IconTip } from './IconTip'
 import { AnimatePresence, motion } from 'motion/react'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 import { PageHeader } from '@offgrid/operator-ui/operator/experience'
@@ -569,35 +573,43 @@ export function AIRequestLogs({
   }
   const headerActions = (
     <div className="flex flex-wrap items-center gap-2">
-      <Button
-        variant="ghost"
-        size="sm"
-        aria-pressed={live}
-        className={live ? 'text-primary' : 'text-muted-foreground'}
-        onClick={() => setLive((value) => !value)}
-      >
-        {live ? <Pulse aria-hidden /> : <Pause aria-hidden />}
-        Live updates
-      </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        aria-label="Refresh activity"
-        onClick={() => setRefresh((value) => value + 1)}
-      >
-        <ArrowClockwise />
-      </Button>
-      {!standalone && (
+      <IconTip label="Live updates">
         <Button
-          variant="outline"
-          size="sm"
-          onClick={() =>
-            void window.api.aiLogsOpenWindow().catch((error) => setError(errorMessage(error)))
-          }
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Live updates"
+          aria-pressed={live}
+          className={live ? 'text-primary' : 'text-muted-foreground'}
+          onClick={() => setLive((value) => !value)}
         >
-          <ArrowSquareOut />
-          Open in new window
+          <GlyphSwap glyphKey={live ? 'live' : 'paused'}>
+            {live ? <Pulse aria-hidden /> : <Pause aria-hidden />}
+          </GlyphSwap>
         </Button>
+      </IconTip>
+      <IconTip label="Refresh activity">
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label="Refresh activity"
+          onClick={() => setRefresh((value) => value + 1)}
+        >
+          <ArrowClockwise />
+        </Button>
+      </IconTip>
+      {!standalone && (
+        <IconTip label="Open in new window">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="Open in new window"
+            onClick={() =>
+              void window.api.aiLogsOpenWindow().catch((error) => setError(errorMessage(error)))
+            }
+          >
+            <ArrowSquareOut />
+          </Button>
+        </IconTip>
       )}
     </div>
   )
@@ -634,23 +646,26 @@ export function AIRequestLogs({
             placeholder="Search requests, responses, models..."
           />
         </InputGroup>
-        <Button
-          variant="outline"
-          size="sm"
-          aria-expanded={showFilters}
-          aria-controls="ai-log-filters"
-          onClick={() => setShowFilters((value) => !value)}
-        >
-          <SlidersHorizontal />
-          Filters
-        </Button>
+        <IconTip label="Filters">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="Filters"
+            aria-expanded={showFilters}
+            aria-controls="ai-log-filters"
+            onClick={() => setShowFilters((value) => !value)}
+          >
+            <SlidersHorizontal />
+          </Button>
+        </IconTip>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm">
-              <Eye />
-              Show
-            </Button>
-          </DropdownMenuTrigger>
+          <IconTip label="Show">
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon-sm" aria-label="Show">
+                <Eye />
+              </Button>
+            </DropdownMenuTrigger>
+          </IconTip>
           <DropdownMenuContent align="end" className="shadow-none">
             <DropdownMenuLabel className="text-[11px] font-normal uppercase tracking-wide text-muted-foreground">
               Visible fields
@@ -714,20 +729,23 @@ export function AIRequestLogs({
                 />
                 Over 10 seconds
               </label>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setSearch('')
-                  setStatus('all')
-                  setHardware('all')
-                  setPeriod('all')
-                  setSlow(false)
-                  setModality('all')
-                }}
-              >
-                Reset filters
-              </Button>
+              <IconTip label="Reset filters">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Reset filters"
+                  onClick={() => {
+                    setSearch('')
+                    setStatus('all')
+                    setHardware('all')
+                    setPeriod('all')
+                    setSlow(false)
+                    setModality('all')
+                  }}
+                >
+                  <ArrowCounterClockwise />
+                </Button>
+              </IconTip>
             </motion.div>
           )}
         </AnimatePresence>
@@ -938,25 +956,31 @@ export function AIRequestLogs({
             </AnimatePresence>
           </div>
           <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border px-3 py-2">
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={offset === 0}
-              onClick={() => setOffset((value) => Math.max(0, value - 30))}
-            >
-              Previous
-            </Button>
+            <IconTip label="Previous">
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Previous"
+                disabled={offset === 0}
+                onClick={() => setOffset((value) => Math.max(0, value - 30))}
+              >
+                <CaretLeft />
+              </Button>
+            </IconTip>
             <span className="text-[11px] text-muted-foreground">
               {page.total ? `${offset + 1}-${Math.min(offset + 30, page.total)}` : '0'}
             </span>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={offset + 30 >= page.total}
-              onClick={() => setOffset((value) => value + 30)}
-            >
-              Next
-            </Button>
+            <IconTip label="Next">
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Next"
+                disabled={offset + 30 >= page.total}
+                onClick={() => setOffset((value) => value + 30)}
+              >
+                <CaretRight />
+              </Button>
+            </IconTip>
           </div>
         </div>
         <div
@@ -1022,10 +1046,16 @@ export function AIRequestLogs({
             </p>
           </details>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => setConfirmClear(true)}>
-          <Trash />
-          Clear history
-        </Button>
+        <IconTip label="Clear history">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Clear history"
+            onClick={() => setConfirmClear(true)}
+          >
+            <Trash />
+          </Button>
+        </IconTip>
       </footer>
       <AutoHeight className="shrink-0">
         <AnimatePresence initial={false}>

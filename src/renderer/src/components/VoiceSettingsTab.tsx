@@ -29,7 +29,9 @@ import { SettingsSection } from './SettingsSection'
 import { LoadingDots } from './ui/loading-dots'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 import ElasticSlider from '@offgrid/operator-ui/operator/bits/elastic-slider'
-import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { ArrowClockwise, CircleNotch, Play, SpeakerHigh } from '@phosphor-icons/react'
+import { Button } from './ui/button'
+import { GlyphSwap, IconTip } from './IconTip'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { LiveStatus } from '@offgrid/operator-ui/operator/presence'
 import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
@@ -88,6 +90,12 @@ export function VoiceSettingsTab(): React.JSX.Element {
   )
   const [progress, setProgress] = useState<VoiceAssetProgress>({ percentage: 0 })
   const [testState, setTestState] = useState<TestState>('idle')
+  const testVoiceLabel =
+    testState === 'generating'
+      ? 'Generating...'
+      : testState === 'playing'
+        ? 'Playing...'
+        : 'Test voice'
   const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [preferences, setPreferences] = useState(DEFAULT_VOICE_PREFERENCES)
   const testAudioRef = useRef<HTMLAudioElement | null>(null)
@@ -484,13 +492,18 @@ export function VoiceSettingsTab(): React.JSX.Element {
             className="mb-4 flex items-center justify-between gap-3 text-xs text-red-400"
           >
             <span>{voiceLoadError}</span>
-            <button
-              type="button"
-              onClick={loadVoices}
-              className="rounded-md border border-red-500/50 px-2.5 py-1 text-red-300"
-            >
-              Retry
-            </button>
+            <IconTip label="Retry">
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Retry"
+                onClick={loadVoices}
+                className="shrink-0 text-red-300 hover:text-red-200"
+              >
+                <ArrowClockwise />
+              </Button>
+            </IconTip>
           </div>
         ) : (
           <LiveStatus className="mb-4 text-xs text-neutral-500">
@@ -548,23 +561,34 @@ export function VoiceSettingsTab(): React.JSX.Element {
           </div>
         </SettingsRow>
 
-        <div className="pb-3">
-          <button
-            type="button"
-            onClick={() => void testVoice()}
-            disabled={testState === 'generating' || testState === 'playing'}
-            className="rounded-md bg-green-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-green-500 disabled:opacity-40"
-          >
-            <TextMorph as="span">
-              {testState === 'generating'
-                ? 'Generating...'
-                : testState === 'playing'
-                  ? 'Playing...'
-                  : 'Test voice'}
-            </TextMorph>
-          </button>
+        <div className="flex items-center gap-2 pb-3">
+          <IconTip label={testVoiceLabel}>
+            <Button
+              type="button"
+              size="icon-sm"
+              aria-label={testVoiceLabel}
+              aria-busy={testState === 'generating' || undefined}
+              onClick={() => void testVoice()}
+              disabled={testState === 'generating' || testState === 'playing'}
+              className="bg-green-600 text-white hover:bg-green-500 disabled:opacity-40"
+            >
+              <GlyphSwap
+                glyphKey={
+                  testState === 'generating' || testState === 'playing' ? testState : 'idle'
+                }
+              >
+                {testState === 'generating' ? (
+                  <CircleNotch className="animate-spin" />
+                ) : testState === 'playing' ? (
+                  <SpeakerHigh />
+                ) : (
+                  <Play weight="fill" />
+                )}
+              </GlyphSwap>
+            </Button>
+          </IconTip>
           {testState === 'error' ? (
-            <span className="ml-2 text-[11px] text-red-400">
+            <span className="text-[11px] text-red-400">
               Could not play this voice. Check your audio output and retry.
             </span>
           ) : null}

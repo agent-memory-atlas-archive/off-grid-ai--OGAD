@@ -9,9 +9,12 @@ import {
   Microphone,
   DownloadSimple,
   DesktopTower,
-  Devices
+  Devices,
+  X
 } from '@phosphor-icons/react'
 import { cn } from '@renderer/lib/utils'
+import { Button } from '../ui/button'
+import { IconTip } from '../IconTip'
 import { deviceNoun } from '@renderer/lib/device'
 import { HealthPanel } from './HealthPanel'
 import { formatTransferSpeed } from '@offgrid/sync'
@@ -353,12 +356,17 @@ export function SetupPanel({ onConfigured, hideHealth }: SetupPanelProps): React
                       <ProgressIndicator className="rounded-full bg-green-500" />
                     </ProgressTrack>
                   </Progress>
-                  <button
-                    onClick={cancel}
-                    className="shrink-0 rounded-md border border-neutral-700 px-2 py-0.5 text-[10px] text-neutral-400 transition-colors hover:border-red-500/60 hover:text-red-400"
-                  >
-                    Cancel
-                  </button>
+                  <IconTip label="Cancel">
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label="Cancel"
+                      onClick={cancel}
+                      className="shrink-0 text-neutral-400 hover:text-red-400"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </IconTip>
                 </div>
                 <div className="mt-1 text-[10px] text-neutral-600">
                   {downloadProgress?.determinate ? (

@@ -50,7 +50,19 @@ import { useReplySound } from '../lib/reply-sound'
 import { SettingsSection } from './SettingsSection'
 import { groupConnectors } from '../../../shared/connector-groups'
 import type { SpeechLanguage } from '@offgrid/speech'
-import { CaretRight, Flame, Minus, Plugs, Plus, Snowflake, Wrench, X } from '@phosphor-icons/react'
+import {
+  ArrowCounterClockwise,
+  CaretRight,
+  Flame,
+  Minus,
+  Plugs,
+  Plus,
+  Snowflake,
+  Trash,
+  Wrench,
+  X
+} from '@phosphor-icons/react'
+import { IconTip } from './IconTip'
 import { getSlot, SLOTS } from '@renderer/bootstrap/slotRegistry'
 
 import {
@@ -1043,9 +1055,18 @@ export function SettingsPanel({
               </Row>
             </SettingsSection>
 
-            <Button variant="outline" onClick={resetDefaults} className="mt-2 w-full">
-              Reset to defaults
-            </Button>
+            <div className="mt-2 flex justify-end">
+              <IconTip label="Reset to defaults">
+                <Button
+                  size="icon-sm"
+                  variant="outline"
+                  aria-label="Reset to defaults"
+                  onClick={resetDefaults}
+                >
+                  <ArrowCounterClockwise />
+                </Button>
+              </IconTip>
+            </div>
           </>
         )}
 
@@ -1142,7 +1163,7 @@ export function SettingsPanel({
             {tools.length === 0 ? (
               <p className="text-xs text-neutral-600">No tools.</p>
             ) : (
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col divide-y divide-neutral-800 overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/40">
                 {groupTools(tools).map((group) => {
                   const enabledCount = group.tools.filter((tool) => tool.enabled !== false).length
                   const allEnabled = enabledCount === group.tools.length
@@ -1154,7 +1175,7 @@ export function SettingsPanel({
                     <section
                       key={group.label}
                       aria-labelledby={`tool-group-${groupId}`}
-                      className="overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/40"
+                      className="overflow-hidden"
                     >
                       <div
                         className={`flex items-center justify-between gap-3 px-3 py-2 ${isExpanded ? 'border-b border-neutral-800' : ''}`}
@@ -1178,16 +1199,16 @@ export function SettingsPanel({
                             aria-hidden="true"
                             className={`shrink-0 transition-transform duration-150 ${isExpanded ? 'rotate-90' : ''}`}
                           />
-                          <span>
+                          <span className="flex min-w-0 items-baseline gap-2">
                             <span
                               id={`tool-group-${groupId}`}
                               role="heading"
                               aria-level={3}
-                              className="text-[11px] uppercase tracking-wide text-neutral-400"
+                              className="truncate text-[11px] uppercase tracking-wide text-neutral-400"
                             >
                               {group.label}
                             </span>
-                            <span className="block text-[10px] text-neutral-600">
+                            <span className="shrink-0 text-[10px] text-neutral-600">
                               {enabledCount} of {group.tools.length} on
                             </span>
                           </span>
@@ -1329,7 +1350,7 @@ export function SettingsPanel({
                       group.connectors.filter((c) => c.enabled).length
                     } on`}
                   >
-                    <div className="flex flex-col pb-2">
+                    <div className="flex flex-col divide-y divide-neutral-900 pb-2">
                       <AnimatePresence initial={false}>
                         {group.connectors.map((c) => (
                           <motion.div
@@ -1364,18 +1385,22 @@ export function SettingsPanel({
                                 </label>
                               }
                               actions={
-                                <Button
-                                  size="xs"
-                                  variant="destructive-outline"
-                                  onClick={async () => {
-                                    await (window.api as Partial<typeof window.api>).mcpRemove?.(
-                                      c.id
-                                    )
-                                    refreshConnectors()
-                                  }}
-                                >
-                                  Remove
-                                </Button>
+                                <IconTip label="Remove">
+                                  <Button
+                                    size="icon-xs"
+                                    variant="ghost"
+                                    aria-label="Remove"
+                                    className="text-neutral-500 hover:text-red-400"
+                                    onClick={async () => {
+                                      await (window.api as Partial<typeof window.api>).mcpRemove?.(
+                                        c.id
+                                      )
+                                      refreshConnectors()
+                                    }}
+                                  >
+                                    <Trash />
+                                  </Button>
+                                </IconTip>
                               }
                             />
                           </motion.div>

@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { Broom } from '@phosphor-icons/react'
+import { Broom, CircleNotch } from '@phosphor-icons/react'
 import type { CacheCleanupResultContract } from '../../../../shared/ipc-contracts'
 import { formatStorageBytes } from './storage-format'
-import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { GlyphSwap, IconTip } from '../IconTip'
 import { Button } from '@offgrid/operator-ui/operator/coss/button'
 import { LiveStatus } from '@offgrid/operator-ui/operator/presence'
 
@@ -40,10 +40,21 @@ export function CacheCleanupControl(): React.ReactElement {
           </LiveStatus>
         )}
       </div>
-      <Button size="xs" variant="outline" onClick={clear} disabled={busy} className="shrink-0">
-        <Broom />
-        <TextMorph as="span">{busy ? 'Clearing…' : 'Clear storage'}</TextMorph>
-      </Button>
+      <IconTip label={busy ? 'Clearing…' : 'Clear storage'}>
+        <Button
+          size="icon-xs"
+          variant="outline"
+          aria-label={busy ? 'Clearing…' : 'Clear storage'}
+          aria-busy={busy || undefined}
+          onClick={clear}
+          disabled={busy}
+          className="shrink-0"
+        >
+          <GlyphSwap glyphKey={busy ? 'busy' : 'idle'}>
+            {busy ? <CircleNotch className="animate-spin" /> : <Broom />}
+          </GlyphSwap>
+        </Button>
+      </IconTip>
     </div>
   )
 }

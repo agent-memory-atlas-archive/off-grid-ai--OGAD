@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { persistToggle } from '@renderer/lib/persist-toggle'
+import { ArrowsClockwise, ClockCounterClockwise, DownloadSimple } from '@phosphor-icons/react'
 import { Button } from './ui/button'
+import { IconTip } from './IconTip'
 import { formatTransferSpeed } from '@offgrid/sync'
 import { projectProgress } from '@offgrid/ui'
 import { formatStorageBytes } from './setup/storage-format'
@@ -80,7 +82,7 @@ function PreviousVersionsPanel({
           No compatible previous versions were found.
         </p>
       ) : null}
-      <div className="max-h-52 overflow-y-auto py-1">
+      <div className="max-h-52 divide-y divide-neutral-900 overflow-y-auto">
         <AnimatePresence initial={false}>
           {releases.map((release) => (
             <motion.div
@@ -90,15 +92,21 @@ function PreviousVersionsPanel({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-              className="px-2"
             >
               <ListRow
                 title={`v${release.version}`}
                 description={`${release.channel === 'nightly' ? 'Nightly' : 'Stable'} · ${releaseDate(release.publishedAt)}`}
                 actions={
-                  <Button size="xs" variant="outline" onClick={() => onSelect(release)}>
-                    Use v{release.version}
-                  </Button>
+                  <IconTip label={`Use v${release.version}`}>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label={`Use v${release.version}`}
+                      onClick={() => onSelect(release)}
+                    >
+                      <DownloadSimple />
+                    </Button>
+                  </IconTip>
                 }
               />
             </motion.div>
@@ -339,14 +347,29 @@ export function SoftwareUpdateSection(): React.ReactElement {
         </SettingRow>
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button size="xs" variant="outline" onClick={() => void check()} disabled={checking}>
-          <TextMorph as="span">{checking ? 'Checking...' : 'Check for updates'}</TextMorph>
-        </Button>
-        <Button size="xs" variant="ghost" onClick={() => void toggleHistory()}>
-          <TextMorph as="span">
-            {historyVisible ? 'Hide previous versions' : 'Previous versions'}
-          </TextMorph>
-        </Button>
+        <IconTip label={checking ? 'Checking...' : 'Check for updates'}>
+          <Button
+            size="icon-xs"
+            variant="outline"
+            aria-label={checking ? 'Checking...' : 'Check for updates'}
+            aria-busy={checking || undefined}
+            onClick={() => void check()}
+            disabled={checking}
+          >
+            <ArrowsClockwise className={checking ? 'animate-spin' : undefined} />
+          </Button>
+        </IconTip>
+        <IconTip label={historyVisible ? 'Hide previous versions' : 'Previous versions'}>
+          <Button
+            size="icon-xs"
+            variant={historyVisible ? 'secondary' : 'ghost'}
+            aria-label={historyVisible ? 'Hide previous versions' : 'Previous versions'}
+            aria-expanded={historyVisible}
+            onClick={() => void toggleHistory()}
+          >
+            <ClockCounterClockwise />
+          </Button>
+        </IconTip>
         {version && <span className="text-xs text-neutral-600">Current: v{version}</span>}
       </div>
       {availableVersion ? (

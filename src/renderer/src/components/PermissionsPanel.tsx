@@ -10,7 +10,7 @@ import {
   type StateTone
 } from '@offgrid/operator-ui/operator/presence'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
-import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { IconTip } from './IconTip'
 import { usePermissionController, type PermissionController } from './use-permission-controller'
 
 const ease = [0.16, 1, 0.3, 1] as const
@@ -184,16 +184,19 @@ export function PermissionsPanel({
               ? 'Checking current grants'
               : 'Current access status'}
         </LiveStatus>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => void permissions.check()}
-          disabled={checking}
-        >
-          <ArrowsClockwise className={cn('size-4', checking && 'animate-spin')} />
-          <TextMorph as="span">{checking ? 'Checking' : 'Check permissions again'}</TextMorph>
-        </Button>
+        <IconTip label={checking ? 'Checking' : 'Check permissions again'}>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label={checking ? 'Checking' : 'Check permissions again'}
+            aria-busy={checking || undefined}
+            onClick={() => void permissions.check()}
+            disabled={checking}
+          >
+            <ArrowsClockwise className={cn('size-4', checking && 'animate-spin')} />
+          </Button>
+        </IconTip>
       </div>
     </div>
   )

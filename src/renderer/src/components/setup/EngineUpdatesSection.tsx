@@ -4,7 +4,8 @@ import type { EngineUpdateStatus } from '../../../../shared/engine-updates'
 import { formatStorageBytes } from './storage-format'
 import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
 import { LiveStatus, SettingRow } from '@offgrid/operator-ui/operator/presence'
-import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { ArrowsClockwise } from '@phosphor-icons/react'
+import { IconTip } from '../IconTip'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 
 const ENGINE_NAMES: Record<string, string> = {
@@ -82,15 +83,19 @@ export function EngineUpdatesSection(): React.ReactElement | null {
         </p>
       ) : null}
       {status.enabled ? (
-        <Button
-          size="xs"
-          variant="outline"
-          className="mt-3"
-          disabled={busy}
-          onClick={() => void window.api.engineUpdates.check().then(setStatus)}
-        >
-          <TextMorph as="span">{busy ? 'Checking...' : 'Check for engine updates'}</TextMorph>
-        </Button>
+        <IconTip label={busy ? 'Checking...' : 'Check for engine updates'}>
+          <Button
+            size="icon-xs"
+            variant="outline"
+            className="mt-3"
+            aria-label={busy ? 'Checking...' : 'Check for engine updates'}
+            aria-busy={busy || undefined}
+            disabled={busy}
+            onClick={() => void window.api.engineUpdates.check().then(setStatus)}
+          >
+            <ArrowsClockwise className={busy ? 'animate-spin' : undefined} />
+          </Button>
+        </IconTip>
       ) : null}
     </div>
   )

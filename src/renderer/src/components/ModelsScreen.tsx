@@ -45,6 +45,7 @@ import {
   SelectValue
 } from '@offgrid/operator-ui/operator/coss/select'
 import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { GlyphSwap, IconTip } from './IconTip'
 import {
   IconDownload,
   IconCircleCheck,
@@ -60,7 +61,9 @@ import {
   IconStarFilled,
   IconClock,
   IconLayoutGrid,
-  IconList
+  IconList,
+  IconRefresh,
+  IconSettings
 } from '@tabler/icons-react'
 import { StoragePanel } from './setup/StoragePanel'
 import { SidePanel } from './SidePanel'
@@ -998,13 +1001,57 @@ export function ModelsScreen({
         )}
       </>
     )
-    const actionRow = (
-      <>
-        {comingSoon ? (
-          <span className="text-[10px] text-neutral-500">
-            Available after support is fully tested
+    // The status half of the action row: what is happening to this model right now (coming soon,
+    // downloading, failed). Null when there is nothing to say, so a card stays one line shorter.
+    const statusNode = comingSoon ? (
+      <span className="text-[10px] text-neutral-500">Available after support is fully tested</span>
+    ) : active || isInstalled ? null : downloading ? (
+      // The percent is NOT in the button: a control whose meaning is "Cancel" is the one place
+      // the card's main number should not live.
+      <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[10px] text-neutral-500">
+        <span className="text-neutral-300">
+          {prog.status === 'queued' ? (
+            'Queued'
+          ) : downloadProgress?.determinate ? (
+            <>
+              <AnimatedNumber value={Math.round(downloadProgress.percentage ?? 0)} />%
+            </>
+          ) : (
+            <TextShimmer as="span">Downloading</TextShimmer>
+          )}
+        </span>
+        {downloadProgress && downloadProgress.totalBytes !== undefined ? (
+          <span className="whitespace-nowrap">
+            {formatSize(downloadProgress.currentBytes)} of {formatSize(downloadProgress.totalBytes)}
           </span>
-        ) : active ? (
+        ) : prog.downloadedMB && prog.totalMB ? (
+          <span className="whitespace-nowrap">
+            {formatTransferred(prog.downloadedMB)} of {formatTransferred(prog.totalMB)}
+          </span>
+        ) : null}
+        {downloadProgress?.bytesPerSecond !== undefined ? (
+          <span className="whitespace-nowrap">
+            · {formatTransferSpeed(downloadProgress.bytesPerSecond)}
+          </span>
+        ) : null}
+        {timeRemaining ? <span className="whitespace-nowrap">· {timeRemaining}</span> : null}
+        <span className="min-w-0 truncate">{downloadPartLabel(prog)}</span>
+      </div>
+    ) : prog?.status === 'failed' ? (
+      // A failure is a STATE of the action row, not a banner under it: reason here, one retry
+      // control in the trailing actions.
+      <span
+        className="min-w-0 truncate text-[10px] text-red-400/90"
+        title={prog.error}
+        role="status"
+      >
+        {downloadFailureText(prog.error)}
+      </span>
+    ) : null
+    // The action half: trailing icon controls (the old label is each one's name and tooltip).
+    const actionIcons = (
+      <div className="flex shrink-0 items-center gap-1">
+        {comingSoon ? null : active ? (
           <span className="flex items-center gap-1 text-[11px] text-green-500">
             <IconCircleCheck className="h-3.5 w-3.5 shrink-0" />{' '}
             {/* A task model says the role it plays, and where: several are active at once. */}
@@ -1017,7 +1064,8 @@ export function ModelsScreen({
           <button
             onClick={() => activateModel(m.id)}
             disabled={!!switching}
-            className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:opacity-40"
+            aria-busy={switching === m.id || undefined}
+            className="flex items-center gap-1 rounded border border-neutral-700 px-2 py-0.5 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:opacity-40"
           >
             {switching === m.id ? (
               <>
@@ -1029,111 +1077,82 @@ export function ModelsScreen({
             )}
           </button>
         ) : downloading ? (
-          // Status left, action right, across the full width of the card. Stacked in a column on
-          // the left they left half the card empty and the whole thing read as lopsided; the row
-          // is already justify-between, so the pair simply uses the space that was there.
-          // The percent is NOT in the button: a control whose meaning is "Cancel" is the one place
-          // the card's main number should not live.
-          <>
-            <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[10px] text-neutral-500">
-              <span className="text-neutral-300">
-                {prog.status === 'queued' ? (
-                  'Queued'
-                ) : downloadProgress?.determinate ? (
-                  <>
-                    <AnimatedNumber value={Math.round(downloadProgress.percentage ?? 0)} />%
-                  </>
-                ) : (
-                  <TextShimmer as="span">Downloading</TextShimmer>
-                )}
-              </span>
-              {downloadProgress && downloadProgress.totalBytes !== undefined ? (
-                <span className="whitespace-nowrap">
-                  {formatSize(downloadProgress.currentBytes)} of{' '}
-                  {formatSize(downloadProgress.totalBytes)}
-                </span>
-              ) : prog.downloadedMB && prog.totalMB ? (
-                <span className="whitespace-nowrap">
-                  {formatTransferred(prog.downloadedMB)} of {formatTransferred(prog.totalMB)}
-                </span>
-              ) : null}
-              {downloadProgress?.bytesPerSecond !== undefined ? (
-                <span className="whitespace-nowrap">
-                  · {formatTransferSpeed(downloadProgress.bytesPerSecond)}
-                </span>
-              ) : null}
-              {timeRemaining ? <span className="whitespace-nowrap">· {timeRemaining}</span> : null}
-              <span className="min-w-0 truncate">{downloadPartLabel(prog)}</span>
-            </div>
-            <button
+          <IconTip label="Cancel">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Cancel"
               onClick={() => cancelDownload(m.id)}
-              className="flex shrink-0 items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-400 transition-all duration-150 hover:border-red-500/60 hover:text-red-400 active:scale-95"
+              className="text-neutral-400 hover:text-red-400"
             >
-              {prog.status === 'queued' ? (
-                <IconClock className="h-3 w-3" />
-              ) : (
-                <IconX className="h-3 w-3" />
-              )}
-              Cancel
-            </button>
-          </>
+              <GlyphSwap glyphKey={prog.status === 'queued' ? 'queued' : 'running'}>
+                {prog.status === 'queued' ? (
+                  <IconClock className="h-3.5 w-3.5" />
+                ) : (
+                  <IconX className="h-3.5 w-3.5" />
+                )}
+              </GlyphSwap>
+            </Button>
+          </IconTip>
         ) : prog?.status === 'failed' ? (
-          // A failure is a STATE of the action row, not a banner under it. As its own block it
-          // stacked a second button beneath "Download" and asked you to choose between two ways
-          // of doing the same thing. Reason left, one button right, on the row that was already
-          // there.
-          <>
-            <span
-              className="min-w-0 truncate text-[10px] text-red-400/90"
-              title={prog.error}
-              role="status"
-            >
-              {downloadFailureText(prog.error)}
-            </span>
-            <button
+          <IconTip label="Try again">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Try again"
               onClick={() => retryDownload(m.id)}
-              className="flex shrink-0 items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
+              className="text-neutral-300 hover:text-emerald-500"
             >
-              <IconDownload className="h-3 w-3" /> Try again
-            </button>
-          </>
+              <IconRefresh className="h-3.5 w-3.5" />
+            </Button>
+          </IconTip>
         ) : (
+          <IconTip label={mtpUnavailable ? 'MTP unavailable' : 'Download'}>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label={mtpUnavailable ? 'MTP unavailable' : 'Download'}
+              onClick={() => (isHf || useMtpDownloads ? void chooseVariant(m) : download(m.id))}
+              disabled={mtpUnavailable}
+              className="text-neutral-300 hover:text-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <IconDownload className="h-3.5 w-3.5" />
+            </Button>
+          </IconTip>
+        )}
+        {isInstalled && active && !isRemote && supportsModelSettings(m.kind) && (
+          <IconTip label="Open settings for the active model">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              onClick={() => openModelSettings(m.kind)}
+              aria-label="Open model settings"
+              className="text-neutral-500 hover:text-emerald-500"
+            >
+              <IconSettings className="h-3.5 w-3.5" />
+            </Button>
+          </IconTip>
+        )}
+        {isInstalled && !isRemote && !m.id.startsWith('external:') && (
           <button
-            onClick={() => (isHf || useMtpDownloads ? void chooseVariant(m) : download(m.id))}
-            disabled={mtpUnavailable}
-            className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={() => removeModel(m.id, m.name)}
+            disabled={deleting === m.id || active}
+            title={active ? 'Switch to another model before deleting' : 'Delete from disk'}
+            className="rounded p-1 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
           >
-            <IconDownload className="h-3 w-3" /> {mtpUnavailable ? 'MTP unavailable' : 'Download'}
+            {deleting === m.id ? (
+              <IconLoader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <IconTrash className="h-3 w-3" />
+            )}
           </button>
         )}
-        {isInstalled && (
-          <div className="flex shrink-0 items-center gap-1">
-            {active && !isRemote && supportsModelSettings(m.kind) && (
-              <button
-                onClick={() => openModelSettings(m.kind)}
-                aria-label="Open model settings"
-                title="Open settings for the active model"
-                className="rounded border border-neutral-800 px-1.5 py-1 text-[9px] text-neutral-500 transition-all duration-150 hover:border-green-500/60 hover:text-emerald-500 active:scale-95"
-              >
-                Settings
-              </button>
-            )}
-            {!isRemote && !m.id.startsWith('external:') && (
-              <button
-                onClick={() => removeModel(m.id, m.name)}
-                disabled={deleting === m.id || active}
-                title={active ? 'Switch to another model before deleting' : 'Delete from disk'}
-                className="rounded p-1 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
-              >
-                {deleting === m.id ? (
-                  <IconLoader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <IconTrash className="h-3 w-3" />
-                )}
-              </button>
-            )}
-          </div>
-        )}
+      </div>
+    )
+    const actionRow = (
+      <>
+        {statusNode ?? <span />}
+        {actionIcons}
       </>
     )
     const repairActions = (
@@ -1235,20 +1254,20 @@ export function ModelsScreen({
         className="group relative"
       >
         <Card
-          className={`h-full gap-2 p-3 transition-shadow duration-300 ${active ? ACTIVE_RING : ''}`}
+          className={`h-full gap-1.5 p-2.5 transition-shadow duration-300 ${active ? ACTIVE_RING : ''}`}
         >
-          {/* Title row */}
+          {/* Title row: name and meta on the left, the actions trailing on the same line. */}
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
               {nameRow}
               {metaLine}
             </div>
+            {actionIcons}
             {detailsButton}
           </div>
           {badgeRow}
           {availabilityNote}
-          {/* Action row */}
-          <div className="mt-auto flex items-center justify-between gap-2 pt-1">{actionRow}</div>
+          {statusNode}
           {repairActions}
           {progressBar}
         </Card>
@@ -1316,18 +1335,25 @@ export function ModelsScreen({
         title="Models"
         description={`Download, switch, and manage the models that run on this ${deviceNoun()}.`}
         actions={
-          <button
-            onClick={importModel}
-            disabled={importing}
-            className="flex items-center gap-1.5 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-400 transition-all duration-150 hover:border-green-500/60 hover:text-emerald-500 active:scale-95 disabled:opacity-50"
-          >
-            {importing ? (
-              <IconLoader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <IconUpload className="h-3 w-3" />
-            )}
-            <TextMorph as="span">{importing ? 'Importing…' : 'Import .gguf'}</TextMorph>
-          </button>
+          <IconTip label={importing ? 'Importing…' : 'Import .gguf'}>
+            <Button
+              size="icon-sm"
+              variant="outline"
+              aria-label={importing ? 'Importing…' : 'Import .gguf'}
+              aria-busy={importing || undefined}
+              onClick={importModel}
+              disabled={importing}
+              className="text-neutral-400 hover:border-green-500/60 hover:text-emerald-500 disabled:opacity-50"
+            >
+              <GlyphSwap glyphKey={importing ? 'busy' : 'idle'}>
+                {importing ? (
+                  <IconLoader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <IconUpload className="h-3.5 w-3.5" />
+                )}
+              </GlyphSwap>
+            </Button>
+          </IconTip>
         }
       />
 
@@ -1460,15 +1486,20 @@ export function ModelsScreen({
               />
             )}
             {hasActiveFilters(filterState) && (
-              <button
-                onClick={() => {
-                  setFilterState(initialFilterState)
-                  setSizeBucket(null)
-                }}
-                className="rounded border border-neutral-800 px-2 py-0.5 text-[9px] text-neutral-500 transition-all duration-150 hover:border-green-500/60 hover:text-emerald-500 active:scale-95"
-              >
-                Clear
-              </button>
+              <IconTip label="Clear">
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="Clear"
+                  onClick={() => {
+                    setFilterState(initialFilterState)
+                    setSizeBucket(null)
+                  }}
+                  className="text-neutral-500 hover:text-emerald-500"
+                >
+                  <IconX className="h-3 w-3" />
+                </Button>
+              </IconTip>
             )}
             <span className="ml-auto text-[9px] text-muted-foreground">
               <AnimatedNumber value={searchingMode ? displayed.length : displayedCatalog.length} />{' '}
@@ -1541,12 +1572,17 @@ export function ModelsScreen({
                 ))}
               </AnimatedBackground>
               {selectedTags.length > 0 && (
-                <button
-                  onClick={() => setSelectedTags([])}
-                  className="ml-2 text-[9px] text-neutral-600 transition-colors hover:text-neutral-400"
-                >
-                  clear
-                </button>
+                <IconTip label="clear">
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label="clear"
+                    onClick={() => setSelectedTags([])}
+                    className="ml-1 text-neutral-600 hover:text-neutral-400"
+                  >
+                    <IconX className="h-3 w-3" />
+                  </Button>
+                </IconTip>
               )}
             </div>
           )}
@@ -1778,12 +1814,17 @@ export function ModelsScreen({
                     </div>
                     <div className="mt-0.5 truncate text-[10px] text-neutral-600">{m.id}</div>
                   </div>
-                  <button
-                    onClick={closeDetail}
-                    className="rounded border border-neutral-800 px-2.5 py-1 text-[10px] text-neutral-400 transition-all duration-150 hover:border-neutral-600 hover:text-white active:scale-95"
-                  >
-                    Close
-                  </button>
+                  <IconTip label="Close">
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label="Close"
+                      onClick={closeDetail}
+                      className="text-neutral-400 hover:text-white"
+                    >
+                      <IconX className="h-3.5 w-3.5" />
+                    </Button>
+                  </IconTip>
                 </div>
 
                 <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -1953,14 +1994,18 @@ export function ModelsScreen({
                                       </p>
                                     )}
                                   </div>
-                                  <button
-                                    onClick={() => download(m.id, file.fileName)}
-                                    disabled={comingSoon || !!downloading || !!detailFilesError}
-                                    aria-label={`Download ${file.fileName}`}
-                                    className="shrink-0 rounded border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 hover:border-green-500 hover:text-green-500 disabled:cursor-not-allowed disabled:opacity-40"
-                                  >
-                                    Download
-                                  </button>
+                                  <IconTip label="Download">
+                                    <Button
+                                      size="icon-xs"
+                                      variant="ghost"
+                                      onClick={() => download(m.id, file.fileName)}
+                                      disabled={comingSoon || !!downloading || !!detailFilesError}
+                                      aria-label={`Download ${file.fileName}`}
+                                      className="shrink-0 text-neutral-300 hover:text-green-500 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      <IconDownload className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </IconTip>
                                 </div>
                               )
                             })}
@@ -1991,15 +2036,20 @@ export function ModelsScreen({
                         Use this model
                       </button>
                       {!m.id.startsWith('external:') && (
-                        <button
-                          onClick={() => {
-                            void removeModel(m.id, m.name)
-                            closeDetail()
-                          }}
-                          className="rounded border border-neutral-800 px-3 py-1.5 text-xs text-neutral-500 transition-all duration-150 hover:border-red-500/60 hover:text-red-400 active:scale-95"
-                        >
-                          Delete
-                        </button>
+                        <IconTip label="Delete">
+                          <Button
+                            size="icon-sm"
+                            variant="outline"
+                            aria-label="Delete"
+                            onClick={() => {
+                              void removeModel(m.id, m.name)
+                              closeDetail()
+                            }}
+                            className="border-neutral-800 text-neutral-500 hover:border-red-500/60 hover:text-red-400"
+                          >
+                            <IconTrash className="h-3.5 w-3.5" />
+                          </Button>
+                        </IconTip>
                       )}
                     </>
                   ) : downloading ? (

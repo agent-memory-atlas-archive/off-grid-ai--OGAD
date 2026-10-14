@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ArrowsClockwise, Check, Copy, Prohibit, Swap, X } from '@phosphor-icons/react'
 import { Button } from '@offgrid/operator-ui/operator/coss/button'
 import { Field, FieldDescription, FieldError } from '@offgrid/operator-ui/operator/coss/field'
 import { Input } from '@offgrid/operator-ui/operator/coss/input'
@@ -17,6 +18,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { SettingsSelect } from './SettingsSelect'
+import { GlyphSwap, IconTip } from './IconTip'
 import { ListRow } from '@offgrid/operator-ui/operator/list-row'
 import { LiveStatus, StatePill } from '@offgrid/operator-ui/operator/presence'
 
@@ -186,21 +188,33 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
             autoComplete="off"
           />
           <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                void run(async () => {
-                  await navigator.clipboard.writeText(createdKey)
-                  setNotice('Key copied.')
-                })
-              }
-            >
-              Copy key
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setCreatedKey('')}>
-              Done
-            </Button>
+            <IconTip label="Copy key">
+              <Button
+                size="icon-sm"
+                variant="outline"
+                aria-label="Copy key"
+                onClick={() =>
+                  void run(async () => {
+                    await navigator.clipboard.writeText(createdKey)
+                    setNotice('Key copied.')
+                  })
+                }
+              >
+                <GlyphSwap glyphKey={notice === 'Key copied.' ? 'copied' : 'copy'}>
+                  {notice === 'Key copied.' ? <Check className="text-emerald-400" /> : <Copy />}
+                </GlyphSwap>
+              </Button>
+            </IconTip>
+            <IconTip label="Done">
+              <Button
+                size="icon-sm"
+                variant="outline"
+                aria-label="Done"
+                onClick={() => setCreatedKey('')}
+              >
+                <X />
+              </Button>
+            </IconTip>
           </div>
         </section>
       )}
@@ -260,7 +274,7 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
       {!settings.keys.length && (
         <p className="text-neutral-500">No API keys. Create a separate key for each client.</p>
       )}
-      <ul className="space-y-1" aria-label="API keys">
+      <ul className="divide-y divide-neutral-900" aria-label="API keys">
         <AnimatePresence initial={false}>
         {settings.keys.map((key) => {
           const status =
@@ -293,24 +307,33 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
                 actions={
                   key.revokedAt === null ? (
                     <>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={busy || !!createdKey}
-                        onClick={() =>
-                          setConfirm({ action: 'replace', id: key.id, name: key.name })
-                        }
-                      >
-                        Replace {key.name}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={busy}
-                        onClick={() => setConfirm({ action: 'revoke', id: key.id, name: key.name })}
-                      >
-                        Revoke {key.name}
-                      </Button>
+                      <IconTip label={`Replace ${key.name}`}>
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label={`Replace ${key.name}`}
+                          disabled={busy || !!createdKey}
+                          onClick={() =>
+                            setConfirm({ action: 'replace', id: key.id, name: key.name })
+                          }
+                        >
+                          <Swap />
+                        </Button>
+                      </IconTip>
+                      <IconTip label={`Revoke ${key.name}`}>
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label={`Revoke ${key.name}`}
+                          className="hover:text-red-400"
+                          disabled={busy}
+                          onClick={() =>
+                            setConfirm({ action: 'revoke', id: key.id, name: key.name })
+                          }
+                        >
+                          <Prohibit />
+                        </Button>
+                      </IconTip>
                     </>
                   ) : undefined
                 }
@@ -320,18 +343,21 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
         })}
         </AnimatePresence>
       </ul>
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={busy}
-        onClick={() =>
-          void run(async () => {
-            setSettings(await window.api.gatewayApiKeys())
-          })
-        }
-      >
-        Refresh status
-      </Button>
+      <IconTip label="Refresh status">
+        <Button
+          size="icon-sm"
+          variant="outline"
+          aria-label="Refresh status"
+          disabled={busy}
+          onClick={() =>
+            void run(async () => {
+              setSettings(await window.api.gatewayApiKeys())
+            })
+          }
+        >
+          <ArrowsClockwise />
+        </Button>
+      </IconTip>
     </div>
   )
 }

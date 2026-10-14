@@ -6,6 +6,9 @@ import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
 import { Empty, EmptyContent, EmptyDescription } from '@offgrid/operator-ui/operator/coss/empty'
 import { SettingsSelect } from './SettingsSelect'
 import { ListRow } from '@offgrid/operator-ui/operator/list-row'
+import { Plus, Trash, X } from '@phosphor-icons/react'
+import { Button } from './ui/button'
+import { IconTip } from './IconTip'
 
 // Right-side panel to view, create, edit, and delete Skills — reusable
 // instruction packs invoked from chat with /skill-name. Mirrors the ArtifactCanvas
@@ -175,19 +178,29 @@ export function SkillsPanel({
         </div>
         <div className="flex items-center gap-2">
           {!draft && (
-            <button
-              onClick={() => setDraft({ ...BLANK })}
-              className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 transition-colors hover:border-green-500 hover:text-green-500"
-            >
-              New skill
-            </button>
+            <IconTip label="New skill">
+              <Button
+                size="icon-sm"
+                variant="outline"
+                aria-label="New skill"
+                onClick={() => setDraft({ ...BLANK })}
+                className="border-neutral-700 text-neutral-300 hover:border-green-500 hover:text-green-500"
+              >
+                <Plus />
+              </Button>
+            </IconTip>
           )}
-          <button
-            onClick={onClose}
-            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 transition-colors hover:text-white"
-          >
-            Close
-          </button>
+          <IconTip label="Close">
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Close"
+              onClick={onClose}
+              className="text-neutral-300 hover:text-white"
+            >
+              <X />
+            </Button>
+          </IconTip>
         </div>
       </div>
 
@@ -324,13 +337,18 @@ export function SkillsPanel({
                 </button>
               </div>
               {draft.originalName && (
-                <button
-                  disabled={busy}
-                  onClick={remove}
-                  className="rounded-md border border-red-500/40 px-3 py-1.5 text-xs text-red-400 transition-colors hover:bg-red-500/10"
-                >
-                  Delete
-                </button>
+                <IconTip label="Delete">
+                  <Button
+                    size="icon-sm"
+                    variant="outline"
+                    aria-label="Delete"
+                    disabled={busy}
+                    onClick={remove}
+                    className="border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                  >
+                    <Trash />
+                  </Button>
+                </IconTip>
               )}
             </div>
           </div>
@@ -347,7 +365,7 @@ export function SkillsPanel({
             </EmptyContent>
           </Empty>
         ) : (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col divide-y divide-neutral-900">
             <AnimatePresence initial={false}>
               {skills.map((s) => (
                 <motion.div

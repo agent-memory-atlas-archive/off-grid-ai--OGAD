@@ -1229,7 +1229,6 @@ function AppContent(): React.JSX.Element {
                   )}
                 >
                   <IconArrowLeft className="h-4 w-4 shrink-0" />
-                  {sidebarOpen && <span className="text-xs font-medium">Back</span>}
                 </button>
                 {sidebarOpen && (
                   <button

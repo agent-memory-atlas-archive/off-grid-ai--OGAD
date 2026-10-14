@@ -6,8 +6,16 @@ import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-nu
 import { CONNECTIONS_CHANGED_EVENT } from './useQuickConnection'
 import { getRendererIsPro } from '@renderer/bootstrap/entitlementRegistry'
 import { useEffect, useState, type JSX } from 'react'
-import { CheckCircle, SlidersHorizontal, X } from '@phosphor-icons/react'
+import {
+  ArrowClockwise,
+  CheckCircle,
+  CircleNotch,
+  SlidersHorizontal,
+  Trash,
+  X
+} from '@phosphor-icons/react'
 import { Button } from './ui/button'
+import { GlyphSwap, IconTip } from './IconTip'
 import { Item, ItemGroup, ItemContent, ItemTitle, ItemDescription, ItemActions } from './ui/item'
 import notionLogo from '@/assets/logos/notion.svg'
 import jiraLogo from '@/assets/logos/jira.svg'
@@ -74,9 +82,16 @@ export function QuickConnections({
       {connection.errors.load && (
         <div role="alert" className="flex items-center gap-3 text-xs">
           <p>{connection.errors.load}</p>
-          <Button size="sm" variant="outline" onClick={() => void connection.reload()}>
-            Retry
-          </Button>
+          <IconTip label="Retry">
+            <Button
+              size="icon-sm"
+              variant="outline"
+              aria-label="Retry"
+              onClick={() => void connection.reload()}
+            >
+              <ArrowClockwise />
+            </Button>
+          </IconTip>
         </div>
       )}
       <AnimatePresence>
@@ -94,57 +109,67 @@ export function QuickConnections({
               </Button>
             </header>
             <div className="space-y-3 px-6 py-5">
-              <AnimatePresence initial={false}>
-                {connection.items
-                  .filter((account) => account.url === manageUrl)
-                  .map((account) => (
-                    <motion.div
-                      key={account.id}
-                      layout
-                      initial={{ opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-                    >
-                      <Item variant="outline">
-                        <ItemContent>
-                          <ItemTitle>{account.name}</ItemTitle>
-                          <ItemDescription>Connection {account.id}</ItemDescription>
-                        </ItemContent>
-                        <ItemActions>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            disabled={removing != null}
-                            aria-label={`Remove ${account.name} connection ${account.id}`}
-                            onClick={() => {
-                              setRemoving(account.id)
-                              setRemoveError('')
-                              void window.api
-                                .mcpRemove(account.id)
-                                .then(() => connection.reload())
-                                .then(() =>
-                                  window.dispatchEvent(new Event(CONNECTIONS_CHANGED_EVENT))
-                                )
-                                .catch((cause) =>
-                                  setRemoveError(
-                                    cause instanceof Error
-                                      ? cause.message
-                                      : 'Could not remove this connection.'
-                                  )
-                                )
-                                .finally(() => setRemoving(null))
-                            }}
-                          >
-                            <TextMorph as="span">
-                              {removing === account.id ? 'Removing' : 'Remove'}
-                            </TextMorph>
-                          </Button>
-                        </ItemActions>
-                      </Item>
-                    </motion.div>
-                  ))}
-              </AnimatePresence>
+              <div className="divide-y divide-neutral-800 overflow-hidden rounded-md border border-neutral-800">
+                <AnimatePresence initial={false}>
+                  {connection.items
+                    .filter((account) => account.url === manageUrl)
+                    .map((account) => (
+                      <motion.div
+                        key={account.id}
+                        layout
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                      >
+                        <Item size="sm" className="rounded-none border-0">
+                          <ItemContent>
+                            <ItemTitle>{account.name}</ItemTitle>
+                            <ItemDescription>Connection {account.id}</ItemDescription>
+                          </ItemContent>
+                          <ItemActions>
+                            <IconTip label={removing === account.id ? 'Removing' : 'Remove'}>
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                disabled={removing != null}
+                                aria-busy={removing === account.id || undefined}
+                                aria-label={`Remove ${account.name} connection ${account.id}`}
+                                className="text-neutral-400 hover:text-red-400"
+                                onClick={() => {
+                                  setRemoving(account.id)
+                                  setRemoveError('')
+                                  void window.api
+                                    .mcpRemove(account.id)
+                                    .then(() => connection.reload())
+                                    .then(() =>
+                                      window.dispatchEvent(new Event(CONNECTIONS_CHANGED_EVENT))
+                                    )
+                                    .catch((cause) =>
+                                      setRemoveError(
+                                        cause instanceof Error
+                                          ? cause.message
+                                          : 'Could not remove this connection.'
+                                      )
+                                    )
+                                    .finally(() => setRemoving(null))
+                                }}
+                              >
+                                <GlyphSwap glyphKey={removing === account.id ? 'busy' : 'idle'}>
+                                  {removing === account.id ? (
+                                    <CircleNotch className="animate-spin" />
+                                  ) : (
+                                    <Trash />
+                                  )}
+                                </GlyphSwap>
+                              </Button>
+                            </IconTip>
+                          </ItemActions>
+                        </Item>
+                      </motion.div>
+                    ))}
+                </AnimatePresence>
+              </div>
               {removeError && (
                 <p role="alert" className="connection-error">
                   {removeError}
@@ -233,15 +258,17 @@ export function QuickConnections({
                         </TextMorph>
                       </Button>
                       {connected && (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          disabled={pending}
-                          aria-label={`${entry.name} accounts`}
-                          onClick={() => setManageUrl(entry.url)}
-                        >
-                          <SlidersHorizontal aria-hidden="true" className="size-4" />
-                        </Button>
+                        <IconTip label={`${entry.name} accounts`}>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            disabled={pending}
+                            aria-label={`${entry.name} accounts`}
+                            onClick={() => setManageUrl(entry.url)}
+                          >
+                            <SlidersHorizontal aria-hidden="true" className="size-4" />
+                          </Button>
+                        </IconTip>
                       )}
                       {authorizing && (
                         <Button

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
-import { Trash, Warning } from '@phosphor-icons/react'
+import { CircleNotch, Trash, Warning } from '@phosphor-icons/react'
+import { Button } from '../ui/button'
+import { GlyphSwap, IconTip } from '../IconTip'
 import { Section } from '@offgrid/operator-ui/operator/experience'
 
 interface DataCategory {
@@ -130,17 +132,25 @@ export function DataPrivacyPanel(): React.ReactElement {
                       {r.label}
                     </button>
                   ))}
-                  <button
-                    onClick={() => clearOne(c)}
-                    disabled={busy === c.id || (!c.count && !c.bytes)}
-                    aria-label={`Delete all ${c.label}`}
-                    className="flex items-center gap-1.5 rounded-md border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-colors hover:border-red-500/60 hover:text-red-400 disabled:opacity-30"
-                  >
-                    <Trash className="h-3 w-3" />{' '}
-                    <TextMorph as="span">
-                      {busy === c.id ? 'Clearing…' : RETENTION[c.id] ? 'All' : 'Clear'}
-                    </TextMorph>
-                  </button>
+                  <IconTip label={busy === c.id ? 'Clearing…' : `Delete all ${c.label}`}>
+                    <Button
+                      size="icon-xs"
+                      variant="outline"
+                      onClick={() => clearOne(c)}
+                      disabled={busy === c.id || (!c.count && !c.bytes)}
+                      aria-label={`Delete all ${c.label}`}
+                      aria-busy={busy === c.id || undefined}
+                      className="border-neutral-700 text-neutral-300 hover:border-red-500/60 hover:text-red-400 disabled:opacity-30"
+                    >
+                      <GlyphSwap glyphKey={busy === c.id ? 'busy' : 'idle'}>
+                        {busy === c.id ? (
+                          <CircleNotch className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Trash className="h-3 w-3" />
+                        )}
+                      </GlyphSwap>
+                    </Button>
+                  </IconTip>
                 </div>
               </div>
             )

@@ -21,6 +21,9 @@ import { LiveStatus } from '@offgrid/operator-ui/operator/presence'
 import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
 import { ListRow } from '@offgrid/operator-ui/operator/list-row'
 import { Section } from '@offgrid/operator-ui/operator/experience'
+import { PencilSimple, Plus, Trash } from '@phosphor-icons/react'
+import { Button } from './ui/button'
+import { IconTip } from './IconTip'
 
 const EMPTY_SETTINGS: RemoteVisionServerSettings = {
   provider: 'local',
@@ -353,17 +356,22 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
           label="Saved servers"
           description="Save model servers once, then switch between them when you need one."
           actions={
-            <button
-              type="button"
-              onClick={addServer}
-              className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:border-neutral-600 hover:text-white"
-            >
-              Add server
-            </button>
+            <IconTip label="Add server">
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="outline"
+                aria-label="Add server"
+                onClick={addServer}
+                className="border-neutral-700 text-neutral-300 hover:border-neutral-600 hover:text-white"
+              >
+                <Plus />
+              </Button>
+            </IconTip>
           }
         >
           {settings.servers.length > 0 ? (
-            <div className="space-y-1">
+            <div className="divide-y divide-neutral-900">
               <AnimatePresence initial={false}>
               {settings.servers.map((server) => (
                 <motion.div
@@ -388,22 +396,32 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
                     }
                     actions={
                       <>
-                        <button
-                          type="button"
-                          onClick={() => void changeModel(server)}
-                          disabled={busy}
-                          className="text-[10px] text-neutral-400 hover:text-white disabled:opacity-40"
-                        >
-                          Change model
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void remove(server.id)}
-                          disabled={busy}
-                          className="text-[10px] text-neutral-600 hover:text-red-400 disabled:opacity-40"
-                        >
-                          Remove
-                        </button>
+                        <IconTip label="Change model">
+                          <Button
+                            type="button"
+                            size="icon-xs"
+                            variant="ghost"
+                            aria-label="Change model"
+                            onClick={() => void changeModel(server)}
+                            disabled={busy}
+                            className="text-neutral-400 hover:text-white disabled:opacity-40"
+                          >
+                            <PencilSimple />
+                          </Button>
+                        </IconTip>
+                        <IconTip label="Remove">
+                          <Button
+                            type="button"
+                            size="icon-xs"
+                            variant="ghost"
+                            aria-label="Remove"
+                            onClick={() => void remove(server.id)}
+                            disabled={busy}
+                            className="text-neutral-500 hover:text-red-400 disabled:opacity-40"
+                          >
+                            <Trash />
+                          </Button>
+                        </IconTip>
                       </>
                     }
                   />
