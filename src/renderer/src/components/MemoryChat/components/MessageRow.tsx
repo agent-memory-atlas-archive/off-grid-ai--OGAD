@@ -281,6 +281,7 @@ function VoiceMessageRow({
           tools={message.toolCalls}
           thinking={thinking}
           thinkingHasContent={Boolean(message.reasoning?.trim())}
+        thinkingText={message.reasoning ?? ''}
           footer={
             workFooter ??
             (message.streaming && hasLiveStreamActivity(message) ? <LoadingDots /> : undefined)
@@ -332,6 +333,7 @@ function VoiceMessageRow({
           tools={message.toolCalls}
           thinking={thinking}
           thinkingHasContent={Boolean(message.reasoning?.trim())}
+        thinkingText={message.reasoning ?? ''}
           footer={
             workFooter ??
             (message.streaming && hasLiveStreamActivity(message) ? <LoadingDots /> : undefined)
@@ -559,6 +561,7 @@ function StandardMessageRow({
         tools={message.toolCalls}
         thinking={thinking}
         thinkingHasContent={Boolean(message.reasoning?.trim())}
+        thinkingText={message.reasoning ?? ''}
         footer={
           workFooter ??
           (message.streaming && hasLiveStreamActivity(message) ? (

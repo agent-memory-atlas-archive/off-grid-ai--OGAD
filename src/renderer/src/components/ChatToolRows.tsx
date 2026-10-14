@@ -10,7 +10,6 @@ import {
   type ToolTraceEntry
 } from '@offgrid/operator-ui/operator/workflows/tool-timeline'
 import { ChatMarkdown } from './ChatMarkdown'
-import { ChatThinkingBlock } from './ChatThinkingBlock'
 import type { AssistantTimelineEntry } from '@renderer/lib/message-persistence'
 import { type TaskSession, useTaskSessionsForReferences } from '@renderer/lib/task-session-store'
 import {
@@ -33,6 +32,9 @@ interface ChatToolRowsProps {
   thinking?: ReactNode
   /** Whether the thinking row has content beyond a waiting indicator. */
   thinkingHasContent?: boolean
+  /** The raw reasoning. When given, the timeline draws its own aligned thinking row from it
+   * instead of the host block, so the checkpoint, title and text share one edge. */
+  thinkingText?: string
   /** Live status shown below, but outside, the ordered work timeline. */
   footer?: ReactNode
   timeline?: readonly AssistantTimelineEntry[]
@@ -256,6 +258,7 @@ export function ChatToolRows({
   tools,
   thinking,
   thinkingHasContent = Boolean(thinking),
+  thinkingText,
   footer,
   timeline,
   thinkingLive = false,
@@ -340,7 +343,23 @@ export function ChatToolRows({
   const pushThinking = (id: string, render: ReactNode, streaming: boolean): void => {
     entries.push({ id, kind: 'thinking', text: null, render, streaming })
   }
+  // The timeline's own thinking row: title shimmers "Thinking" while live, then the reasoning
+  // renders through OGAD's markdown, level with its checkpoint.
+  const pushReasoning = (id: string, text: string, streaming: boolean): void => {
+    entries.push({
+      id,
+      kind: 'thinking',
+      text: text.trim() ? <ChatMarkdown content={text} /> : null,
+      streaming
+    })
+  }
   const liveThinking = (): void => {
+    if (thinkingText !== undefined) {
+      if (thinkingText.trim() || workIsLive) {
+        pushReasoning('thinking:live', thinkingText, workIsLive && !thinkingHasContent)
+      }
+      return
+    }
     if (thinking) pushThinking('thinking:live', thinking, workIsLive && !thinkingHasContent)
   }
 
@@ -348,11 +367,7 @@ export function ChatToolRows({
   ordered.forEach((entry, orderIndex) => {
     if (entry.kind === 'thinking') {
       const streaming = thinkingLive && orderIndex === ordered.length - 1
-      pushThinking(
-        `thinking:${orderIndex}`,
-        <ChatThinkingBlock content={entry.text} live={streaming} className="max-w-full" />,
-        streaming
-      )
+      pushReasoning(`thinking:${orderIndex}`, entry.text, streaming)
       return
     }
     const projectedTool = projected[entry.toolIndex - toolOffset]
@@ -434,7 +449,7 @@ export function ChatToolRows({
           onExpandedChange={setExpanded}
           label={thinking || hasOrderedThinking ? 'Thinking and tool calls' : 'Tool calls'}
           stateLabels={STATE_LABELS}
-          showCount
+          showCount={entries.length > 1}
         />
       </div>
       {footer ? (
