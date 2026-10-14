@@ -425,9 +425,9 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="h-full overflow-y-auto px-8 pb-40 pt-8"
+            className="h-full overflow-y-auto px-12 pb-40 pt-10"
           >
-            <div className="mx-auto w-full max-w-7xl">
+            <div className="w-full">
               <div className="mb-10 flex items-center justify-between border-b border-neutral-800 pb-4">
                 <div className="flex items-center gap-3">
                   <img src={logo} alt="" className="size-6 object-contain" />
@@ -502,14 +502,14 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
       <div
         className={
           currentStep === 4
-            ? 'fixed bottom-0 left-0 right-0 z-50 border-t border-neutral-800 bg-neutral-950 px-8 py-6'
+            ? 'fixed bottom-0 left-0 right-0 z-50 border-t border-neutral-800 bg-neutral-950/80 px-12 py-5 backdrop-blur-xl'
             : 'fixed bottom-12 left-0 right-0 z-50 flex flex-col items-center gap-6'
         }
       >
         <div
           className={
             currentStep === 4
-              ? 'mx-auto flex max-w-7xl items-center justify-between'
+              ? 'flex w-full items-center justify-between'
               : 'flex flex-col items-center gap-6'
           }
         >
