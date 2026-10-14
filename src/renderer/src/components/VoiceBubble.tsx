@@ -807,9 +807,11 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
     try {
       const voice = audioUrl ? undefined : await readVoice?.().catch(() => undefined)
       if (status === 'paused' && audio && (audioUrl || srcRef.current?.voice === voice)) {
-        pendingStartRef.current = 0
+        const pendingStart = pendingStartRef.current
         claimVoicePlayback(messageId)
         await audio.play()
+        // Cleared only once playback starts, and only if no newer seek replaced it.
+        if (pendingStartRef.current === pendingStart) pendingStartRef.current = 0
         setStatus('playing')
         return
       }
@@ -827,7 +829,6 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
       }
       // Read after synthesis: a seek made while the clip was being prepared still counts.
       const startAt = pendingStartRef.current
-      pendingStartRef.current = 0
       setCurrentTime(startAt)
       const audioEl = new Audio(src)
       audioRef.current = audioEl
@@ -836,6 +837,7 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
       if (startAt > 0) audioEl.currentTime = startAt
       claimVoicePlayback(messageId)
       await audioEl.play()
+      if (pendingStartRef.current === startAt) pendingStartRef.current = 0
       setStatus('playing')
     } catch (e) {
       console.error('[voice] playback failed', e)
