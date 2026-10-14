@@ -43,10 +43,29 @@ function ensureIndexTable(): void {
   getDB().exec('CREATE TABLE IF NOT EXISTS vec_indexed (key TEXT PRIMARY KEY)')
 }
 
+// The full seven-source count scans every capture table, so the backfill loop does not run it
+// after every batch. It keeps an estimate that each batch decrements by the keys it newly
+// marked, and replaces the estimate with an exact count when it reaches zero (to confirm the
+// backlog is really empty) or when it is older than PENDING_RECOUNT_MS (to notice new items).
+// An empty pending scan across all seven sources is an exact zero on its own.
+const PENDING_RECOUNT_MS = 30_000
+let pendingEstimate: { count: number; countedAt: number } | undefined
+
 function pendingCount(): number {
   ensureIndexTable()
   const row = getDB().prepare(PENDING_COUNT_SQL).get() as { c: number }
+  pendingEstimate = { count: row.c, countedAt: Date.now() }
   return row.c
+}
+
+function remainingAfterBatch(marked: number): number {
+  if (!pendingEstimate) return pendingCount()
+  const count = Math.max(0, pendingEstimate.count - marked)
+  if (count === 0 || Date.now() - pendingEstimate.countedAt >= PENDING_RECOUNT_MS) {
+    return pendingCount()
+  }
+  pendingEstimate = { count, countedAt: pendingEstimate.countedAt }
+  return count
 }
 
 function pendingRows(limit: number): PendingRow[] {
@@ -63,7 +82,10 @@ async function indexBatch(limit = 48): Promise<{ indexed: number; remaining: num
   ensureIndexTable()
   const db = getDB()
   const rows = pendingRows(limit)
-  if (!rows.length) return { indexed: 0, remaining: 0 }
+  if (!rows.length) {
+    pendingEstimate = { count: 0, countedAt: Date.now() }
+    return { indexed: 0, remaining: 0 }
+  }
 
   const chunks: VecChunk[] = []
   for (const r of rows) {
@@ -87,8 +109,9 @@ async function indexBatch(limit = 48): Promise<{ indexed: number; remaining: num
   await addChunks(chunks)
 
   const mark = db.prepare('INSERT OR IGNORE INTO vec_indexed (key) VALUES (?)')
-  db.transaction(() => rows.forEach((r) => mark.run(r.key)))()
-  return { indexed: chunks.length, remaining: pendingCount() }
+  // Only keys inserted here leave the backlog; a key another writer marked meanwhile is ignored.
+  const marked = db.transaction(() => rows.reduce((sum, r) => sum + mark.run(r.key).changes, 0))()
+  return { indexed: chunks.length, remaining: remainingAfterBatch(marked) }
 }
 
 let backfilling = false
@@ -98,6 +121,8 @@ export async function runBackfill(
 ): Promise<void> {
   if (backfilling) return
   backfilling = true
+  // Each run starts from an exact count, so items added since the last run are included.
+  pendingEstimate = undefined
   try {
     let done = 0
     for (;;) {

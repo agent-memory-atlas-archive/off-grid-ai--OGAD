@@ -23,15 +23,32 @@ let storageError: string | undefined
 const root = (): string => path.join(dataDir(), 'ai-request-media')
 const validId = (id: string): boolean => /^[a-f0-9-]{36}$/.test(id)
 
+// Retention runs as set-based DELETEs, not after every save. It is due at startup, once
+// RETENTION_INTERVAL_MS after the last pass when anything was saved since, or sooner when the
+// bytes or rows saved since the last pass cross a threshold. The limits themselves are unchanged.
+const RETENTION_INTERVAL_MS = 60_000
+const RETENTION_PENDING_BYTES = 16 * 1024 * 1024
+const RETENTION_PENDING_ROWS = 100
+let lastRetentionAt = 0
+let bytesSinceRetention = 0
+let rowsSinceRetention = 0
+let retentionRequested = false
+let retentionTimer: ReturnType<typeof setTimeout> | undefined
+const migratedConnections = new WeakSet<object>()
+
 function database(): ReturnType<typeof getDB> {
   const db = getDB()
+  if (migratedConnections.has(db)) return db
   db.exec(`CREATE TABLE IF NOT EXISTS ai_request_logs (
     id TEXT PRIMARY KEY, parent_id TEXT, started_at INTEGER NOT NULL, duration_ms INTEGER,
     modality TEXT NOT NULL, status TEXT NOT NULL, model TEXT, backend TEXT,
     search TEXT NOT NULL, summary TEXT NOT NULL, detail TEXT NOT NULL, bytes INTEGER NOT NULL
   ); CREATE INDEX IF NOT EXISTS ai_logs_started ON ai_request_logs(started_at);
   CREATE INDEX IF NOT EXISTS ai_logs_modality ON ai_request_logs(modality, started_at);
-  CREATE INDEX IF NOT EXISTS ai_logs_parent ON ai_request_logs(parent_id);`)
+  CREATE INDEX IF NOT EXISTS ai_logs_parent ON ai_request_logs(parent_id);
+  CREATE INDEX IF NOT EXISTS ai_logs_retention ON ai_request_logs(started_at DESC, id DESC, bytes);
+  CREATE INDEX IF NOT EXISTS ai_logs_running ON ai_request_logs(started_at) WHERE status = 'running';`)
+  migratedConnections.add(db)
   return db
 }
 
@@ -148,26 +165,76 @@ async function save(record: AIRequestRecord): Promise<void> {
       detail,
       bytes
     )
-  await prune()
+  bytesSinceRetention += bytes
+  rowsSinceRetention += 1
 }
 
-async function prune(): Promise<void> {
+/**
+ * Apply all three retention limits in one transaction. Ages out rows older than maxAgeDays,
+ * then drops every row ranked past maxRecords or whose newest-first running byte total exceeds
+ * maxBytes (ordered started_at DESC, id DESC). Rows of any status are eligible, as before.
+ * Media directories of the deleted rows are removed after the commit.
+ */
+export async function pruneAIRequestLogs(now = Date.now()): Promise<number> {
   const db = database()
-  const rows = db
-    .prepare('SELECT id, started_at, bytes FROM ai_request_logs ORDER BY started_at DESC, id DESC')
-    .all() as { id: string; started_at: number; bytes: number }[]
-  let used = 0
-  const expired = rows.filter((row, index) => {
-    used += row.bytes
-    return (
-      index >= AI_LOG_POLICY.maxRecords ||
-      used > AI_LOG_POLICY.maxBytes ||
-      row.started_at < Date.now() - AI_LOG_POLICY.maxAgeDays * 86400000
-    )
-  })
-  for (const row of expired) {
-    db.prepare('DELETE FROM ai_request_logs WHERE id = ?').run(row.id)
+  lastRetentionAt = now
+  bytesSinceRetention = 0
+  rowsSinceRetention = 0
+  retentionRequested = false
+  const removed = db.transaction(() => {
+    // Deleting the oldest rows first cannot change the rank or running total of a newer row.
+    const aged = db
+      .prepare('DELETE FROM ai_request_logs WHERE started_at < ? RETURNING id')
+      .all(now - AI_LOG_POLICY.maxAgeDays * 86400000) as { id: string }[]
+    const overLimit = db
+      .prepare(
+        `DELETE FROM ai_request_logs WHERE id IN (
+           SELECT id FROM (
+             SELECT id, ROW_NUMBER() OVER w AS rank, SUM(bytes) OVER w AS used
+               FROM ai_request_logs
+             WINDOW w AS (ORDER BY started_at DESC, id DESC ROWS UNBOUNDED PRECEDING)
+           ) WHERE rank > ? OR used > ?
+         ) RETURNING id`
+      )
+      .all(AI_LOG_POLICY.maxRecords, AI_LOG_POLICY.maxBytes) as { id: string }[]
+    return [...aged, ...overLimit]
+  })()
+  for (const row of removed) {
     if (validId(row.id)) await fs.rm(path.join(root(), row.id), { recursive: true, force: true })
+  }
+  return removed.length
+}
+
+function retentionDue(now: number): boolean {
+  if (retentionRequested) return true
+  if (!rowsSinceRetention) return false
+  return (
+    bytesSinceRetention >= RETENTION_PENDING_BYTES ||
+    rowsSinceRetention >= RETENTION_PENDING_ROWS ||
+    now - lastRetentionAt >= RETENTION_INTERVAL_MS
+  )
+}
+
+/** A deferred pass still runs when no further request arrives to trigger it. */
+function scheduleRetention(now: number): void {
+  if (retentionTimer || !rowsSinceRetention) return
+  retentionTimer = setTimeout(
+    () => {
+      retentionTimer = undefined
+      void flushAIRequestLogs()
+    },
+    Math.max(0, lastRetentionAt + RETENTION_INTERVAL_MS - now)
+  )
+  retentionTimer.unref()
+}
+
+async function applyRetentionIfDue(): Promise<void> {
+  const now = Date.now()
+  if (!retentionDue(now)) return scheduleRetention(now)
+  try {
+    await pruneAIRequestLogs(now)
+  } catch {
+    storageError = 'Activity storage is unavailable. AI requests are not affected.'
   }
 }
 
@@ -197,22 +264,30 @@ function enqueue(record: AIRequestRecord): void {
 export async function flushAIRequestLogs(): Promise<void> {
   if (draining !== undefined) return draining
   draining = (async () => {
-    while (pending.size) {
-      const [id, json] = pending.entries().next().value!
-      pending.delete(id)
-      queuedBytes -= json.length
-      try {
-        await save(JSON.parse(json))
-      } catch {
-        storageError = 'Activity storage is unavailable. AI requests are not affected.'
-      }
-      await new Promise<void>((resolve) => setImmediate(resolve))
-    }
+    // Retention can await media removal; a record enqueued meanwhile is drained before exit.
+    do {
+      await drainPending()
+      await applyRetentionIfDue()
+    } while (pending.size)
   })()
   try {
     await draining
   } finally {
     draining = undefined
+  }
+}
+
+async function drainPending(): Promise<void> {
+  while (pending.size) {
+    const [id, json] = pending.entries().next().value!
+    pending.delete(id)
+    queuedBytes -= json.length
+    try {
+      await save(JSON.parse(json))
+    } catch {
+      storageError = 'Activity storage is unavailable. AI requests are not affected.'
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve))
   }
 }
 
@@ -230,7 +305,9 @@ export function initializeAIRequestLogs(): void {
       record.error = 'The app closed before this request finished.'
       enqueue(record)
     }
-    void prune().catch(() => {})
+    // Startup pass, after the interrupted rows above have been rewritten.
+    retentionRequested = true
+    void flushAIRequestLogs()
   } catch {
     storageError = 'Activity storage is unavailable. AI requests are not affected.'
   }
@@ -342,6 +419,8 @@ export async function clearAIRequestLogs(): Promise<void> {
     await flushAIRequestLogs()
     database().prepare('DELETE FROM ai_request_logs').run()
     await fs.rm(root(), { recursive: true, force: true })
+    bytesSinceRetention = 0
+    rowsSinceRetention = 0
     storageError = undefined
   } finally {
     setAIRequestSink(enqueue)
