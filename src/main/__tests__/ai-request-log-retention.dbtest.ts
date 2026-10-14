@@ -83,11 +83,11 @@ beforeAll(async () => {
   await flushAIRequestLogs()
 })
 beforeEach(async () => {
-  vi.restoreAllMocks()
+  vi.useRealTimers()
   await clearAIRequestLogs()
 })
 afterAll(async () => {
-  vi.restoreAllMocks()
+  vi.useRealTimers()
   await flushAIRequestLogs()
   setAIRequestSink(undefined)
   getDB().close()
@@ -170,7 +170,7 @@ describe('AI activity retention', () => {
 
   it('does not run retention after every save, but runs it once the interval has passed', async () => {
     const start = Date.now()
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(start)
+    vi.useFakeTimers({ toFake: ['Date'], now: start })
     await pruneAIRequestLogs(start)
     const stale = withMedia([{ id: randomUUID(), startedAt: start - 8 * DAY, bytes: 1 }])[0]!
     insert([stale])
@@ -179,7 +179,7 @@ describe('AI activity retention', () => {
     await flushAIRequestLogs()
     expect(ids()).toContain(stale.id)
 
-    clock.mockReturnValue(start + 61_000)
+    vi.setSystemTime(start + 61_000)
     await recordAIRequest({ modality: 'text', source: 'Chat' }, async () => 'done')
     await flushAIRequestLogs()
     expect(ids()).not.toContain(stale.id)
@@ -188,7 +188,7 @@ describe('AI activity retention', () => {
 
   it('runs retention early when many rows were saved since the last pass', async () => {
     const start = Date.now()
-    vi.spyOn(Date, 'now').mockReturnValue(start)
+    vi.useFakeTimers({ toFake: ['Date'], now: start })
     await pruneAIRequestLogs(start)
     const stale = { id: randomUUID(), startedAt: start - 8 * DAY, bytes: 1 }
     insert([stale])

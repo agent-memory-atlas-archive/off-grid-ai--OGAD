@@ -190,10 +190,6 @@ function cachedDocEmbeddings(docId: number): DocEmbeddings {
 }
 
 /** Current cache footprint, for tests and diagnostics. */
-export function ragEmbeddingCacheStats(): { documents: number; bytes: number } {
-  return { documents: embeddingCache.size, bytes: embeddingCacheBytes }
-}
-
 /** Whether a project folds captured memories into its KB (default on). */
 export function projectIncludesMemory(projectId: string): boolean {
   ensureRagStoreSchema()

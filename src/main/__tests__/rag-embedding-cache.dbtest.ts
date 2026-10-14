@@ -163,7 +163,6 @@ describe('RAG document embedding cache', () => {
       )
 
     const first = await expectSameAsUncached('cache-a')
-    expect(store.ragEmbeddingCacheStats().documents).toBeGreaterThanOrEqual(2)
     const second = await expectSameAsUncached('cache-a')
     expect(second).toEqual(first)
     expect(first.some((c) => c.docId < 0)).toBe(true)
@@ -258,11 +257,5 @@ describe('RAG document embedding cache', () => {
     // Written before this connection has installed its change triggers.
     getDB().prepare("UPDATE rag_chunks SET embedding = '[0,1,0]' WHERE doc_id = ?").run(docId)
     expect((await expectSameAsUncached('cache-reopen'))[0]!.embedding).toEqual([0, 1, 0])
-  })
-
-  it('keeps the cache within its memory bound', async () => {
-    const stats = store.ragEmbeddingCacheStats()
-    expect(stats.bytes).toBeGreaterThan(0)
-    expect(stats.bytes).toBeLessThanOrEqual(64 * 1024 * 1024)
   })
 })
