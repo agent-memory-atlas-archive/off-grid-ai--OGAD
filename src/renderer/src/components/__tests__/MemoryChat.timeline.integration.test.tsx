@@ -270,7 +270,7 @@ describe('<MemoryChat/> ordered tool turn', () => {
     expect(screen.getByAltText('synced-input.jpg')).toBeTruthy()
     expect(screen.getByAltText('Generated')).toBeTruthy()
     expect(screen.getByText('Generated for: a horse')).toBeTruthy()
-    expect(screen.getAllByTitle('Play')).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Play voice note' })).toHaveLength(2)
     await openCompletedWork()
     expect(timelineLabels().map((label) => label.split('Created the requested image.')[0])).toEqual([
       'Reasoning',
@@ -616,7 +616,7 @@ describe('<MemoryChat/> ordered tool turn', () => {
         </TooltipProvider>
       )
       await screen.findByText('The answer is ready.')
-      const replyPlayback = screen.getAllByTitle('Play').at(-1)!
+      const replyPlayback = screen.getAllByRole('button', { name: 'Play voice note' }).at(-1)!
       await user.click(replyPlayback)
       await waitFor(() =>
         expect(playedSources).toEqual([`data:audio/wav;base64,${btoa('af_heart')}`])
