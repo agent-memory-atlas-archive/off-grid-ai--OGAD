@@ -409,7 +409,7 @@ jobs:
   native-desktop:
     name: Native recording (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -542,7 +542,7 @@ jobs:
         run: npx vitest run integration-tests/native-desktop-recording.test.ts integration-tests/extension-bridge-native.test.ts integration-tests/extension-chat-native.test.ts integration-tests/chat-next-action-native.test.ts integration-tests/task-stop-native.test.ts integration-tests/web-use-failure-native.test.ts integration-tests/web-use-debugger-native.test.ts --no-file-parallelism --project product-integration
       - name: Verify chat queues and saved replies in Electron
         if: runner.os == 'Linux'
-        timeout-minutes: 12
+        timeout-minutes: 18 # 16 specs take ~11.7 min on ubuntu-latest; 12 left no headroom
         env:
           ELECTRON_DISABLE_SANDBOX: '1'
         # These specs use fresh free profiles and synthetic model executables.
