@@ -96,10 +96,15 @@ const server = http.createServer((request, response) => {
     }
     if (prompt === 'Finish after I reopen Chat.') {
       response.write(delta('The first reply is still running.'))
-      const timer = setTimeout(() => {
+      // Held until the test has queued both drafts and released it, so a slow runner cannot
+      // finish the reply (and drain the queue) before the test looks at the queue.
+      const releaseFile = `${auditFile}.release`
+      const timer = setInterval(() => {
+        if (!fs.existsSync(releaseFile)) return
+        clearInterval(timer)
         timers.delete(timer)
         finish(' The reopened reply is complete.')
-      }, 10_000)
+      }, 100)
       timers.add(timer)
       return
     }
