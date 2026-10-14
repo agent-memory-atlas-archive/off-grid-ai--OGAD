@@ -407,6 +407,23 @@ async function openImageComposer(user: ReturnType<typeof userEvent.setup>): Prom
 }
 
 /** The steps control is a slider bounded 4..50; find it by its slider role and name. */
+/**
+ * Picks an option from the composer's library select with the keyboard. jsdom gives every
+ * element a 0x0 box, so the resizable panels in Chat take every pointer press as a drag of their
+ * handle: open the list with the arrow key and choose with Enter, as a keyboard user would.
+ */
+async function chooseOption(
+  user: Pick<ReturnType<typeof userEvent.setup>, 'keyboard'>,
+  trigger: HTMLElement,
+  name: string
+): Promise<void> {
+  act(() => trigger.focus())
+  await user.keyboard('{ArrowDown}')
+  const option = await screen.findByRole('option', { name })
+  act(() => option.focus())
+  await user.keyboard('{Enter}')
+}
+
 function stepsSlider(): HTMLElement {
   return screen.getByRole('slider', { name: 'Steps' })
 }
@@ -663,12 +680,12 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
 
     await openImageComposer(user)
     // Model select must be present (imgModels.length > 1) and reflect the active model.
-    const modelSelect = (await screen.findByDisplayValue(
-      /dreamlike-photoreal-v2/i,
-      {},
+    const modelSelect = await screen.findByRole(
+      'combobox',
+      { name: 'Model' },
       { timeout: 3000 }
-    )) as HTMLSelectElement
-    expect(modelSelect).toBeTruthy()
+    )
+    expect(modelSelect.textContent).toMatch(/dreamlike-photoreal-v2/i)
 
     // User overrides steps to 10 (the model's default is 28).
     await setSteps(user, 10)
@@ -1118,13 +1135,14 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
     renderChat()
     await openImageComposer(user)
 
-    const modelSelect = (await screen.findByDisplayValue(
-      /dreamlike-photoreal-v2/i,
-      {},
+    const modelSelect = await screen.findByRole(
+      'combobox',
+      { name: 'Model' },
       { timeout: 3000 }
-    )) as HTMLSelectElement
-    // Switch to the few-step model via a REAL change event on the real <select>.
-    await user.selectOptions(modelSelect, FEW_STEP)
+    )
+    expect(modelSelect.textContent).toMatch(/dreamlike-photoreal-v2/i)
+    // Switch to the few-step model through the real select, as a keyboard user would.
+    await chooseOption(user, modelSelect, 'sdxl-lightning')
 
     // Divergence fix: the dropdown MUST write through the same owner as the
     // Active-models panel, or the two silently disagree on which model runs.
@@ -1163,9 +1181,12 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
     const firstMount = renderChat()
     await openImageComposer(firstUser)
 
-    const modelSelect = screen.getByLabelText('Model') as HTMLSelectElement
-    await firstUser.selectOptions(modelSelect, FEW_STEP)
-    await firstUser.selectOptions(modelSelect, FULL)
+    const modelSelect = screen.getByRole('combobox', { name: 'Model' })
+    await chooseOption(firstUser, modelSelect, 'sdxl-lightning')
+    await waitFor(() =>
+      expect(boundary.setActiveModalModel).toHaveBeenLastCalledWith('image', FEW_STEP)
+    )
+    await chooseOption(firstUser, modelSelect, 'dreamlike-photoreal-v2')
     await waitFor(() =>
       expect(boundary.setActiveModalModel).toHaveBeenLastCalledWith('image', FULL)
     )
@@ -1206,7 +1227,9 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
     renderChat()
     await openImageComposer(secondUser)
 
-    expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe(FULL)
+    expect(screen.getByRole('combobox', { name: 'Model' }).textContent).toMatch(
+      /dreamlike-photoreal-v2/i
+    )
     expect(
       within(screen.getByRole('radiogroup', { name: 'Size' }))
         .getByRole('radio', { name: '768' })
