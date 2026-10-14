@@ -418,11 +418,13 @@ describe('assistant reply speech integration (#105)', () => {
       ])
     })
 
-    await user.click(screen.getAllByTitle('Play').at(-1)!)
-    expect(await screen.findByTitle('Pause', {}, { timeout: 10_000 })).toBeTruthy()
+    await user.click(screen.getAllByRole('button', { name: 'Play voice note' }).at(-1)!)
+    expect(
+      await screen.findByRole('button', { name: 'Pause voice note' }, { timeout: 10_000 })
+    ).toBeTruthy()
     expect(audios).toHaveLength(1)
     expect(audios[0]!.play).toHaveBeenCalledOnce()
-    await user.click(screen.getByTitle('Pause'))
+    await user.click(screen.getByRole('button', { name: 'Pause voice note' }))
     expect(audios[0]!.pause).toHaveBeenCalledOnce()
 
     view.unmount()
