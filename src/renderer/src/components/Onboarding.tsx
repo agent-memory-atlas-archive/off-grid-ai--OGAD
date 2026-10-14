@@ -256,7 +256,9 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
                         className="h-5 w-5 text-emerald-600 dark:text-emerald-400"
                         weight="regular"
                       />
-                      <span className="text-[8px] text-neutral-500">{label}</span>
+                      <span className="max-w-full px-0.5 text-center text-[8px] leading-[1.05] text-neutral-500">
+                        {label}
+                      </span>
                     </div>
                   ))}
                 </OrbitingCircles>
@@ -270,7 +272,9 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
                         className="h-5 w-5 text-emerald-600 dark:text-emerald-400"
                         weight="regular"
                       />
-                      <span className="text-[8px] text-neutral-500">{label}</span>
+                      <span className="max-w-full px-0.5 text-center text-[8px] leading-[1.05] text-neutral-500">
+                        {label}
+                      </span>
                     </div>
                   ))}
                 </OrbitingCircles>
@@ -508,7 +512,7 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
               : 'flex flex-col items-center gap-6'
           }
         >
-          {/* A quiet progress line: thin segments, one gliding emerald pill, the step's name. */}
+          {/* A quiet progress line: thin segments, one gliding emerald pill, the step's name centred below. */}
           <div
             role="progressbar"
             aria-label="Onboarding progress"
@@ -516,7 +520,7 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
             aria-valuemax={steps.length}
             aria-valuenow={currentStep + 1}
             aria-valuetext={`Step ${currentStep + 1} of ${steps.length}: ${steps[currentStep]!.label}`}
-            className="flex items-center gap-3"
+            className="flex flex-col items-center gap-2"
           >
             <div className="flex items-center gap-1.5">
               {steps.map(({ label }, index) => (
@@ -540,19 +544,21 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
                 </motion.span>
               ))}
             </div>
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.span
-                key={currentStep}
-                aria-hidden
-                initial={reducedMotion ? false : { opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={reducedMotion ? undefined : { opacity: 0, y: -4 }}
-                transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-                className="text-xs text-neutral-500"
-              >
-                {steps[currentStep]!.label}
-              </motion.span>
-            </AnimatePresence>
+            <span className="grid h-4 place-items-center">
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span
+                  key={currentStep}
+                  aria-hidden
+                  initial={reducedMotion ? false : { opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={reducedMotion ? undefined : { opacity: 0, y: -4 }}
+                  transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+                  className="text-xs text-neutral-500"
+                >
+                  {steps[currentStep]!.label}
+                </motion.span>
+              </AnimatePresence>
+            </span>
           </div>
           <div className="flex items-center gap-3">
             {currentStep === 4 && (
