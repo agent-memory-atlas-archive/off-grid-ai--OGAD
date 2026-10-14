@@ -80,6 +80,13 @@ the one primary call to action whose meaning needs words (an icon plus a short l
 there). Icon buttons change state by morphing the glyph (play↔pause, copy→check), not by swapping
 words.
 
+**Use the space.** Lists are thin rows, not stacks of tall cards: title and meta on one line (or
+two tight lines), badges inline beside the title, and the action as a trailing icon button or
+revealed on hover. Never one fact per line with a button row under each item. Cards are for
+genuinely rich content; a list lives in one surface, divided by hairlines. Tight inside an item,
+generous only between groups. The active item is marked in its row (an emerald edge or a state
+pill), not by a bigger card.
+
 ### 6. Motion is the language
 
 Motion explains state; it is not decoration, and it is never optional.

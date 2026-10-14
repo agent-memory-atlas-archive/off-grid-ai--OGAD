@@ -96,7 +96,8 @@ Never hard-code hex or shadows in components; the skin and tokens own them.
 - **Buttons** — `ui/button` variants. Hand-built primary: `bg-green-500 text-neutral-950`;
   secondary: `border border-neutral-700 text-neutral-300 hover:border-green-500 hover:text-green-500`.
 - **Inputs** — `rounded-md border border-neutral-800 bg-neutral-950 text-neutral-200`; focus glows.
-- **Lists / rows** — compact rows with a trailing chevron that reveals on hover; click → detail.
+- **Lists / rows** — thin rows (about 40–52px): title + meta inline, badges inline, a trailing icon action
+  or chevron revealed on hover; click → detail. Never a tall card per item with a button row.
 - **Badges** — `rounded-md bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400`; active
   ones emerald.
 - **Popups, menus, tooltips, dialogs** — the `ui/*` primitives: glass, spring in from their
