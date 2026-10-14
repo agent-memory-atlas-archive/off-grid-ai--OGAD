@@ -344,6 +344,20 @@ test('Search opens Replay at the selected captured moment instead of a timeline 
           return {
             query,
             hit,
+            matchingIndex: hits
+              .filter(
+                (candidate) =>
+                  candidate.kind === hit.kind &&
+                  candidate.title === hit.title &&
+                  candidate.snippet === hit.snippet
+              )
+              .findIndex((candidate) => candidate.key === hit.key),
+            matchingCount: hits.filter(
+              (candidate) =>
+                candidate.kind === hit.kind &&
+                candidate.title === hit.title &&
+                candidate.snippet === hit.snippet
+            ).length,
             selected,
             selectedIndex,
             frameCount: frames.length,
@@ -369,11 +383,15 @@ test('Search opens Replay at the selected captured moment instead of a timeline 
   const search = page.getByRole('dialog', { name: 'Search Off Grid AI' })
   await expect(search).toBeVisible()
   await search.getByRole('combobox').fill(expected.query)
-  // Several synthetic moments share a summary; the option's value is the hit's own key.
-  const result = search
+  // Equal summaries retain search order. Select the matching visible result, then prove
+  // that Replay opens its exact interior frame below.
+  const results = search
     .getByRole('option')
-    .and(search.locator(`[data-value="${expected.hit.key}"]`))
-    .filter({ hasText: expected.hit.snippet })
+    .filter({ has: page.getByText(expected.hit.title, { exact: true }) })
+    .filter({ has: page.getByText(expected.hit.snippet, { exact: true }) })
+    .filter({ has: page.getByText(expected.hit.kind, { exact: true }) })
+  await expect(results).toHaveCount(expected.matchingCount)
+  const result = results.nth(expected.matchingIndex)
   await expect(result).toBeVisible()
   await result.click()
 

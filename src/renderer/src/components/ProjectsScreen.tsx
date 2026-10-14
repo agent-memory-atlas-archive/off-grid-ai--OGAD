@@ -15,6 +15,7 @@ import {
   IconSettings,
   IconLayoutGrid
 } from '@tabler/icons-react'
+import { Card } from '@offgrid/operator-ui/operator/coss/card'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
 import { PageHeader } from '@offgrid/operator-ui/operator/experience'
@@ -411,12 +412,13 @@ function ProjectChats({
           this project.
         </p>
       ) : (
-        <div className="divide-y divide-neutral-800/80 overflow-hidden rounded-lg border border-neutral-800/80 bg-neutral-900/30">
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
           {chats.map((c) => (
-            <button
+            <Card
+              render={<button />}
               key={c.id}
               onClick={() => onOpenChat({ conversationId: c.id })}
-              className="group flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-neutral-900/60"
+              className="group w-full min-w-0 flex-row items-center gap-2 p-2.5 text-left transition-colors hover:bg-neutral-900/60"
             >
               <IconMessage className="h-4 w-4 shrink-0 text-neutral-600 group-hover:text-green-500" />
               <div className="min-w-0 flex-1 truncate text-sm text-neutral-200">
@@ -426,7 +428,7 @@ function ProjectChats({
                 {c.message_count ? `${c.message_count} messages · ` : ''}
                 {timeAgo(c.updated_at)}
               </div>
-            </button>
+            </Card>
           ))}
         </div>
       )}
