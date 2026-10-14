@@ -9,6 +9,7 @@ import { formatStorageBytes } from './storage-format'
 import { EngineUpdatesSection } from './EngineUpdatesSection'
 import { Progress, ProgressIndicator, ProgressTrack } from '@offgrid/operator-ui/operator/coss/progress'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 
 interface PerformancePackPanelProps {
@@ -99,7 +100,10 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
         <div className="mt-2.5">
           <div className="mb-1 flex justify-between text-[11px] text-neutral-400">
             <TextMorph as="span">{status.phase === 'paused' ? 'Paused' : 'Downloading'}</TextMorph>
-            <span>{formatStorageBytes(status.downloadedBytes)} / {formatStorageBytes(status.bytes)}</span>
+            <span>
+              <AnimatedNumber value={status.downloadedBytes} format={formatStorageBytes} /> /{' '}
+              {formatStorageBytes(status.bytes)}
+            </span>
           </div>
           <Progress aria-label="NVIDIA GPU download" value={progress.percentage ?? 0}>
             <ProgressTrack className="rounded-sm bg-neutral-800">
