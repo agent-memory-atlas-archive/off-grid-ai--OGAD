@@ -1,6 +1,5 @@
 import { useState, type JSX } from 'react'
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react'
-import AnimatedStepper from '@offgrid/operator-ui/operator/animated-stepper'
 import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
 import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
@@ -514,20 +513,51 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
               : 'flex flex-col items-center gap-6'
           }
         >
+          {/* A quiet progress line: thin segments, one gliding emerald pill, the step's name. */}
           <div
-            className={cn(
-              'w-[min(36rem,calc(100vw-4rem))] [&>[role=tabpanel]]:hidden',
-              '[&_[role=tab]]:size-7 [&_[role=tab]]:border [&_[role=tab]]:text-[11px] [&_[role=tab]]:font-normal',
-              '[&_[role=tab][aria-selected=true]]:bg-primary/15 [&_[role=tab][aria-selected=true]]:text-primary',
-              '[&_[role=tab][aria-selected=true]]:shadow-[0_0_18px_-4px_rgb(var(--og-rgb-primary)/0.8)]',
-              '[&_[role=tab]_svg]:size-3.5 [&_[role=tablist]_p]:text-[11.5px] [&_[role=tablist]_p]:font-normal'
-            )}
+            role="progressbar"
+            aria-label="Onboarding progress"
+            aria-valuemin={1}
+            aria-valuemax={steps.length}
+            aria-valuenow={currentStep + 1}
+            aria-valuetext={`Step ${currentStep + 1} of ${steps.length}: ${steps[currentStep]!.label}`}
+            className="flex items-center gap-3"
           >
-            <AnimatedStepper
-              className="gap-0"
-              currentStep={currentStep}
-              steps={steps.map(({ label }) => ({ label }))}
-            />
+            <div className="flex items-center gap-1.5">
+              {steps.map(({ label }, index) => (
+                <motion.span
+                  key={label}
+                  layout={!reducedMotion}
+                  transition={{ type: 'spring', stiffness: 380, damping: 34 }}
+                  className={cn(
+                    'relative h-1 overflow-hidden rounded-full bg-neutral-800',
+                    index === currentStep ? 'w-8' : 'w-3'
+                  )}
+                >
+                  {index < currentStep && <span className="absolute inset-0 bg-primary/45" />}
+                  {index === currentStep && (
+                    <motion.span
+                      layoutId={reducedMotion ? undefined : 'onboarding-step'}
+                      transition={{ type: 'spring', stiffness: 380, damping: 34 }}
+                      className="absolute inset-0 rounded-full bg-primary shadow-[0_0_10px_rgb(var(--og-rgb-primary)/0.75)]"
+                    />
+                  )}
+                </motion.span>
+              ))}
+            </div>
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.span
+                key={currentStep}
+                aria-hidden
+                initial={reducedMotion ? false : { opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={reducedMotion ? undefined : { opacity: 0, y: -4 }}
+                transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+                className="text-xs text-neutral-500"
+              >
+                {steps[currentStep]!.label}
+              </motion.span>
+            </AnimatePresence>
           </div>
           <div className="flex items-center gap-3">
             {currentStep === 4 && (
