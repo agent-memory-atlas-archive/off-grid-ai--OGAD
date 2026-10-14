@@ -1,6 +1,12 @@
 import { modelKindLabel } from './model-kind-labels'
 
-export const INTERNAL_TAB_VIEWS = ['devices', 'entities', 'models', 'notifications'] as const
+export const INTERNAL_TAB_VIEWS = [
+  'devices',
+  'entities',
+  'meetings',
+  'models',
+  'notifications'
+] as const
 export type InternalTabView = (typeof INTERNAL_TAB_VIEWS)[number]
 
 export interface InternalTabRoute {
@@ -27,6 +33,10 @@ const ROUTES: Record<InternalTabView, readonly InternalTabRoute[]> = {
     { id: 'topics', slug: 'topics', label: 'Topics' },
     { id: 'places', slug: 'places', label: 'Places' },
     { id: 'objects', slug: 'objects', label: 'Objects' }
+  ],
+  meetings: [
+    { id: 'recorded', slug: null, label: 'Recorded' },
+    { id: 'calendar', slug: 'calendar', label: 'Calendar' }
   ],
   models: [
     { id: 'text', slug: null, label: modelKindLabel('text') },

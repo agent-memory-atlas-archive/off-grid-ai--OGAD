@@ -10,7 +10,13 @@ export type ProNavigationIntent =
     }
   | { view: 'day'; calendarEventId?: number }
   | { view: 'replay'; seekMs?: number }
-  | { view: 'meetings'; meetingId?: number; mode?: 'calendar' | 'recorded' }
+  | {
+      view: 'meetings'
+      meetingId?: number
+      mode?: 'calendar' | 'recorded'
+      /** Calendar mode: the event to scroll to and open prep for. */
+      calendarEventId?: number
+    }
   | { view: 'chat'; approvalId: number }
   | { view: 'chat'; conversationId: string }
 
@@ -69,7 +75,19 @@ function normalizeReplayIntent(value: Record<string, unknown>): ProNavigationInt
 
 function normalizeMeetingsIntent(value: Record<string, unknown>): ProNavigationIntent | null {
   const meetingId = optionalPositiveInteger(value, 'meetingId')
-  return meetingId === null ? null : { view: 'meetings', ...(meetingId ? { meetingId } : {}) }
+  const calendarEventId = optionalPositiveInteger(value, 'calendarEventId')
+  if (meetingId === null || calendarEventId === null) return null
+  if ('mode' in value && value.mode !== 'calendar' && value.mode !== 'recorded') return null
+  // A recorded meeting lives under Recorded and a calendar event under Calendar.
+  if (meetingId && (calendarEventId || value.mode === 'calendar')) return null
+  if (calendarEventId && value.mode === 'recorded') return null
+  const mode = calendarEventId ? 'calendar' : (value.mode as 'calendar' | 'recorded' | undefined)
+  return {
+    view: 'meetings',
+    ...(meetingId ? { meetingId } : {}),
+    ...(mode ? { mode } : {}),
+    ...(calendarEventId ? { calendarEventId } : {})
+  }
 }
 
 function normalizeActionsIntent(value: Record<string, unknown>): ProNavigationIntent | null {
