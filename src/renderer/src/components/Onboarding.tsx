@@ -8,7 +8,6 @@ import { Card } from '@offgrid/operator-ui/operator/coss/card'
 import { SettingRow, StatePill } from '@offgrid/operator-ui/operator/presence'
 import { LampContainer } from './ui/lamp'
 import { OrbitingCircles } from './ui/orbiting-circles'
-import { GridBackdrop } from './ui/grid-backdrop'
 import { deviceNoun, isMac } from '@renderer/lib/device'
 import { cn } from '@renderer/lib/utils'
 import logo from '@/assets/logo.png'
@@ -180,7 +179,7 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
   }
 
   return (
-    <div className="fixed inset-0 overflow-hidden bg-neutral-950 font-mono">
+    <div className="fixed inset-0 overflow-hidden font-mono">
       <AnimatePresence mode="wait">
         {/* Step 0 — Welcome */}
         {currentStep === 0 && (
@@ -189,7 +188,7 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="h-full w-full"
+            className="h-full w-full bg-neutral-950"
           >
             <LampContainer className="min-h-screen bg-neutral-950">
               <motion.div
@@ -218,9 +217,8 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="relative h-full w-full bg-neutral-950"
+            className="relative h-full w-full"
           >
-            <GridBackdrop className="opacity-70" />
             <div className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6">
               <div className="mb-6 text-center">
                 <TextGenerate
@@ -299,7 +297,6 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
             exit={{ opacity: 0 }}
             className="relative flex h-full w-full flex-col items-center justify-center bg-neutral-950 px-6"
           >
-            <GridBackdrop className="opacity-70" />
             <div className="relative z-10 mx-auto max-w-5xl">
               <div className="mb-2 text-center">
                 <Badge variant="success">Off Grid AI Pro · live now</Badge>
@@ -365,7 +362,6 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
             exit={{ opacity: 0 }}
             className="relative flex h-full w-full flex-col items-center justify-center bg-neutral-950 px-6"
           >
-            <GridBackdrop className="opacity-70" />
             <div className="relative z-10 mx-auto grid w-full max-w-6xl grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1.05fr)_minmax(420px,0.95fr)] lg:items-center">
               <div>
                 <div className="mb-4 flex items-center gap-2 text-[11px] uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
@@ -452,7 +448,6 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
             exit={{ opacity: 0 }}
             className="relative flex h-full w-full flex-col items-center justify-center bg-neutral-950 px-6"
           >
-            <GridBackdrop className="opacity-70" />
             <div className="relative z-10 mx-auto max-w-2xl text-center">
               <TextGenerate
                 words="You choose where each model runs."
