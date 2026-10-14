@@ -131,9 +131,7 @@ async function createProjectWithKnowledge(): Promise<void> {
   await page.getByPlaceholder('Project name…').fill(PROJECT)
   await page.keyboard.press('Enter')
   await expect(page.getByText(PROJECT, { exact: true }).first()).toBeVisible()
-  await expect(
-    page.getByRole('button', { name: 'Knowledge & settings', exact: true })
-  ).toBeVisible()
+  await expect(page.getByRole('radio', { name: 'Knowledge & settings', exact: true })).toBeVisible()
 
   await chooseOpenPath(knowledgePath)
   await page.getByRole('button', { name: 'Add files', exact: true }).click()
@@ -144,7 +142,7 @@ async function createProjectWithKnowledge(): Promise<void> {
 }
 
 async function askProjectQuestion(): Promise<void> {
-  await page.getByRole('button', { name: 'Chats', exact: true }).click()
+  await page.getByRole('radio', { name: 'Chats', exact: true }).click()
   await page.getByRole('button', { name: 'New chat', exact: true }).click()
   const composer = page.getByRole('textbox', { name: 'Message', exact: true })
   await expect(composer).toBeVisible()
@@ -196,10 +194,10 @@ test.describe('APP-242 portable backup', () => {
 
     await openSidebarScreen('Projects')
     await page.getByText(PROJECT, { exact: true }).first().click()
-    await page.getByRole('button', { name: 'Knowledge & settings', exact: true }).click()
+    await page.getByRole('radio', { name: 'Knowledge & settings', exact: true }).click()
     await expect(page.getByText(DOCUMENT, { exact: true })).toBeVisible()
 
-    await page.getByRole('button', { name: 'Chats', exact: true }).click()
+    await page.getByRole('radio', { name: 'Chats', exact: true }).click()
     await expect(page.getByText('1 chat', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'New chat', exact: true }).click()
     const composer = page.getByRole('textbox', { name: 'Message', exact: true })
