@@ -97,11 +97,11 @@ describe('command palette', () => {
   it('navigates to the screen that was chosen, and closes', async () => {
     const user = await openPalette()
     await user.type(screen.getByPlaceholderText(/jump to a screen/i), 'preferences')
-    await waitFor(() => expect(screen.getByText('Settings')).toBeTruthy())
-    await user.click(screen.getByText('Settings'))
+    await user.click(await screen.findByRole('option', { name: 'Settings' }))
 
     await waitFor(() => expect(goTo).toHaveBeenCalledWith('settings', undefined))
-    expect(screen.queryByPlaceholderText(/jump to a screen/i)).toBeNull()
+    // The dialog stays mounted until its exit transition finishes.
+    await waitFor(() => expect(screen.queryByPlaceholderText(/jump to a screen/i)).toBeNull())
   })
 
   it.each([
@@ -112,8 +112,8 @@ describe('command palette', () => {
   ])('opens the %s nested route', async (label, subroute) => {
     const user = await openPalette()
     await user.type(screen.getByPlaceholderText(/jump to a screen/i), label)
-    await waitFor(() => expect(screen.getByText(label)).toBeTruthy())
-    await user.click(screen.getByText(label))
+    // Highlight renders visual and screen-reader text; select the named option itself.
+    await user.click(await screen.findByRole('option', { name: label }))
 
     await waitFor(() =>
       expect(goTo).toHaveBeenCalledWith(subroute === 'remote' ? 'settings' : 'devices', subroute)

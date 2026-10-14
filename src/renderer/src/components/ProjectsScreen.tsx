@@ -277,8 +277,9 @@ export function ProjectsScreen({
       {/* Active project */}
       {active ? (
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* Project header with view toggle */}
+          {/* Restart the title reveal when its text changes; new segments otherwise stay hidden. */}
           <PageHeader
+            key={active.name}
             className="px-8 pt-8 pb-6"
             eyebrow="Project"
             title={active.name}
