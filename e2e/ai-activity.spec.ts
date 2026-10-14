@@ -100,13 +100,13 @@ test('AI activity uses the window, filters records, and keeps the main window op
         })
       }
     }
-    await activity.getByRole('button', { name: 'Images', exact: true }).click()
+    await activity.getByRole('radio', { name: 'Images', exact: true }).click()
     await expect(activity.getByText('Synthetic image response', { exact: true })).toBeVisible()
     await activity.getByRole('button', { name: 'Show', exact: true }).click()
     await activity.getByRole('menuitemcheckbox', { name: 'Responses', exact: true }).click()
     await activity.keyboard.press('Escape')
     await expect(activity.getByText('Synthetic image response', { exact: true })).toHaveCount(0)
-    await activity.getByRole('button', { name: 'Raw', exact: true }).click()
+    await activity.getByRole('radio', { name: 'Raw', exact: true }).click()
     await expect(activity.getByText(/Synthetic image response/)).toHaveCount(0)
     await activity.getByRole('button', { name: 'Clear history', exact: true }).click()
     await activity.getByRole('button', { name: 'Delete history', exact: true }).click()

@@ -36,8 +36,14 @@ describe('<SkillsPanel/> persisted trigger recovery', () => {
       await user.click(await screen.findByRole('button', { name: /capture-review/i }))
 
       expect(await screen.findByDisplayValue('capture-review')).not.toBeNull()
+      const automation = screen.getByRole('combobox', { name: 'Automation' })
+      expect(automation.textContent).toContain('Manual only (invoke with /name)')
+      await user.click(automation)
       expect(
-        screen.getByRole('option', { name: 'Manual only (invoke with /name)', selected: true })
+        await screen.findByRole('option', {
+          name: 'Manual only (invoke with /name)',
+          selected: true
+        })
       ).not.toBeNull()
       expect(screen.queryByPlaceholderText('invoice, payment, contract')).toBeNull()
       expect(screen.queryByPlaceholderText('08:00')).toBeNull()

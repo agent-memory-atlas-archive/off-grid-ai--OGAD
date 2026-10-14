@@ -73,14 +73,15 @@ describe('AI activity viewer', () => {
   })
   it('filters by modality, status and search', async () => {
     render(<AIRequestLogs />)
-    await userEvent.click(screen.getByRole('button', { name: 'Images' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Images' }))
     await waitFor(() =>
       expect(api.aiLogsList).toHaveBeenLastCalledWith(
         expect.objectContaining({ modality: 'image' })
       )
     )
     await userEvent.click(screen.getByRole('button', { name: 'Filters' }))
-    await userEvent.selectOptions(screen.getByLabelText('Status'), 'failed')
+    await userEvent.click(await screen.findByRole('combobox', { name: 'Status' }))
+    await userEvent.click(await screen.findByRole('option', { name: 'failed' }))
     await waitFor(() =>
       expect(api.aiLogsList).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'failed' }))
     )
@@ -96,7 +97,8 @@ describe('AI activity viewer', () => {
     await userEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Responses' }))
     await userEvent.keyboard('{Escape}')
     expect(screen.queryByText('Here are two cafes')).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: 'Raw' }))
+    // The menu fades out before the page behind it is reachable again.
+    await userEvent.click(await screen.findByRole('radio', { name: 'Raw' }))
     expect(screen.queryByText(/Here are two cafes/)).toBeNull()
     expect(JSON.parse(window.localStorage.getItem('ai-activity-display')!).response).toBe(false)
   })
@@ -126,8 +128,8 @@ describe('AI activity viewer', () => {
     api.aiLogsList.mockResolvedValue({ rows: [], total: 0 })
     render(<AIRequestLogs standalone />)
     await screen.findByText('No activity yet. Your next AI request will appear here.')
-    expect(screen.queryByRole('button', { name: 'Raw' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Readable' })).toBeNull()
+    expect(screen.queryByRole('radio', { name: 'Raw' })).toBeNull()
+    expect(screen.queryByRole('radio', { name: 'Readable' })).toBeNull()
     const live = screen.getByRole('button', { name: 'Live updates' })
     expect(live.getAttribute('aria-pressed')).toBe('true')
     await userEvent.click(live)

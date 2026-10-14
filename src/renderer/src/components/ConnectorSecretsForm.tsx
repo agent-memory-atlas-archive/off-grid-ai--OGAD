@@ -1,4 +1,15 @@
 import { useState } from 'react'
+import { X } from '@phosphor-icons/react'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { IconTip } from './IconTip'
+import {
+  KeyValue,
+  KeyValueItem,
+  KeyValueKeyInput,
+  KeyValueList,
+  KeyValueValueInput
+} from '@offgrid/operator-ui/operator/dice/key-value'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 
 interface ConnectorSecret {
   readonly key: string
@@ -22,6 +33,9 @@ interface ConnectorSecretsFormProps {
  * every connector row and the whole gallery, and the values outlived a cancelled connection. They
  * live here for as long as the form is open: the screen receives them once, on Connect, and they
  * go with the form when it closes.
+ *
+ * The secrets are one dice/key-value list with fixed keys (the catalog names them; nothing is
+ * added or removed) and masked values, each row with its own reveal and its own labels.
  */
 export function ConnectorSecretsForm({
   secrets,
@@ -33,30 +47,56 @@ export function ConnectorSecretsForm({
 
   return (
     <>
-      {secrets.map((s) => (
-        <input
-          key={s.key}
-          type="password"
-          value={values[s.key] ?? ''}
-          onChange={(ev) => setValues((p) => ({ ...p, [s.key]: ev.target.value }))}
-          placeholder={s.label + (s.placeholder ? ` (${s.placeholder})` : '')}
-          className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-2.5 py-1.5 text-xs text-neutral-200 outline-none focus:border-neutral-600"
-        />
-      ))}
-      <div className="flex gap-2">
-        <button
-          onClick={() => onConnect(values)}
-          disabled={connecting}
-          className="rounded-md bg-green-500 px-2.5 py-1 text-xs text-neutral-950 hover:bg-green-400 disabled:opacity-40"
-        >
-          {connecting ? 'Connecting…' : 'Connect'}
-        </button>
-        <button
-          onClick={onCancel}
-          className="rounded-md border border-neutral-700 px-2.5 py-1 text-xs text-neutral-400"
-        >
-          Cancel
-        </button>
+      <KeyValue
+        fixedKeys
+        masked
+        trim={false}
+        enablePaste={false}
+        value={secrets.map((secret) => ({
+          id: secret.key,
+          key: secret.label,
+          value: values[secret.key] ?? ''
+        }))}
+        onValueChange={(items) =>
+          setValues((p) => ({
+            ...p,
+            ...Object.fromEntries(items.map((item) => [item.id, item.value]))
+          }))
+        }
+      >
+        <KeyValueList>
+          {(_item, index) => {
+            const s = secrets[index]
+            if (!s) return null
+            return (
+              <KeyValueItem className="items-center">
+                <KeyValueKeyInput
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  className="w-2/5 shrink-0 text-xs text-muted-foreground"
+                />
+                <KeyValueValueInput
+                  aria-label={s.label}
+                  autoComplete="off"
+                  placeholder={s.label + (s.placeholder ? ` (${s.placeholder})` : '')}
+                  revealLabel={`Show ${s.label}`}
+                  hideLabel={`Hide ${s.label}`}
+                  className="font-mono text-xs"
+                />
+              </KeyValueItem>
+            )
+          }}
+        </KeyValueList>
+      </KeyValue>
+      <div className="flex items-center gap-2">
+        <Button size="xs" onClick={() => onConnect(values)} disabled={connecting}>
+          <TextMorph as="span">{connecting ? 'Connecting…' : 'Connect'}</TextMorph>
+        </Button>
+        <IconTip label="Cancel">
+          <Button size="icon-xs" variant="outline" aria-label="Cancel" onClick={onCancel}>
+            <X />
+          </Button>
+        </IconTip>
       </div>
     </>
   )

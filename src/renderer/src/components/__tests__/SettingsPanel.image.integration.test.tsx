@@ -48,16 +48,16 @@ describe('<SettingsPanel/> image settings', () => {
     expect(view.container.querySelector('select')).toBeNull()
 
     const user = userEvent.setup()
-    const model = await screen.findByRole('button', { name: 'Active image model' })
+    const model = await screen.findByRole('combobox', { name: 'Active image model' })
     expect(model.textContent).toContain('dreamshaper-xl-v2-turbo')
     await user.click(screen.getByRole('button', { name: /^Fine tuning/ }))
-    expect(
-      (screen.getByRole('spinbutton', { name: 'Image steps' }) as HTMLInputElement).value
-    ).toBe('12')
-    expect(screen.getByRole('button', { name: 'Image size' }).textContent).toContain('768 × 768')
+    expect((screen.getByRole('textbox', { name: 'Image steps' }) as HTMLInputElement).value).toBe(
+      '12'
+    )
+    expect(screen.getByRole('combobox', { name: 'Image size' }).textContent).toContain('768 × 768')
 
-    await user.click(screen.getByRole('button', { name: 'Image size' }))
-    await user.click(screen.getByRole('menuitemradio', { name: '1024 × 1024' }))
+    await user.click(screen.getByRole('combobox', { name: 'Image size' }))
+    await user.click(await screen.findByRole('option', { name: '1024 × 1024' }))
     await waitFor(() =>
       expect(saved).toContainEqual([
         'imageParams',
@@ -67,12 +67,10 @@ describe('<SettingsPanel/> image settings', () => {
       ])
     )
 
-    const savesBeforeGuidance = saved.length
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Image guidance' }), {
+    // A complete typed value saves at once, so closing Settings without a blur keeps it.
+    fireEvent.change(screen.getByRole('textbox', { name: 'Image guidance' }), {
       target: { value: '4' }
     })
-    expect(saved).toHaveLength(savesBeforeGuidance)
-    fireEvent.blur(screen.getByRole('spinbutton', { name: 'Image guidance' }))
     await waitFor(() =>
       expect(saved).toContainEqual([
         'imageParams',
@@ -83,7 +81,7 @@ describe('<SettingsPanel/> image settings', () => {
     )
 
     await user.click(model)
-    await user.click(screen.getByRole('menuitemradio', { name: 'juggernaut-xl-v9' }))
+    await user.click(await screen.findByRole('option', { name: 'juggernaut-xl-v9' }))
     expect(selectedModels).toContainEqual(['image', 'juggernaut-xl-v9.gguf'])
   })
 
@@ -113,14 +111,14 @@ describe('<SettingsPanel/> image settings', () => {
     const user = userEvent.setup()
     const panel = render(<SettingsPanel embedded initialTab="image" onClose={() => {}} />)
     await user.click(await screen.findByRole('button', { name: /^Fine tuning/ }))
-    const steps = screen.getByRole('spinbutton', { name: 'Image steps' })
+    const steps = screen.getByRole('textbox', { name: 'Image steps' })
 
     await user.clear(steps)
     await user.type(steps, '45')
     expect((steps as HTMLInputElement).value).toBe('45')
     await user.tab()
 
-    const guidance = screen.getByRole('spinbutton', { name: 'Image guidance' })
+    const guidance = screen.getByRole('textbox', { name: 'Image guidance' })
     await user.clear(guidance)
     await user.type(guidance, '1.5')
     expect((guidance as HTMLInputElement).value).toBe('1.5')
@@ -129,12 +127,12 @@ describe('<SettingsPanel/> image settings', () => {
     panel.unmount()
     render(<SettingsPanel embedded initialTab="image" onClose={() => {}} />)
     await waitFor(() =>
-      expect(
-        (screen.getByRole('spinbutton', { name: 'Image steps' }) as HTMLInputElement).value
-      ).toBe('45')
+      expect((screen.getByRole('textbox', { name: 'Image steps' }) as HTMLInputElement).value).toBe(
+        '45'
+      )
     )
     expect(
-      (screen.getByRole('spinbutton', { name: 'Image guidance' }) as HTMLInputElement).value
+      (screen.getByRole('textbox', { name: 'Image guidance' }) as HTMLInputElement).value
     ).toBe('1.5')
   })
 
@@ -164,13 +162,13 @@ describe('<SettingsPanel/> image settings', () => {
     render(<SettingsPanel embedded initialTab="image" onClose={() => {}} />)
 
     expect(await screen.findByRole('button', { name: /^Generation/ })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Image size' })).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: 'Image size' })).toBeTruthy()
     expect(screen.getByRole('button', { name: /^Fine tuning/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: /^Prompts/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: /^Processing/ })).toBeTruthy()
     expect(await screen.findByText('12 steps · guidance 3 · seed 42')).toBeTruthy()
     expect(screen.getByText('Enhanced by the chat model · negative prompt set')).toBeTruthy()
-    expect(screen.queryByRole('spinbutton', { name: 'Image steps' })).toBeNull()
+    expect(screen.queryByRole('textbox', { name: 'Image steps' })).toBeNull()
     expect(screen.queryByRole('textbox', { name: 'Negative prompt' })).toBeNull()
   })
 })

@@ -1,6 +1,6 @@
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, vi } from 'vitest'
+import { afterEach, expect, vi } from 'vitest'
 import { MemoryChat } from '../../MemoryChat'
 import { TooltipProvider } from '../../ui/tooltip'
 import type {
@@ -10,7 +10,8 @@ import type {
 
 export type StreamEvent = {
   streamId: string
-  type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'done' | 'error' | 'cancel'
+  type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'done' | 'error' | 'cancel' | 'image_request'
+  request?: { prompt: string; enhancePrompt?: boolean }
   text?: string
   step?: unknown
   call?: { name: string; result: string; status: 'completed' | 'failed' | 'pending' }
@@ -532,6 +533,8 @@ export function renderChat(target: {
 }
 
 export async function send(text: string, user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  // A menu that just closed animates out; until it is gone it holds focus and the page is inert.
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
   const textarea = await screen.findByPlaceholderText(/^ask /i)
   await user.clear(textarea)
   await user.type(textarea, text)

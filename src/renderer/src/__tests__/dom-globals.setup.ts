@@ -39,6 +39,16 @@ if (typeof window !== 'undefined' && typeof Element.prototype.scrollTo === 'unde
   Element.prototype.scrollTo = function scrollTo(): void {}
 }
 
+// Element.getAnimations: jsdom has no Web Animations API. base-ui's scroll area asks its viewport
+// for running animations a tick after mounting (the searchable pickers' option lists), and the
+// missing method throws from a timer. jsdom runs no CSS or Web animations, so the honest answer
+// is the one Chromium gives an element with none running: an empty list.
+if (typeof window !== 'undefined' && typeof Element.prototype.getAnimations === 'undefined') {
+  Element.prototype.getAnimations = function getAnimations(): Animation[] {
+    return []
+  }
+}
+
 // Web Storage: Node 25 and later define their own global `localStorage` and `sessionStorage`,
 // which are undefined unless Node starts with --localstorage-file. That global shadows the one
 // jsdom provides, so `localStorage.clear()` in a test throws before it runs. Chromium always has

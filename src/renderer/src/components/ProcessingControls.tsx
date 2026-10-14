@@ -8,7 +8,11 @@ import {
   type BackendPreference,
   type BackendPreferences
 } from '../../../shared/backend-preferences'
-import { runtimeBackendLabel, type RuntimeBackend, type RuntimeId } from '../../../shared/runtime-backends'
+import {
+  runtimeBackendLabel,
+  type RuntimeBackend,
+  type RuntimeId
+} from '../../../shared/runtime-backends'
 import type { PerformancePackStatus } from '../../../shared/performance-pack'
 import { persistToggle } from '@renderer/lib/persist-toggle'
 import {
@@ -16,6 +20,11 @@ import {
   residencyStatusText,
   residencySwitchLabel
 } from '@renderer/lib/residency-rows'
+import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { AnimatePresence, motion } from 'motion/react'
+
+const ease = [0.16, 1, 0.3, 1] as const
 
 interface QueueCfg {
   enabled: boolean
@@ -62,33 +71,33 @@ export function RuntimeResidencySection(): React.ReactElement {
         {RESIDENCY_ROWS.map((row) => {
           const resident = row.locked || modes[row.modality] === 'resident'
           return (
-            <div key={row.modality} className="flex items-start justify-between gap-4 py-2.5">
-              <div>
-                <div className="text-sm text-neutral-200">{row.label}</div>
-                <div className="text-xs text-neutral-600">{row.hint}</div>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <span
-                  className={`text-[11px] tabular-nums ${resident ? 'text-emerald-400' : 'text-neutral-500'}`}
-                >
-                  {residencyStatusText(row, resident)}
+            // One quiet row, as in the preview: the words are the switch's hit area too.
+            <label
+              key={row.modality}
+              data-disabled={row.locked || undefined}
+              className="group flex cursor-pointer items-start justify-between gap-4 py-2.5 data-disabled:cursor-not-allowed"
+            >
+              <span className="min-w-0">
+                <span className="block text-sm text-neutral-200 transition-colors group-hover:text-foreground">
+                  {row.label}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => toggle(row.modality, row.locked)}
-                  role="switch"
-                  aria-checked={resident}
-                  aria-disabled={row.locked}
-                  disabled={row.locked}
-                  aria-label={residencySwitchLabel(row)}
-                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-all duration-150 active:scale-95 ${resident ? 'bg-emerald-500' : 'bg-neutral-700'} ${row.locked ? 'cursor-not-allowed opacity-50' : ''}`}
+                <span className="block text-xs text-neutral-600">{row.hint}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                <span
+                  className={`text-[11px] tabular-nums transition-colors duration-300 ${resident ? 'text-emerald-400' : 'text-neutral-500'}`}
                 >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${resident ? 'translate-x-6' : 'translate-x-1'}`}
-                  />
-                </button>
-              </div>
-            </div>
+                  <TextMorph as="span">{residencyStatusText(row, resident)}</TextMorph>
+                </span>
+                <Switch
+                  checked={resident}
+                  onCheckedChange={() => toggle(row.modality, row.locked)}
+                  disabled={row.locked}
+                  aria-disabled={row.locked}
+                  aria-label={residencySwitchLabel(row)}
+                />
+              </span>
+            </label>
           )
         })}
       </div>
@@ -155,88 +164,131 @@ export function ModelPipelineSection(): React.ReactElement {
       </p>
       <div className="flex flex-col divide-y divide-neutral-800/70">
         {rows.map((row) => (
-          <div key={row.key} className="flex items-start justify-between gap-4 py-2.5">
-            <div>
-              <div className="text-sm text-neutral-200">{row.label}</div>
-              <div className="text-xs text-neutral-600">{row.hint}</div>
-            </div>
-            <button
-              type="button"
-              onClick={() => set({ [row.key]: !row.on })}
-              role="switch"
-              aria-checked={row.on}
+          <label
+            key={row.key}
+            className="group flex cursor-pointer items-start justify-between gap-4 py-2.5"
+          >
+            <span className="min-w-0">
+              <span className="block text-sm text-neutral-200 transition-colors group-hover:text-foreground">
+                {row.label}
+              </span>
+              <span className="block text-xs text-neutral-600">{row.hint}</span>
+            </span>
+            <Switch
+              checked={row.on}
+              onCheckedChange={() => set({ [row.key]: !row.on })}
               aria-label={row.label}
-              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-all duration-150 active:scale-95 ${row.on ? 'bg-emerald-500' : 'bg-neutral-700'}`}
-            >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${row.on ? 'translate-x-6' : 'translate-x-1'}`}
-              />
-            </button>
-          </div>
+            />
+          </label>
         ))}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-neutral-600">
         <span className="uppercase tracking-wide">Now</span>
-        {activity.length === 0 ? (
-          <span className="text-neutral-500">idle</span>
-        ) : (
-          activity.map((job, index) => (
-            <span
-              key={`${job.label}-${String(index)}`}
-              className={`rounded px-1.5 py-0.5 tabular-nums ${live.running.includes(job) ? 'bg-emerald-500/15 text-emerald-400' : 'bg-neutral-800 text-neutral-400'}`}
+        <AnimatePresence mode="popLayout" initial={false}>
+          {activity.length === 0 ? (
+            <motion.span
+              key="idle"
+              layout
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.4, ease }}
+              className="text-neutral-500"
             >
-              {job.label}
-              {live.queued.includes(job) ? ' · queued' : ''}
-            </span>
-          ))
-        )}
+              idle
+            </motion.span>
+          ) : (
+            activity.map((job, index) => (
+              <motion.span
+                key={`${job.label}-${String(index)}`}
+                layout
+                initial={{ opacity: 0, y: 4, filter: 'blur(3px)' }}
+                animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                exit={{ opacity: 0, filter: 'blur(3px)' }}
+                transition={{ duration: 0.4, ease, delay: index * 0.05 }}
+                className={`rounded px-1.5 py-0.5 tabular-nums transition-colors duration-300 ${live.running.includes(job) ? 'bg-emerald-500/15 text-emerald-400' : 'bg-neutral-800 text-neutral-400'}`}
+              >
+                {job.label}
+                {live.queued.includes(job) ? ' · queued' : ''}
+              </motion.span>
+            ))
+          )}
+        </AnimatePresence>
       </div>
     </section>
   )
 }
 
 const BACKEND_LABELS: Record<BackendPreference, string> = {
-  auto: 'Auto', cuda: 'CUDA', vulkan: 'Vulkan', metal: 'Metal',
-  webgpu: 'WebGPU', directml: 'DirectML', cpu: 'CPU'
+  auto: 'Auto',
+  cuda: 'CUDA',
+  vulkan: 'Vulkan',
+  metal: 'Metal',
+  webgpu: 'WebGPU',
+  directml: 'DirectML',
+  cpu: 'CPU'
 }
 
 const RUNTIME_IDS: Record<BackendModality, RuntimeId> = {
-  llm: 'chat', image: 'image', stt: 'transcription', tts: 'speech',
-  grounding: 'grounding', decision: 'decision', embeddings: 'embeddings'
+  llm: 'chat',
+  image: 'image',
+  stt: 'transcription',
+  tts: 'speech',
+  grounding: 'grounding',
+  decision: 'decision',
+  embeddings: 'embeddings'
 }
 
 const BACKEND_ROW_LABELS: Record<BackendModality, string> = {
-  llm: 'Chat and vision', image: 'Images', stt: 'Transcription', tts: 'Speech',
-  grounding: 'Grounding', decision: 'Decider', embeddings: 'Search embeddings'
+  llm: 'Chat and vision',
+  image: 'Images',
+  stt: 'Transcription',
+  tts: 'Speech',
+  grounding: 'Grounding',
+  decision: 'Decider',
+  embeddings: 'Search embeddings'
 }
 
-export function BackendPreferencesSection({ modalities }: {
+export function BackendPreferencesSection({
+  modalities
+}: {
   modalities: readonly BackendModality[]
 }): React.ReactElement {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const api = (window as any).api
   const platform: string = api.platform ?? 'linux'
-  const [preferences, setPreferences] = useState<BackendPreferences>(() => normalizeBackendPreferences({}, platform))
+  const [preferences, setPreferences] = useState<BackendPreferences>(() =>
+    normalizeBackendPreferences({}, platform)
+  )
   const [running, setRunning] = useState<RuntimeBackend[]>([])
   const [packStatus, setPackStatus] = useState<PerformancePackStatus | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
     if (api.backendPreferencesGet) {
-      void api.backendPreferencesGet().then((value: unknown) => {
-        setPreferences(normalizeBackendPreferences(value, platform))
-      }).catch(() => setError('Backend settings could not load.'))
+      void api
+        .backendPreferencesGet()
+        .then((value: unknown) => {
+          setPreferences(normalizeBackendPreferences(value, platform))
+        })
+        .catch(() => setError('Backend settings could not load.'))
     }
     const poll = (): void => {
       if (api.runtimeBackends) {
-        void api.runtimeBackends().then((value: unknown) => {
-          setRunning(Array.isArray(value) ? value : [])
-        }).catch(() => {})
+        void api
+          .runtimeBackends()
+          .then((value: unknown) => {
+            setRunning(Array.isArray(value) ? value : [])
+          })
+          .catch(() => {})
       }
     }
     poll()
     if (typeof api.performancePack?.status === 'function') {
-      void api.performancePack.status().then(setPackStatus).catch(() => {})
+      void api.performancePack
+        .status()
+        .then(setPackStatus)
+        .catch(() => {})
     }
     const stopPackUpdates = api.performancePack?.onChanged?.(setPackStatus)
     const timer = setInterval(poll, 3_000)
@@ -251,29 +303,41 @@ export function BackendPreferencesSection({ modalities }: {
     const previous = preferences
     setPreferences({ ...preferences, [modality]: preference })
     setError('')
-    void api.backendPreferenceSet(modality, preference).then(setPreferences).catch(() => {
-      setPreferences(previous)
-      setError('Backend setting could not be saved.')
-    })
+    void api
+      .backendPreferenceSet(modality, preference)
+      .then(setPreferences)
+      .catch(() => {
+        setPreferences(previous)
+        setError('Backend setting could not be saved.')
+      })
   }
 
   return (
     <section aria-label="Model backends">
-      {error && <p role="alert" className="mb-2 text-xs text-red-400">{error}</p>}
+      {error && (
+        <p role="alert" className="mb-2 text-xs text-red-400">
+          {error}
+        </p>
+      )}
       {modalities.map((modality) => {
         const runtime = running.find((entry) => entry.id === RUNTIME_IDS[modality])
         const label = `${BACKEND_ROW_LABELS[modality]} backend`
         const packOwnsCuda = ['llm', 'image', 'stt', 'grounding', 'decision'].includes(modality)
-        const cudaNeedsPack = packOwnsCuda && packStatus !== null &&
+        const cudaNeedsPack =
+          packOwnsCuda &&
+          packStatus !== null &&
           ['available', 'downloading', 'paused', 'failed', 'not-needed'].includes(packStatus.phase)
         return (
           <SettingsRow
+            inline
             key={modality}
             label={label}
             controlId={`backend-${modality}`}
-            hint={cudaNeedsPack
-              ? `Now: ${runtimeBackendLabel(runtime)}. CUDA needs the optional NVIDIA download in Setup & health. Other available backends can still run.`
-              : `Now: ${runtimeBackendLabel(runtime)}. Auto tries the best available backend. Changes when the model next loads.`}
+            hint={
+              cudaNeedsPack
+                ? `Now: ${runtimeBackendLabel(runtime)}. CUDA needs the optional NVIDIA download in Setup & health. Other available backends can still run.`
+                : `Now: ${runtimeBackendLabel(runtime)}. Auto tries the best available backend. Changes when the model next loads.`
+            }
           >
             <SettingsSelect
               id={`backend-${modality}`}
@@ -281,7 +345,10 @@ export function BackendPreferencesSection({ modalities }: {
               value={preferences[modality]}
               options={backendChoices(modality, platform).map((value) => ({
                 value,
-                label: value === 'cuda' && cudaNeedsPack ? 'CUDA (download required)' : BACKEND_LABELS[value],
+                label:
+                  value === 'cuda' && cudaNeedsPack
+                    ? 'CUDA (download required)'
+                    : BACKEND_LABELS[value],
                 disabled: value === 'cuda' && cudaNeedsPack
               }))}
               onValueChange={(value) => change(modality, value)}

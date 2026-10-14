@@ -50,17 +50,11 @@ function entryRow(title: string): Locator {
 }
 
 function entryRows(): Locator {
-  // VaultScreen.tsx:222-258: the row container follows the search/new toolbar.
-  return page
-    .getByRole('textbox', { name: 'Search vault', exact: true })
-    .locator('xpath=../..')
-    .locator('xpath=following-sibling::div[1]')
-    .getByRole('button')
+  return page.getByRole('list', { name: 'Vault items' }).getByRole('listitem')
 }
 
 function detailRow(label: string): Locator {
-  // DetailRow labels have a div parent; category labels have a button parent.
-  return page.getByText(label, { exact: true }).locator('xpath=parent::div')
+  return page.getByRole('group', { name: label, exact: true })
 }
 
 async function openVault(): Promise<void> {
@@ -76,7 +70,8 @@ async function showList(): Promise<void> {
   if (await back.isVisible()) await back.click()
   // All Items only changes category (VaultScreen.tsx:483-485); other filters persist.
   await page.getByRole('button', { name: /^All Items\s+4$/ }).click()
-  await page.getByRole('combobox', { name: 'Folder filter', exact: true }).selectOption('*')
+  await page.getByRole('combobox', { name: 'Folder filter', exact: true }).click()
+  await page.getByRole('option', { name: 'All folders', exact: true }).click()
   await page.getByRole('textbox', { name: 'Search vault', exact: true }).fill('')
   await expect(entryRows()).toHaveCount(4)
   for (const title of TITLES) await expect(entryRow(title)).toBeVisible()
@@ -84,7 +79,10 @@ async function showList(): Promise<void> {
 }
 
 async function selectEntry(title: string): Promise<void> {
-  await entryRow(title).click()
+  await entryRow(title)
+    .getByRole('button')
+    .filter({ has: page.getByText(title, { exact: true }) })
+    .click()
   await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible()
   // Selecting an entry hides the list only below md (VaultScreen.tsx:491).
   const search = page.getByRole('textbox', { name: 'Search vault', exact: true })
@@ -102,7 +100,10 @@ async function beginEntry(
 ): Promise<void> {
   await page.getByTitle('New entry', { exact: true }).click()
   await expect(page.getByText('New Entry', { exact: true })).toBeVisible()
-  await page.getByRole('combobox', { name: 'Kind', exact: true }).selectOption({ label: kind })
+  await page
+    .getByRole('radiogroup', { name: 'Kind', exact: true })
+    .getByRole('radio', { name: kind, exact: true })
+    .click()
   await page.getByRole('textbox', { name: 'Title', exact: true }).fill(title)
 }
 
@@ -232,11 +233,13 @@ test.describe('Vault item kinds with demo data', () => {
     await showList()
     await expect(page.getByRole('heading', { name: NOTE.title, exact: true })).toBeVisible()
     const folder = page.getByRole('combobox', { name: 'Folder filter', exact: true })
-    await expect(folder.getByRole('option', { name: 'Work', exact: true })).toHaveCount(1)
-    await folder.selectOption({ label: 'Work' })
+    await folder.click()
+    await expect(page.getByRole('option', { name: 'Work', exact: true })).toHaveCount(1)
+    await page.getByRole('option', { name: 'Work', exact: true }).click()
     await expect(entryRows()).toHaveCount(1)
     await expect(entryRows().first()).toContainText(LOGIN.title)
-    await folder.selectOption('*')
+    await folder.click()
+    await page.getByRole('option', { name: 'All folders', exact: true }).click()
 
     for (const [category, title] of [
       ['Logins', LOGIN.title],
@@ -269,7 +272,7 @@ test.describe('Vault item kinds with demo data', () => {
     )
     const timeLeft = page.getByRole('progressbar', { name: 'Code time remaining', exact: true })
     await expect(timeLeft).toBeVisible()
-    await expect(timeLeft).toHaveAttribute('value', /^(?:[1-9]|[12]\d|30)$/)
+    await expect(timeLeft).toHaveAttribute('aria-valuenow', /^(?:[1-9]|[12]\d|30)$/)
     await expect(detailRow('Authenticator code').getByText(/^(?:[1-9]|[12]\d|30)s$/)).toBeVisible()
     await expect(detailRow('Password').getByText('••••••••••••', { exact: true })).toBeVisible()
     await expect(page.getByText(LOGIN.password, { exact: true })).toHaveCount(0)

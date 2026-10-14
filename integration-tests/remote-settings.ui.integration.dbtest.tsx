@@ -96,12 +96,12 @@ describe('remote media choices in Desktop Settings', () => {
     const user = userEvent.setup()
     // The media choices sit in the Other models section, closed until opened.
     await user.click(screen.getByRole('button', { name: /^Other models/ }))
-    await user.click(screen.getByRole('button', { name: 'image model' }))
-    await user.click(screen.getByRole('menuitemradio', { name: 'picture' }))
-    await user.click(screen.getByRole('button', { name: 'transcription model' }))
-    await user.click(screen.getByRole('menuitemradio', { name: 'listener' }))
-    await user.click(screen.getByRole('button', { name: 'voice model' }))
-    await user.click(screen.getByRole('menuitemradio', { name: 'speaker' }))
+    await user.click(screen.getByRole('combobox', { name: 'image model' }))
+    await user.click(await screen.findByRole('option', { name: 'picture' }))
+    await user.click(screen.getByRole('combobox', { name: 'transcription model' }))
+    await user.click(await screen.findByRole('option', { name: 'listener' }))
+    await user.click(screen.getByRole('combobox', { name: 'voice model' }))
+    await user.click(await screen.findByRole('option', { name: 'speaker' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByText('Server saved and active.')
 

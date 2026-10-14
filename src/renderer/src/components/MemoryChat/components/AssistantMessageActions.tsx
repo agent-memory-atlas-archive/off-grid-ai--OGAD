@@ -1,6 +1,8 @@
 import { memo } from 'react'
-import { Button } from '@offgrid/operator-ui/operator/button'
-import { CaretLeft, CaretRight } from '@phosphor-icons/react'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { AppWindow, CaretLeft, CaretRight } from '@phosphor-icons/react'
 import { DropdownMenuItem } from '@renderer/components/ui/dropdown-menu'
 import type { Artifact } from '../../ArtifactCanvas'
 import type { ChatMessage } from '../types'
@@ -72,15 +74,10 @@ function SpeechActionComponent({
       </svg>
     )
   }
-  const color = state === 'idle' ? 'text-neutral-600 hover:text-green-500' : 'text-green-500'
   return (
-    <DropdownMenuItem
-      onSelect={onSpeak}
-      className={`flex items-center gap-1 text-[11px] transition-colors ${color}`}
-      title={label}
-    >
+    <DropdownMenuItem onSelect={onSpeak} title={label}>
       {icon}
-      {label}
+      <TextMorph as="span">{label}</TextMorph>
     </DropdownMenuItem>
   )
 }
@@ -99,24 +96,22 @@ function VariantNavigationComponent({
     <span className="flex items-center gap-1 text-[11px] text-neutral-500">
       <Button
         variant="ghost"
-        size="icon"
+        size="icon-xs"
         aria-label="Previous response"
         onClick={() => onSelect(-1)}
         disabled={index <= 0}
-        className="size-6"
       >
         <CaretLeft aria-hidden="true" />
       </Button>
       <span>
-        {index + 1}/{message.variants.length}
+        <AnimatedNumber value={index + 1} />/<AnimatedNumber value={message.variants.length} />
       </span>
       <Button
         variant="ghost"
-        size="icon"
+        size="icon-xs"
         aria-label="Next response"
         onClick={() => onSelect(1)}
         disabled={index >= message.variants.length - 1}
-        className="size-6"
       >
         <CaretRight aria-hidden="true" />
       </Button>
@@ -150,7 +145,9 @@ function AssistantMessageActionsComponent({
   onSpeak: () => void
 }>): React.JSX.Element | null {
   console.log('MemoryChat AssistantMessageActions rendered')
-  if (message.image || isSupportingMessage(message)) return null
+  if (isSupportingMessage(message)) return null
+  // An image answer has its own controls, but its earlier versions stay reachable.
+  if (message.image) return <VariantNavigation message={message} onSelect={onSelectVariant} />
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       <MessageActionsMenu>
@@ -160,7 +157,10 @@ function AssistantMessageActionsComponent({
           <RegenerateAction label="Regenerate" title="Regenerate" onRegenerate={onRegenerate} />
         ) : null}
         {artifact ? (
-          <DropdownMenuItem onSelect={() => onOpenArtifact(artifact)}>Open canvas</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onOpenArtifact(artifact)} title="Open canvas">
+            <AppWindow className="h-3.5 w-3.5" aria-hidden="true" />
+            Open canvas
+          </DropdownMenuItem>
         ) : null}
       </MessageActionsMenu>
       <VariantNavigation message={message} onSelect={onSelectVariant} />
@@ -183,20 +183,20 @@ function MessageTimeComponent({
     minute: '2-digit'
   })
   const ms = message.generationTimeMs
-  const duration =
-    ms === undefined
-      ? null
-      : ms < 1000
-        ? `${ms}ms`
-        : ms < 60000
-          ? `${(ms / 1000).toFixed(1)}s`
-          : `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`
   return (
     <span className="font-mono text-[11px] tabular-nums text-neutral-500">
       {time}
-      {duration ? <span className="ml-2 text-green-500">{duration}</span> : null}
+      {ms !== undefined ? (
+        <AnimatedNumber value={ms} format={formatGenerationTime} className="ml-2 text-green-500" />
+      ) : null}
     </span>
   )
+}
+
+function formatGenerationTime(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`
 }
 
 export const SpeechAction = memo(SpeechActionComponent)

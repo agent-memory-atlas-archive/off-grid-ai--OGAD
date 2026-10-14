@@ -43,7 +43,7 @@ describe('<ProjectsScreen/> delete refusal', () => {
     )
 
     expect((await screen.findAllByText(project.name)).length).toBeGreaterThan(0)
-    await user.click(screen.getByRole('button', { name: /knowledge & settings/i }))
+    await user.click(screen.getByRole('radio', { name: /knowledge & settings/i }))
     await user.click(screen.getByTitle('Delete project'))
 
     expect((await screen.findByRole('alert')).textContent).toContain(

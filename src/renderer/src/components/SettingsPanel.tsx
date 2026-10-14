@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { persistToggle } from '@renderer/lib/persist-toggle'
 import {
   DEFAULT_CTX_SIZE,
@@ -31,13 +32,37 @@ import { BestSettingsCard } from './BestSettingsCard'
 import { RemoteVisionSettingsTab } from './RemoteVisionSettingsTab'
 import { SettingsRow as Row } from './SettingsRow'
 import { SettingsSelect } from './SettingsSelect'
-import { NativeSelect } from '@offgrid/operator-ui/operator/forms'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { Input } from '@offgrid/operator-ui/operator/coss/input'
+import { Textarea } from '@offgrid/operator-ui/operator/coss/textarea'
+import Counter from '@offgrid/operator-ui/operator/bits/counter'
+import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import ElasticSlider from '@offgrid/operator-ui/operator/bits/elastic-slider'
+import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
+import { Stat, StatLabel, StatValue } from '@offgrid/operator-ui/operator/dice/stat'
+import { Empty, EmptyDescription, EmptyMedia } from '@offgrid/operator-ui/operator/coss/empty'
+import { ListRow } from '@offgrid/operator-ui/operator/list-row'
+import { AutoHeight, SettingRow } from '@offgrid/operator-ui/operator/presence'
 import { BackendPreferencesSection } from './ProcessingControls'
 import { useReplySound } from '../lib/reply-sound'
 import { SettingsSection } from './SettingsSection'
 import { groupConnectors } from '../../../shared/connector-groups'
 import type { SpeechLanguage } from '@offgrid/speech'
-import { CaretRight, X } from '@phosphor-icons/react'
+import {
+  ArrowCounterClockwise,
+  CaretRight,
+  Flame,
+  Minus,
+  Plugs,
+  Plus,
+  Snowflake,
+  Trash,
+  Wrench,
+  X
+} from '@phosphor-icons/react'
+import { IconTip } from './IconTip'
 import { getSlot, SLOTS } from '@renderer/bootstrap/slotRegistry'
 
 import {
@@ -180,6 +205,168 @@ const DEFAULTS: LlmSettings = {
   draftModel: ''
 }
 
+/**
+ * A slider that drafts while it moves and saves when it loses focus, like the range inputs it
+ * replaced - dragging must not reconfigure the engine on every step.
+ */
+function SettingSlider({
+  id,
+  label,
+  value,
+  min,
+  max,
+  step,
+  decimals = 0,
+  format,
+  onDraft,
+  onCommit,
+  leftIcon,
+  rightIcon
+}: {
+  id?: string
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  decimals?: number
+  format: (value: number) => string
+  onDraft: (value: number) => void
+  onCommit: (value: number) => void
+  leftIcon?: React.ReactNode
+  rightIcon?: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <div id={id} onBlur={() => onCommit(value)}>
+      <ElasticSlider
+        aria-label={label}
+        className="w-full pt-4"
+        value={value}
+        onValueChange={(next: number) => onDraft(Number(next.toFixed(decimals)))}
+        startingValue={min}
+        maxValue={max}
+        isStepped
+        stepSize={step}
+        formatValue={format}
+        leftIcon={leftIcon}
+        rightIcon={rightIcon}
+      />
+    </div>
+  )
+}
+
+/**
+ * Rolling digits with a calm stepper either side (the preview's Values chapter); the counter
+ * follows the system's reduced-motion setting itself. Each press drafts
+ * at once and saves after a short pause, so stepping 4 → 8 reconfigures the engine once, not four
+ * times. A pending save still lands if the panel closes first.
+ */
+function SettingStepper({
+  label,
+  value,
+  min,
+  max,
+  step,
+  disabled = false,
+  format = (next) => String(next),
+  onDraft,
+  onCommit
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  disabled?: boolean
+  format?: (value: number) => string
+  onDraft: (value: number) => void
+  onCommit: (value: number) => void
+}): React.JSX.Element {
+  const pending = useRef<{ timer: ReturnType<typeof setTimeout>; value: number } | null>(null)
+  const commitRef = useRef(onCommit)
+  useEffect(() => {
+    commitRef.current = onCommit
+  })
+  useEffect(
+    () => () => {
+      if (!pending.current) return
+      clearTimeout(pending.current.timer)
+      commitRef.current(pending.current.value)
+    },
+    []
+  )
+  const change = (next: number): void => {
+    const clamped = Math.min(max, Math.max(min, next))
+    if (clamped === value) return
+    onDraft(clamped)
+    if (pending.current) clearTimeout(pending.current.timer)
+    pending.current = {
+      value: clamped,
+      timer: setTimeout(() => {
+        pending.current = null
+        commitRef.current(clamped)
+      }, 600)
+    }
+  }
+  return (
+    <div
+      data-disabled={disabled || undefined}
+      className="flex items-center gap-4 transition-opacity duration-300 data-disabled:opacity-40"
+    >
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        aria-label={`Decrease ${label}`}
+        disabled={disabled || value <= min}
+        onClick={() => change(value - step)}
+      >
+        <Minus />
+      </Button>
+      <span
+        role="spinbutton"
+        aria-label={label}
+        aria-valuenow={value}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuetext={format(value)}
+        aria-disabled={disabled || undefined}
+        tabIndex={disabled ? -1 : 0}
+        onKeyDown={(event) => {
+          if (disabled) return
+          if (event.key === 'ArrowUp' || event.key === 'ArrowRight') {
+            event.preventDefault()
+            change(value + step)
+          }
+          if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') {
+            event.preventDefault()
+            change(value - step)
+          }
+        }}
+        className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      >
+        <Counter
+          value={value}
+          fontSize={22}
+          gap={1}
+          horizontalPadding={2}
+          fontWeight={300}
+          gradientFrom="transparent"
+          textColor="var(--foreground)"
+        />
+      </span>
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        aria-label={`Increase ${label}`}
+        disabled={disabled || value >= max}
+        onClick={() => change(value + step)}
+      >
+        <Plus />
+      </Button>
+    </div>
+  )
+}
+
 export function SettingsPanel({
   onClose,
   embedded = false,
@@ -204,6 +391,9 @@ export function SettingsPanel({
   const [dflashModels, setDflashModels] = useState<DraftModelOption[]>([])
   // Default hidden, like mobile: the numbers are for when you go looking, not a permanent fixture.
   const [showGenerationDetails, setShowGenerationDetails] = useState(false)
+  // The count a stepper returns to when "Choose automatically" is turned off again.
+  const [manualThreads, setManualThreads] = useState(8)
+  const [manualDraftMax, setManualDraftMax] = useState(4)
   // Remounts the tab content after "Use fastest settings" so every section re-reads its values.
   const [settingsVersion, setSettingsVersion] = useState(0)
   const reloadAfterBestSettings = (): void => {
@@ -380,6 +570,59 @@ export function SettingsPanel({
     openActiveModelsPanel()
   }
 
+  const connectorGroups = groupConnectors(connectors)
+  // One connector: its name and URL, an On/Off switch that stays visible, Remove on hover.
+  const connectorRow = (c: Connector): React.JSX.Element => (
+    <motion.div
+      key={c.id}
+      layout
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+    >
+      <ListRow
+        density="compact"
+        title={c.name}
+        description={c.url ?? undefined}
+        // On/Off is state, so it stays visible; only Remove waits for hover.
+        meta={
+          <label className="flex cursor-pointer items-center gap-2">
+            <span
+              className={`text-[11px] transition-colors duration-300 ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
+            >
+              <TextMorph as="span">{c.enabled ? 'On' : 'Off'}</TextMorph>
+            </span>
+            <Switch
+              aria-label={`Enable ${c.name}`}
+              checked={Boolean(c.enabled)}
+              onCheckedChange={async () => {
+                await (window.api as Partial<typeof window.api>).mcpSetEnabled?.(c.id, !c.enabled)
+                refreshConnectors()
+              }}
+            />
+          </label>
+        }
+        actions={
+          <IconTip label="Remove">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Remove"
+              className="text-neutral-500 hover:text-red-400"
+              onClick={async () => {
+                await (window.api as Partial<typeof window.api>).mcpRemove?.(c.id)
+                refreshConnectors()
+              }}
+            >
+              <Trash />
+            </Button>
+          </IconTip>
+        }
+      />
+    </motion.div>
+  )
+
   const content = (
     <>
       {!embedded ? (
@@ -390,19 +633,12 @@ export function SettingsPanel({
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={openActiveModels}
-              className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 transition-colors hover:text-white"
-            >
+            <Button size="sm" variant="outline" onClick={openActiveModels}>
               Active models
-            </button>
-            <button
-              onClick={onClose}
-              aria-label="Close"
-              className="text-neutral-500 transition-colors hover:text-white"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            </Button>
+            <Button size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close">
+              <X />
+            </Button>
           </div>
         </div>
       ) : null}
@@ -410,26 +646,29 @@ export function SettingsPanel({
       <BestSettingsCard onApplied={reloadAfterBestSettings} />
 
       <div className="flex flex-nowrap items-center gap-1 overflow-x-auto border-b border-neutral-800 px-3 py-2">
-        {(
-          [
-            'model',
-            'image',
-            'voice',
-            'transcription',
-            'remote',
-            ...(TaskSettings ? (['tasks'] as const) : []),
-            'tools',
-            'connectors'
-          ] as const
-        ).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`shrink-0 rounded-md px-3 py-1 text-xs capitalize transition-colors ${tab === t ? 'bg-neutral-800 text-green-500' : 'text-neutral-500 hover:text-neutral-300'}`}
-          >
-            {t === 'model' ? 'Text' : t}
-          </button>
-        ))}
+        <Segmented
+          label="Settings sections"
+          size="sm"
+          tone="quiet"
+          value={tab}
+          onValueChange={setTab}
+          options={(
+            [
+              'model',
+              'image',
+              'voice',
+              'transcription',
+              'remote',
+              ...(TaskSettings ? (['tasks'] as const) : []),
+              'tools',
+              'connectors'
+            ] as const
+          ).map((t) => ({
+            id: t,
+            label: t === 'model' ? 'Text' : t,
+            icon: <span className="capitalize">{t === 'model' ? 'Text' : t}</span>
+          }))}
+        />
       </div>
 
       <div
@@ -459,37 +698,47 @@ export function SettingsPanel({
               summary={`${activeModelName ?? 'No active model'} · context ${formatContextWindow(s.ctxSize) ?? 'checking'}`}
               defaultOpen
             >
-              <div
-                className="mb-5 grid grid-cols-2 gap-px border border-neutral-800 bg-neutral-800 lg:grid-cols-4"
-                role="status"
-              >
-                {[
-                  ['Current model', activeModelName ?? 'No active model'],
-                  ['Configured', formatContextWindow(s.ctxSize) ?? 'Checking'],
-                  ['Running', formatContextWindow(s.effectiveCtxSize) ?? 'Checking'],
-                  [
-                    'Recommended',
-                    formatContextWindow(recommendedContextWindow(s.modelMaxCtx)) ?? 'Not supported'
-                  ]
-                ].map(([label, value]) => (
-                  <div key={label} className="bg-neutral-950/90 p-3">
-                    <div className="text-[10px] uppercase tracking-wide text-neutral-600">
-                      {label}
-                    </div>
-                    <div className="mt-1 truncate text-xs text-neutral-200" title={value}>
-                      {value}
-                    </div>
-                  </div>
-                ))}
+              <div className="mb-3" role="status">
+                <AnimatedGroup
+                  preset="fade"
+                  className="grid grid-cols-2 gap-px border border-neutral-800 bg-neutral-800 lg:grid-cols-4"
+                >
+                  {[
+                    ['Current model', activeModelName ?? 'No active model'],
+                    ['Configured', formatContextWindow(s.ctxSize) ?? 'Checking'],
+                    ['Running', formatContextWindow(s.effectiveCtxSize) ?? 'Checking'],
+                    [
+                      'Recommended',
+                      formatContextWindow(recommendedContextWindow(s.modelMaxCtx)) ??
+                        'Not supported'
+                    ]
+                  ].map(([label, value]) => (
+                    <Stat
+                      key={label}
+                      className="h-full rounded-none border-0 bg-neutral-950/90 p-3 shadow-none"
+                    >
+                      <StatLabel className="text-[10px] font-normal uppercase tracking-wide text-neutral-600">
+                        {label}
+                      </StatLabel>
+                      <StatValue
+                        className="min-w-0 truncate text-xs font-normal tracking-normal text-neutral-200"
+                        title={value}
+                      >
+                        {value}
+                      </StatValue>
+                    </Stat>
+                  ))}
+                </AnimatedGroup>
               </div>
-              <p className="mb-5 text-[11px] leading-5 text-neutral-500">
-                16K is recommended for capture and chat. Capture needs at least 8K; smaller windows
-                can save memory but leave captured frames waiting for analysis.
-              </p>
               {/* Order matters: the OUTER budget first, because each inner one is bounded by it.
                 thinking budget within max output within context window (rule in @offgrid/models). */}
               <BackendPreferencesSection modalities={['llm']} />
-              <Row label="Context window" controlId="context-window" hint={contextWindowHint(s)}>
+              <Row
+                inline
+                label="Context window"
+                controlId="context-window"
+                hint={`${contextWindowHint(s)} 16K is recommended for capture and chat.`}
+              >
                 <SettingsSelect
                   id="context-window"
                   label="Context window"
@@ -514,6 +763,7 @@ export function SettingsPanel({
                 />
               </Row>
               <Row
+                inline
                 label="Max output"
                 controlId="max-output"
                 hint={
@@ -536,6 +786,7 @@ export function SettingsPanel({
                 />
               </Row>
               <Row
+                inline
                 label="Thinking budget"
                 controlId="thinking-budget"
                 hint={
@@ -564,94 +815,71 @@ export function SettingsPanel({
               summary={`Temperature ${(s.temperature ?? 0.7).toFixed(2)} · up to ${s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS} tool calls`}
               defaultOpen
             >
-              <Row
-                label="Temperature"
-                value={(s.temperature ?? 0.7).toFixed(2)}
-                hint="Lower = focused, higher = creative."
-              >
-                <input
-                  type="range"
+              <Row label="Temperature" hint="Lower = focused, higher = creative.">
+                <SettingSlider
+                  label="Temperature"
+                  value={s.temperature ?? 0.7}
                   min={0}
                   max={1.5}
                   step={0.05}
-                  value={s.temperature ?? 0.7}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, temperature: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ temperature: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  decimals={2}
+                  format={(value) => value.toFixed(2)}
+                  onDraft={(value) => setS((current) => ({ ...current, temperature: value }))}
+                  onCommit={(value) => set({ temperature: value })}
+                  leftIcon={<Snowflake className="size-4 text-muted-foreground" />}
+                  rightIcon={<Flame className="size-4 text-muted-foreground" />}
                 />
               </Row>
               <Row
+                inline
                 label="Generation details"
                 controlId="generation-details-toggle"
-                value={showGenerationDetails ? 'Shown' : 'Hidden'}
                 hint="Show context use, speed, token count, time, and the tools sent with the request under each answer."
               >
-                <button
+                <Switch
                   id="generation-details-toggle"
-                  type="button"
-                  role="switch"
-                  aria-checked={showGenerationDetails}
-                  onClick={toggleGenerationDetails}
-                  className={`w-full border px-3 py-1.5 text-left text-xs transition-colors ${
-                    showGenerationDetails
-                      ? 'border-green-500/40 text-green-500'
-                      : 'border-neutral-800 text-neutral-400 hover:text-neutral-200'
-                  }`}
-                >
-                  {showGenerationDetails ? 'Showing under each answer' : 'Hidden'}
-                </button>
+                  aria-label="Generation details"
+                  checked={showGenerationDetails}
+                  onCheckedChange={toggleGenerationDetails}
+                />
               </Row>
               <Row
+                inline
                 label="Reply sound"
                 controlId="reply-sound-toggle"
-                value={replySound ? 'On' : 'Off'}
                 hint="A soft ding when an answer arrives, here and in God. The same setting in both."
               >
-                <button
+                <Switch
                   id="reply-sound-toggle"
-                  type="button"
-                  role="switch"
-                  aria-checked={replySound}
-                  onClick={() => setReplySound(!replySound)}
-                  className={`w-full border px-3 py-1.5 text-left text-xs transition-colors ${
-                    replySound
-                      ? 'border-green-500/40 text-green-500'
-                      : 'border-neutral-800 text-neutral-400 hover:text-neutral-200'
-                  }`}
-                >
-                  {replySound ? 'Ding when an answer arrives' : 'Off'}
-                </button>
+                  aria-label="Reply sound"
+                  checked={replySound}
+                  onCheckedChange={() => setReplySound(!replySound)}
+                />
               </Row>
               <Row
                 label="Maximum tool calls"
                 controlId="maximum-tool-calls"
-                value={String(s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS)}
                 hint="Emergency limit for tool calls in one response."
               >
-                <input
+                <SettingSlider
                   id="maximum-tool-calls"
-                  type="range"
+                  label="Maximum tool calls"
+                  value={s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS}
                   min={MIN_MAX_TOOL_CALLS}
                   max={MAX_MAX_TOOL_CALLS}
                   step={1}
-                  value={s.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS}
-                  onChange={(e) =>
-                    setS((current) => ({
-                      ...current,
-                      maxToolCalls: Math.round(Number(e.target.value))
-                    }))
+                  format={(value) => String(value)}
+                  onDraft={(value) =>
+                    setS((current) => ({ ...current, maxToolCalls: Math.round(value) }))
                   }
-                  onBlur={(e) => set({ maxToolCalls: Math.round(Number(e.target.value)) })}
-                  className="w-full accent-green-500"
+                  onCommit={(value) => set({ maxToolCalls: Math.round(value) })}
                 />
               </Row>
               <Row
                 label="System prompt"
                 hint="Prepended to every chat as a system message. Leave blank for the default."
               >
-                <textarea
+                <Textarea
                   value={s.systemPrompt ?? ''}
                   onChange={(e) =>
                     setS((current) => ({ ...current, systemPrompt: e.target.value }))
@@ -659,7 +887,7 @@ export function SettingsPanel({
                   onBlur={(e) => set({ systemPrompt: e.target.value })}
                   rows={5}
                   placeholder="e.g. You are a concise, technical assistant."
-                  className="w-full resize-none rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
+                  className="resize-none"
                 />
               </Row>
             </SettingsSection>
@@ -668,76 +896,55 @@ export function SettingsPanel({
               title="Sampling"
               summary={`Top-P ${(s.topP ?? 0.95).toFixed(2)} · Top-K ${s.topK ?? 40} · repeat penalty ${(s.repeatPenalty ?? 1.1).toFixed(2)}`}
             >
-              <Row
-                label="Top-P"
-                value={(s.topP ?? 0.95).toFixed(2)}
-                hint="Nucleus sampling cutoff."
-              >
-                <input
-                  type="range"
+              <Row label="Top-P" hint="Nucleus sampling cutoff.">
+                <SettingSlider
+                  label="Top-P"
+                  value={s.topP ?? 0.95}
                   min={0}
                   max={1}
                   step={0.01}
-                  value={s.topP ?? 0.95}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, topP: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ topP: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  decimals={2}
+                  format={(value) => value.toFixed(2)}
+                  onDraft={(value) => setS((current) => ({ ...current, topP: value }))}
+                  onCommit={(value) => set({ topP: value })}
                 />
               </Row>
-              <Row
-                label="Top-K"
-                value={String(s.topK ?? 40)}
-                hint="0 disables. Limits candidate tokens."
-              >
-                <input
-                  type="range"
+              <Row label="Top-K" hint="0 disables. Limits candidate tokens.">
+                <SettingSlider
+                  label="Top-K"
+                  value={s.topK ?? 40}
                   min={0}
                   max={100}
                   step={1}
-                  value={s.topK ?? 40}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, topK: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ topK: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  format={(value) => String(value)}
+                  onDraft={(value) => setS((current) => ({ ...current, topK: value }))}
+                  onCommit={(value) => set({ topK: value })}
                 />
               </Row>
-              <Row
-                label="Min-P"
-                value={(s.minP ?? 0.05).toFixed(2)}
-                hint="Min probability relative to the top token."
-              >
-                <input
-                  type="range"
+              <Row label="Min-P" hint="Min probability relative to the top token.">
+                <SettingSlider
+                  label="Min-P"
+                  value={s.minP ?? 0.05}
                   min={0}
                   max={0.5}
                   step={0.01}
-                  value={s.minP ?? 0.05}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, minP: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ minP: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  decimals={2}
+                  format={(value) => value.toFixed(2)}
+                  onDraft={(value) => setS((current) => ({ ...current, minP: value }))}
+                  onCommit={(value) => set({ minP: value })}
                 />
               </Row>
-              <Row
-                label="Repeat penalty"
-                value={(s.repeatPenalty ?? 1.1).toFixed(2)}
-                hint="Higher discourages repetition."
-              >
-                <input
-                  type="range"
+              <Row label="Repeat penalty" hint="Higher discourages repetition.">
+                <SettingSlider
+                  label="Repeat penalty"
+                  value={s.repeatPenalty ?? 1.1}
                   min={1}
                   max={1.5}
                   step={0.01}
-                  value={s.repeatPenalty ?? 1.1}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, repeatPenalty: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ repeatPenalty: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  decimals={2}
+                  format={(value) => value.toFixed(2)}
+                  onDraft={(value) => setS((current) => ({ ...current, repeatPenalty: value }))}
+                  onCommit={(value) => set({ repeatPenalty: value })}
                 />
               </Row>
             </SettingsSection>
@@ -749,37 +956,36 @@ export function SettingsPanel({
               }
             >
               <Row
+                inline
                 label="KV cache"
                 hint="Quantize the KV cache to cut memory and allow a larger context. q8_0 ≈ half, q4_0 ≈ quarter of f16. Auto-enables FlashAttention."
               >
-                <div className="flex gap-1.5">
-                  {(['f16', 'q8_0', 'q4_0'] as const).map((t) => (
-                    <button
-                      key={t}
-                      onClick={() =>
-                        set({ kvCacheType: t, ...(t !== 'f16' ? { flashAttn: true } : {}) })
-                      }
-                      className={`flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors ${(s.kvCacheType ?? 'f16') === t ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
+                <Segmented
+                  label="KV cache"
+                  size="sm"
+                  value={s.kvCacheType ?? 'f16'}
+                  onValueChange={(t) =>
+                    set({ kvCacheType: t, ...(t !== 'f16' ? { flashAttn: true } : {}) })
+                  }
+                  options={(['f16', 'q8_0', 'q4_0'] as const).map((t) => ({ id: t, label: t }))}
+                />
               </Row>
               <Row
+                inline
                 label="FlashAttention"
-                value={(s.flashAttn ?? false) ? 'On' : 'Off'}
+                controlId="flash-attention-toggle"
                 hint="Faster, lower memory. Required for a quantized KV cache."
               >
-                <button
-                  onClick={() => set({ flashAttn: !(s.flashAttn ?? false) })}
+                <Switch
+                  id="flash-attention-toggle"
+                  aria-label="FlashAttention"
+                  checked={s.flashAttn ?? false}
                   disabled={(s.kvCacheType ?? 'f16') !== 'f16'}
-                  className={`w-full rounded-md border px-2 py-1.5 text-xs transition-colors disabled:opacity-50 ${s.flashAttn ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}
-                >
-                  {s.flashAttn ? 'Enabled' : 'Disabled'}
-                </button>
+                  onCheckedChange={() => set({ flashAttn: !(s.flashAttn ?? false) })}
+                />
               </Row>
               <Row
+                inline
                 label="Speculative decoding"
                 controlId="speculative-decoding"
                 hint="N-gram needs no second model. MTP uses prediction heads in the main model or its matching installed MTP file. Draft and DFlash need a compatible installed draft GGUF."
@@ -800,19 +1006,34 @@ export function SettingsPanel({
                   controlId="speculative-draft-max"
                   hint="Maximum tokens proposed per step. More is not always faster. Auto uses two for MTP and the engine default for Draft and DFlash."
                 >
-                  <NativeSelect
-                    id="speculative-draft-max"
-                    aria-label="Draft token limit"
-                    value={s.speculativeDraftMax ?? 0}
-                    onChange={(event) => set({ speculativeDraftMax: Number(event.target.value) })}
-                  >
-                    <option value={0}>Auto</option>
-                    {Array.from({ length: 16 }, (_, index) => index + 1).map((limit) => (
-                      <option key={limit} value={limit}>
-                        {limit} tokens
-                      </option>
-                    ))}
-                  </NativeSelect>
+                  <div id="speculative-draft-max" className="flex items-center gap-3">
+                    <SettingStepper
+                      label="Draft token limit"
+                      value={
+                        (s.speculativeDraftMax ?? 0) > 0 ? s.speculativeDraftMax! : manualDraftMax
+                      }
+                      min={1}
+                      max={16}
+                      step={1}
+                      disabled={(s.speculativeDraftMax ?? 0) === 0}
+                      format={(value) => `${value} tokens`}
+                      onDraft={(value) => {
+                        setManualDraftMax(value)
+                        setS((current) => ({ ...current, speculativeDraftMax: value }))
+                      }}
+                      onCommit={(value) => set({ speculativeDraftMax: value })}
+                    />
+                    <label className="flex w-fit cursor-pointer items-center gap-3 text-[12px] text-muted-foreground">
+                      <Switch
+                        aria-label="Choose the draft token limit automatically"
+                        checked={(s.speculativeDraftMax ?? 0) === 0}
+                        onCheckedChange={(auto) =>
+                          set({ speculativeDraftMax: auto ? 0 : manualDraftMax })
+                        }
+                      />
+                      Auto
+                    </label>
+                  </div>
                 </Row>
               )}
               {(s.speculativeDecoding === 'draft' || s.speculativeDecoding === 'dflash') && (
@@ -837,68 +1058,69 @@ export function SettingsPanel({
                   />
                 </Row>
               )}
-              <Row
-                label="GPU layers"
-                value={String(s.gpuLayers ?? 99)}
-                hint={gpuLayersHint(s.gpuAccelerator ?? null)}
-              >
-                <input
-                  type="range"
+              <Row label="GPU layers" hint={gpuLayersHint(s.gpuAccelerator ?? null)}>
+                <SettingSlider
+                  label="GPU layers"
+                  value={s.gpuLayers ?? 99}
                   min={0}
                   max={99}
                   step={1}
-                  value={s.gpuLayers ?? 99}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, gpuLayers: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ gpuLayers: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  format={(value) => String(value)}
+                  onDraft={(value) => setS((current) => ({ ...current, gpuLayers: value }))}
+                  onCommit={(value) => set({ gpuLayers: value })}
                 />
               </Row>
-              <Row
-                label="CPU threads"
-                value={(s.threads ?? 0) === 0 ? 'auto' : String(s.threads)}
-                hint="0 = auto (let llama.cpp choose)."
-              >
-                <input
-                  type="range"
-                  min={0}
-                  max={16}
-                  step={1}
-                  value={s.threads ?? 0}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, threads: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ threads: Number(e.target.value) })}
-                  className="w-full accent-green-500"
-                />
+              <Row label="CPU threads" hint="Auto lets llama.cpp choose.">
+                <div className="flex items-center gap-3">
+                  <SettingStepper
+                    label="CPU threads"
+                    value={(s.threads ?? 0) > 0 ? s.threads! : manualThreads}
+                    min={1}
+                    max={16}
+                    step={1}
+                    disabled={(s.threads ?? 0) === 0}
+                    onDraft={(value) => {
+                      setManualThreads(value)
+                      setS((current) => ({ ...current, threads: value }))
+                    }}
+                    onCommit={(value) => set({ threads: value })}
+                  />
+                  <label className="flex w-fit cursor-pointer items-center gap-3 text-[12px] text-muted-foreground">
+                    <Switch
+                      aria-label="Choose CPU threads automatically"
+                      checked={(s.threads ?? 0) === 0}
+                      onCheckedChange={(auto) => set({ threads: auto ? 0 : manualThreads })}
+                    />
+                    Auto
+                  </label>
+                </div>
               </Row>
-              <Row
-                label="Batch size"
-                value={String(s.batchSize ?? 512)}
-                hint="Tokens processed per batch during prompt ingest."
-              >
-                <input
-                  type="range"
+              <Row label="Batch size" hint="Tokens processed per batch during prompt ingest.">
+                <SettingSlider
+                  label="Batch size"
+                  value={s.batchSize ?? 512}
                   min={64}
                   max={2048}
                   step={64}
-                  value={s.batchSize ?? 512}
-                  onChange={(e) =>
-                    setS((current) => ({ ...current, batchSize: Number(e.target.value) }))
-                  }
-                  onBlur={(e) => set({ batchSize: Number(e.target.value) })}
-                  className="w-full accent-green-500"
+                  format={(value) => String(value)}
+                  onDraft={(value) => setS((current) => ({ ...current, batchSize: value }))}
+                  onCommit={(value) => set({ batchSize: value })}
                 />
               </Row>
             </SettingsSection>
 
-            <button
-              onClick={resetDefaults}
-              className="mt-2 w-full rounded-md border border-neutral-800 px-3 py-2 text-xs text-neutral-400 transition-colors hover:border-neutral-700 hover:text-white"
-            >
-              Reset to defaults
-            </button>
+            <div className="mt-2 flex justify-end">
+              <IconTip label="Reset to defaults">
+                <Button
+                  size="icon-sm"
+                  variant="outline"
+                  aria-label="Reset to defaults"
+                  onClick={resetDefaults}
+                >
+                  <ArrowCounterClockwise />
+                </Button>
+              </IconTip>
+            </div>
           </>
         )}
 
@@ -917,9 +1139,10 @@ export function SettingsPanel({
               defaultOpen
             >
               <Row
+                inline
                 label="Current model"
                 controlId="transcription-model"
-                hint="The model used for the next recording."
+                hint={transcriptionInfo?.label ?? 'The model used for the next recording.'}
               >
                 <SettingsSelect
                   id="transcription-model"
@@ -936,11 +1159,9 @@ export function SettingsPanel({
                     label: option.name
                   }))}
                 />
-                {transcriptionInfo ? (
-                  <p className="mt-1 text-[10px] text-neutral-600">{transcriptionInfo.label}</p>
-                ) : null}
               </Row>
               <Row
+                inline
                 label="Spoken language"
                 controlId="stt-language"
                 hint="Auto-detect is available for multilingual Whisper models. English-only models show English only."
@@ -957,12 +1178,7 @@ export function SettingsPanel({
                   }))}
                 />
               </Row>
-            </SettingsSection>
-            <SettingsSection
-              id="transcription.performance"
-              title="Performance"
-              summary="Which processor runs transcription."
-            >
+              {/* One row needs no section of its own: the processor sits with the model it runs. */}
               <BackendPreferencesSection modalities={['stt']} />
             </SettingsSection>
           </>
@@ -970,19 +1186,16 @@ export function SettingsPanel({
 
         {tab === 'tools' && (
           <>
-            <div className="mb-3 flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2">
-              <div>
-                <div className="text-sm">Enable tools</div>
-                <div className="text-[11px] text-neutral-500">
-                  Controls whether any tools are sent to the chat model.
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
+            <SettingRow
+              icon={<Wrench />}
+              title="Enable tools"
+              description="Controls whether any tools are sent to the chat model."
+              className="mb-3 pt-0"
+            >
+              <Switch
                 aria-label="Enable tools"
-                aria-checked={toolsEnabled}
-                onClick={() => {
+                checked={toolsEnabled}
+                onCheckedChange={() => {
                   const next = !toolsEnabled
                   setToolsEnabled(next)
                   void window.api.saveSetting('toolsEnabled', next)
@@ -990,18 +1203,12 @@ export function SettingsPanel({
                     new CustomEvent('offgrid-tools-enabled-changed', { detail: next })
                   )
                 }}
-                className={`shrink-0 rounded px-2 py-1 text-[11px] ${toolsEnabled ? 'text-green-500' : 'text-neutral-500'}`}
-              >
-                {toolsEnabled ? 'On' : 'Off'}
-              </button>
-            </div>
-            <p className="mb-3 text-[11px] text-neutral-500">
-              Built-in tools the model can call when “Tools” is on in the composer.
-            </p>
+              />
+            </SettingRow>
             {tools.length === 0 ? (
               <p className="text-xs text-neutral-600">No tools.</p>
             ) : (
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col divide-y divide-neutral-800 overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/40">
                 {groupTools(tools).map((group) => {
                   const enabledCount = group.tools.filter((tool) => tool.enabled !== false).length
                   const allEnabled = enabledCount === group.tools.length
@@ -1013,7 +1220,7 @@ export function SettingsPanel({
                     <section
                       key={group.label}
                       aria-labelledby={`tool-group-${groupId}`}
-                      className="overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/40"
+                      className="overflow-hidden"
                     >
                       <div
                         className={`flex items-center justify-between gap-3 px-3 py-2 ${isExpanded ? 'border-b border-neutral-800' : ''}`}
@@ -1037,189 +1244,181 @@ export function SettingsPanel({
                             aria-hidden="true"
                             className={`shrink-0 transition-transform duration-150 ${isExpanded ? 'rotate-90' : ''}`}
                           />
-                          <span>
+                          <span className="flex min-w-0 items-baseline gap-2">
                             <span
                               id={`tool-group-${groupId}`}
                               role="heading"
                               aria-level={3}
-                              className="text-[11px] uppercase tracking-wide text-neutral-400"
+                              className="truncate text-[11px] uppercase tracking-wide text-neutral-400"
                             >
                               {group.label}
                             </span>
-                            <span className="block text-[10px] text-neutral-600">
+                            <span className="shrink-0 text-[10px] text-neutral-600">
                               {enabledCount} of {group.tools.length} on
                             </span>
                           </span>
                         </button>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-label={`Enable ${group.label} tools`}
-                          aria-checked={allEnabled}
-                          onClick={() => {
-                            const next = !allEnabled
-                            const names = new Set(group.tools.map((tool) => tool.name))
-                            const nextTools = tools.map((tool) =>
-                              names.has(tool.name) ? { ...tool, enabled: next } : tool
-                            )
-                            void persistToggle(nextTools, tools, setTools, async () => {
-                              for (const tool of group.tools) {
-                                await (window.api as Partial<typeof window.api>).setToolEnabled?.(
-                                  tool.name,
-                                  next
-                                )
-                              }
-                            })
-                          }}
-                          className={`shrink-0 rounded px-2 py-1 text-[11px] transition-all duration-150 active:scale-95 ${allEnabled ? 'text-green-500' : 'text-neutral-500'}`}
-                        >
-                          {groupState}
-                        </button>
+                        <label className="flex shrink-0 cursor-pointer items-center gap-2">
+                          <span
+                            className={`text-[11px] transition-colors duration-300 ${allEnabled ? 'text-green-500' : 'text-neutral-500'}`}
+                          >
+                            <TextMorph as="span">{groupState}</TextMorph>
+                          </span>
+                          <Switch
+                            aria-label={`Enable ${group.label} tools`}
+                            checked={allEnabled ? true : enabledCount === 0 ? false : 'mixed'}
+                            onCheckedChange={() => {
+                              // Mixed turns the whole group on, as the switch reports it.
+                              const next = !allEnabled
+                              const names = new Set(group.tools.map((tool) => tool.name))
+                              const nextTools = tools.map((tool) =>
+                                names.has(tool.name) ? { ...tool, enabled: next } : tool
+                              )
+                              void persistToggle(nextTools, tools, setTools, async () => {
+                                try {
+                                  for (const tool of group.tools) {
+                                    await (
+                                      window.api as Partial<typeof window.api>
+                                    ).setToolEnabled?.(tool.name, next)
+                                  }
+                                } catch {
+                                  setTools(await window.api.listTools())
+                                }
+                              })
+                            }}
+                          />
+                        </label>
                       </div>
-                      {isExpanded && (
-                        <div
-                          id={`tool-group-items-${groupId}`}
-                          className="divide-y divide-neutral-800/70"
-                        >
-                          {group.tools.map((tool) => (
-                            <div
-                              key={tool.name}
-                              className="flex items-start justify-between gap-3 px-3 py-2 transition-colors duration-150 hover:bg-neutral-800/30"
-                            >
-                              <div className="min-w-0">
-                                <div
-                                  className={`text-sm ${tool.enabled === false ? 'text-neutral-500' : 'text-green-500'}`}
-                                >
-                                  {tool.name}
-                                </div>
-                                <div className="text-[11px] text-neutral-500">
-                                  {tool.description}
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                role="switch"
-                                aria-label={`Enable ${tool.name}`}
-                                aria-checked={tool.enabled !== false}
-                                onClick={() => {
-                                  const next = tool.enabled === false
-                                  void persistToggle(
-                                    tools.map((item) =>
-                                      item.name === tool.name ? { ...item, enabled: next } : item
-                                    ),
-                                    tools,
-                                    setTools,
-                                    () =>
-                                      (window.api as Partial<typeof window.api>).setToolEnabled?.(
-                                        tool.name,
-                                        next
-                                      )
-                                  )
-                                }}
-                                className={`shrink-0 rounded px-2 py-1 text-[11px] transition-all duration-150 active:scale-95 ${tool.enabled === false ? 'text-neutral-500' : 'text-green-500'}`}
+                      <AutoHeight>
+                        {isExpanded && (
+                          <div
+                            id={`tool-group-items-${groupId}`}
+                            className="divide-y divide-neutral-800/70"
+                          >
+                            {group.tools.map((tool) => (
+                              <div
+                                key={tool.name}
+                                className="flex items-start justify-between gap-3 px-3 py-2 transition-colors duration-150 hover:bg-neutral-800/30"
                               >
-                                {tool.enabled === false ? 'Off' : 'On'}
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                                <div className="min-w-0">
+                                  <div
+                                    className={`text-sm ${tool.enabled === false ? 'text-neutral-500' : 'text-green-500'}`}
+                                  >
+                                    {tool.name}
+                                  </div>
+                                  <div className="text-[11px] text-neutral-500">
+                                    {tool.description}
+                                  </div>
+                                </div>
+                                <Switch
+                                  aria-label={`Enable ${tool.name}`}
+                                  checked={tool.enabled !== false}
+                                  onCheckedChange={() => {
+                                    const next = tool.enabled === false
+                                    void persistToggle(
+                                      tools.map((item) =>
+                                        item.name === tool.name ? { ...item, enabled: next } : item
+                                      ),
+                                      tools,
+                                      setTools,
+                                      () =>
+                                        (window.api as Partial<typeof window.api>).setToolEnabled?.(
+                                          tool.name,
+                                          next
+                                        )
+                                    )
+                                  }}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </AutoHeight>
                     </section>
                   )
                 })}
               </div>
             )}
-            <SettingsSection
-              id="tools.search"
-              title="Search performance"
-              summary="Which processor builds search embeddings."
-            >
+            {/* One row needs no section of its own. */}
+            <div className="mt-4">
               <BackendPreferencesSection modalities={['embeddings']} />
-            </SettingsSection>
+            </div>
           </>
         )}
 
         {tab === 'connectors' && (
           <>
-            <p className="mb-3 text-[11px] text-neutral-500">
+            <p className="mb-2 text-[11.5px] leading-snug text-neutral-500">
               Connect MCP servers — your reusable tool library (web search, fetch, etc.). Add an
               HTTP MCP endpoint:
             </p>
-            <div className="mb-4 flex flex-col gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 p-3">
-              <input
+            <div className="mb-4 flex items-center gap-2">
+              <Input
+                size="sm"
+                className="w-32 shrink-0"
                 value={newConn.name}
                 onChange={(e) => setNewConn({ ...newConn, name: e.target.value })}
                 placeholder="Name (e.g. Brave Search)"
-                className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
               />
-              <input
+              <Input
+                size="sm"
+                className="min-w-0 flex-1"
                 value={newConn.url}
                 onChange={(e) => setNewConn({ ...newConn, url: e.target.value })}
                 placeholder="https://… (MCP HTTP URL)"
-                className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
               />
-              <button
-                onClick={addConnector}
-                disabled={!newConn.name.trim() || !newConn.url.trim()}
-                className="self-start rounded-md bg-green-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-green-500 disabled:opacity-40"
-              >
-                Add connector
-              </button>
+              <IconTip label="Add connector">
+                <Button
+                  size="icon-sm"
+                  variant="outline"
+                  aria-label="Add connector"
+                  onClick={addConnector}
+                  disabled={!newConn.name.trim() || !newConn.url.trim()}
+                >
+                  <Plus />
+                </Button>
+              </IconTip>
             </div>
             {connectors.length === 0 ? (
-              <p className="text-xs text-neutral-600">No connectors yet.</p>
+              <Empty className="px-0 py-6 md:py-6">
+                <EmptyMedia variant="icon">
+                  <Plugs className="text-neutral-600" />
+                </EmptyMedia>
+                <EmptyDescription className="text-xs text-neutral-600">
+                  No connectors yet.
+                </EmptyDescription>
+              </Empty>
             ) : (
-              // By service: several accounts and servers of one service sit together.
+              // By service: several accounts and servers of one service sit together in a section;
+              // a service with one connector is just its row, in one thin list above them.
               <div className="flex flex-col">
-                {groupConnectors(connectors).map((group) => (
-                  <SettingsSection
-                    key={group.key}
-                    id={`connectors.${group.key}`}
-                    title={group.label}
-                    summary={`${group.connectors.length} connected · ${
-                      group.connectors.filter((c) => c.enabled).length
-                    } on`}
-                  >
-                    <div className="flex flex-col gap-2 pb-2">
-                      {group.connectors.map((c) => (
-                        <div
-                          key={c.id}
-                          className="flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2"
-                        >
-                          <div className="min-w-0">
-                            <div className="truncate text-sm text-neutral-200">{c.name}</div>
-                            {c.url ? (
-                              <div className="truncate text-[10px] text-neutral-600">{c.url}</div>
-                            ) : null}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={async () => {
-                                await (window.api as Partial<typeof window.api>).mcpSetEnabled?.(
-                                  c.id,
-                                  !c.enabled
-                                )
-                                refreshConnectors()
-                              }}
-                              className={`rounded px-2 py-1 text-[11px] ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
-                            >
-                              {c.enabled ? 'On' : 'Off'}
-                            </button>
-                            <button
-                              onClick={async () => {
-                                await (window.api as Partial<typeof window.api>).mcpRemove?.(c.id)
-                                refreshConnectors()
-                              }}
-                              className="rounded px-2 py-1 text-[11px] text-red-400 hover:bg-red-500/10"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </SettingsSection>
-                ))}
+                {connectorGroups.some((group) => group.connectors.length === 1) && (
+                  <div className="mb-2 flex flex-col divide-y divide-neutral-900 rounded-md border border-neutral-800 bg-neutral-950/40">
+                    <AnimatePresence initial={false}>
+                      {connectorGroups
+                        .filter((group) => group.connectors.length === 1)
+                        .flatMap((group) => group.connectors.map((c) => connectorRow(c)))}
+                    </AnimatePresence>
+                  </div>
+                )}
+                {connectorGroups
+                  .filter((group) => group.connectors.length > 1)
+                  .map((group) => (
+                    <SettingsSection
+                      key={group.key}
+                      id={`connectors.${group.key}`}
+                      title={group.label}
+                      summary={`${group.connectors.length} connected · ${
+                        group.connectors.filter((c) => c.enabled).length
+                      } on`}
+                    >
+                      <div className="flex flex-col divide-y divide-neutral-900 pb-2">
+                        <AnimatePresence initial={false}>
+                          {group.connectors.map((c) => connectorRow(c))}
+                        </AnimatePresence>
+                      </div>
+                    </SettingsSection>
+                  ))}
               </div>
             )}
           </>

@@ -9,6 +9,9 @@ import {
   Clock,
   Desktop
 } from '@phosphor-icons/react'
+import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
+import { Button } from '../ui/button'
 import { PRO_PAY_URL, PRO_FEATURES, featureSupportsPlatform, type ProFeature } from './proCatalog'
 import { OFF_GRID_MOBILE_URL, OFF_GRID_WEBSITE_URL, openExternal } from '../../constants/links'
 import { deviceNoun, currentPlatform } from '@renderer/lib/device'
@@ -160,9 +163,14 @@ export function UpgradeScreen({
               )}
             </div>
             <div className="min-w-0">
-              <h1 className="text-3xl font-semibold tracking-tight text-white">
+              <TextEffect
+                as="h1"
+                preset="fade-in-blur"
+                per="word"
+                className="text-3xl font-semibold tracking-tight text-white"
+              >
                 {f ? f.label : linux ? 'Off Grid AI Pro on Linux' : 'Off Grid AI Pro is here'}
-              </h1>
+              </TextEffect>
               {f && <p className="mt-1 text-base text-neutral-300">{f.tagline}</p>}
             </div>
           </div>
@@ -174,17 +182,17 @@ export function UpgradeScreen({
           </p>
 
           {f && (
-            <ul className="grid gap-2 sm:grid-cols-2">
+            <AnimatedGroup as="ul" asChild="li" preset="blur-slide" className="grid gap-2 sm:grid-cols-2">
               {f.highlights.map((h) => (
-                <li key={h} className="flex items-start gap-2 text-sm text-neutral-300">
+                <div key={h} className="flex items-start gap-2 text-sm text-neutral-300">
                   <Check
                     weight="bold"
                     className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400"
                   />{' '}
                   {h}
-                </li>
+                </div>
               ))}
-            </ul>
+            </AnimatedGroup>
           )}
 
           {/* Everything Pro includes — the other gated tabs */}
@@ -266,12 +274,9 @@ export function UpgradeScreen({
                   <div className="text-[10px] uppercase tracking-widest text-neutral-500">
                     Unlock Pro
                   </div>
-                  <button
-                    onClick={() => open(PRO_PAY_URL)}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-green-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-green-500"
-                  >
+                  <Button size="lg" className="w-full" onClick={() => open(PRO_PAY_URL)}>
                     Get Pro <ArrowSquareOut weight="bold" className="h-4 w-4" />
-                  </button>
+                  </Button>
                   <p className="text-[11px] leading-relaxed text-neutral-600">
                     One-time purchase. Runs entirely on your device - no subscription, no cloud, no
                     account.

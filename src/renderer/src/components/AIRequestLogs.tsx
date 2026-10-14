@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowSquareOut,
   MagnifyingGlass,
@@ -11,7 +11,10 @@ import {
   HardDrives,
   Pulse,
   Pause,
-  ListMagnifyingGlass
+  ListMagnifyingGlass,
+  ArrowCounterClockwise,
+  CaretLeft,
+  CaretRight
 } from '@phosphor-icons/react'
 import {
   AI_LOG_POLICY,
@@ -23,6 +26,35 @@ import {
   type AIRequestSummary
 } from '@offgrid/core/shared/ai-request-log'
 import { Button } from './ui/button'
+import { GlyphSwap, IconTip } from './IconTip'
+import { AnimatePresence, motion } from 'motion/react'
+import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import { PageHeader } from '@offgrid/operator-ui/operator/experience'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
+import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle
+} from '@offgrid/operator-ui/operator/coss/empty'
+import { Table, TableBody, TableHeader, TableRow } from '@offgrid/operator-ui/operator/coss/table'
+import { TableVirtuoso, type TableComponents } from '@offgrid/operator-ui/operator/virtual-list'
+import { AutoHeight, Highlight, LiveStatus } from '@offgrid/operator-ui/operator/presence'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput
+} from '@offgrid/operator-ui/operator/coss/input-group'
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue
+} from '@offgrid/operator-ui/operator/coss/select'
 import { SettingsSelect } from './SettingsSelect'
 import { CopyButton } from './ui/CopyButton'
 import {
@@ -42,12 +74,64 @@ const labels = {
 }
 const initialDisplay = { request: true, response: true, model: true, details: true }
 type Display = typeof initialDisplay
-const inputClass =
-  'min-w-0 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring'
 const duration = (ms?: number): string =>
   ms === undefined ? 'In progress' : `${(ms / 1000).toFixed(ms < 1000 ? 2 : 1)}s`
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : 'Could not load activity. Try Refresh.'
+const ease = [0.16, 1, 0.3, 1] as const
+const spring = { type: 'spring', stiffness: 420, damping: 36 } as const
+const STATUS_DOT: Record<string, string> = {
+  completed: 'bg-primary shadow-[0_0_6px_rgb(var(--og-rgb-primary)/0.8)]',
+  running: 'bg-primary/70 animate-pulse',
+  failed: 'bg-red-400',
+  interrupted: 'bg-amber-400',
+  cancelled: 'bg-muted-foreground/50'
+}
+
+/** What every visible request row needs to know besides its own data. */
+interface RowContext {
+  selectedId: string | null
+  freshIds: ReadonlySet<string>
+}
+
+// The virtual chapter's table: Coss parts, a header that stays put, rows that light on hover. The
+// Coss container scrolls on x, which would capture the sticky header, so it stays visible here.
+function RequestTable({
+  context: _context,
+  ...props
+}: React.ComponentProps<'table'> & { context?: RowContext }): React.ReactElement {
+  return (
+    <Table
+      {...props}
+      render={<div style={{ overflow: 'visible' }} />}
+      className="table-fixed border-separate border-spacing-0"
+    />
+  )
+}
+
+function RequestTableRow({
+  item,
+  context,
+  ...props
+}: React.ComponentProps<'tr'> & {
+  item: AIRequestSummary
+  context: RowContext
+}): React.ReactElement {
+  return (
+    <TableRow
+      {...props}
+      data-state={context.selectedId === item.id ? 'selected' : undefined}
+      className="relative border-0 transition-colors duration-200 hover:bg-foreground/[0.035] data-[state=selected]:bg-primary/[0.05] [&>td]:border-b [&>td]:border-border/40"
+    />
+  )
+}
+
+const requestTableComponents: TableComponents<AIRequestSummary, RowContext> = {
+  Table: RequestTable,
+  TableHead: TableHeader,
+  TableBody,
+  TableRow: RequestTableRow
+}
 
 function readDisplay(): Display {
   try {
@@ -221,7 +305,7 @@ function RequestDetail({
       (display.response && /\.response(\.|$)/.test(asset.label))
   )
   return (
-    <div className="min-w-0 space-y-5">
+    <div className="min-w-0 space-y-3">
       <div>
         <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{record.source}</p>
         <h2 className="mt-2 break-words text-base font-normal">{record.preview}</h2>
@@ -386,6 +470,9 @@ export function AIRequestLogs({
   const [loading, setLoading] = useState(true)
   const [confirmClear, setConfirmClear] = useState(false)
   const [clearing, setClearing] = useState(false)
+  // Rows that arrived with the latest live refresh glow in once; the first page arrives quietly.
+  const [freshIds, setFreshIds] = useState<ReadonlySet<string>>(new Set())
+  const shownIds = useRef<ReadonlySet<string> | null>(null)
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search), 250)
     return () => clearTimeout(timer)
@@ -422,6 +509,12 @@ export function AIRequestLogs({
                 : undefined
         })
         if (disposed) return
+        const previous = shownIds.current
+        const ids = new Set(result.rows.map((row) => row.id))
+        setFreshIds(
+          previous ? new Set([...ids].filter((id) => !previous.has(id))) : new Set<string>()
+        )
+        shownIds.current = ids
         setPage(result)
         setError('')
         const selected = result.rows.some((row) => row.id === selectedId)
@@ -478,83 +571,101 @@ export function AIRequestLogs({
       setClearing(false)
     }
   }
+  const headerActions = (
+    <div className="flex flex-wrap items-center gap-2">
+      <IconTip label="Live updates">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Live updates"
+          aria-pressed={live}
+          className={live ? 'text-primary' : 'text-muted-foreground'}
+          onClick={() => setLive((value) => !value)}
+        >
+          <GlyphSwap glyphKey={live ? 'live' : 'paused'}>
+            {live ? <Pulse aria-hidden /> : <Pause aria-hidden />}
+          </GlyphSwap>
+        </Button>
+      </IconTip>
+      <IconTip label="Refresh activity">
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label="Refresh activity"
+          onClick={() => setRefresh((value) => value + 1)}
+        >
+          <ArrowClockwise />
+        </Button>
+      </IconTip>
+      {!standalone && (
+        <IconTip label="Open in new window">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="Open in new window"
+            onClick={() =>
+              void window.api.aiLogsOpenWindow().catch((error) => setError(errorMessage(error)))
+            }
+          >
+            <ArrowSquareOut />
+          </Button>
+        </IconTip>
+      )}
+    </div>
+  )
   return (
     <section
       aria-label="AI activity"
       className={`flex w-full min-w-0 flex-col gap-3 overflow-auto font-mono text-foreground ${standalone ? 'h-full flex-1 bg-background p-6' : 'h-[calc(100dvh-18rem)] min-h-96'}`}
     >
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3">
-        <div>
-          {standalone && <h1 className="text-lg font-normal">AI activity</h1>}
+      {standalone ? (
+        <PageHeader
+          className="shrink-0 pb-4"
+          title="AI activity"
+          description="Inspect your AI requests and responses."
+          actions={headerActions}
+        />
+      ) : (
+        <header className="flex shrink-0 flex-wrap items-center justify-between gap-3">
           <p className="mt-1 text-xs text-muted-foreground">
             Inspect your AI requests and responses.
           </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-pressed={live}
-            className={live ? 'text-primary' : 'text-muted-foreground'}
-            onClick={() => setLive((value) => !value)}
-          >
-            {live ? <Pulse aria-hidden /> : <Pause aria-hidden />}
-            Live updates
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-label="Refresh activity"
-            onClick={() => setRefresh((value) => value + 1)}
-          >
-            <ArrowClockwise />
-          </Button>
-          {!standalone && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                void window.api.aiLogsOpenWindow().catch((error) => setError(errorMessage(error)))
-              }
-            >
-              <ArrowSquareOut />
-              Open in new window
-            </Button>
-          )}
-        </div>
-      </header>
+          {headerActions}
+        </header>
+      )}
       <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <label
-          data-focus-surface
-          className="flex min-w-48 flex-1 items-center gap-2 rounded-md border border-border bg-background px-3"
-        >
-          <MagnifyingGlass aria-hidden />
-          <input
+        <InputGroup data-focus-surface className="min-w-48 flex-1">
+          <InputGroupAddon>
+            <MagnifyingGlass aria-hidden />
+          </InputGroupAddon>
+          <InputGroupInput
             aria-label="Search requests and responses"
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search requests, responses, models..."
-            className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none"
           />
-        </label>
-        <Button
-          variant="outline"
-          size="sm"
-          aria-expanded={showFilters}
-          aria-controls="ai-log-filters"
-          onClick={() => setShowFilters((value) => !value)}
-        >
-          <SlidersHorizontal />
-          Filters
-        </Button>
+        </InputGroup>
+        <IconTip label="Filters">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="Filters"
+            aria-expanded={showFilters}
+            aria-controls="ai-log-filters"
+            onClick={() => setShowFilters((value) => !value)}
+          >
+            <SlidersHorizontal />
+          </Button>
+        </IconTip>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm">
-              <Eye />
-              Show
-            </Button>
-          </DropdownMenuTrigger>
+          <IconTip label="Show">
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon-sm" aria-label="Show">
+                <Eye />
+              </Button>
+            </DropdownMenuTrigger>
+          </IconTip>
           <DropdownMenuContent align="end" className="shadow-none">
             <DropdownMenuLabel className="text-[11px] font-normal uppercase tracking-wide text-muted-foreground">
               Visible fields
@@ -579,82 +690,94 @@ export function AIRequestLogs({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      {showFilters && (
-        <div
-          id="ai-log-filters"
-          className="flex shrink-0 flex-wrap items-end gap-3 rounded-md border border-border bg-muted/20 p-3"
-        >
-          <Filter
-            label="Status"
-            value={status}
-            onChange={setStatus}
-            options={['all', 'running', 'completed', 'failed', 'cancelled', 'interrupted']}
-          />
-          <Filter
-            label="Hardware"
-            value={hardware}
-            onChange={setHardware}
-            options={['all', 'gpu', 'cpu', 'unknown']}
-          />
-          <Filter
-            label="Time"
-            value={period}
-            onChange={setPeriod}
-            options={['all', 'hour', 'day']}
-          />
-          <label className="flex items-center gap-2 py-2 text-xs">
-            <input
-              type="checkbox"
-              className="accent-primary"
-              checked={slow}
-              onChange={(event) => setSlow(event.target.checked)}
-            />
-            Over 10 seconds
-          </label>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setSearch('')
-              setStatus('all')
-              setHardware('all')
-              setPeriod('all')
-              setSlow(false)
-              setModality('all')
-            }}
-          >
-            Reset filters
-          </Button>
-        </div>
-      )}
-      <div className="flex shrink-0 flex-wrap gap-1" role="group" aria-label="Modality">
-        <Button
-          variant={modality === 'all' ? 'secondary' : 'ghost'}
-          size="sm"
-          aria-pressed={modality === 'all'}
-          className={modality === 'all' ? 'text-primary' : 'text-muted-foreground'}
-          onClick={() => setModality('all')}
-        >
-          All
-        </Button>
-        {AI_MODALITIES.map((kind) => (
-          <Button
-            key={kind}
-            variant={modality === kind ? 'secondary' : 'ghost'}
-            size="sm"
-            aria-pressed={modality === kind}
-            className={modality === kind ? 'text-primary' : 'text-muted-foreground'}
-            onClick={() => setModality(kind)}
-          >
-            {labels[kind]}
-          </Button>
-        ))}
-      </div>
-      {(error || page.storageError) && (
-        <p role="alert" className="rounded-md border border-border p-3 text-xs">
-          {error || page.storageError}
-        </p>
-      )}
+      <AutoHeight className="shrink-0">
+        <AnimatePresence initial={false}>
+          {showFilters && (
+            <motion.div
+              key="filters"
+              id="ai-log-filters"
+              initial={{ opacity: 0, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, filter: 'blur(4px)' }}
+              transition={{ duration: 0.3, ease }}
+              className="flex flex-wrap items-end gap-3 rounded-md border border-border bg-muted/20 p-3"
+            >
+              <Filter
+                label="Status"
+                value={status}
+                onChange={setStatus}
+                options={['all', 'running', 'completed', 'failed', 'cancelled', 'interrupted']}
+              />
+              <Filter
+                label="Hardware"
+                value={hardware}
+                onChange={setHardware}
+                options={['all', 'gpu', 'cpu', 'unknown']}
+              />
+              <Filter
+                label="Time"
+                value={period}
+                onChange={setPeriod}
+                options={['all', 'hour', 'day']}
+              />
+              <label className="flex items-center gap-2 py-2 text-xs">
+                <input
+                  type="checkbox"
+                  className="accent-primary"
+                  checked={slow}
+                  onChange={(event) => setSlow(event.target.checked)}
+                />
+                Over 10 seconds
+              </label>
+              <IconTip label="Reset filters">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Reset filters"
+                  onClick={() => {
+                    setSearch('')
+                    setStatus('all')
+                    setHardware('all')
+                    setPeriod('all')
+                    setSlow(false)
+                    setModality('all')
+                  }}
+                >
+                  <ArrowCounterClockwise />
+                </Button>
+              </IconTip>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </AutoHeight>
+      <Segmented
+        label="Modality"
+        size="sm"
+        className="shrink-0 self-start"
+        value={modality}
+        onValueChange={setModality}
+        options={[
+          { id: 'all', label: 'All' },
+          ...AI_MODALITIES.map((kind) => ({ id: kind as string, label: labels[kind] }))
+        ]}
+      />
+      <AutoHeight className="shrink-0">
+        <AnimatePresence initial={false}>
+          {(error || page.storageError) && (
+            <motion.p
+              key="error"
+              role="alert"
+              initial={{ opacity: 0, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, filter: 'blur(4px)' }}
+              transition={{ duration: 0.3, ease }}
+              className="rounded-md border border-border p-3 text-xs"
+            >
+              {error || page.storageError}
+            </motion.p>
+          )}
+        </AnimatePresence>
+      </AutoHeight>
       <div className="grid min-h-64 min-w-0 flex-1 grid-cols-1 overflow-auto rounded-md border border-border bg-background md:grid-cols-[minmax(16rem,1fr)_minmax(0,2fr)] md:overflow-hidden">
         <div
           aria-label="Request list"
@@ -666,7 +789,7 @@ export function AIRequestLogs({
               aria-live="polite"
               className="shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground"
             >
-              {page.total} requests
+              <AnimatedNumber value={page.total} /> requests
             </span>
             <div className="min-w-0 max-w-44">
               <SettingsSelect
@@ -682,84 +805,182 @@ export function AIRequestLogs({
               />
             </div>
           </div>
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
-            {loading && (
-              <p role="status" className="p-4 text-xs text-muted-foreground">
-                Loading activity...
-              </p>
-            )}
-            {!loading && !page.rows.length && (
-              <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-                <ListMagnifyingGlass aria-hidden className="size-6 text-muted-foreground" />
-                <p className="max-w-xs text-sm text-muted-foreground">
-                  {search ||
-                  modality !== 'all' ||
-                  status !== 'all' ||
-                  hardware !== 'all' ||
-                  slow ||
-                  period !== 'all'
-                    ? 'No requests match these filters.'
-                    : 'No activity yet. Your next AI request will appear here.'}
-                </p>
-              </div>
-            )}
-            <div>
-              {page.rows.map((row) => (
-                <button
-                  key={row.id}
-                  type="button"
-                  aria-pressed={selectedId === row.id}
-                  onClick={() => {
-                    setRecord(null)
-                    setSelectedId(row.id)
-                  }}
-                  className={`block w-full border-b border-l-2 border-b-border px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring ${selectedId === row.id ? 'border-l-primary bg-primary/5' : 'border-l-transparent'}`}
+          <div
+            aria-busy={loading || undefined}
+            className="relative flex min-h-0 flex-1 flex-col overscroll-contain"
+          >
+            <AnimatePresence mode="wait" initial={false}>
+              {loading ? (
+                // Shaped like the request rows that replace it.
+                <motion.div
+                  key="loading"
+                  role="status"
+                  exit={{ opacity: 0, filter: 'blur(4px)' }}
+                  transition={{ duration: 0.3, ease }}
+                  className="space-y-3 p-4"
                 >
-                  <span className="flex justify-between gap-2 text-[11px] text-muted-foreground">
-                    <span>
-                      {labels[row.modality]}
-                      {row.source ? ` · ${row.source}` : ''}
-                      {row.parentId ? ' · Attempt / child' : ''}
-                    </span>
-                    <time>{new Date(row.startedAt).toLocaleTimeString()}</time>
-                  </span>
-                  <span className="my-1 block truncate text-sm">{row.preview || row.source}</span>
-                  <span className="flex justify-between gap-2 text-xs text-muted-foreground">
-                    <span className="truncate">
-                      {display.model ? (row.model ?? row.source) : row.source}
-                    </span>
-                    {display.details && (
-                      <span className="shrink-0">{duration(row.durationMs)}</span>
+                  <span className="sr-only">Loading activity...</span>
+                  {Array.from({ length: 5 }, (_, index) => (
+                    <div key={index} className="space-y-1.5">
+                      <Skeleton className="h-2.5 w-1/3" />
+                      <Skeleton className="h-3.5" style={{ width: `${82 - index * 9}%` }} />
+                      <Skeleton className="h-2.5 w-1/2" />
+                    </div>
+                  ))}
+                </motion.div>
+              ) : !page.rows.length ? (
+                <motion.div
+                  key="empty"
+                  initial={{ opacity: 0, y: 8, filter: 'blur(4px)' }}
+                  animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                  exit={{ opacity: 0, y: -8, filter: 'blur(4px)' }}
+                  transition={{ duration: 0.35, ease }}
+                >
+                  <Empty className="p-6 md:py-6">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <ListMagnifyingGlass aria-hidden />
+                      </EmptyMedia>
+                      <EmptyTitle className="text-[13px] font-normal">No requests</EmptyTitle>
+                      <EmptyDescription className="max-w-xs">
+                        {search ||
+                        modality !== 'all' ||
+                        status !== 'all' ||
+                        hardware !== 'all' ||
+                        slow ||
+                        period !== 'all'
+                          ? 'No requests match these filters.'
+                          : 'No activity yet. Your next AI request will appear here.'}
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key={`rows-${offset}`}
+                  className="h-full min-h-0 flex-1"
+                  initial={{ opacity: 0, y: 6, filter: 'blur(4px)' }}
+                  animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                  exit={{ opacity: 0, y: -6, filter: 'blur(4px)' }}
+                  transition={{ duration: 0.3, ease }}
+                >
+                  <TableVirtuoso
+                    className="h-full"
+                    aria-label="Requests"
+                    data={page.rows}
+                    context={{ selectedId, freshIds }}
+                    computeItemKey={(_, row) => row.id}
+                    components={requestTableComponents}
+                    fixedHeaderContent={() => (
+                      <tr>
+                        {[
+                          ['Request', 'text-left'],
+                          ['Time', 'w-24 text-right']
+                        ].map(([label, align]) => (
+                          <th
+                            key={label}
+                            className={`border-b border-border/60 bg-background/80 px-4 pb-2 pt-2 font-mono text-[10px] font-normal uppercase tracking-[0.18em] text-muted-foreground backdrop-blur-md ${align}`}
+                          >
+                            {label}
+                          </th>
+                        ))}
+                      </tr>
                     )}
-                  </span>
-                  <span className="mt-1 block text-[11px] text-muted-foreground">
-                    {row.status}
-                    {display.model ? ` · ${row.backend ?? 'Backend not reported'}` : ''}
-                  </span>
-                </button>
-              ))}
-            </div>
+                    itemContent={(_, row, context) => (
+                      <>
+                        <td className="min-w-0 px-4 py-3 align-top">
+                          {context.freshIds.has(row.id) && (
+                            <motion.span
+                              aria-hidden
+                              initial={{ opacity: 1 }}
+                              animate={{ opacity: 0 }}
+                              transition={{ duration: 1.4, ease }}
+                              className="pointer-events-none absolute inset-0 bg-primary/10"
+                            />
+                          )}
+                          {context.selectedId === row.id && (
+                            <motion.span
+                              aria-hidden
+                              layoutId="ai-activity-selection"
+                              transition={spring}
+                              className="pointer-events-none absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary shadow-[0_0_8px_rgb(var(--og-rgb-primary)/0.8)]"
+                            />
+                          )}
+                          <button
+                            type="button"
+                            aria-pressed={context.selectedId === row.id}
+                            onClick={() => {
+                              setRecord(null)
+                              setSelectedId(row.id)
+                            }}
+                            className="group block w-full min-w-0 text-left outline-none after:absolute after:inset-0 focus-visible:after:outline-2 focus-visible:after:-outline-offset-2 focus-visible:after:outline-ring"
+                          >
+                            <span className="block truncate text-[11px] text-muted-foreground">
+                              {labels[row.modality]}
+                              {row.source ? ` · ${row.source}` : ''}
+                              {row.parentId ? ' · Attempt / child' : ''}
+                            </span>
+                            <span className="my-1 block truncate text-sm transition-transform duration-300 group-hover:translate-x-0.5">
+                              <Highlight
+                                text={row.preview || row.source}
+                                query={debouncedSearch.trim()}
+                              />
+                            </span>
+                            <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                              <span
+                                aria-hidden
+                                className={`size-1.5 shrink-0 rounded-full ${STATUS_DOT[row.status] ?? 'bg-muted-foreground/50'}`}
+                              />
+                              <span className="truncate">
+                                {row.status}
+                                {display.model
+                                  ? ` · ${row.model ?? row.source} · ${row.backend ?? 'Backend not reported'}`
+                                  : ''}
+                              </span>
+                            </span>
+                          </button>
+                        </td>
+                        <td className="px-4 py-3 text-right align-top font-mono text-[11px] tabular-nums text-muted-foreground">
+                          <time className="block">
+                            {new Date(row.startedAt).toLocaleTimeString()}
+                          </time>
+                          {display.details && (
+                            <span className="mt-1 block">{duration(row.durationMs)}</span>
+                          )}
+                        </td>
+                      </>
+                    )}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
           <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border px-3 py-2">
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={offset === 0}
-              onClick={() => setOffset((value) => Math.max(0, value - 30))}
-            >
-              Previous
-            </Button>
+            <IconTip label="Previous">
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Previous"
+                disabled={offset === 0}
+                onClick={() => setOffset((value) => Math.max(0, value - 30))}
+              >
+                <CaretLeft />
+              </Button>
+            </IconTip>
             <span className="text-[11px] text-muted-foreground">
               {page.total ? `${offset + 1}-${Math.min(offset + 30, page.total)}` : '0'}
             </span>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={offset + 30 >= page.total}
-              onClick={() => setOffset((value) => value + 30)}
-            >
-              Next
-            </Button>
+            <IconTip label="Next">
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Next"
+                disabled={offset + 30 >= page.total}
+                onClick={() => setOffset((value) => value + 30)}
+              >
+                <CaretRight />
+              </Button>
+            </IconTip>
           </div>
         </div>
         <div
@@ -772,36 +993,38 @@ export function AIRequestLogs({
               Request details
             </span>
             {record && (
-              <div className="flex gap-1">
-                <Button
-                  size="xs"
-                  variant={raw ? 'ghost' : 'secondary'}
-                  aria-pressed={!raw}
-                  onClick={() => setRaw(false)}
-                >
-                  Readable
-                </Button>
-                <Button
-                  size="xs"
-                  variant={raw ? 'secondary' : 'ghost'}
-                  aria-pressed={raw}
-                  onClick={() => setRaw(true)}
-                >
-                  Raw
-                </Button>
-              </div>
+              <Segmented
+                label="Detail view"
+                size="sm"
+                tone="quiet"
+                value={raw ? 'raw' : 'readable'}
+                onValueChange={(view) => setRaw(view === 'raw')}
+                options={[
+                  { id: 'readable', label: 'Readable' },
+                  { id: 'raw', label: 'Raw' }
+                ]}
+              />
             )}
           </div>
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-5">
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-3">
             {record ? (
-              <RequestDetail key={record.id} record={record} display={display} raw={raw} />
+              <motion.div
+                key={record.id}
+                initial={{ opacity: 0, y: 6, filter: 'blur(4px)' }}
+                animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                transition={{ duration: 0.3, ease }}
+              >
+                <RequestDetail record={record} display={display} raw={raw} />
+              </motion.div>
             ) : (
-              <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
-                <ListMagnifyingGlass aria-hidden className="size-6" />
-                <p className="text-sm">
+              <Empty className="p-6 md:py-6" aria-busy={selectedId ? true : undefined}>
+                <EmptyMedia variant="icon">
+                  <ListMagnifyingGlass aria-hidden />
+                </EmptyMedia>
+                <LiveStatus className="text-sm text-muted-foreground">
                   {selectedId ? 'Loading request...' : 'Select a request to inspect it.'}
-                </p>
-              </div>
+                </LiveStatus>
+              </Empty>
             )}
           </div>
         </div>
@@ -823,31 +1046,51 @@ export function AIRequestLogs({
             </p>
           </details>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => setConfirmClear(true)}>
-          <Trash />
-          Clear history
-        </Button>
-      </footer>
-      {confirmClear && (
-        <div
-          role="group"
-          aria-label="Confirm clear activity"
-          className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3"
-        >
-          <p className="flex-1 text-sm">Delete all saved AI activity and its media?</p>
+        <IconTip label="Clear history">
           <Button
-            size="sm"
-            variant="outline"
-            disabled={clearing}
-            onClick={() => setConfirmClear(false)}
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Clear history"
+            onClick={() => setConfirmClear(true)}
           >
-            Cancel
+            <Trash />
           </Button>
-          <Button size="sm" variant="destructive" disabled={clearing} onClick={() => void clear()}>
-            {clearing ? 'Clearing...' : 'Delete history'}
-          </Button>
-        </div>
-      )}
+        </IconTip>
+      </footer>
+      <AutoHeight className="shrink-0">
+        <AnimatePresence initial={false}>
+          {confirmClear && (
+            <motion.div
+              key="confirm-clear"
+              role="group"
+              aria-label="Confirm clear activity"
+              initial={{ opacity: 0, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, filter: 'blur(4px)' }}
+              transition={{ duration: 0.3, ease }}
+              className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3"
+            >
+              <p className="flex-1 text-sm">Delete all saved AI activity and its media?</p>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={clearing}
+                onClick={() => setConfirmClear(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={clearing}
+                onClick={() => void clear()}
+              >
+                <TextMorph as="span">{clearing ? 'Clearing...' : 'Delete history'}</TextMorph>
+              </Button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </AutoHeight>
     </section>
   )
 }
@@ -872,20 +1115,26 @@ function Filter({
     unknown: 'Not reported'
   }
   return (
-    <label className="flex min-w-32 flex-col gap-1 text-xs text-muted-foreground">
+    <div className="flex min-w-32 flex-col gap-1 text-xs text-muted-foreground">
       <span className="text-[11px] uppercase tracking-wide">{label}</span>
-      <select
-        aria-label={label}
-        className={inputClass}
+      <Select
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onValueChange={(next) => {
+          if (next != null) onChange(next)
+        }}
+        items={options.map((option) => ({ value: option, label: names[option] ?? option }))}
       >
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {names[option] ?? option}
-          </option>
-        ))}
-      </select>
-    </label>
+        <SelectTrigger size="sm" aria-label={label}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectPopup>
+          {options.map((option) => (
+            <SelectItem key={option} value={option}>
+              {names[option] ?? option}
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
+    </div>
   )
 }

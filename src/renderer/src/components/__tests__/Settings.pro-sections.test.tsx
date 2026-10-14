@@ -94,7 +94,8 @@ describe('Settings pro-section registry seam (D31)', () => {
 
     await user.click(screen.getByText('Remote model server'))
     expect(await screen.findByRole('switch', { name: 'Use remote server' })).toBeTruthy()
-    expect(screen.getByText('Local model is active.')).toBeTruthy()
+    // The status line swaps its words after the previous ones fade out.
+    expect(await screen.findByText('Local model is active.')).toBeTruthy()
     expect(screen.queryByText(/OpenRouter/i)).toBeNull()
   })
 
@@ -127,7 +128,7 @@ describe('Settings pro-section registry seam (D31)', () => {
     render(<Settings initialSection="permissions" onInitialSectionConsumed={consumed} />)
 
     expect(await screen.findByText('System permissions')).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'Screen Recording' })).toBeTruthy()
+    expect(screen.getByRole('status', { name: 'Screen Recording permission' })).toBeTruthy()
     expect(screen.getByText('Permission needed')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Permissions' })).toBeNull()
     await waitFor(() => expect(consumed).toHaveBeenCalledOnce())

@@ -21,7 +21,7 @@
 //       as the Active-models panel, so the two disagreed on which model ran.
 
 import { afterEach, describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
-import { render, screen, waitFor, cleanup, fireEvent, act } from '@testing-library/react'
+import { render, screen, waitFor, cleanup, fireEvent, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryChat } from '../MemoryChat'
 import { TooltipProvider } from '../ui/tooltip'
@@ -406,20 +406,25 @@ async function openImageComposer(user: ReturnType<typeof userEvent.setup>): Prom
   await user.click(opts)
 }
 
-/** The steps control is a numeric <input min=4 max=50>; find it by its spinbutton role. */
-function stepsInput(): HTMLInputElement {
-  const spinners = screen.getAllByRole('spinbutton') as HTMLInputElement[]
-  // The steps input is the one bounded 4..50 (seed is text; strength is 0..1).
-  const steps = spinners.find((el) => el.max === '50' && el.min === '4')
-  if (!steps) throw new Error('steps <input min=4 max=50> not found in the image options')
-  return steps
+/** The steps control is a slider bounded 4..50; find it by its slider role and name. */
+function stepsSlider(): HTMLElement {
+  return screen.getByRole('slider', { name: 'Steps' })
 }
 
-function typeSteps(value: number): void {
-  // The steps <input type=number> is controlled and clamps on every keystroke
-  // (onChange -> Math.max(4, Math.min(50, …))). A real edit commits one final value;
-  // fire a single change event with that value, which is the faithful DOM signal.
-  fireEvent.change(stepsInput(), { target: { value: String(value) } })
+/** Move a slider to `value` from the keyboard: Home to its minimum, then one arrow per step. */
+async function slideTo(
+  user: ReturnType<typeof userEvent.setup>,
+  slider: HTMLElement,
+  value: number,
+  step: number
+): Promise<void> {
+  slider.focus()
+  const steps = Math.round((value - Number(slider.getAttribute('aria-valuemin'))) / step)
+  await user.keyboard('{Home}' + '{ArrowRight}'.repeat(steps))
+}
+
+async function setSteps(user: ReturnType<typeof userEvent.setup>, value: number): Promise<void> {
+  await slideTo(user, stepsSlider(), value, 1)
 }
 
 async function sendPrompt(user: ReturnType<typeof userEvent.setup>, prompt: string): Promise<void> {
@@ -666,7 +671,7 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
     expect(modelSelect).toBeTruthy()
 
     // User overrides steps to 10 (the model's default is 28).
-    typeSteps(10)
+    await setSteps(user, 10)
     await sendPrompt(user, 'a red fox in the snow')
 
     await waitFor(() => expect(generateImage).toHaveBeenCalledTimes(1))
@@ -1165,10 +1170,10 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
       expect(boundary.setActiveModalModel).toHaveBeenLastCalledWith('image', FULL)
     )
 
-    const sizeSelect = screen.getByLabelText('Size') as HTMLSelectElement
-    await firstUser.selectOptions(sizeSelect, '768')
-    typeSteps(17)
-    fireEvent.change(screen.getByLabelText('Guidance'), { target: { value: '5.5' } })
+    const sizes = screen.getByRole('radiogroup', { name: 'Size' })
+    await firstUser.click(within(sizes).getByRole('radio', { name: '768' }))
+    await setSteps(firstUser, 17)
+    await slideTo(firstUser, screen.getByRole('slider', { name: 'Guidance' }), 5.5, 0.5)
     const seedInput = screen.getByLabelText('Seed') as HTMLInputElement
     seedInput.focus()
     await firstUser.type(seedInput, '4242', { skipClick: true })
@@ -1202,9 +1207,15 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
     await openImageComposer(secondUser)
 
     expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe(FULL)
-    expect((screen.getByLabelText('Size') as HTMLSelectElement).value).toBe('768')
-    expect(stepsInput().value).toBe('17')
-    expect((screen.getByLabelText('Guidance') as HTMLInputElement).value).toBe('5.5')
+    expect(
+      within(screen.getByRole('radiogroup', { name: 'Size' }))
+        .getByRole('radio', { name: '768' })
+        .getAttribute('aria-checked')
+    ).toBe('true')
+    expect(stepsSlider().getAttribute('aria-valuenow')).toBe('17')
+    expect(screen.getByRole('slider', { name: 'Guidance' }).getAttribute('aria-valuenow')).toBe(
+      '5.5'
+    )
     expect((screen.getByLabelText('Seed') as HTMLInputElement).value).toBe('4242')
     expect((screen.getByPlaceholderText('Negative prompt') as HTMLInputElement).value).toBe(
       'blurry, watermark'
@@ -1235,7 +1246,7 @@ async function sendChat(user: ReturnType<typeof userEvent.setup>, text: string):
 
 async function openLatestCompletedWork(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   const toggle = (await screen.findAllByRole('button', { name: 'Work done' })).at(-1)
-  if (toggle?.getAttribute('data-state') === 'closed') await user.click(toggle)
+  if (toggle?.getAttribute('aria-expanded') === 'false') await user.click(toggle)
 }
 
 // Bug 4 (root of the image-gen-as-tool bug): the renderer's keyword auto-route and
@@ -1757,7 +1768,10 @@ describe('<MemoryChat/> image and vision release journeys', () => {
       </TooltipProvider>
     )
     expect(
-      screen.queryAllByRole('button', { name: /stop/i }).map((button) => button.textContent)
+      // Stop is an icon button: its accessible name is its aria-label.
+      screen
+        .queryAllByRole('button', { name: /stop/i })
+        .map((button) => button.getAttribute('aria-label'))
     ).toEqual(['Stop'])
     await user.click(screen.getByRole('button', { name: 'Stop' }))
     expect(boundary.cancelImageGen).toHaveBeenCalledTimes(1)

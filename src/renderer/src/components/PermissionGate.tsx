@@ -1,8 +1,19 @@
 import { replaceAppLocation } from '@renderer/lib/app-location'
 import { useState, useEffect, useCallback } from 'react'
-import { motion } from 'motion/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { GridBackdrop } from './ui/grid-backdrop'
-import { X, Cpu } from '@phosphor-icons/react'
+import { X, Cpu, ArrowLeft } from '@phosphor-icons/react'
+import {
+  Progress,
+  ProgressTrack,
+  ProgressIndicator
+} from '@offgrid/operator-ui/operator/coss/progress'
+import { PageHeader, Section } from '@offgrid/operator-ui/operator/experience'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
+import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
+import { Button } from './ui/button'
+import { IconTip } from './IconTip'
 import { SetupPanel } from './setup/SetupPanel'
 import { deviceNoun } from '@renderer/lib/device'
 import { PermissionsPanel } from './PermissionsPanel'
@@ -183,7 +194,9 @@ export function PermissionGate({ children }: PermissionGateProps): React.JSX.Ele
           className="relative z-10 text-center"
         >
           <div className="w-8 h-8 mx-auto mb-4 border-2 border-neutral-700 border-t-neutral-400 rounded-full animate-spin" />
-          <p className="text-neutral-500 text-sm">Checking permissions</p>
+          <TextShimmer as="p" className="text-sm">
+            Checking permissions
+          </TextShimmer>
         </motion.div>
       </div>
     )
@@ -202,24 +215,28 @@ export function PermissionGate({ children }: PermissionGateProps): React.JSX.Ele
     return (
       <>
         {children}
-        {!ready && !setupDismissed && (
-          <SetupNudge
-            missingModel={!modelStatus?.downloaded}
-            missingLocalNetwork={isPro && permissionStatus?.localNetwork === false}
-            onOpen={() => setShowSetup(true)}
-            onDismiss={() => setSetupDismissed(true)}
-          />
-        )}
-        {ready && visionIssue && !setupDismissed && (
-          <SetupNudge
-            issue={visionIssue.kind}
-            modelName={visionIssue.modelName}
-            progress={visionDownloadProgress}
-            failure={visionDownloadFailure}
-            onOpen={handleVisionAction}
-            onDismiss={() => setSetupDismissed(true)}
-          />
-        )}
+        <AnimatePresence>
+          {!ready && !setupDismissed && (
+            <SetupNudge
+              key="setup-nudge"
+              missingModel={!modelStatus?.downloaded}
+              missingLocalNetwork={isPro && permissionStatus?.localNetwork === false}
+              onOpen={() => setShowSetup(true)}
+              onDismiss={() => setSetupDismissed(true)}
+            />
+          )}
+          {ready && visionIssue && !setupDismissed && (
+            <SetupNudge
+              key="vision-nudge"
+              issue={visionIssue.kind}
+              modelName={visionIssue.modelName}
+              progress={visionDownloadProgress}
+              failure={visionDownloadFailure}
+              onOpen={handleVisionAction}
+              onDismiss={() => setSetupDismissed(true)}
+            />
+          )}
+        </AnimatePresence>
       </>
     )
   }
@@ -228,111 +245,87 @@ export function PermissionGate({ children }: PermissionGateProps): React.JSX.Ele
   return (
     <div className="h-screen w-screen bg-neutral-950 fixed inset-0 overflow-hidden">
       <GridBackdrop className="z-0" />
-      <button
-        onClick={() => setShowSetup(false)}
-        className="absolute left-4 top-4 z-20 flex items-center gap-1 text-sm text-neutral-400 transition-colors hover:text-white"
-      >
-        ← Back to app
-      </button>
-
-      <div className="relative z-10 h-full w-full flex flex-col items-center overflow-y-auto py-12 px-8">
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] }}
-          className="w-full max-w-3xl my-auto"
+      <IconTip label="Back to app">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Back to app"
+          onClick={() => setShowSetup(false)}
+          className="absolute left-4 top-4 z-20"
         >
-          {/* Icon */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.8, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            transition={{ delay: 0.1, duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
-            className="flex justify-center mb-8"
-          >
-            <div className="w-16 h-16 rounded-2xl bg-neutral-900/80 border border-neutral-800 flex items-center justify-center backdrop-blur-xl">
-              <Cpu className="w-7 h-7 text-green-500" />
-            </div>
-          </motion.div>
+          <ArrowLeft />
+        </Button>
+      </IconTip>
 
-          {/* Title */}
-          <h1 className="text-center text-3xl md:text-4xl font-light tracking-tight text-white mb-3">
-            Set up your local AI
-          </h1>
+      <div className="relative z-10 h-full w-full flex flex-col items-center overflow-y-auto px-8 pb-12 pt-16">
+        <div className="w-full max-w-3xl my-auto">
+          <PageHeader
+            eyebrow={
+              <>
+                <Cpu className="h-3 w-3" aria-hidden /> Local AI
+              </>
+            }
+            title="Set up your local AI"
+            description={
+              isPro
+                ? 'Grant permissions and download a model to get started. Everything runs locally on your device.'
+                : 'Download a model to get started. Everything runs locally on your device — no cloud, no account.'
+            }
+          />
 
-          {/* Subtitle */}
-          <motion.p
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.5, duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
-            className="text-center text-neutral-500 text-sm mb-10 max-w-xs mx-auto leading-relaxed"
-          >
-            {isPro
-              ? 'Grant permissions and download a model to get started. Everything runs locally on your device.'
-              : 'Download a model to get started. Everything runs locally on your device — no cloud, no account.'}
-          </motion.p>
-
-          {/* The model: one-click "Configure for me" + manual browse (shared with
-              Settings). On success it flips modelStatus and the gate clears. */}
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.6, duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
-            className="mb-8"
-          >
-            <SetupPanel hideHealth onConfigured={checkModelStatus} />
-            <div className="mt-3 text-center">
-              <button
-                onClick={() => {
-                  // Drop into the real in-app Models screen (with the left nav). The
-                  // app shell (already mounted behind this gate) listens for og:navigate
-                  // and switches view — replaceState alone wouldn't re-derive it. Keep
-                  // the URL in sync, then dismiss the gate.
-                  openModels()
-                  setSetupDismissed(true)
-                  setShowSetup(false)
-                }}
-                className="text-xs text-neutral-500 underline-offset-2 transition-colors hover:text-neutral-300 hover:underline"
-              >
-                or browse &amp; pick a model yourself
-              </button>
-            </div>
-          </motion.div>
-
-          {/* What you get — gives the screen substance and sells the local stack. */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.75, duration: 0.4 }}
-            className="mb-2 flex flex-col items-center gap-2"
-          >
-            <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-neutral-400">
-              {['Chat', 'Vision', 'Images', 'Voice', 'Speech'].map((c) => (
-                <span key={c} className="flex items-center gap-1.5">
-                  <span className="h-1 w-1 rounded-full bg-green-500" />
-                  {c}
-                </span>
-              ))}
-            </div>
-            <p className="text-[11px] text-neutral-600">
-              One app · every open model · all on your device
-            </p>
-          </motion.div>
-
-          {/* System permissions - Pro only. The same panel is always reachable in Settings. */}
-          {isPro && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.8, duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
-              className="mb-8"
-            >
-              <div className="mb-3 text-[10px] font-medium uppercase tracking-widest text-neutral-600">
-                System permissions
+          <div className="space-y-12">
+            {/* The model: one-click "Configure for me" + manual browse (shared with
+                Settings). On success it flips modelStatus and the gate clears. */}
+            <Section label="Model">
+              <SetupPanel hideHealth onConfigured={checkModelStatus} />
+              <div className="mt-4">
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  onClick={() => {
+                    // Drop into the real in-app Models screen (with the left nav). The
+                    // app shell (already mounted behind this gate) listens for og:navigate
+                    // and switches view — replaceState alone wouldn't re-derive it. Keep
+                    // the URL in sync, then dismiss the gate.
+                    openModels()
+                    setSetupDismissed(true)
+                    setShowSetup(false)
+                  }}
+                  className="px-0 text-xs text-neutral-500 hover:text-neutral-300"
+                >
+                  or browse &amp; pick a model yourself
+                </Button>
               </div>
-              <PermissionsPanel controller={permissions} />
-            </motion.div>
-          )}
-        </motion.div>
+            </Section>
+
+            {/* What you get — gives the screen substance and sells the local stack. */}
+            <Section
+              label="On your device"
+              description="One app · every open model · all on your device"
+            >
+              <AnimatedGroup
+                preset="blur-slide"
+                className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-neutral-400"
+              >
+                {['Chat', 'Vision', 'Images', 'Voice', 'Speech'].map((c) => (
+                  <span key={c} className="flex items-center gap-1.5">
+                    <span className="h-1 w-1 rounded-full bg-green-500" />
+                    {c}
+                  </span>
+                ))}
+              </AnimatedGroup>
+            </Section>
+
+            {/* System permissions - Pro only. The same panel is always reachable in Settings. */}
+            {isPro && (
+              <Section label="System permissions">
+                <PermissionsPanel controller={permissions} />
+              </Section>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -360,6 +353,7 @@ function SetupNudge({
   onDismiss: () => void
 }): React.JSX.Element | null {
   const taskWorkspaceOpen = useTaskWorkspaceOpen()
+  const reduceMotion = useReducedMotion()
   const [taskLeft, setTaskLeft] = useState<number | null>(null)
 
   useEffect(() => {
@@ -421,48 +415,87 @@ function SetupNudge({
   const currentTaskLeft = taskWorkspaceOpen ? taskLeft : null
   if (currentTaskLeft !== null && currentTaskLeft < 520) return null
 
+  const ease = [0.16, 1, 0.3, 1] as const
+  const percent = presentedProgress?.determinate ? (presentedProgress.percentage ?? 0) : null
+
   return (
     <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: [0.25, 0.46, 0.45, 0.94] }}
-      className="fixed bottom-14 z-50 flex max-w-[min(560px,calc(100vw-2rem))] items-center gap-3 rounded-xl border border-green-500/30 bg-background/95 px-4 py-3 text-foreground shadow-xl backdrop-blur-xl"
+      initial={reduceMotion ? false : { opacity: 0, y: 16, filter: 'blur(6px)' }}
+      animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+      exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 16, filter: 'blur(6px)' }}
+      transition={{ duration: reduceMotion ? 0 : 0.4, ease }}
+      className="fixed bottom-14 z-50 flex max-w-[min(560px,calc(100vw-2rem))] items-center gap-4 rounded-xl border border-green-500/30 bg-background/95 px-5 py-4 text-foreground shadow-xl backdrop-blur-xl"
       style={{ right: currentTaskLeft === null ? 16 : window.innerWidth - currentTaskLeft + 16 }}
     >
       <Cpu className="h-4 w-4 shrink-0 text-green-500" />
-      <div className="text-xs leading-tight">
+      <div className="min-w-0 flex-1 text-xs leading-snug">
         <div className="font-medium text-foreground">{title}</div>
-        <div className="text-muted-foreground">{detail}</div>
-        {failure ? (
-          <div role="status" className="mt-1 text-red-400">
-            {failure}
-          </div>
-        ) : null}
-        {presentedProgress ? (
-          <div className="mt-1 tabular-nums text-muted-foreground">
-            {presentedProgress.totalBytes !== undefined
-              ? `${formatStorageBytes(presentedProgress.currentBytes)} / ${formatStorageBytes(presentedProgress.totalBytes)}`
-              : 'Total size unavailable'}
-            {presentedProgress.bytesPerSecond !== undefined
-              ? ` · ${formatTransferSpeed(presentedProgress.bytesPerSecond)}`
-              : ''}
-          </div>
-        ) : null}
+        <div className="mt-0.5 text-muted-foreground">{detail}</div>
+        <AnimatePresence initial={false}>
+          {failure ? (
+            <motion.div
+              key="failure"
+              role="status"
+              className="mt-1 text-red-400"
+              initial={reduceMotion ? false : { opacity: 0, y: 4, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: reduceMotion ? 0 : 0.3, ease }}
+            >
+              {failure}
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+        <AnimatePresence initial={false}>
+          {presentedProgress ? (
+            <motion.div
+              key="progress"
+              className="overflow-hidden"
+              initial={reduceMotion ? false : { opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0 }}
+              transition={{ duration: reduceMotion ? 0 : 0.4, ease }}
+            >
+              <Progress
+                aria-label="Vision support download progress"
+                value={percent}
+                className="mt-2"
+              >
+                <ProgressTrack>
+                  <ProgressIndicator />
+                </ProgressTrack>
+              </Progress>
+              <div className="mt-1.5 tabular-nums text-muted-foreground">
+                {presentedProgress.totalBytes !== undefined
+                  ? `${formatStorageBytes(presentedProgress.currentBytes)} / ${formatStorageBytes(presentedProgress.totalBytes)}`
+                  : 'Total size unavailable'}
+                {presentedProgress.bytesPerSecond !== undefined
+                  ? ` · ${formatTransferSpeed(presentedProgress.bytesPerSecond)}`
+                  : ''}
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
       </div>
-      <button
+      <Button
+        type="button"
+        size="sm"
         onClick={onOpen}
         disabled={progress != null}
-        className="ml-1 whitespace-nowrap rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-500"
+        className="shrink-0 whitespace-nowrap"
       >
-        {cta}
-      </button>
-      <button
+        <TextMorph as="span">{cta}</TextMorph>
+      </Button>
+      <Button
+        type="button"
+        size="icon-xs"
+        variant="ghost"
         onClick={onDismiss}
         aria-label="Dismiss"
-        className="rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
+        className="shrink-0 text-muted-foreground"
       >
         <X className="h-3.5 w-3.5" />
-      </button>
+      </Button>
     </motion.div>
   )
 }

@@ -112,43 +112,61 @@ describe('remote model discovery from Settings', () => {
     expect(await screen.findByText(/7 models found/)).toBeTruthy()
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /^Other models/ }))
-    await user.click(screen.getByRole('button', { name: 'image model' }))
-    expect(screen.getByRole('menuitemradio', { name: 'picture' })).toBeTruthy()
-    expect(screen.getByRole('menuitemradio', { name: 'inferred-picture' })).toBeTruthy()
+    await user.click(screen.getByRole('combobox', { name: 'image model' }))
+    expect(await screen.findByRole('option', { name: 'picture' })).toBeTruthy()
+    expect(await screen.findByRole('option', { name: 'inferred-picture' })).toBeTruthy()
     await user.keyboard('{Escape}')
-    await user.click(screen.getByRole('button', { name: 'transcription model' }))
-    expect(screen.getByRole('menuitemradio', { name: 'listener' })).toBeTruthy()
-    expect(screen.getByRole('menuitemradio', { name: 'inferred-listener' })).toBeTruthy()
+    await user.click(screen.getByRole('combobox', { name: 'transcription model' }))
+    expect(await screen.findByRole('option', { name: 'listener' })).toBeTruthy()
+    expect(await screen.findByRole('option', { name: 'inferred-listener' })).toBeTruthy()
     await user.keyboard('{Escape}')
-    await user.click(screen.getByRole('button', { name: 'voice model' }))
-    expect(screen.getByRole('menuitemradio', { name: 'speaker' })).toBeTruthy()
-    expect(screen.getByRole('menuitemradio', { name: 'inferred-speaker' })).toBeTruthy()
+    await user.click(screen.getByRole('combobox', { name: 'voice model' }))
+    expect(await screen.findByRole('option', { name: 'speaker' })).toBeTruthy()
+    expect(await screen.findByRole('option', { name: 'inferred-speaker' })).toBeTruthy()
   })
 
   it('keeps grounding, decision, and general chat models in their own role lists', async () => {
-    await showServer({ status: 200, body: { data: [
-      { id: 'bartowski/tencent_UI-Mate-27B-GGUF', name: 'UI-Mate-27B', kind: 'vision' },
-      { id: 'jaredpalmer/kev-4b', name: 'Kev 4B', kind: 'chat', architecture: { input_modalities: ['text'], output_modalities: ['decisions'] } },
-      { id: 'general-vision', name: 'General vision', kind: 'vision' },
-      { id: 'provider/decider', name: 'Provider decision', architecture: { output_modalities: ['decisions'] } }
-    ] } })
+    await showServer({
+      status: 200,
+      body: {
+        data: [
+          { id: 'bartowski/tencent_UI-Mate-27B-GGUF', name: 'UI-Mate-27B', kind: 'vision' },
+          {
+            id: 'jaredpalmer/kev-4b',
+            name: 'Kev 4B',
+            kind: 'chat',
+            architecture: { input_modalities: ['text'], output_modalities: ['decisions'] }
+          },
+          { id: 'general-vision', name: 'General vision', kind: 'vision' },
+          {
+            id: 'provider/decider',
+            name: 'Provider decision',
+            architecture: { output_modalities: ['decisions'] }
+          }
+        ]
+      }
+    })
     await screen.findByText(/4 models found/)
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /^Other models/ }))
-    await user.click(screen.getByRole('button', { name: 'grounding model' }))
-    expect(screen.getByRole('menuitemradio', { name: 'UI-Mate-27B' })).toBeTruthy()
-    expect(screen.queryByRole('menuitemradio', { name: 'Kev 4B' })).toBeNull()
-    expect(screen.queryByRole('menuitemradio', { name: 'Provider decision' })).toBeNull()
-    expect(screen.queryByRole('menuitemradio', { name: 'General vision' })).toBeNull()
-    await user.click(screen.getByRole('menuitemradio', { name: 'UI-Mate-27B' }))
-    await user.click(screen.getByRole('button', { name: 'decision model' }))
-    expect(screen.getByRole('menuitemradio', { name: 'Kev 4B' })).toBeTruthy()
-    expect(screen.getByRole('menuitemradio', { name: 'Provider decision' })).toBeTruthy()
-    expect(screen.queryByRole('menuitemradio', { name: 'UI-Mate-27B' })).toBeNull()
-    expect(screen.queryByRole('menuitemradio', { name: 'General vision' })).toBeNull()
-    await user.click(screen.getByRole('menuitemradio', { name: 'Kev 4B' }))
-    expect(screen.getByRole('button', { name: 'grounding model' }).textContent).toBe('UI-Mate-27B')
-    expect(screen.getByRole('button', { name: 'decision model' }).textContent).toBe('Kev 4B')
+    await user.click(screen.getByRole('combobox', { name: 'grounding model' }))
+    expect(await screen.findByRole('option', { name: 'UI-Mate-27B' })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: 'Kev 4B' })).toBeNull()
+    expect(screen.queryByRole('option', { name: 'Provider decision' })).toBeNull()
+    expect(screen.queryByRole('option', { name: 'General vision' })).toBeNull()
+    await user.click(await screen.findByRole('option', { name: 'UI-Mate-27B' }))
+    await user.click(screen.getByRole('combobox', { name: 'decision model' }))
+    expect(await screen.findByRole('option', { name: 'Kev 4B' })).toBeTruthy()
+    expect(await screen.findByRole('option', { name: 'Provider decision' })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: 'UI-Mate-27B' })).toBeNull()
+    expect(screen.queryByRole('option', { name: 'General vision' })).toBeNull()
+    await user.click(await screen.findByRole('option', { name: 'Kev 4B' }))
+    expect(
+      (screen.getByRole('combobox', { name: 'grounding model' }) as HTMLInputElement).value
+    ).toBe('UI-Mate-27B')
+    expect(
+      (screen.getByRole('combobox', { name: 'decision model' }) as HTMLInputElement).value
+    ).toBe('Kev 4B')
   })
 
   it('shows a reachable server’s rejection reason', async () => {

@@ -52,6 +52,15 @@ const server = http.createServer((req, res) => {
     res.end('{"status":"ok"}')
     return
   }
+  if (req.method === 'GET' && req.url === '/props') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      modalities: { vision: false },
+      chat_template_caps: { supports_tools: true },
+      chat_template: '{% if enable_thinking %}<think>{% endif %}'
+    }))
+    return
+  }
   if (req.method === 'GET' && req.url === '/v1/models') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ data: [{ id: model }] }))
@@ -94,6 +103,22 @@ async function unusedPort(): Promise<number> {
   const port = (probe.address() as AddressInfo).port
   await new Promise<void>((resolve) => probe.close(() => resolve()))
   return port
+}
+
+async function startGateway(
+  server: typeof import('../model-server'),
+  port: number
+): Promise<void> {
+  server.startModelServer(port)
+  const deadline = Date.now() + 2_000
+  for (;;) {
+    try {
+      if ((await fetch(`http://127.0.0.1:${port}/v1`)).ok) return
+    } catch (error) {
+      if (Date.now() > deadline) throw error
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
 }
 
 beforeAll(() => {
@@ -148,6 +173,156 @@ describe('active chat model handoff', () => {
       expect(manager.getActiveModel()).toBe(modelB.id)
     } finally {
       llm.stop()
+    }
+  })
+})
+
+describe('gateway model choice', () => {
+  it('makes a requested installed chat model the saved model and lists only its live capabilities', async () => {
+    const [{ llm }, manager, remote, server] = await Promise.all([
+      import('../llm'),
+      import('../models-manager'),
+      import('../vision/remote-vision-server'),
+      import('../model-server')
+    ])
+    const service = llm as unknown as { port: number }
+    service.port = await unusedPort()
+    const gatewayPort = await unusedPort()
+    const saved = await manager.importLocalModel(writeGguf('gateway-saved.gguf'))
+    const other = await manager.importLocalModel(writeGguf('gateway-other.gguf'))
+    expect(await manager.setActiveModel(saved.id!)).toEqual({ success: true })
+    const serverId = 'gateway-remote-text'
+    remote.setRemoteVisionServerSettings({
+      provider: 'custom',
+      endpoint: 'http://127.0.0.1:9/v1',
+      model: 'remote-text',
+      serverId,
+      name: 'Remote text'
+    })
+    expect(remote.getActiveRemoteVisionServer()?.id).toBe(serverId)
+
+    await startGateway(server, gatewayPort)
+    try {
+      const response = await fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: other.id,
+          stream: true,
+          messages: [{ role: 'user', content: 'hi' }]
+        })
+      })
+      expect(response.status).toBe(200)
+      expect(await response.text()).toContain('gateway-other.gguf:first')
+      const activeFile = JSON.parse(
+        fs.readFileSync(path.join(llm.getModelsDir(), 'active-model.json'), 'utf8')
+      ) as { id: string }
+      expect(activeFile.id).toBe(other.id)
+      expect(manager.getActiveModel()).toBe(other.id)
+      expect(remote.getActiveRemoteVisionServer()).toBeNull()
+
+      const listed = (await (await fetch(`http://127.0.0.1:${gatewayPort}/v1/models`)).json()) as {
+        data: Record<string, unknown>[]
+      }
+      expect(listed.data[0]).toMatchObject({
+        id: other.id,
+        active: true,
+        capabilities: ['tools', 'reasoning'],
+        context_length: llm.effectiveContextSize()
+      })
+      const savedEntry = listed.data.find((entry) => entry.id === saved.id)
+      expect(savedEntry).toMatchObject({ context_length: llm.effectiveContextSize() })
+      expect(savedEntry).not.toHaveProperty('capabilities')
+      expect(savedEntry).not.toHaveProperty('active')
+    } finally {
+      server.stopModelServer()
+      remote.removeRemoteVisionServer(serverId)
+      llm.stop()
+    }
+  })
+
+  it('makes a requested installed image model the active image model', async () => {
+    const [{ llm }, manager, server] = await Promise.all([
+      import('../llm'),
+      import('../models-manager'),
+      import('../model-server')
+    ])
+    const gatewayPort = await unusedPort()
+    fs.mkdirSync(llm.getModelsDir(), { recursive: true })
+    for (const name of ['gateway-alpha.safetensors', 'gateway-beta.safetensors'])
+      fs.writeFileSync(path.join(llm.getModelsDir(), name), Buffer.alloc(2048, 7))
+    expect(await manager.setActiveModalChoice('image', 'gateway-alpha.safetensors')).toEqual({
+      success: true
+    })
+
+    await startGateway(server, gatewayPort)
+    try {
+      await fetch(`http://127.0.0.1:${gatewayPort}/v1/images/generations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'gateway-beta.safetensors', prompt: 'a lighthouse' })
+      })
+      expect(manager.getActiveModalities().image).toBe('gateway-beta.safetensors')
+    } finally {
+      server.stopModelServer()
+    }
+  })
+
+  it.each([
+    { modality: 'speech' as const, kind: 'voice' },
+    { modality: 'transcription' as const, kind: 'transcription' }
+  ])('makes a requested installed $modality model the active $modality model', async ({ modality, kind }) => {
+    const [{ llm }, manager, server] = await Promise.all([
+      import('../llm'),
+      import('../models-manager'),
+      import('../model-server')
+    ])
+    const gatewayPort = await unusedPort()
+    const candidates = (await manager.desktopCatalog()).filter(
+      (model) => model.kind === kind && model.files.length > 0
+    )
+    const [first, second] = candidates
+    expect(second).toBeDefined()
+    for (const file of [...first!.files, ...second!.files]) {
+      const target = path.join(llm.getModelsDir(), file.name)
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      fs.writeFileSync(target, Buffer.alloc(2048, 7))
+    }
+    expect(await manager.listInstalled()).toEqual(expect.arrayContaining([first!.id, second!.id]))
+    expect(await manager.setActiveModalChoice(modality, first!.id)).toEqual({ success: true })
+
+    await startGateway(server, gatewayPort)
+    try {
+      let accepted: Response
+      if (modality === 'speech') {
+        accepted = await fetch(`http://127.0.0.1:${gatewayPort}/v1/audio/speech?async=true`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: second!.id, input: 'Hello there' })
+        })
+      } else {
+        const form = new FormData()
+        form.append('model', second!.id)
+        form.append('file', new Blob([Buffer.alloc(64, 1)], { type: 'audio/wav' }), 'clip.wav')
+        accepted = await fetch(`http://127.0.0.1:${gatewayPort}/v1/audio/transcriptions?async=true`, {
+          method: 'POST',
+          body: form
+        })
+      }
+      expect(accepted.status).toBe(202)
+      expect(manager.getActiveModalities()[modality]).toBe(second!.id)
+      const { request_id: requestId } = (await accepted.json()) as { request_id: string }
+      await vi.waitFor(
+        async () => {
+          const job = (await (
+            await fetch(`http://127.0.0.1:${gatewayPort}/v1/requests/${requestId}`)
+          ).json()) as { status: string }
+          expect(['completed', 'failed']).toContain(job.status)
+        },
+        { timeout: 12_000, interval: 50 }
+      )
+    } finally {
+      server.stopModelServer()
     }
   })
 })

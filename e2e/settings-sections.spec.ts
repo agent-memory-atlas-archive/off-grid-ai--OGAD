@@ -106,12 +106,12 @@ test('resource mode selection is exclusive and persists to llm settings', async 
   await openSettingsSection(page, 'Setup & health')
 
   for (const label of ['Conservative', 'Extreme', 'Balanced']) {
-    const mode = page.getByRole('button', { name: label }).first()
+    const mode = page.getByRole('radio', { name: label }).first()
     await mode.click()
-    await expect(mode).toHaveAttribute('aria-pressed', 'true')
+    await expect(mode).toHaveAttribute('aria-checked', 'true')
 
     // Exactly one mode is ever pressed.
-    const pressed = page.locator('button[aria-pressed="true"]').filter({
+    const pressed = page.locator('[role="radio"][aria-checked="true"]').filter({
       hasText: /^(Conservative|Balanced|Extreme)$/
     })
     await expect(pressed).toHaveCount(1)
@@ -124,7 +124,7 @@ test('resource mode selection is exclusive and persists to llm settings', async 
 test('resource mode survives a relaunch', async () => {
   await gotoSettings(page)
   await openSettingsSection(page, 'Setup & health')
-  await page.getByRole('button', { name: 'Conservative' }).first().click()
+  await page.getByRole('radio', { name: 'Conservative' }).first().click()
   await expect.poll(performanceMode).toBe('conservative')
 
   await closeApp()
@@ -132,8 +132,8 @@ test('resource mode survives a relaunch', async () => {
   await gotoSettings(page)
   await openSettingsSection(page, 'Setup & health')
 
-  await expect(page.getByRole('button', { name: 'Conservative' }).first()).toHaveAttribute(
-    'aria-pressed',
+  await expect(page.getByRole('radio', { name: 'Conservative' }).first()).toHaveAttribute(
+    'aria-checked',
     'true'
   )
   expect(await performanceMode()).toBe('conservative')

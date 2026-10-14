@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'motion/react'
 import { ProgressiveBlur } from './ui/progressive-blur'
+import { PageHeader, Section } from '@offgrid/operator-ui/operator/experience'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
 import { SetupPanel } from './setup/SetupPanel'
 import { PerformancePackPanel } from './setup/PerformancePackPanel'
 import { StoragePanel } from './setup/StoragePanel'
@@ -106,42 +108,20 @@ export function Settings({
   return (
     <div className="relative flex h-full flex-col">
       {/* Fixed header — stays put while the content below scrolls. */}
-      <div className="flex shrink-0 items-center gap-3 border-b border-neutral-800/60 px-1 pb-4">
-        <div className="h-10 w-10 rounded-xl bg-neutral-800 border border-neutral-700 flex items-center justify-center">
-          <svg
-            className="w-5 h-5 text-neutral-400"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-            />
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-            />
-          </svg>
-        </div>
-        <div>
-          <h2 className="text-lg font-semibold text-white">Settings</h2>
-          <p className="text-sm text-neutral-500">
-            {isPro
-              ? 'Who you are, what Off Grid AI has learned, and your devices'
-              : 'Personalization & automation unlock with Pro'}
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        className="shrink-0 px-1 pb-6"
+        title="Settings"
+        description={
+          isPro
+            ? 'Who you are, what Off Grid AI has learned, and your devices'
+            : 'Personalization & automation unlock with Pro'
+        }
+      />
 
       {/* Scrolling content below the fixed header */}
-      <div className="relative flex-1 overflow-y-auto px-1 pt-5 pb-16">
+      <div className="relative flex-1 overflow-y-auto px-1 pt-2 pb-16">
         <motion.div
-          className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2 2xl:grid-cols-3"
+          className="grid grid-cols-1 items-start gap-2 lg:grid-cols-2 2xl:grid-cols-3"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
@@ -167,18 +147,17 @@ export function Settings({
               summary="Set up your local AI, manage storage, and see live component health."
               delay={0.13}
             >
-              <SetupPanel />
-              <div className="mt-4">
+              <div className="space-y-6">
+                <SetupPanel />
                 <StoragePanel />
-              </div>
-              {currentPlatform() === 'darwin' ? (
-                <section id="settings-permissions" className="mt-6 scroll-mt-4">
-                  <div className="mb-3 text-[10px] font-medium uppercase tracking-widest text-neutral-600">
-                    System permissions
+                {currentPlatform() === 'darwin' ? (
+                  <div id="settings-permissions" className="scroll-mt-4">
+                    <Section label="System permissions">
+                      <SettingsPermissionsPanel />
+                    </Section>
                   </div>
-                  <SettingsPermissionsPanel />
-                </section>
-              ) : null}
+                ) : null}
+              </div>
             </SettingsCard>
 
             <SettingsCard
@@ -198,9 +177,9 @@ export function Settings({
                 <CaptureContribution />
               ) : (
                 <div className="mb-5 border border-neutral-800 bg-neutral-950/40 p-3 text-xs text-neutral-500">
-                  <span className="mr-2 text-[10px] uppercase tracking-wide text-emerald-500">
+                  <Badge variant="success" size="sm" className="mr-2">
                     Pro
-                  </span>
+                  </Badge>
                   {currentPlatform() === 'linux'
                     ? 'Capture and Replay controls are available with Pro on Linux.'
                     : 'Screen capture, backlog recovery, and proactive delivery are available with Pro on Windows, Linux, and macOS.'}

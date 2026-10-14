@@ -99,14 +99,28 @@ export interface AssembledToolCall {
  * args. Keyed by `index` so parallel tool calls in one turn stay separate. Pure - feed
  * it each delta's tool_calls, then read `list()` when the round ends.
  */
-export function createToolCallAccumulator(): {
+export function createToolCallAccumulator(onReady?: (call: AssembledToolCall) => void): {
   push: (deltas: SseToolCallDelta[] | undefined) => void
   list: () => AssembledToolCall[]
+  /** Report every call not yet reported as ready. Call once when the stream ends. */
+  end: () => void
 } {
   const byIndex = new Map<number, { id: string; name: string; args: string }>()
+  const reported = new Set<number>()
+  // Calls stream in index order, so a call is complete once a later index starts. Reporting it
+  // then lets a caller act on it while the model is still writing the rest of the round.
+  const report = (below: number): void => {
+    if (!onReady) return
+    for (const [index, call] of [...byIndex.entries()].sort((a, b) => a[0] - b[0])) {
+      if (index >= below || reported.has(index) || !call.name) continue
+      reported.add(index)
+      onReady({ id: call.id, name: call.name, arguments: call.args })
+    }
+  }
   const push = (deltas: SseToolCallDelta[] | undefined): void => {
     if (!deltas) return
     for (const d of deltas) {
+      if (!byIndex.has(d.index)) report(d.index)
       const cur = byIndex.get(d.index) ?? { id: '', name: '', args: '' }
       if (d.id) cur.id = d.id
       if (d.function?.name) cur.name = d.function.name
@@ -119,7 +133,7 @@ export function createToolCallAccumulator(): {
       .sort((a, b) => a[0] - b[0])
       .map(([, v]) => ({ id: v.id, name: v.name, arguments: v.args }))
       .filter((c) => c.name) // drop any fragment that never got a name
-  return { push, list }
+  return { push, list, end: () => report(Number.POSITIVE_INFINITY) }
 }
 
 /**

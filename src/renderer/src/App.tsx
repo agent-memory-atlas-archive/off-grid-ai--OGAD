@@ -1,4 +1,5 @@
 import { appLocationPath, replaceAppLocation } from './lib/app-location'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { ChatDetail } from './components/ChatDetail'
 import { CommandPalette } from './components/CommandPalette'
 import logo from './assets/logo.png'
@@ -40,8 +41,6 @@ import { useNotifications } from './hooks/useNotifications'
 import { ToastProvider } from './hooks/ToastProvider'
 import { ReprocessingProvider, useReprocessing } from './hooks/useReprocessing'
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
-import { GridBackdrop } from './components/ui/grid-backdrop'
-import { StarfieldBackdrop } from './components/ui/starfield-backdrop'
 import { Sidebar, SidebarBody } from './components/ui/sidebar'
 import { NavThemeToggle } from './components/ThemeToggle'
 import { motion, AnimatePresence } from 'motion/react'
@@ -71,6 +70,7 @@ import { normalizeProNavigationIntent, type ProNavigationIntent } from './lib/pr
 import { navigateSearchHit } from './lib/search-navigation'
 import { internalTabPaletteScreens } from './lib/paletteScreens'
 import { getSlot, SLOTS } from './bootstrap/slotRegistry'
+import { NavHighlight, ScreenTransition } from '@offgrid/operator-ui/operator/experience'
 import { SidebarNavigationMenu } from './components/navigation/SidebarNavigationMenu'
 import { StartupNotice } from './components/StartupNotice'
 import { CHAT_VIEW, setCurrentView } from './lib/current-view'
@@ -186,11 +186,9 @@ function ReprocessingBanner(): React.JSX.Element | null {
 // text token, so `hover:text-neutral-900` painted the label near-white on a near-white row.
 const navRowClass = (expanded: boolean, active = false): string =>
   cn(
-    'group/nav relative flex items-center gap-3 rounded-lg py-2 text-sm transition-colors',
+    'group/nav relative isolate flex items-center gap-3 rounded-lg py-2 text-sm transition-colors',
     expanded ? 'px-3' : 'justify-center px-0',
-    active
-      ? 'bg-green-500/10 text-emerald-400'
-      : 'text-neutral-400 hover:bg-neutral-500/10 hover:text-white'
+    active ? 'text-emerald-400' : 'text-neutral-400 hover:bg-neutral-500/10 hover:text-white'
   )
 
 // Model-server health dot for the sidebar. Uses the same authoritative chat probe
@@ -276,7 +274,11 @@ function ModelStatusDot({
       className={navRowClass(open)}
     >
       <IconActivityHeartbeat className={cn('h-5 w-5 shrink-0', color)} />
-      {open && <span className="flex-1 text-left text-xs">{text}</span>}
+      {open && (
+        <TextMorph as="span" className="flex-1 whitespace-nowrap text-left text-xs">
+          {text}
+        </TextMorph>
+      )}
     </button>
   )
 }
@@ -1058,11 +1060,12 @@ function AppContent(): React.JSX.Element {
         title={!sidebarOpen ? item.label : undefined}
         className={navRowClass(sidebarOpen, active)}
       >
-        {active && (
-          <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-green-500" />
+        {/* One highlight across the rail: it glides from the old item to the new one. */}
+        <NavHighlight active={active} group="sidebar" />
+        <span className="relative z-10 flex shrink-0">{item.icon}</span>
+        {sidebarOpen && (
+          <span className="relative z-10 flex-1 text-left whitespace-pre">{item.label}</span>
         )}
-        {item.icon}
-        {sidebarOpen && <span className="flex-1 text-left whitespace-pre">{item.label}</span>}
         {item.view === 'explore' && GodBadge && (
           <GodBadge open={viewMode === 'explore'} compact={!sidebarOpen} />
         )}
@@ -1070,8 +1073,8 @@ function AppContent(): React.JSX.Element {
           <span
             aria-label={`${notificationCount} unread notifications`}
             className={cn(
-              'flex h-4 min-w-4 items-center justify-center border border-green-500 bg-green-500 px-1 font-mono text-[9px] leading-none text-black',
-              !sidebarOpen && 'absolute right-0 top-0'
+              'z-10 flex h-4 min-w-4 items-center justify-center border border-green-500 bg-green-500 px-1 font-mono text-[9px] leading-none text-black',
+              sidebarOpen ? 'relative' : 'absolute right-0 top-0'
             )}
           >
             {notificationCountLabel}
@@ -1079,7 +1082,7 @@ function AppContent(): React.JSX.Element {
         )}
         {sidebarOpen && item.locked && (
           <IconLock
-            className="h-3.5 w-3.5 shrink-0 text-neutral-400/60"
+            className="relative z-10 h-3.5 w-3.5 shrink-0 text-neutral-400/60"
             title={proFeatureComingSoon(item.view, currentPlatform(), true) ? 'Coming soon' : 'Pro'}
           />
         )}
@@ -1088,7 +1091,7 @@ function AppContent(): React.JSX.Element {
   }
 
   return (
-    <div className="h-screen w-full overflow-hidden bg-neutral-950 relative">
+    <div className="relative h-screen w-full overflow-hidden">
       <StartupNotice />
       <CommandPalette
         onOpenHit={handleOpenHit}
@@ -1179,10 +1182,8 @@ function AppContent(): React.JSX.Element {
           </button>
         </div>
       )}
-      {/* Background — flat Off Grid AI terminal grid (theme-aware), with a dark-mode
-          starfield + periodic shooting star layered on top. */}
-      <GridBackdrop className="z-0" />
-      <StarfieldBackdrop className="z-0" />
+      {/* The background is the library LivingField (mounted in main.tsx): one breathing layer
+          under every screen, so nothing here may paint an opaque or competing backdrop. */}
 
       <div className="flex h-full relative z-10">
         {/* Aceternity Sidebar */}
@@ -1213,7 +1214,12 @@ function AppContent(): React.JSX.Element {
               </div>
 
               {/* Back / forward — a distinct control (filled), available everywhere (⌘[ / ⌘]) */}
-              <div className={cn('mt-3 flex items-center gap-1', !sidebarOpen && 'justify-center')}>
+              <div
+                className={cn(
+                  'mt-3 flex h-9 shrink-0 items-center gap-1',
+                  !sidebarOpen && 'justify-center'
+                )}
+              >
                 {sidebarOpen && (
                   <SidebarPinButton pinned={sidebarPinned} onToggle={toggleSidebarPinned} />
                 )}
@@ -1228,7 +1234,6 @@ function AppContent(): React.JSX.Element {
                   )}
                 >
                   <IconArrowLeft className="h-4 w-4 shrink-0" />
-                  {sidebarOpen && <span className="text-xs font-medium">Back</span>}
                 </button>
                 {sidebarOpen && (
                   <button
@@ -1311,42 +1316,37 @@ function AppContent(): React.JSX.Element {
             </AnimatePresence>
             {/* Content Area */}
             <div className="flex-1 overflow-hidden">
-              <AnimatePresence mode="wait">
+              <ScreenTransition
+                screenKey={
+                  viewMode === 'chats' && selectedSessionId
+                    ? `chat-detail-${selectedSessionId}`
+                    : viewMode
+                }
+                className={
+                  viewMode === 'chats' && selectedSessionId
+                    ? 'h-full'
+                    : 'h-full overflow-y-auto p-6'
+                }
+              >
                 {viewMode === 'chats' && selectedSessionId ? (
-                  <motion.div
-                    key={`chat-detail-${selectedSessionId}`}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.12, ease: [0.25, 0.46, 0.45, 0.94] }}
-                    className="h-full"
-                  >
-                    <ChatDetail
-                      sessionId={selectedSessionId}
-                      onBack={handleBack}
-                      onSelectEntity={(entityId) => {
-                        navigateTo('entities', () => {
-                          setSelectedEntityId(entityId)
-                          setSelectedSessionId(null)
-                        })
-                      }}
-                      onSelectMemory={(memoryId) => {
-                        navigateTo('memories', () => {
-                          setSelectedMemoryId(memoryId)
-                          setSelectedSessionId(null)
-                        })
-                      }}
-                    />
-                  </motion.div>
+                  <ChatDetail
+                    sessionId={selectedSessionId}
+                    onBack={handleBack}
+                    onSelectEntity={(entityId) => {
+                      navigateTo('entities', () => {
+                        setSelectedEntityId(entityId)
+                        setSelectedSessionId(null)
+                      })
+                    }}
+                    onSelectMemory={(memoryId) => {
+                      navigateTo('memories', () => {
+                        setSelectedMemoryId(memoryId)
+                        setSelectedSessionId(null)
+                      })
+                    }}
+                  />
                 ) : (
-                  <motion.div
-                    key={viewMode}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.12, ease: [0.25, 0.46, 0.45, 0.94] }}
-                    className="p-6 h-full overflow-y-auto"
-                  >
+                  <>
                     {proFeatureComingSoon(viewMode, currentPlatform(), true) ? (
                       <UpgradeScreen variant="coming-soon" feature={getProFeature(viewMode)} />
                     ) : viewMode === 'explore' ? (
@@ -1463,9 +1463,9 @@ function AppContent(): React.JSX.Element {
                         <UpgradeScreen feature={getProFeature(viewMode)} />
                       ))
                     )}
-                  </motion.div>
+                  </>
                 )}
-              </AnimatePresence>
+              </ScreenTransition>
             </div>
           </div>
         </div>

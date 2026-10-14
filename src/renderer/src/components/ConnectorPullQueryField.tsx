@@ -1,4 +1,11 @@
 import { useState } from 'react'
+import { MagnifyingGlass } from '@phosphor-icons/react'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput
+} from '@offgrid/operator-ui/operator/coss/input-group'
+import { Button } from './ui/button'
 
 interface ConnectorPullQueryFieldProps {
   /** The connector being asked, for the field's prompt. */
@@ -25,22 +32,31 @@ export function ConnectorPullQueryField({
 
   return (
     <>
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && pullable && !disabled) onPull(query)
-        }}
-        placeholder={`Ask ${connectorName} for… (e.g. ABSLI)`}
-        className="flex-1 rounded-md border border-neutral-800 bg-neutral-950 px-2.5 py-1.5 text-xs text-neutral-200 outline-none focus:border-neutral-600"
-      />
-      <button
+      <InputGroup className="min-w-0 flex-1">
+        <InputGroupAddon>
+          <MagnifyingGlass aria-hidden="true" />
+        </InputGroupAddon>
+        <InputGroupInput
+          size="sm"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && pullable && !disabled) onPull(query)
+          }}
+          placeholder={`Ask ${connectorName} for… (e.g. ABSLI)`}
+          className="text-xs"
+        />
+      </InputGroup>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
         onClick={() => onPull(query)}
         disabled={disabled || !pullable}
-        className="shrink-0 rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:border-green-500 hover:text-green-500 disabled:opacity-40"
+        className="shrink-0"
       >
         Pull
-      </button>
+      </Button>
     </>
   )
 }

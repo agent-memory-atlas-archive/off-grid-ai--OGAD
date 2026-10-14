@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import { CaretDown, Pulse, WarningCircle, Wrench } from '@phosphor-icons/react'
+import AIContextMeter from '@offgrid/operator-ui/operator/ai-context-meter'
 import {
   Collapsible,
   CollapsibleContent,
@@ -48,6 +49,19 @@ function GenerationMetricsRowComponent({
           aria-hidden="true"
         />
       </CollapsibleTrigger>
+      {promptTokens && contextWindowTokens && contextWindowTokens > 0 ? (
+        <AIContextMeter
+          used={promptTokens}
+          limit={contextWindowTokens}
+          breakdown={[
+            { label: estimated ? 'Prompt (estimated)' : 'Prompt', tokens: promptTokens },
+            ...(metrics.completionTokens
+              ? [{ label: 'Output', tokens: metrics.completionTokens }]
+              : [])
+          ]}
+          className="font-mono"
+        />
+      ) : null}
       <CollapsibleContent className="order-last min-w-0 max-w-full basis-full overflow-hidden font-mono text-[10px] text-neutral-500">
         <p
           className="ml-1 mt-1 border-l border-neutral-800 pl-3 tabular-nums [overflow-wrap:anywhere]"

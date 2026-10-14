@@ -304,10 +304,11 @@ interface RendererAPIOverrides {
   onRagStream: (
     callback: (data: {
       streamId: string
-      type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'done'
+      type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'image_request' | 'done'
       text?: string
       step?: unknown
       call?: { name: string; result: string; status: 'completed' | 'failed' | 'pending' }
+      request?: { prompt: string; enhancePrompt?: boolean }
     }) => void
   ) => () => void
   getActiveRagStreams?: () => Promise<

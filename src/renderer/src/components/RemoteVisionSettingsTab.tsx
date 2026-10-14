@@ -15,6 +15,14 @@ import { providerNeedsScreenDisclosure } from '../../../shared/remote-screen-pri
 import { SettingsRow as Row } from './SettingsRow'
 import { SettingsSelect } from './SettingsSelect'
 import { SettingsSection } from './SettingsSection'
+import { AnimatePresence, motion } from 'motion/react'
+import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
+import { LiveStatus } from '@offgrid/operator-ui/operator/presence'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
+import { ListRow } from '@offgrid/operator-ui/operator/list-row'
+import { PencilSimple, Plus, Trash } from '@phosphor-icons/react'
+import { Button } from './ui/button'
+import { IconTip } from './IconTip'
 
 const EMPTY_SETTINGS: RemoteVisionServerSettings = {
   provider: 'local',
@@ -159,7 +167,8 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
       .filter(
         (model) =>
           model.kind === 'text' &&
-          !model.outputModalities?.includes('decisions') && !isGrounderModel(model.id) &&
+          !model.outputModalities?.includes('decisions') &&
+          !isGrounderModel(model.id) &&
           (!query || `${model.name} ${model.id}`.toLowerCase().includes(query))
       )
       .slice(0, 75)
@@ -342,94 +351,110 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
         summary={serversSummary}
         defaultOpen
       >
-        <p className="mb-3 text-[11px] leading-4 text-neutral-500">
-          Save model servers once, then switch between them when you need one.
-        </p>
-
-        <div className="mb-3">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <p className="text-[11px] uppercase tracking-wide text-neutral-400">Saved servers</p>
-            <button
+        {/* The section header already names the group; one hint line carries the add action. */}
+        <div className="flex items-center justify-between gap-3 py-1">
+          <p className="min-w-0 text-[11.5px] leading-snug text-neutral-500">
+            Save model servers once, then switch between them when you need one.
+          </p>
+          <IconTip label="Add server">
+            <Button
               type="button"
+              size="icon-sm"
+              variant="outline"
+              aria-label="Add server"
               onClick={addServer}
-              className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:border-neutral-600 hover:text-white"
+              className="shrink-0 border-neutral-700 text-neutral-300 hover:border-neutral-600 hover:text-white"
             >
-              Add server
-            </button>
-          </div>
-          {settings.servers.length > 0 ? (
-            <div className="space-y-2">
-              {settings.servers.map((server) => (
-                <div
-                  key={server.id}
-                  className={`flex items-center gap-3 border p-2 ${form.id === server.id ? 'border-green-500/60 bg-green-500/5' : 'border-neutral-800 bg-neutral-950/40'}`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => selectServer(server)}
-                    className="min-w-0 flex-1 text-left"
-                  >
-                    <span className="block truncate text-xs text-neutral-200">{server.name}</span>
-                    <span className="block truncate text-[10px] text-neutral-600">
-                      {server.endpoint} · {server.model}
-                    </span>
-                  </button>
-                  {settings.activeServerId === server.id ? (
-                    <span className="text-[9px] uppercase tracking-wide text-green-500">
-                      Active
-                    </span>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => void changeModel(server)}
-                    disabled={busy}
-                    className="text-[10px] text-neutral-400 hover:text-white disabled:opacity-40"
-                  >
-                    Change model
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void remove(server.id)}
-                    disabled={busy}
-                    className="text-[10px] text-neutral-600 hover:text-red-400 disabled:opacity-40"
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-[10px] text-neutral-600">No saved servers.</p>
-          )}
+              <Plus />
+            </Button>
+          </IconTip>
         </div>
+        {settings.servers.length > 0 ? (
+          <div className="divide-y divide-neutral-900">
+            <AnimatePresence initial={false}>
+              {settings.servers.map((server) => (
+                <motion.div
+                  key={server.id}
+                  layout
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                >
+                  <ListRow
+                    density="compact"
+                    title={server.name}
+                    description={`${server.endpoint} · ${server.model}`}
+                    onSelect={() => selectServer(server)}
+                    selected={form.id === server.id}
+                    meta={
+                      settings.activeServerId === server.id ? (
+                        <Badge variant="success" size="sm">
+                          Active
+                        </Badge>
+                      ) : null
+                    }
+                    actions={
+                      <>
+                        <IconTip label="Change model">
+                          <Button
+                            type="button"
+                            size="icon-xs"
+                            variant="ghost"
+                            aria-label="Change model"
+                            onClick={() => void changeModel(server)}
+                            disabled={busy}
+                            className="text-neutral-400 hover:text-white disabled:opacity-40"
+                          >
+                            <PencilSimple />
+                          </Button>
+                        </IconTip>
+                        <IconTip label="Remove">
+                          <Button
+                            type="button"
+                            size="icon-xs"
+                            variant="ghost"
+                            aria-label="Remove"
+                            onClick={() => void remove(server.id)}
+                            disabled={busy}
+                            className="text-neutral-500 hover:text-red-400 disabled:opacity-40"
+                          >
+                            <Trash />
+                          </Button>
+                        </IconTip>
+                      </>
+                    }
+                  />
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </div>
+        ) : (
+          <p className="pb-1 text-[10px] text-neutral-600">No saved servers.</p>
+        )}
       </SettingsSection>
 
       <SettingsSection id="remote.server" title="Server" summary={serverSummary} defaultOpen>
         <div
           role="group"
           aria-label="Remote server details"
-          className="grid grid-cols-1 gap-x-3 lg:grid-cols-2 [&>div]:mb-2"
+          className="grid grid-cols-1 gap-x-3 lg:grid-cols-2"
         >
           <Row
+            inline
             label="Use remote server"
             controlId="remote-server-enabled"
             hint="Off uses models on this device."
           >
-            <button
+            <Switch
               id="remote-server-enabled"
-              type="button"
-              role="switch"
-              aria-checked={remoteEnabled}
-              onClick={() => {
+              aria-label="Use remote server"
+              checked={remoteEnabled}
+              onCheckedChange={() => {
                 setRemoteEnabled((enabled) => !enabled)
                 setStatus('Not saved.')
               }}
-              className={`relative h-6 w-11 rounded-full border transition-colors ${remoteEnabled ? 'border-green-500 bg-green-500/20' : 'border-neutral-700 bg-neutral-900'}`}
-            >
-              <span
-                className={`absolute left-1 top-1 h-3.5 w-3.5 rounded-full transition-transform ${remoteEnabled ? 'translate-x-5 bg-green-500' : 'translate-x-0 bg-neutral-500'}`}
-              />
-            </button>
+            />
           </Row>
 
           {remoteEnabled ? (
@@ -501,8 +526,9 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
                 />
               </Row>
               {providerNeedsScreenDisclosure(remoteVisionProviderForEndpoint(form.endpoint)) ? (
-                <div className="lg:col-span-2 [&>div]:mb-0">
+                <div className="lg:col-span-2">
                   <Row
+                    inline
                     label="Allow screen images"
                     controlId="remote-server-screen-frames"
                     hint={
@@ -511,24 +537,18 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
                         : 'Blocked until you allow it. Web Use and Computer Use can send screen images with visible text, apps, and other content to this server.'
                     }
                   >
-                    <button
+                    <Switch
                       id="remote-server-screen-frames"
-                      type="button"
-                      role="switch"
-                      aria-checked={form.screenFramesAllowed}
-                      onClick={() => {
+                      aria-label="Allow screen images"
+                      checked={form.screenFramesAllowed}
+                      onCheckedChange={() => {
                         setForm((current) => ({
                           ...current,
                           screenFramesAllowed: !current.screenFramesAllowed
                         }))
                         setStatus('Not saved.')
                       }}
-                      className={`relative h-6 w-11 rounded-full border transition-colors ${form.screenFramesAllowed ? 'border-green-500 bg-green-500/20' : 'border-neutral-700 bg-neutral-900'}`}
-                    >
-                      <span
-                        className={`absolute left-1 top-1 h-3.5 w-3.5 rounded-full transition-transform ${form.screenFramesAllowed ? 'translate-x-5 bg-green-500' : 'translate-x-0 bg-neutral-500'}`}
-                      />
-                    </button>
+                    />
                   </Row>
                 </div>
               ) : null}
@@ -601,10 +621,11 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
           <div
             role="group"
             aria-label="Other remote models"
-            className="grid grid-cols-1 gap-x-3 lg:grid-cols-2 [&>div]:mb-2"
+            className="grid grid-cols-1 gap-x-3 lg:grid-cols-2"
           >
             {(['grounding', 'decision'] as const).map((role) => (
               <Row
+                inline
                 key={role}
                 label={role === 'grounding' ? 'Grounding specialist' : 'Decision model'}
                 controlId={`remote-server-${role}-model`}
@@ -621,7 +642,9 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
                       .filter((model) => {
                         if (model.kind !== 'text') return false
                         const decision = model.outputModalities?.includes('decisions') === true
-                        return role === 'decision' ? decision : !decision && isGrounderModel(model.id)
+                        return role === 'decision'
+                          ? decision
+                          : !decision && isGrounderModel(model.id)
                       })
                       .map((model) => ({ value: model.id, label: model.name }))
                   ]}
@@ -637,6 +660,7 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
             ))}
             {(['image', 'transcription', 'voice'] as const).map((kind) => (
               <Row
+                inline
                 key={kind}
                 label={kind === 'image' ? 'Image' : kind === 'voice' ? 'Voice' : 'Transcription'}
                 controlId={`remote-server-${kind}-model`}
@@ -667,9 +691,9 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
       ) : null}
 
       <div className="mt-3 flex items-center justify-between gap-3 border-t border-neutral-800 pt-3">
-        <p role="status" aria-live="polite" className="min-w-0 flex-1 text-[10px] text-neutral-500">
-          {status}
-        </p>
+        <div className="min-w-0 flex-1">
+          <LiveStatus className="text-[10px] text-neutral-500">{status}</LiveStatus>
+        </div>
         {remoteEnabled ? (
           <button
             type="button"

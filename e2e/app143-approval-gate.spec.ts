@@ -130,7 +130,7 @@ test('holds a connector write until approval, then executes it once with visible
   await page.keyboard.press('Escape')
 
   await page.getByRole('button', { name: 'Actions', exact: true }).click()
-  await page.getByRole('button', { name: /^Approvals/ }).click()
+  await page.getByRole('radio', { name: /^Approvals/ }).click()
   await expect(page.getByText('Nothing waiting for approval.')).toBeVisible()
 
   const approvalId = await page.evaluate(
@@ -204,8 +204,8 @@ test('holds a connector write until approval, then executes it once with visible
     .toEqual([{ title: EXTERNAL_TITLE, project: EXTERNAL_PROJECT }])
 
   await page.getByRole('button', { name: 'Actions', exact: true }).click()
-  await page.getByRole('button', { name: /^Approvals/ }).click()
-  await page.getByRole('button', { name: 'history', exact: true }).click()
+  await page.getByRole('radio', { name: /^Approvals/ }).click()
+  await page.getByRole('radio', { name: 'history', exact: true }).click()
 
   await expect(page.getByRole('paragraph').filter({ hasText: APPROVAL_TITLE })).toBeVisible()
   await expect(page.getByText('executed', { exact: true })).toBeVisible({ timeout: 10_000 })

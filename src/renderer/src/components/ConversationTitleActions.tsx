@@ -1,13 +1,18 @@
-import { useState, type FormEvent, type JSX, type KeyboardEvent } from 'react'
+import { useState, type JSX, type KeyboardEvent } from 'react'
 import { Check, DotsThree, PencilSimple, Trash, X } from '@phosphor-icons/react'
-import type { RagConversationContract } from '../../../shared/ipc-contracts'
-import { Button } from './ui/button'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from './ui/dropdown-menu'
+  Editable,
+  EditableArea,
+  EditableCancel,
+  EditableInput,
+  EditableLabel,
+  EditableSubmit,
+  EditableToolbar
+} from '@offgrid/operator-ui/operator/dice/editable'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@offgrid/operator-ui/operator/coss/menu'
+import type { RagConversationContract } from '../../../shared/ipc-contracts'
 
 interface ConversationTitleActionsProps {
   conversation: RagConversationContract
@@ -25,6 +30,7 @@ export function ConversationTitleActions({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const displayTitle = conversation.title || 'Untitled'
+  const reduceMotion = useReducedMotion()
 
   const beginRename = (): void => {
     setDraft(conversation.title || '')
@@ -38,8 +44,7 @@ export function ConversationTitleActions({
     setEditing(false)
   }
 
-  const saveRename = async (event: FormEvent): Promise<void> => {
-    event.preventDefault()
+  const saveRename = async (): Promise<void> => {
     const title = draft.trim()
     if (!title) {
       setError('Enter a conversation name.')
@@ -59,8 +64,12 @@ export function ConversationTitleActions({
     }
   }
 
+  // The title edits where it sits (the preview's Details chapter). Saving is async and can fail,
+  // so the editor stays open until the save lands (closeOnSubmit off), and leaving the field keeps
+  // the draft open, as before, rather than saving it (submitOnBlur off).
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key === 'Escape') {
+      // Handled here, not by the panel behind: Escape leaves the rename, nothing else.
       event.preventDefault()
       cancelRename()
     }
@@ -68,76 +77,102 @@ export function ConversationTitleActions({
 
   if (editing) {
     return (
-      <div className="min-w-0" onClick={(event) => event.stopPropagation()}>
-        <form className="flex min-w-0 items-center gap-1" onSubmit={saveRename}>
-          <input
-            autoFocus
-            aria-label="Rename conversation"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={handleInputKeyDown}
-            onFocus={(event) => event.currentTarget.select()}
-            disabled={saving}
-            className="h-6 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
-          />
-          <Button
-            type="submit"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Save conversation name"
-            disabled={saving}
-            className="active:scale-95"
-          >
-            <Check />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Cancel rename"
-            disabled={saving}
-            onClick={cancelRename}
-            className="active:scale-95"
-          >
-            <X />
-          </Button>
-        </form>
-        {error && (
-          <p role="alert" className="mt-1 text-[10px] text-destructive">
-            {error}
-          </p>
-        )}
-      </div>
+      <motion.div
+        className="min-w-0"
+        onClick={(event) => event.stopPropagation()}
+        initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: reduceMotion ? 0 : 0.3, ease: [0.16, 1, 0.3, 1] }}
+      >
+        <Editable
+          value={draft}
+          onValueChange={setDraft}
+          editing
+          onEditingChange={(next) => {
+            if (!next) cancelRename()
+          }}
+          closeOnSubmit={false}
+          submitOnBlur={false}
+          onSubmit={() => void saveRename()}
+          disabled={saving}
+          invalid={error !== null}
+          className="gap-0"
+        >
+          <EditableLabel className="sr-only">Rename conversation</EditableLabel>
+          <div className="flex min-w-0 items-center gap-1">
+            <EditableArea className="min-w-0 flex-1">
+              <EditableInput
+                aria-label="Rename conversation"
+                onKeyDown={handleInputKeyDown}
+                className="h-7 min-w-0 px-2 text-xs md:text-xs"
+              />
+            </EditableArea>
+            <EditableToolbar className="flex items-center gap-1">
+              <EditableSubmit
+                aria-label="Save conversation name"
+                disabled={saving}
+                render={<Button variant="ghost" size="icon-xs" />}
+              >
+                <Check />
+              </EditableSubmit>
+              <EditableCancel
+                aria-label="Cancel rename"
+                disabled={saving}
+                render={<Button variant="ghost" size="icon-xs" />}
+              >
+                <X />
+              </EditableCancel>
+            </EditableToolbar>
+          </div>
+        </Editable>
+        <AnimatePresence initial={false}>
+          {error && (
+            <motion.p
+              key="rename-error"
+              role="alert"
+              className="mt-1 text-[10px] text-destructive"
+              initial={reduceMotion ? false : { opacity: 0, y: -4, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4, filter: 'blur(4px)' }}
+              transition={{ duration: reduceMotion ? 0 : 0.3, ease: [0.16, 1, 0.3, 1] }}
+            >
+              {error}
+            </motion.p>
+          )}
+        </AnimatePresence>
+      </motion.div>
     )
   }
 
   return (
     <div className="flex min-w-0 items-center gap-1">
       <p className="min-w-0 flex-1 truncate text-xs text-neutral-300">{displayTitle}</p>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label={`Conversation actions for ${displayTitle}`}
-            onClick={(event) => event.stopPropagation()}
-            className="opacity-0 transition-all group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 active:scale-95"
-          >
-            <DotsThree />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-36">
-          <DropdownMenuItem onSelect={beginRename}>
+      <Menu>
+        <MenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Conversation actions for ${displayTitle}`}
+              onClick={(event) => event.stopPropagation()}
+              className="opacity-0 transition-all group-hover:opacity-100 focus-visible:opacity-100 data-popup-open:opacity-100"
+            />
+          }
+        >
+          <DotsThree />
+        </MenuTrigger>
+        <MenuPopup align="end" className="w-36">
+          <MenuItem onClick={beginRename}>
             <PencilSimple />
             Rename
-          </DropdownMenuItem>
-          <DropdownMenuItem variant="destructive" onSelect={() => void onDelete()}>
+          </MenuItem>
+          <MenuItem variant="destructive" onClick={() => void onDelete()}>
             <Trash />
             Delete
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+          </MenuItem>
+        </MenuPopup>
+      </Menu>
     </div>
   )
 }

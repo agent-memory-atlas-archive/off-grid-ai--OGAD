@@ -10,7 +10,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { launchOffGrid } from './helpers/launch'
+import { createServer, type Server } from 'node:http'
+import { launchOffGrid, targetIsPackaged } from './helpers/launch'
 import { completeOnboarding } from './helpers/onboarding'
 import { navButton } from './helpers/settings'
 import {
@@ -47,6 +48,12 @@ const SYNCED_PROJECT_ID = '22222222-2222-4222-8222-222222222222'
 const SYNCED_CONVERSATION_ID = '33333333-3333-4333-8333-333333333333'
 const SYNCED_MESSAGE_ID = '44444444-4444-4444-8444-444444444444'
 
+const SYNTHETIC_LICENSE = 'SYNTHETIC-DEVICE-SYNC-LICENSE'
+let licenseServer: Server | null = null
+let licenseEndpoint = ''
+let licenseProvider = ''
+let restoreLicenseBoundary: (() => void) | null = null
+
 let app: ElectronApplication
 let page: Page
 let userDataDir: string
@@ -71,6 +78,44 @@ const syntheticRecords = new Map<
 const launch = async (pro: '0' | '1'): Promise<void> => {
   userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), `offgrid-devices-${pro}-`))
   if (pro === '1') {
+    test.skip(targetIsPackaged(), 'Synthetic licensing boundary requires the source app entry.')
+    const { createKeygenFake } = await import('../pro/main/__tests__/helpers/keygen-fake')
+    const { KEYGEN_API_BASE } = await import('../pro/main/licensing/keygen-config')
+    licenseProvider = KEYGEN_API_BASE
+    const provider = createKeygenFake()
+    provider.addLicence({ key: SYNTHETIC_LICENSE, seats: 5 })
+    const realFetch = globalThis.fetch
+    provider.install()
+    const providerFetch = globalThis.fetch
+    provider.restore()
+    // Both real sync peers use one external provider, including seat registration and removal.
+    globalThis.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      return url.startsWith(KEYGEN_API_BASE) ? providerFetch(input, init) : realFetch(input, init)
+    }
+    restoreLicenseBoundary = () => {
+      globalThis.fetch = realFetch
+    }
+    licenseServer = createServer(async (request, response) => {
+      try {
+        const chunks: Buffer[] = []
+        for await (const chunk of request) chunks.push(Buffer.from(chunk))
+        const result = await providerFetch(`${KEYGEN_API_BASE}${request.url}`, {
+          method: request.method,
+          headers: request.headers as Record<string, string>,
+          body: chunks.length ? Buffer.concat(chunks) : undefined
+        })
+        response.writeHead(result.status, Object.fromEntries(result.headers))
+        response.end(Buffer.from(await result.arrayBuffer()))
+      } catch {
+        response.writeHead(500)
+        response.end('Synthetic licensing boundary failed')
+      }
+    })
+    await new Promise<void>((resolve) => licenseServer!.listen(0, '127.0.0.1', resolve))
+    const address = licenseServer.address()
+    if (!address || typeof address === 'string') throw new Error('Synthetic provider did not bind')
+    licenseEndpoint = `http://127.0.0.1:${address.port}`
     const modelsDir = path.join(userDataDir, 'models')
     const fileName = 'synthetic-transfer-q4.gguf'
     const bytes = Buffer.alloc(4096, 7)
@@ -103,9 +148,12 @@ const launch = async (pro: '0' | '1'): Promise<void> => {
     fs.symlinkSync(embeddingCache, path.join(modelsDir, '.cache', 'Xenova'), 'dir')
   }
   app = await launchOffGrid({
+    appEntry: pro === '1' ? path.resolve('pro/e2e/fixtures/sync-license-boundary.cjs') : undefined,
     env: {
       OFFGRID_USER_DATA: userDataDir,
-      OFFGRID_PRO: pro,
+      OFFGRID_PRO: pro === '1' ? '' : '0',
+      OFFGRID_E2E_KEYGEN_URL: licenseEndpoint,
+      OFFGRID_E2E_KEYGEN_PROVIDER: licenseProvider,
       OFFGRID_EMBEDDINGS_OFFLINE: '1',
       NODE_ENV: 'production'
     }
@@ -119,6 +167,14 @@ const launch = async (pro: '0' | '1'): Promise<void> => {
   const navigation = page.getByRole('navigation', { name: 'Primary navigation' })
   await navigation.hover()
   await navigation.getByRole('button', { name: 'Pin sidebar', exact: true }).click()
+  if (pro === '1') {
+    await navigation.getByRole('button', { name: 'Devices', exact: true }).click()
+    await page.getByPlaceholder('XXXX-XXXX-XXXX-XXXX').fill(SYNTHETIC_LICENSE)
+    await page.getByRole('button', { name: 'Activate', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Devices', exact: true })).toBeVisible({
+      timeout: 60_000
+    })
+  }
 }
 
 /**
@@ -161,6 +217,10 @@ const teardown = async (): Promise<void> => {
   }
   syntheticRegistry = null
   syntheticInstallationId = null
+  if (licenseServer) await new Promise<void>((resolve) => licenseServer!.close(() => resolve()))
+  licenseServer = null
+  restoreLicenseBoundary?.()
+  restoreLicenseBoundary = null
 }
 
 test.describe('Devices surface — unlicensed', () => {
@@ -632,7 +692,7 @@ test.describe('Devices surface — pro tier', () => {
     await syncedProject.click()
     await expect(page.getByRole('button', { name: /Cross-device notes/ })).toBeVisible()
 
-    await page.getByRole('button', { name: 'Knowledge & settings', exact: true }).click()
+    await page.getByRole('radio', { name: 'Knowledge & settings', exact: true }).click()
     await expect(page.getByText('No documents yet.')).toBeVisible()
     const knowledgePath = path.join(userDataDir, 'launch-brief.txt')
     const knowledgeBytes = Buffer.from(

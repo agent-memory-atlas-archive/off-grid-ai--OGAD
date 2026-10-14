@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { DownloadSimple, UploadSimple } from '@phosphor-icons/react'
+import { CircleNotch, DownloadSimple, UploadSimple } from '@phosphor-icons/react'
 import type {
   BackupDeliveryContract,
   BackupRestoreSummaryContract
 } from '../../../shared/backup-contracts'
 import { Button } from './ui/button'
+import { GlyphSwap, IconTip } from './IconTip'
 
 type BackupAction = 'export' | 'restore'
 
@@ -62,45 +63,58 @@ export function BackupRestoreSection(): React.ReactElement {
       (result) => (result ? restoreMessage(result) : 'Restore canceled.')
     )
 
+  const exportLabel = busy === 'export' ? 'Creating backup...' : 'Create backup'
+  const restoreLabel = busy === 'restore' ? 'Restoring...' : 'Choose backup'
+
   return (
-    <div className="grid gap-3 lg:grid-cols-2">
-      <section className="border border-neutral-800 bg-neutral-950/40 p-3">
-        <div className="mb-3">
+    <div className="grid gap-x-8 gap-y-6 lg:grid-cols-2">
+      <section className="flex items-start justify-between gap-4">
+        <div>
           <h4 className="text-sm text-neutral-200">Create a portable backup</h4>
           <p className="mt-1 text-xs leading-relaxed text-neutral-500">
             Save your chats, projects, project instructions, and knowledge files as one ZIP file.
           </p>
         </div>
-        <Button
-          type="button"
-          size="sm"
-          disabled={busy !== null}
-          onClick={() => void exportBackup()}
-          className="rounded-none bg-emerald-600 text-white active:scale-95"
-        >
-          <DownloadSimple />
-          {busy === 'export' ? 'Creating backup...' : 'Create backup'}
-        </Button>
+        <IconTip label={exportLabel}>
+          <Button
+            type="button"
+            size="icon-sm"
+            aria-label={exportLabel}
+            aria-busy={busy === 'export' || undefined}
+            disabled={busy !== null}
+            onClick={() => void exportBackup()}
+            className="shrink-0 bg-emerald-600 text-white active:scale-95"
+          >
+            <GlyphSwap glyphKey={busy === 'export' ? 'busy' : 'idle'}>
+              {busy === 'export' ? <CircleNotch className="animate-spin" /> : <DownloadSimple />}
+            </GlyphSwap>
+          </Button>
+        </IconTip>
       </section>
 
-      <section className="border border-neutral-800 bg-neutral-950/40 p-3">
-        <div className="mb-3">
+      <section className="flex items-start justify-between gap-4">
+        <div>
           <h4 className="text-sm text-neutral-200">Restore from a backup</h4>
           <p className="mt-1 text-xs leading-relaxed text-neutral-500">
             Add missing chats, projects, and knowledge files. Existing data stays unchanged.
           </p>
         </div>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={busy !== null}
-          onClick={() => void importBackup()}
-          className="rounded-none border-neutral-700 bg-transparent active:scale-95"
-        >
-          <UploadSimple />
-          {busy === 'restore' ? 'Restoring...' : 'Choose backup'}
-        </Button>
+        <IconTip label={restoreLabel}>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            aria-label={restoreLabel}
+            aria-busy={busy === 'restore' || undefined}
+            disabled={busy !== null}
+            onClick={() => void importBackup()}
+            className="shrink-0 border-neutral-700 bg-transparent active:scale-95"
+          >
+            <GlyphSwap glyphKey={busy === 'restore' ? 'busy' : 'idle'}>
+              {busy === 'restore' ? <CircleNotch className="animate-spin" /> : <UploadSimple />}
+            </GlyphSwap>
+          </Button>
+        </IconTip>
       </section>
 
       {status ? (

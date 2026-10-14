@@ -1,3 +1,4 @@
+import { gotoSettings, openSettingsSection } from './helpers/settings'
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -44,6 +45,10 @@ const launch = async (): Promise<void> => {
   page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
   await completeOnboarding(page)
+  // This journey owns the one-shot CLI process, including its cancellation and PNG output.
+  await gotoSettings(page)
+  await openSettingsSection(page, 'Capture & processing')
+  await page.getByRole('switch', { name: 'Image generation residency', exact: true }).uncheck()
   // Let this profile own its model port before image eviction. Another running
   // Desktop instance can keep its real model on the default port.
   await expect
@@ -140,11 +145,15 @@ test('APP-093 generates one owned image and keeps it usable across a full relaun
   await expect(page.getByRole('heading', { name: 'Create an image' })).toBeVisible()
   await page.getByRole('button', { name: /Image options/i }).click()
   const imageOptions = page
-    .locator('div')
-    .filter({ has: page.getByText('Guidance', { exact: true }) })
-    .last()
-  await imageOptions.getByLabel('Size').selectOption('256')
-  await imageOptions.getByLabel('Steps').fill('4')
+  await imageOptions
+    .getByRole('radiogroup', { name: 'Size', exact: true })
+    .getByRole('radio', { name: '256', exact: true })
+    .click()
+  await imageOptions.getByRole('slider', { name: 'Steps', exact: true }).press('Home')
+  await expect(imageOptions.getByRole('slider', { name: 'Steps', exact: true })).toHaveAttribute(
+    'aria-valuenow',
+    '4'
+  )
   await imageOptions.getByLabel('Seed').fill('93')
   const enhance = imageOptions.getByLabel('Enhance')
   if (await enhance.isChecked()) await enhance.uncheck()
@@ -239,11 +248,15 @@ test('Send Now cancels the active image and saves urgent and queued images in or
   await page.getByRole('button', { name: /^Image$/ }).click()
   await page.getByRole('button', { name: /Image options/i }).click()
   const imageOptions = page
-    .locator('div')
-    .filter({ has: page.getByText('Guidance', { exact: true }) })
-    .last()
-  await imageOptions.getByLabel('Size').selectOption('256')
-  await imageOptions.getByLabel('Steps').fill('4')
+  await imageOptions
+    .getByRole('radiogroup', { name: 'Size', exact: true })
+    .getByRole('radio', { name: '256', exact: true })
+    .click()
+  await imageOptions.getByRole('slider', { name: 'Steps', exact: true }).press('Home')
+  await expect(imageOptions.getByRole('slider', { name: 'Steps', exact: true })).toHaveAttribute(
+    'aria-valuenow',
+    '4'
+  )
   const enhance = imageOptions.getByLabel('Enhance')
   if (await enhance.isChecked()) await enhance.uncheck()
 
@@ -271,7 +284,9 @@ test('Send Now cancels the active image and saves urgent and queued images in or
     .toEqual([held])
   await composer.fill(queued)
   await composer.press('Enter')
-  await expect(page.getByText('1 queued', { exact: true })).toBeVisible()
+  await expect(
+    page.getByTestId('chat-composer').getByText('1 queued', { exact: true })
+  ).toBeVisible()
   await composer.fill(urgent)
   await composer.press(process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter')
   await expect
@@ -291,7 +306,9 @@ test('Send Now cancels the active image and saves urgent and queued images in or
   expect(() => process.kill(heldPid, 0)).toThrow()
   await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeHidden()
   await expect(page.getByRole('img', { name: 'Generated', exact: true })).toHaveCount(2)
-  await expect(page.getByText('1 queued', { exact: true })).toBeHidden()
+  await expect(
+    page.getByTestId('chat-composer').getByText('1 queued', { exact: true })
+  ).toBeHidden()
 
   const before = await scopedImages()
   expect(before.images).toHaveLength(2)
@@ -328,11 +345,15 @@ for (const action of ['finish', 'send-now', 'stop']) {
     await page.getByRole('button', { name: /^Image$/ }).click()
     await page.getByRole('button', { name: /Image options/i }).click()
     const options = page
-      .locator('div')
-      .filter({ has: page.getByText('Guidance', { exact: true }) })
-      .last()
-    await options.getByLabel('Size').selectOption('256')
-    await options.getByLabel('Steps').fill('4')
+    await options
+      .getByRole('radiogroup', { name: 'Size', exact: true })
+      .getByRole('radio', { name: '256', exact: true })
+      .click()
+    await options.getByRole('slider', { name: 'Steps', exact: true }).press('Home')
+    await expect(options.getByRole('slider', { name: 'Steps', exact: true })).toHaveAttribute(
+      'aria-valuenow',
+      '4'
+    )
     if (await options.getByLabel('Enhance').isChecked())
       await options.getByLabel('Enhance').uncheck()
     const held =
@@ -362,20 +383,27 @@ for (const action of ['finish', 'send-now', 'stop']) {
       .toEqual([held])
     await composer.fill(queued)
     await composer.press('Enter')
-    await expect(page.getByText('1 queued', { exact: true })).toBeVisible()
+    await expect(
+      page.getByTestId('chat-composer').getByText('1 queued', { exact: true })
+    ).toBeVisible()
     await page.getByRole('button', { name: 'Settings', exact: true }).first().click()
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
     await enterChat()
     await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeVisible()
-    await expect(page.getByText('1 queued', { exact: true })).toBeVisible()
+    await expect(
+      page.getByTestId('chat-composer').getByText('1 queued', { exact: true })
+    ).toBeVisible()
     await page.getByRole('button', { name: /^Image$/ }).click()
     await page.getByRole('button', { name: /Image options/i }).click()
     const reopenedOptions = page
-      .locator('div')
-      .filter({ has: page.getByText('Guidance', { exact: true }) })
-      .last()
-    await reopenedOptions.getByLabel('Size').selectOption('256')
-    await reopenedOptions.getByLabel('Steps').fill('4')
+    await reopenedOptions
+      .getByRole('radiogroup', { name: 'Size', exact: true })
+      .getByRole('radio', { name: '256', exact: true })
+      .click()
+    await reopenedOptions.getByRole('slider', { name: 'Steps', exact: true }).press('Home')
+    await expect(
+      reopenedOptions.getByRole('slider', { name: 'Steps', exact: true })
+    ).toHaveAttribute('aria-valuenow', '4')
     if (await reopenedOptions.getByLabel('Enhance').isChecked())
       await reopenedOptions.getByLabel('Enhance').uncheck()
     if (stop) {

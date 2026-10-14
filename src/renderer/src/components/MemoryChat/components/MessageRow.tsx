@@ -1,5 +1,7 @@
 import { memo, useCallback, useEffect, useState } from 'react'
 import { attachmentKindFor, type SyncedMessageRole } from '@offgrid/sync'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
+import { Message, MessageContent } from '@offgrid/operator-ui/operator/elements/message-core'
 import { hasLiveStreamActivity } from '@renderer/lib/stream-reducer'
 import { type TaskSession, useGuidanceTaskForJourney } from '@renderer/lib/task-session-store'
 import { captureUrlForPath } from '../../../../../shared/ogcapture-url'
@@ -22,6 +24,7 @@ import {
   assistantWorkIsSettled,
   isPromptEnhancementMessage,
   isSupportingMessage,
+  messageContentClass,
   messageToSpeakable,
   parseAsk,
   selectedMessageContent,
@@ -43,9 +46,19 @@ import {
   VoiceMessageActions
 } from './MessageActions'
 import { MessageMarkdown } from './MessageMarkdown'
-import { AssistantMessageActions, MessageTime, speechControlState } from './AssistantMessageActions'
+import {
+  AssistantMessageActions,
+  MessageTime,
+  speechControlState,
+  VariantNavigation
+} from './AssistantMessageActions'
 import { ContextDisclosure, hasInlineMemorySources, UnifiedContextSection } from './MessageContext'
 import { useStreamViewMessage } from '../stream-view-store'
+import {
+  answerVersionsNavigable,
+  liveAnswerVersionView,
+  nextLiveVersionIndex
+} from '@renderer/lib/live-answer-versions'
 
 /** The pause before the first reaction on a message just sent: a beat, as a person takes, between
  *  one and three seconds. Fixed per message (from its id), so it never jumps on a re-render. */
@@ -268,6 +281,9 @@ function VoiceMessageRow({
           tools={message.toolCalls}
           thinking={thinking}
           thinkingHasContent={Boolean(message.reasoning?.trim())}
+        thinkingText={
+          timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
+        }
           footer={
             workFooter ??
             (message.streaming && hasLiveStreamActivity(message) ? <LoadingDots /> : undefined)
@@ -319,6 +335,9 @@ function VoiceMessageRow({
           tools={message.toolCalls}
           thinking={thinking}
           thinkingHasContent={Boolean(message.reasoning?.trim())}
+        thinkingText={
+          timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
+        }
           footer={
             workFooter ??
             (message.streaming && hasLiveStreamActivity(message) ? <LoadingDots /> : undefined)
@@ -378,7 +397,7 @@ function VoiceMessageRow({
       ) : null}
       {transcribing ? (
         <div role="status" className="text-[11px] text-neutral-500">
-          Transcribing...
+          <TextShimmer as="span">Transcribing...</TextShimmer>
         </div>
       ) : null}
       {transcriptionError ? (
@@ -432,7 +451,7 @@ function MessageBubble({
     (attachment) => attachmentKindFor({ fileName: attachment.name }) !== 'audio'
   )
   return (
-    <div className={standardMessageBubbleClass(message, editing)}>
+    <MessageContent className={messageContentClass(message, editing)}>
       {message.context?.taskGuidance ? (
         <div className="mb-2 flex items-center justify-between gap-3 border-b border-green-500/20 pb-2 text-[9px] uppercase tracking-wide text-green-600 dark:text-green-400">
           <span>Task guidance</span>
@@ -488,7 +507,7 @@ function MessageBubble({
           onSubmit={() => actions.submitAsk(selected)}
         />
       ) : null}
-    </div>
+    </MessageContent>
   )
 }
 
@@ -501,8 +520,12 @@ function StandardMessageRow({
   continuation,
   state,
   actions,
-  navigation
-}: Omit<MessageRowProps, 'voiceMode'>): React.JSX.Element {
+  navigation,
+  onBrowseVersion
+}: Omit<MessageRowProps, 'voiceMode'> & {
+  /** Set while the newest version streams: the arrows only change which version is read. */
+  onBrowseVersion?: (direction: -1 | 1) => void
+}): React.JSX.Element {
   console.log('MemoryChat StandardMessageRow rendered')
   const artifact = message.role === 'assistant' ? parseArtifact(message.content) : null
   const copied = state.copiedKey === message.id
@@ -524,9 +547,12 @@ function StandardMessageRow({
   const isFinalAssistantResponse =
     message.role === 'assistant' &&
     !message.streaming &&
+    !onBrowseVersion &&
     nextMessageRole !== 'assistant' &&
     nextMessageRole !== 'tool' &&
     !isSupportingMessage(message)
+  const showVersionsOnly =
+    !isFinalAssistantResponse && answerVersionsNavigable(message, nextMessageRole)
   const memorySources = hasInlineMemorySources(message)
     ? {
         count: message.context.unified.length,
@@ -539,15 +565,20 @@ function StandardMessageRow({
         tools={message.toolCalls}
         thinking={thinking}
         thinkingHasContent={Boolean(message.reasoning?.trim())}
+        thinkingText={
+          timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
+        }
         footer={
           workFooter ??
           (message.streaming && hasLiveStreamActivity(message) ? (
             liveActivity ? (
-              message.toolCalls?.length ? (
+              // Only a labelled host thinking block still carries the activity line itself; the
+              // timeline's own thinking row does not, so the footer names it.
+              message.toolCalls?.length && message.reasoningLabel ? (
                 <LoadingDots size="small" />
               ) : (
                 <span className="inline-flex items-center gap-1 text-[11px] text-neutral-500">
-                  {liveActivity}
+                  <TextShimmer as="span">{liveActivity}</TextShimmer>
                   <LoadingDots size="small" />
                 </span>
               )
@@ -565,8 +596,9 @@ function StandardMessageRow({
         stopped={message.turnStatus === 'cancelled'}
         failed={message.turnStatus === 'failed'}
       />
-      <div
-        className={`flex flex-col ${message.role === 'user' ? 'items-end' : 'items-start'} ${message.image || message.attachments?.length || state.editingId === message.id ? 'w-full max-w-2xl' : 'w-fit max-w-[85%]'}`}
+      <Message
+        from={message.role === 'user' ? 'user' : 'assistant'}
+        className={`gap-0 ${message.role === 'user' ? 'items-end' : 'items-start'} ${message.image || message.attachments?.length || state.editingId === message.id ? 'w-full max-w-2xl' : 'w-fit max-w-[85%]'}`}
       >
         <MessageBubble message={message} state={state} actions={actions} navigation={navigation} />
         {message.role === 'user' ? (
@@ -593,7 +625,7 @@ function StandardMessageRow({
             )}
           </div>
         ) : null}
-      </div>
+      </Message>
       {continuation}
       {isFinalAssistantResponse ? (
         <div className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1 pr-1">
@@ -624,6 +656,16 @@ function StandardMessageRow({
             onRegenerate={() => actions.regenerate(message.id)}
             onSelectVariant={(direction) => actions.selectVariant(message.id, direction)}
             onSpeak={() => actions.speak(message.id, message.content)}
+          />
+        </div>
+      ) : null}
+      {showVersionsOnly ? (
+        <div className="flex w-full min-w-0 items-center pr-1">
+          <VariantNavigation
+            message={message}
+            onSelect={
+              onBrowseVersion ?? ((direction) => actions.selectVariant(message.id, direction))
+            }
           />
         </div>
       ) : null}
@@ -679,7 +721,15 @@ function MessageRowComponent({
   navigation
 }: MessageRowProps): React.JSX.Element {
   console.log('MemoryChat MessageRow rendered')
-  const currentMessage = useStreamViewMessage(message)
+  const liveMessage = useStreamViewMessage(message)
+  // While a new version streams, an earlier one can be read without touching the live row.
+  const [viewedVersion, setViewedVersion] = useState<number | null>(null)
+  const currentMessage = liveAnswerVersionView(liveMessage, viewedVersion)
+  const browseLiveVersion =
+    liveMessage.streaming && liveMessage.variants?.length
+      ? (direction: -1 | 1): void =>
+          setViewedVersion((viewed) => nextLiveVersionIndex(liveMessage, viewed, direction))
+      : undefined
   useEffect(() => {
     if (currentMessage.streaming) onStreamRender?.()
   }, [currentMessage, onStreamRender])
@@ -733,6 +783,7 @@ function MessageRowComponent({
         state={state}
         actions={actions}
         navigation={navigation}
+        onBrowseVersion={browseLiveVersion}
       />
     )
   }

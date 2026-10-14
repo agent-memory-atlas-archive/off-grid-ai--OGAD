@@ -20,7 +20,7 @@ it('deletes only the selected queued message and keeps the composer draft', asyn
   const row = screen.getByRole('group', { name: 'Queued message 2' })
   await user.click(within(row).getByRole('button', { name: 'Delete queued message' }))
 
-  expect(screen.queryByText('Delete this question')).toBeNull()
+  await waitFor(() => expect(screen.queryByText('Delete this question')).toBeNull())
   expect(screen.getByText('Keep this question')).toBeTruthy()
   expect((composer as HTMLTextAreaElement).value).toBe('Unsent draft')
   await act(async () => boundary.resolve(0, 'First answer'))

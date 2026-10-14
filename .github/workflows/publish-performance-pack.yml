@@ -1,106 +1,185 @@
 name: Publish optional CUDA pack
 
+# Assembles the optional NVIDIA pack from freshly staged engines and publishes it to R2 under a new,
+# immutable version. Installers no longer carry CUDA (electron-builder.yml excludes the folders and
+# release.yml checks they are absent), so nothing here reads an installer:
+#   llama-cuda, cuda-runtime  scripts/stage-llama-engine.mjs (official ggml-org asset, GitHub SHA-256),
+#                             the same staging the engine update channel publishes
+#   llama-prism-cuda          Linux scripts/build-llama-linux.sh, Windows scripts/fetch-win-binaries.ps1
+#   whisper-cuda / whisper    Linux scripts/build-voice-linux.sh, Windows scripts/fetch-win-binaries.ps1
+#   sd-cuda                   Linux scripts/build-image-cuda-linux.sh, Windows scripts/fetch-win-binaries.ps1
+#   kev-runtime               Linux scripts/build-kev-runtime-linux.sh, Windows scripts/build-kev-runtime.ps1
+#   onnx-cuda                 pinned NVIDIA wheels (+ ONNX Runtime release and our LFS addon on Windows)
+# Every source above is pinned by version and SHA-256 in those scripts. Windows runtimes that need
+# Windows to build (Kev's Python) are staged on a Windows runner and handed to the pack job.
+# After a run, copy the manifest artifact's url, sha256, bytes and version into
+# resources/performance-packs.json.
 on:
   workflow_dispatch:
     inputs:
       platform:
-        description: 'Pack an existing Windows or Linux build artifact'
+        description: 'Pack platform'
         type: choice
         options: [win32, linux]
         required: true
       version:
-        description: 'Immutable pack version (letters, numbers, dot, dash, underscore)'
+        description: 'New immutable pack version, e.g. 2026-10-13-v1 (letters, numbers, dot, dash, underscore)'
         type: string
         required: true
-      source_run:
-        description: 'Build and Release run with the installer artifact (empty uses the pinned source run)'
+      llama_ref:
+        description: 'llama.cpp build for llama-cuda, e.g. b11532 (empty uses package.json offgrid.llamaRef)'
         type: string
         required: false
+        default: ''
 
 permissions:
-  actions: read
   contents: read
 
 jobs:
-  publish:
-    runs-on: ubuntu-24.04
+  stage-win32:
+    name: Stage Windows CUDA runtimes
+    if: inputs.platform == 'win32'
+    # windows-2022 matches the release build; the Kev runtime's Python and wheels are Windows-native.
+    runs-on: windows-2022
     timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJSON(github.event_name == 'push' && '["linux","win32"]' || format('["{0}"]', inputs.platform)) }}
-    env:
-      PLATFORM: ${{ matrix.platform }}
-      VERSION: ${{ inputs.version || '2026-09-29-v1' }}
-      SOURCE_RUN_INPUT: ${{ inputs.source_run }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          lfs: false # Pull only the cross-platform Kev launcher below, not the macOS LFS binaries
+          persist-credentials: false
+      - name: Pull the Kev server launcher from LFS
+        shell: bash
+        run: |
+          set -euo pipefail
+          git lfs pull --include="resources/bin/kev-local-server.py" --exclude=""
+          if head -n 1 resources/bin/kev-local-server.py | grep -q '^version https://git-lfs.github.com/spec/'; then
+            echo '::error::Kev server launcher is still an LFS pointer'
+            exit 1
+          fi
+      - name: Clear macOS placeholders from the Windows Whisper folder
+        shell: bash
+        # resources/bin/whisper holds macOS LFS pointers in a checkout without LFS; the fetch below
+        # copies the CUDA Whisper build into the same folder, and the pack must carry only that.
+        run: rm -rf resources/bin/whisper
+      - name: Fetch pinned Windows engines (Prism CUDA, Whisper CUDA, image CUDA)
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # raises the GitHub API rate limit
+        # Also fetches the base Vulkan and CPU engines and a llama-cuda build; the pack job ignores
+        # those and stages llama-cuda and cuda-runtime itself.
+        run: ./scripts/fetch-win-binaries.ps1
+      - name: Build Kev server runtime (model weights excluded)
+        shell: pwsh
+        run: ./scripts/build-kev-runtime.ps1
+      - name: Check staged Windows runtimes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in llama-prism-cuda/llama-server.exe sd-cuda/sd-cli.exe sd-cuda/ggml-cuda.dll \
+            whisper/whisper-cli.exe whisper/ggml-cuda.dll kev-runtime/python/python.exe; do
+            test -s "resources/bin/$file"
+          done
+          du -sh resources/bin/llama-prism-cuda resources/bin/sd-cuda resources/bin/whisper resources/bin/kev-runtime
+      - name: Hand the runtimes to the pack job
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
+        with:
+          name: win32-cuda-runtimes
+          path: |
+            resources/bin/llama-prism-cuda
+            resources/bin/sd-cuda
+            resources/bin/whisper
+            resources/bin/kev-runtime
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 0 # the pack is compressed once, in the next job
+          retention-days: 1
+
+  publish:
+    name: Publish ${{ inputs.platform }} CUDA pack
+    needs: stage-win32
+    # stage-win32 only runs for Windows; a Linux pack goes ahead when it is skipped.
+    if: ${{ !cancelled() && (needs.stage-win32.result == 'success' || needs.stage-win32.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      PLATFORM: ${{ inputs.platform }}
+      VERSION: ${{ inputs.version }}
+      LLAMA_REF_INPUT: ${{ inputs.llama_ref }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          lfs: false
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-      - name: Check input and source artifact
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Check inputs
         run: |
-          [[ "$VERSION" =~ ^[a-zA-Z0-9._-]+$ ]]
-          source_run="$SOURCE_RUN_INPUT"
-          if [ -n "$source_run" ]; then
-            [[ "$source_run" =~ ^[0-9]+$ ]]
-          elif [ "$PLATFORM" = linux ]; then
-            source_run=36450913791
-          else
-            source_run=36448396362
+          [[ "$VERSION" =~ ^[a-zA-Z0-9._-]+$ ]] || { echo 'version may use letters, numbers, dot, dash and underscore' >&2; exit 1; }
+          if grep -qF "\"version\": \"$VERSION\"" resources/performance-packs.json; then
+            echo "Pack version $VERSION is already pinned in resources/performance-packs.json. Choose a new version." >&2
+            exit 1
           fi
-          echo "source_run=$source_run" >> "$GITHUB_ENV"
+          llama_ref="${LLAMA_REF_INPUT:-$(node -p "require('./package.json').offgrid.llamaRef")}"
+          [[ "$llama_ref" =~ ^b[0-9]+$ ]] || { echo "llama_ref must look like b11532, got '$llama_ref'" >&2; exit 1; }
+          echo "LLAMA_REF=$llama_ref" >> "$GITHUB_ENV"
           if [ "$PLATFORM" = linux ]; then
-            echo 'source_name=off-grid-ai-linux-deb' >> "$GITHUB_ENV"
+            # The Linux staging scripts write into build/linux-bin.
+            echo "BIN_ROOT=$GITHUB_WORKSPACE/build/linux-bin" >> "$GITHUB_ENV"
           else
-            echo 'source_name=off-grid-ai-windows' >> "$GITHUB_ENV"
+            echo "BIN_ROOT=$RUNNER_TEMP/win-bin" >> "$GITHUB_ENV"
           fi
-      - name: Download existing build artifact
+      - name: Free runner disk
+        # The Kev runtime, the staged folders and the multi-gigabyte archive do not fit the default free space.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Install Linux staging dependencies
+        if: inputs.platform == 'linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y libgomp1 libvulkan1 unzip
+
+      - name: Receive Windows runtimes
+        if: inputs.platform == 'win32'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: win32-cuda-runtimes
+          path: ${{ runner.temp }}/win-bin
+      - name: Stage Linux Prism CUDA engine
+        if: inputs.platform == 'linux'
+        # Also writes build/linux-bin/cuda-runtime; the next step replaces it with the engine's copy.
+        run: LLAMA_VARIANT=prism LLAMA_ACCELERATOR=cuda bash scripts/build-llama-linux.sh
+      - name: Stage llama-cuda and cuda-runtime
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p source
-          gh run download "$source_run" --repo "$GITHUB_REPOSITORY" --name "$source_name" --dir source
-          find source -maxdepth 3 -type f -printf '%p %s bytes\n'
-      - name: Extract CUDA directories
+          node scripts/stage-llama-engine.mjs --platform "$PLATFORM" --ref "$LLAMA_REF" --out "$RUNNER_TEMP/engine"
+          mkdir -p "$BIN_ROOT"
+          rm -rf "$BIN_ROOT/llama-cuda" "$BIN_ROOT/cuda-runtime"
+          cp -a "$RUNNER_TEMP/engine/llama-cuda" "$RUNNER_TEMP/engine/cuda-runtime" "$BIN_ROOT/"
+          cat "$RUNNER_TEMP/engine/engine.json"
+      - name: Check the Linux llama engines' libraries resolve
+        if: inputs.platform == 'linux'
         run: |
-          mkdir -p extracted
-          if [ "$PLATFORM" = linux ]; then
-            deb="$(find source -name '*.deb' -type f -print -quit)"
-            test -s "$deb"
-            dpkg-deb --fsys-tarfile "$deb" | tar -x -C extracted --wildcards --no-anchored \
-              '*/resources/bin/llama-cuda/*' \
-              '*/resources/bin/llama-prism-cuda/*' \
-              '*/resources/bin/cuda-runtime/*' \
-              '*/resources/bin/sd-cuda/*' \
-              '*/resources/bin/whisper-cuda/*' \
-              '*/resources/bin/kev-runtime/*'
-          else
-            payload="$(find source -name '*.7z' -type f -print -quit)"
-            test -s "$payload"
-            7z l -slt "$payload" | sed -n 's/^Path = //p' | \
-              grep -E '(^|[/\\])resources[/\\]bin[/\\](llama-cuda|llama-prism-cuda|cuda-runtime|sd-cuda|whisper|kev-runtime)([/\\]|$)' \
-              > "$RUNNER_TEMP/cuda-files.txt"
-            test -s "$RUNNER_TEMP/cuda-files.txt"
-            7z x -y "$payload" "-o$PWD/extracted" "-i@$RUNNER_TEMP/cuda-files.txt"
-          fi
-          bin_root="$(find extracted -type d -path '*/resources/bin' -print -quit)"
-          test -n "$bin_root"
-          echo "BIN_ROOT=$PWD/$bin_root" >> "$GITHUB_ENV"
-          du -sh "$bin_root"/*
-      - name: Replace Windows Whisper engine with pinned CUDA 12.4 build
-        if: matrix.platform == 'win32'
-        run: |
-          curl -fL --retry 3 --silent --show-error \
-            'https://github.com/ggml-org/whisper.cpp/releases/download/b5130/whisper-cublas-12.4.0-bin-x64.zip' \
-            -o "$RUNNER_TEMP/whisper-cublas-12.4.0-bin-x64.zip"
-          python3 scripts/stage-win-whisper-cuda-pack.py \
-            "$RUNNER_TEMP/whisper-cublas-12.4.0-bin-x64.zip" \
-            "$BIN_ROOT/whisper"
+          for engine in llama-cuda llama-prism-cuda; do
+            deps="$(LD_LIBRARY_PATH="$BIN_ROOT/$engine:$BIN_ROOT/cuda-runtime" ldd "$BIN_ROOT/$engine/llama-server")"
+            printf '%s\n' "$deps"
+            # The NVIDIA driver library comes from the user's machine, never from the pack.
+            if printf '%s\n' "$deps" | grep 'not found' | grep -v 'libcuda.so.1'; then exit 1; fi
+          done
+      - name: Stage Linux Whisper CUDA engine
+        if: inputs.platform == 'linux'
+        run: bash scripts/build-voice-linux.sh
+      - name: Stage Linux image CUDA engine
+        if: inputs.platform == 'linux'
+        run: bash scripts/build-image-cuda-linux.sh
+      - name: Build Linux Kev runtime (model weights excluded)
+        if: inputs.platform == 'linux'
+        run: bash scripts/build-kev-runtime-linux.sh
       - name: Add prebuilt ONNX CUDA libraries
-        if: matrix.platform == 'linux'
+        if: inputs.platform == 'linux'
         run: |
           python3 -m pip install --no-cache-dir --no-deps --target "$RUNNER_TEMP/onnx-nvidia" \
             'nvidia-cuda-runtime==13.2.86' 'nvidia-cublas==13.2.2.2' \
@@ -113,7 +192,7 @@ jobs:
           test -s "$BIN_ROOT/onnx-cuda/libcublasLt.so.13"
           test -s "$BIN_ROOT/onnx-cuda/libcudnn.so.9"
       - name: Add pinned Windows ONNX CUDA libraries
-        if: matrix.platform == 'win32'
+        if: inputs.platform == 'win32'
         run: |
           git lfs pull --include="resources/bin/onnx-cuda/onnxruntime_binding.node" --exclude=""
           mkdir -p "$RUNNER_TEMP/onnx-wheels"
@@ -135,14 +214,18 @@ jobs:
             "$BIN_ROOT/onnx-cuda"
       - name: Make and check versioned pack
         run: |
+          du -sh "$BIN_ROOT"/*
           node scripts/package-performance-pack.mjs "$PLATFORM" "$BIN_ROOT" "$RUNNER_TEMP/$VERSION.tar.gz" "$VERSION"
           tar -tzf "$RUNNER_TEMP/$VERSION.tar.gz" | grep -q '^bin/llama-cuda/'
           sha256sum "$RUNNER_TEMP/$VERSION.tar.gz"
           cat "$RUNNER_TEMP/$VERSION.tar.gz.json"
-      - name: Install S3 client
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: '3.12'
+          {
+            echo "### $PLATFORM CUDA pack $VERSION"
+            echo "llama-cuda: llama.cpp $LLAMA_REF"
+            echo '```json'
+            cat "$RUNNER_TEMP/$VERSION.tar.gz.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Install AWS CLI
         run: python3 -m pip install --user awscli
       - name: Upload to Cloudflare R2
@@ -167,6 +250,6 @@ jobs:
       - name: Keep manifest for app pinning
         uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
         with:
-          name: cuda-${{ matrix.platform }}-${{ env.VERSION }}-manifest
-          path: ${{ runner.temp }}/${{ env.VERSION }}.tar.gz.json
+          name: cuda-${{ inputs.platform }}-${{ inputs.version }}-manifest
+          path: ${{ runner.temp }}/${{ inputs.version }}.tar.gz.json
           if-no-files-found: error

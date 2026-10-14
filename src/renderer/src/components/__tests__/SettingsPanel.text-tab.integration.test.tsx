@@ -20,11 +20,11 @@ describe('Desktop Settings tabs', () => {
     }
 
     render(<SettingsPanel embedded initialTab="tools" onClose={() => {}} />)
-    await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Text' }))
 
     expect(screen.getByText('Current model')).toBeTruthy()
     expect(screen.getByText('Temperature')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Model' })).toBeNull()
+    expect(screen.queryByRole('radio', { name: 'Model' })).toBeNull()
   })
 
   it('keeps text edits local until the field loses focus', async () => {

@@ -1,4 +1,6 @@
 import { memo } from 'react'
+import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
 import { Button } from '@renderer/components/ui/button'
 import { deviceNoun } from '@renderer/lib/device'
 import type { Artifact } from '../../ArtifactCanvas'
@@ -86,7 +88,7 @@ function AskCardComponent({
   return (
     <div className="mt-2 flex flex-col gap-1.5">
       <p className="text-xs text-neutral-400">{ask.question}</p>
-      <div className="flex flex-wrap gap-1.5">
+      <AnimatedGroup preset="blur-slide" className="flex flex-wrap gap-1.5">
         {ask.options.map((option) => {
           const active = selected.includes(option)
           const className = active
@@ -103,14 +105,14 @@ function AskCardComponent({
             </button>
           )
         })}
-      </div>
+      </AnimatedGroup>
       {ask.multiSelect && selected.length > 0 ? (
         <button
           type="button"
           onClick={onSubmit}
           className="mt-1 self-start rounded-md bg-green-600 px-3 py-1 text-xs text-white transition-colors hover:bg-green-500"
         >
-          Submit ({selected.length})
+          Submit (<AnimatedNumber value={selected.length} />)
         </button>
       ) : null}
     </div>

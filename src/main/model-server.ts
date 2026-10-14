@@ -30,14 +30,22 @@ import os from 'os'
 import path from 'path'
 import { randomUUID, randomBytes, createHash } from 'crypto'
 import { getSecret, setSecret, listSecretKeys } from './secrets'
+import { getSetting, saveSetting } from './database'
 import { authorizeBearer } from './mcp-auth-logic'
 import type { GatewayApiKeyContract, GatewayApiKeySettingsContract } from '../shared/ipc-contracts'
 import { getActiveTranscription } from './transcription/select'
 import { transcriptionRequestOptions } from './model-server/transcription-request'
 import * as tts from './tts'
-import { generateImage, imageGenStatus, activeImageModel, type ImageGenParams } from './imagegen'
+import {
+  generateImage,
+  imageGenStatus,
+  activeImageModel,
+  listImageModels,
+  type ImageGenParams
+} from './imagegen'
 import { whisperModel } from './rag/extractors'
 import { getActiveModal } from './active-models'
+import { modalityForKind } from './active-models-logic'
 import { embeddings } from './embeddings'
 import { docsText, docsHtml, openApiSpec } from './api-docs'
 import { handleMcpRequest } from './mcp-server'
@@ -62,7 +70,7 @@ import { isAsync, matchPollRoute } from './model-server/async-request'
 import { sanitizeChatMessages, parseDecisionChatMessages } from './model-server/chat-messages'
 import { applyThinkingPayload, requestedThinking } from './llm/chat-payload'
 import { parseMultipart } from './model-server/multipart'
-import { tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries, installedTextModelEntries } from './model-server/models-list'
+import { tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries, installedTextModelEntries, installedImageModelEntries, leadWithActiveChatModel, liveChatCapabilities } from './model-server/models-list'
 import { buildGatewayModalities, type GatewayModalities } from './model-server/health'
 import { safeProxyResponse } from './model-server/proxy-response'
 import { writeDiagnosticLog } from './diagnostics-log'
@@ -92,13 +100,21 @@ let server: http.Server | null = null
 // The gateway owns its credentials. Reuse the OS-encrypted secret store; do not
 // put credentials in generic settings, return stored hashes to IPC, or log them.
 const GATEWAY_KEYS_SECRET = 'gateway:api-keys'
+// Whether keys are required is not a credential. A plain copy lets the gateway decide what to do
+// when the keychain cannot be read: refuse when keys are required, serve when they are not.
+const GATEWAY_KEYS_REQUIRED_SETTING = 'gatewayApiKeysRequired'
+const GATEWAY_KEYS_LOCKED = 'API key storage is locked. Unlock system key storage and try again.'
 type StoredGatewayKeys = { enabled: boolean; keys: (GatewayApiKeyContract & { digest: string })[] }
+
+function recordGatewayKeysRequired(enabled: boolean): void {
+  if (getSetting<boolean | null>(GATEWAY_KEYS_REQUIRED_SETTING, null) !== enabled)
+    saveSetting(GATEWAY_KEYS_REQUIRED_SETTING, enabled)
+}
 
 function readGatewayKeys(): StoredGatewayKeys {
   const raw = getSecret(GATEWAY_KEYS_SECRET)
   if (raw === null) {
-    if (listSecretKeys().includes(GATEWAY_KEYS_SECRET))
-      throw new Error('API key storage is locked. Unlock system key storage and try again.')
+    if (listSecretKeys().includes(GATEWAY_KEYS_SECRET)) throw new Error(GATEWAY_KEYS_LOCKED)
     return { enabled: false, keys: [] }
   }
   const value = JSON.parse(raw) as StoredGatewayKeys
@@ -116,6 +132,7 @@ function readGatewayKeys(): StoredGatewayKeys {
     )
   )
     throw new Error('API key storage could not be read.')
+  recordGatewayKeysRequired(value.enabled)
   return value
 }
 
@@ -123,6 +140,7 @@ function writeGatewayKeys(value: StoredGatewayKeys): void {
   if (!setSecret(GATEWAY_KEYS_SECRET, JSON.stringify(value))) {
     throw new Error('API keys require system encryption. Unlock system key storage and try again.')
   }
+  recordGatewayKeysRequired(value.enabled)
 }
 
 export function gatewayApiKeySettings(): GatewayApiKeySettingsContract {
@@ -183,7 +201,20 @@ export function revokeGatewayApiKey(id: string): GatewayApiKeySettingsContract {
 }
 
 function authorizeGateway(req: http.IncomingMessage): boolean {
-  const state = readGatewayKeys()
+  let state: StoredGatewayKeys
+  try {
+    state = readGatewayKeys()
+  } catch (error) {
+    // A locked keychain serves only when keys were last recorded as not required. A store from a
+    // build that never recorded it counts as required until it is next read.
+    if (
+      error instanceof Error &&
+      error.message === GATEWAY_KEYS_LOCKED &&
+      getSetting<boolean | null>(GATEWAY_KEYS_REQUIRED_SETTING, null) === false
+    )
+      return true
+    throw error
+  }
   if (!state.enabled) return true
   const header = req.headers.authorization
   // Preserve the existing strict Bearer parser and constant-time comparison.
@@ -1047,15 +1078,15 @@ async function handleEmbeddings(
 // ─── Models list (all modalities) ────────────────────────────────────────────
 // One ACTIVE model per modality is served on demand: a request loads it, returns,
 // then it's offloaded — models never co-reside in RAM (that's why long calls hand
-// back a request id to poll). So /v1/models reports the *active* pick per modality
-// — what an incoming request would actually load — not every installed file.
+// back a request id to poll). Text, vision and image list every installed model so a
+// client can choose one per request; speech and transcription report the active pick.
 // llama-server's own /v1/models only knows the loaded text/vision LLM; we fetch
-// that and fold in the active image, speech (TTS), and transcription (STT) models.
+// that and fold in the image, speech (TTS), and transcription (STT) models.
 // Each entry carries a non-standard `kind` (chat/vision/image/speech/transcription).
-function fetchUpstreamModels(): Promise<Record<string, unknown>> {
+function fetchUpstreamModels(route = '/v1/models'): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
     const r = http.request(
-      { hostname: UPSTREAM_HOST, port: upstreamPort(), path: '/v1/models', method: 'GET' },
+      { hostname: UPSTREAM_HOST, port: upstreamPort(), path: route, method: 'GET' },
       (pr) => {
         let b = ''
         pr.on('data', (d) => (b += d))
@@ -1128,9 +1159,13 @@ async function handleModelsList(
     extra: Record<string, unknown> = {}
   ): Record<string, unknown> => modelEntry(id, kind, now, extra)
 
-  // Active image model (chosen pick, else the resolver default).
+  // Every installed image model, active pick first. A request names the one it wants and
+  // generation loads that file; a remote image server stays the single routed pick.
   const imgId = activeImageModel()
-  const images = imgId ? [tag(imgId, 'image')] : []
+  const remoteImage = getActiveRemoteVisionServerForModality('image')
+  const images = remoteImage
+    ? [tag(imgId ?? remoteVisionModelId(remoteImage.id, remoteImage.selectedModel), 'image')]
+    : installedImageModelEntries(listImageModels(), imgId, now)
 
   // Active speech (TTS) model + its available voices.
   let voices: string[] = []
@@ -1162,12 +1197,21 @@ async function handleModelsList(
       (whisperModel() ? path.basename(whisperModel() as string) : null)
   const transcription = sttId ? [tag(sttId, 'transcription')] : []
 
-  const { desktopCatalog, listInstalled, getCatalog } = await import('./models-manager')
+  const { desktopCatalog, listInstalled, getCatalog, getActiveModel } = await import('./models-manager')
   const installed = await listInstalled()
   const catalog = (await getCatalog()).models as { id: string; name: string; kind: string; remoteServerId?: string }[]
   if (!activeRemote) {
     const downloaded = installedTextModelEntries(catalog, installed, now)
     if (downloaded.length) text = downloaded
+    // Only the model llama-server is serving has known capabilities; the rest stay unknown.
+    const loadedId = upData.length ? llm.activeModelInfo()?.id : undefined
+    const liveCaps = loadedId ? liveChatCapabilities(await fetchUpstreamModels('/props')) : null
+    text = leadWithActiveChatModel(
+      text,
+      getActiveModel(),
+      llm.effectiveContextSize(),
+      loadedId && liveCaps ? { id: loadedId, capabilities: liveCaps } : null
+    )
   }
   const specialists = specialistModelEntries(await desktopCatalog(), installed, now)
   const data: Record<string, unknown>[] = [
@@ -1232,6 +1276,7 @@ async function handleTranscription(
     )
     return
   }
+  await selectRequestedModal('transcription', fields.model)
   const run = async (): Promise<unknown> => {
     try {
       await fs.promises.writeFile(tmp, file.data)
@@ -1262,6 +1307,28 @@ async function handleTranscription(
   )
 }
 
+// ─── Per-request model choice for media modalities ──────────────────────────
+/** A request naming an installed image, voice or transcription model makes it that modality's
+ *  active model, as a chat request naming an installed model does for Text. */
+async function selectRequestedModal(
+  modality: 'image' | 'speech' | 'transcription',
+  requested: unknown
+): Promise<void> {
+  if (typeof requested !== 'string' || !requested || parseRemoteVisionModelId(requested)) return
+  const remote = getActiveRemoteVisionServerForModality(modality === 'speech' ? 'voice' : modality)
+  const manager = await import('./models-manager')
+  if (modality === 'image') {
+    if (!listImageModels().includes(requested) || activeImageModel() === requested) return
+  } else {
+    if (!remote && getActiveModal(modality) === requested) return
+    const catalog = (await manager.getCatalog()).models as { id: string; kind: string }[]
+    const entry = catalog.find((model) => model.id === requested)
+    if (!entry || modalityForKind(entry.kind) !== modality) return
+    if (!(await manager.listInstalled()).includes(requested)) return
+  }
+  await manager.setActiveModalChoice(modality, requested)
+}
+
 // ─── Text-to-speech (Kokoro) ─────────────────────────────────────────────────
 async function handleSpeech(
   req: http.IncomingMessage,
@@ -1280,6 +1347,7 @@ async function handleSpeech(
     json(res, 400, errBody('Field "input" (text to speak) is required.'))
     return
   }
+  await selectRequestedModal('speech', payload.model)
   const voice = typeof payload.voice === 'string' ? payload.voice : undefined
   const fmt = String(payload.response_format ?? '').toLowerCase()
   const run = async (): Promise<unknown> => {
@@ -1384,6 +1452,7 @@ async function handleImageGeneration(
     allowUnsafeMemoryOverride: payload.allow_unsafe_memory_override === true
   }
   const fmt = String(payload.response_format ?? 'b64_json')
+  await selectRequestedModal('image', params.model)
   await serve(
     res,
     rid,
@@ -1471,6 +1540,7 @@ async function handleImagesUnified(
     if (tmp) fs.promises.unlink(tmp).catch(() => {})
   }
   const fmt = String(payload.response_format ?? 'b64_json')
+  await selectRequestedModal('image', params.model)
   await serve(
     res,
     rid,
@@ -1537,6 +1607,7 @@ async function handleImageEdit(
     fs.promises.unlink(tmp).catch(() => {})
   }
   const fmt = String(fields.response_format ?? 'b64_json')
+  await selectRequestedModal('image', params.model)
   await serve(
     res,
     rid,
@@ -1662,8 +1733,13 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
           json(res, 401, errBody('A valid API key is required.', 'authentication_error'))
           return
         }
-      } catch {
-        json(res, 503, errBody('API key storage is unavailable.', 'server_error'))
+      } catch (error) {
+        const locked = error instanceof Error && error.message === GATEWAY_KEYS_LOCKED
+        json(
+          res,
+          503,
+          errBody(locked ? 'API key storage is locked.' : 'API key storage is unavailable.', 'server_error')
+        )
         return
       }
     }

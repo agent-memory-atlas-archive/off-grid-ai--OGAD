@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, type ReactNode } from 'react'
-import { AnimatePresence } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
 import {
   IconPlus,
   IconFolder,
@@ -15,6 +15,19 @@ import {
   IconSettings,
   IconLayoutGrid
 } from '@tabler/icons-react'
+import { Card } from '@offgrid/operator-ui/operator/coss/card'
+import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { PageHeader } from '@offgrid/operator-ui/operator/experience'
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia
+} from '@offgrid/operator-ui/operator/coss/empty'
+import { Button } from './ui/button'
+import { GlyphSwap, IconTip } from './IconTip'
 import { ArtifactCanvas, type Artifact } from './ArtifactCanvas'
 import { artifactKindLabel } from '@renderer/lib/artifact-labels'
 import { timeAgo } from '@renderer/lib/time'
@@ -53,23 +66,21 @@ function ProjectArtifacts({ projectId }: { projectId: string }): React.ReactElem
           project and they’ll appear here.
         </p>
       ) : (
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <div className="divide-y divide-neutral-800/80 overflow-hidden rounded-lg border border-neutral-800/80 bg-neutral-900/30">
           {items.map((a) => (
             <button
               key={a.id}
               onClick={() => setOpen(a)}
-              className="group flex flex-col gap-2 rounded-lg border border-neutral-800/80 bg-neutral-900/30 p-4 text-left transition-colors hover:border-green-500/50 hover:bg-neutral-900/60"
+              className="group flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-neutral-900/60"
             >
-              <div className="flex items-center justify-between">
-                <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-400">
-                  {artifactKindLabel(a.kind)}
-                </span>
-                <span className="text-[10px] text-neutral-600">
-                  {a.created ? timeAgo(new Date(a.created).toISOString()) : ''}
-                </span>
-              </div>
-              <span className="min-w-0 truncate text-sm text-neutral-200 group-hover:text-white">
+              <span className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-400">
+                {artifactKindLabel(a.kind)}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-sm text-neutral-200 group-hover:text-white">
                 {a.title}
+              </span>
+              <span className="shrink-0 text-[10px] text-neutral-600">
+                {a.created ? timeAgo(new Date(a.created).toISOString()) : ''}
               </span>
             </button>
           ))}
@@ -194,9 +205,16 @@ export function ProjectsScreen({
   return (
     <div className="flex h-full font-mono">
       {/* Projects column */}
-      <div className="flex w-60 shrink-0 flex-col border-r border-neutral-800">
-        <div className="flex items-center justify-between px-4 py-4">
-          <h1 className="text-lg font-light tracking-tight text-white">Projects</h1>
+      <div className="flex w-60 shrink-0 flex-col border-r border-neutral-900">
+        <div className="mb-2 flex items-center justify-between border-b border-neutral-900 px-4 py-4">
+          <TextEffect
+            as="h1"
+            preset="fade-in-blur"
+            per="char"
+            className="text-lg font-light tracking-tight text-white"
+          >
+            Projects
+          </TextEffect>
           <button
             onClick={() => setCreating(true)}
             title="New project"
@@ -233,65 +251,77 @@ export function ProjectsScreen({
               No projects yet. Create one to configure a knowledge base.
             </p>
           )}
-          {projects.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => selectProject(p.id)}
-              className={`group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors ${
-                p.id === activeId
-                  ? 'bg-neutral-900 text-white'
-                  : 'text-neutral-400 hover:bg-neutral-900/50'
-              }`}
-            >
-              <IconFolder className="h-4 w-4 shrink-0 text-neutral-500" />
-              <span className="truncate">{p.name}</span>
-            </button>
-          ))}
+          <AnimatePresence initial={false}>
+            {projects.map((p) => (
+              <motion.button
+                key={p.id}
+                layout
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                onClick={() => selectProject(p.id)}
+                className={`group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors ${
+                  p.id === activeId
+                    ? 'bg-neutral-900 text-white'
+                    : 'text-neutral-400 hover:bg-neutral-900/50'
+                }`}
+              >
+                <IconFolder className="h-4 w-4 shrink-0 text-neutral-500" />
+                <span className="truncate">{p.name}</span>
+              </motion.button>
+            ))}
+          </AnimatePresence>
         </div>
       </div>
 
       {/* Active project */}
       {active ? (
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* Project header with view toggle */}
-          <div className="flex items-center justify-between border-b border-neutral-800 px-6 py-3">
-            <div className="flex min-w-0 items-center gap-2 text-sm text-white">
-              <IconFolder className="h-4 w-4 shrink-0 text-neutral-500" />
-              <span className="truncate">{active.name}</span>
-            </div>
-            <div className="flex items-center gap-1 rounded-md border border-neutral-800 p-0.5">
-              <button
-                onClick={() => setView('chat')}
-                className={`flex items-center gap-1.5 rounded px-3 py-1 text-xs transition-colors ${
-                  view === 'chat'
-                    ? 'bg-neutral-800 text-white'
-                    : 'text-neutral-500 hover:text-neutral-300'
-                }`}
-              >
-                <IconMessage className="h-3.5 w-3.5" /> Chats
-              </button>
-              <button
-                onClick={() => setView('artifacts')}
-                className={`flex items-center gap-1.5 rounded px-3 py-1 text-xs transition-colors ${
-                  view === 'artifacts'
-                    ? 'bg-neutral-800 text-white'
-                    : 'text-neutral-500 hover:text-neutral-300'
-                }`}
-              >
-                <IconLayoutGrid className="h-3.5 w-3.5" /> Artifacts
-              </button>
-              <button
-                onClick={() => setView('config')}
-                className={`flex items-center gap-1.5 rounded px-3 py-1 text-xs transition-colors ${
-                  view === 'config'
-                    ? 'bg-neutral-800 text-white'
-                    : 'text-neutral-500 hover:text-neutral-300'
-                }`}
-              >
-                <IconSettings className="h-3.5 w-3.5" /> Knowledge & settings
-              </button>
-            </div>
-          </div>
+          {/* Restart the title reveal when its text changes; new segments otherwise stay hidden. */}
+          <PageHeader
+            key={active.name}
+            className="px-8 pt-8 pb-6"
+            eyebrow="Project"
+            title={active.name}
+            actions={
+              <Segmented
+                label="Project view"
+                size="sm"
+                value={view}
+                onValueChange={setView}
+                options={[
+                  {
+                    id: 'chat',
+                    label: 'Chats',
+                    icon: (
+                      <>
+                        <IconMessage className="h-3.5 w-3.5" /> Chats
+                      </>
+                    )
+                  },
+                  {
+                    id: 'artifacts',
+                    label: 'Artifacts',
+                    icon: (
+                      <>
+                        <IconLayoutGrid className="h-3.5 w-3.5" /> Artifacts
+                      </>
+                    )
+                  },
+                  {
+                    id: 'config',
+                    label: 'Knowledge & settings',
+                    icon: (
+                      <>
+                        <IconSettings className="h-3.5 w-3.5" /> Knowledge & settings
+                      </>
+                    )
+                  }
+                ]}
+              />
+            }
+          />
 
           {view === 'chat' ? (
             <ProjectChats key={active.id} project={active} onOpenChat={onOpenChat} />
@@ -307,9 +337,19 @@ export function ProjectsScreen({
           )}
         </div>
       ) : (
-        <div className="flex flex-1 items-center justify-center text-sm text-neutral-600">
-          Select or create a project to get started.
-        </div>
+        <Empty>
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <IconFolder />
+            </EmptyMedia>
+            <EmptyDescription>Select or create a project to get started.</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button size="sm" onClick={() => setCreating(true)}>
+              <IconPlus className="h-4 w-4" /> New project
+            </Button>
+          </EmptyContent>
+        </Empty>
       )}
     </div>
   )
@@ -354,12 +394,17 @@ function ProjectChats({
         <span className="text-[11px] uppercase tracking-widest text-neutral-600">
           {chats.length} {chats.length === 1 ? 'chat' : 'chats'}
         </span>
-        <button
-          onClick={() => onOpenChat({ projectId: project.id })}
-          className="flex items-center gap-2 rounded-md border border-neutral-800 px-3 py-2 text-sm text-neutral-300 transition-colors hover:border-green-500 hover:text-green-500"
-        >
-          <IconPlus className="h-4 w-4" /> New chat
-        </button>
+        <IconTip label="New chat">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="New chat"
+            onClick={() => onOpenChat({ projectId: project.id })}
+            className="border-neutral-800 text-neutral-300 hover:border-green-500 hover:text-green-500"
+          >
+            <IconPlus className="h-4 w-4" />
+          </Button>
+        </IconTip>
       </div>
       {chats.length === 0 ? (
         <p className="py-10 text-center text-sm text-neutral-600">
@@ -367,24 +412,23 @@ function ProjectChats({
           this project.
         </p>
       ) : (
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
           {chats.map((c) => (
-            <button
+            <Card
+              render={<button />}
               key={c.id}
               onClick={() => onOpenChat({ conversationId: c.id })}
-              className="group flex items-start gap-3 rounded-lg border border-neutral-800/80 bg-neutral-900/30 px-4 py-3.5 text-left transition-colors hover:border-green-500/50 hover:bg-neutral-900/60"
+              className="group w-full min-w-0 flex-row items-center gap-2 p-2.5 text-left transition-colors hover:bg-neutral-900/60"
             >
-              <IconMessage className="mt-0.5 h-4 w-4 shrink-0 text-neutral-600 group-hover:text-green-500" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm text-neutral-200">
-                  {c.title || 'Untitled chat'}
-                </div>
-                <div className="mt-0.5 text-[11px] text-neutral-600">
-                  {c.message_count ? `${c.message_count} messages · ` : ''}
-                  {timeAgo(c.updated_at)}
-                </div>
+              <IconMessage className="h-4 w-4 shrink-0 text-neutral-600 group-hover:text-green-500" />
+              <div className="min-w-0 flex-1 truncate text-sm text-neutral-200">
+                {c.title || 'Untitled chat'}
               </div>
-            </button>
+              <div className="shrink-0 text-[11px] text-neutral-600">
+                {c.message_count ? `${c.message_count} messages · ` : ''}
+                {timeAgo(c.updated_at)}
+              </div>
+            </Card>
           ))}
         </div>
       )}
@@ -433,25 +477,34 @@ function ProjectConfig({
     <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
       <div className="flex items-center justify-end gap-3 border-b border-neutral-800 px-6 py-3">
         {savedAt && !dirty && <span className="text-[11px] text-neutral-600">{savedAt}</span>}
-        <button
-          onClick={save}
-          disabled={!dirty || saving}
-          className="flex items-center gap-1 rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-white transition-colors hover:border-green-500 hover:text-green-500 disabled:opacity-40"
-        >
-          {saving ? (
-            <IconLoader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <IconDeviceFloppy className="h-4 w-4" />
-          )}{' '}
-          Save
-        </button>
-        <button
-          onClick={onDelete}
-          title="Delete project"
-          className="rounded-md p-1.5 text-neutral-500 transition-colors hover:text-red-500"
-        >
-          <IconTrash className="h-4 w-4" />
-        </button>
+        <IconTip label="Save">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="Save"
+            aria-busy={saving || undefined}
+            onClick={save}
+            disabled={!dirty || saving}
+            className="border-neutral-700 text-white hover:border-green-500 hover:text-green-500 disabled:opacity-40"
+          >
+            <GlyphSwap glyphKey={saving ? 'busy' : 'idle'}>
+              {saving ? (
+                <IconLoader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <IconDeviceFloppy className="h-4 w-4" />
+              )}
+            </GlyphSwap>
+          </Button>
+        </IconTip>
+        <IconTip label="Delete project">
+          <button
+            onClick={onDelete}
+            title="Delete project"
+            className="rounded-md p-1.5 text-neutral-500 transition-colors hover:text-red-500"
+          >
+            <IconTrash className="h-4 w-4" />
+          </button>
+        </IconTip>
       </div>
 
       <div className="mx-auto w-full max-w-2xl space-y-6 px-6 py-6">
@@ -516,7 +569,15 @@ function ProjectConfig({
   )
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }): React.JSX.Element {
+function Field({
+  label,
+  hint,
+  children
+}: {
+  label: string
+  hint?: string
+  children: ReactNode
+}): React.JSX.Element {
   return (
     <div>
       <div className="mb-1.5 text-[11px] uppercase tracking-wide text-neutral-500">{label}</div>
@@ -574,18 +635,25 @@ function KnowledgeBase({ projectId }: { projectId: string }): React.JSX.Element 
     <div>
       <div className="mb-3 flex items-center justify-between">
         <div className="text-[11px] uppercase tracking-wide text-neutral-500">Knowledge base</div>
-        <button
-          onClick={add}
-          disabled={busy}
-          className="flex shrink-0 items-center gap-1 rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-white transition-colors hover:border-green-500 hover:text-green-500 disabled:opacity-50"
-        >
-          {busy ? (
-            <IconLoader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <IconPlus className="h-4 w-4" />
-          )}{' '}
-          Add files
-        </button>
+        <IconTip label="Add files">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="Add files"
+            aria-busy={busy || undefined}
+            onClick={add}
+            disabled={busy}
+            className="shrink-0 border-neutral-700 text-white hover:border-green-500 hover:text-green-500 disabled:opacity-50"
+          >
+            <GlyphSwap glyphKey={busy ? 'busy' : 'idle'}>
+              {busy ? (
+                <IconLoader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <IconPlus className="h-4 w-4" />
+              )}
+            </GlyphSwap>
+          </Button>
+        </IconTip>
       </div>
       <p className="mb-3 text-[11px] text-neutral-600">
         Documents (txt, md, PDF, DOCX), images, audio, or video. Audio is transcribed; video frames
@@ -593,21 +661,16 @@ function KnowledgeBase({ projectId }: { projectId: string }): React.JSX.Element 
       </p>
       {status && <div className="mb-3 text-[11px] text-neutral-500">{status}</div>}
 
-      <div className="grid grid-cols-1 gap-2">
-        {docs.length === 0 && <p className="text-sm text-neutral-600">No documents yet.</p>}
+      {docs.length === 0 && <p className="text-sm text-neutral-600">No documents yet.</p>}
+      <div className="divide-y divide-neutral-800 overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60 empty:hidden">
         {docs.map((d) => {
           const Icon = KIND_ICON[d.kind] ?? IconFile
           return (
-            <div
-              key={d.id}
-              className="flex items-center gap-3 rounded-md border border-neutral-800 bg-neutral-900/60 p-3"
-            >
+            <div key={d.id} className="flex items-center gap-3 px-3 py-2">
               <Icon className="h-4 w-4 shrink-0 text-neutral-500" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm text-white">{d.name}</div>
-                <div className="text-[10px] uppercase tracking-wide text-neutral-600">
-                  {[d.kind, fmtSize(d.size)].filter(Boolean).join('  ·  ')}
-                </div>
+              <div className="min-w-0 flex-1 truncate text-sm text-white">{d.name}</div>
+              <div className="shrink-0 text-[10px] uppercase tracking-wide text-neutral-600">
+                {[d.kind, fmtSize(d.size)].filter(Boolean).join('  ·  ')}
               </div>
               <button
                 onClick={async () => {

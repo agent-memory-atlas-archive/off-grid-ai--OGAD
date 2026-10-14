@@ -1,119 +1,168 @@
 # Off Grid AI Desktop — Design
 
-Read [DESIGN_PHILOSOPHY.md](DESIGN_PHILOSOPHY.md) before any Desktop UI change. It is synchronized from the canonical sibling `brand/DESIGN_PHILOSOPHY.md`. Shared brand principles follow that source; this document supplies Desktop layout and interaction details.
+> Replaces OGAD `docs/DESIGN.md`. New direction: premium, alive and luminous, replacing flat
+> terminal brutalism.
+
+Read [DESIGN_PHILOSOPHY.md](DESIGN_PHILOSOPHY.md) before any Desktop UI change. It is
+synchronized from the canonical `brand/DESIGN_PHILOSOPHY.md`. Shared principles come from there;
+this document gives Desktop layout, implementation and interaction details.
 
 ---
 
-## Soul (unchanged from mobile)
+## Soul
 
-**Brutalist, minimal, terminal-inspired.** Functionality over decoration. Clarity, density, respect for attention. Silence over noise. Remove before adding.
+**Calm, luminous, alive. Lean, never bulky.** Every surface responds to the person using it, and
+the parts respond together. Depth comes from layers of light, not from heavy boxes.
 
-- **Typeface: Menlo (monospace) everywhere.** No sans UI font, no mixed families.
-- **Single accent: emerald** — `#34D399` (dark) / `#059669` (light). Used _sparingly_ — active states, focus, primary actions, links, success. Everything else is monochrome.
-- **Base:** pure black `#0A0A0A` (dark) / white `#FFFFFF` (light). Three surface tiers: `background → surface → surfaceLight`.
-- **Hierarchy through size + weight + opacity, never color.** Weights stay light (≤ medium); avoid bold for emphasis.
-- **Flat & sharp:** 8px radius, hairline borders, no gradients, no heavy shadows, no emojis, no decorative animation.
+- **Type:** Geist for reading text, controls and titles; Geist Mono for small uppercase labels,
+  numbers, timestamps, keys and code. Weights 300–500.
+- **Single accent: emerald** — `#34D399` (dark) / `#059669` (light). It is the light source:
+  primary actions glow, focus and active states glow, everything else is monochrome.
+- **Base:** near-black `#0A0A0A` (dark) / white (light), with a living background behind
+  translucent surfaces.
+- **Hierarchy through size, weight, tone and space**, never colour.
+- **Lean:** 32px controls, hairline borders, 9–12px radius (pills fully round), soft wide shadows.
 
 ---
 
 ## What changes for desktop
 
-Desktop is a **wide, mouse-driven, multi-window** canvas. Adapt accordingly:
+Desktop is a wide, mouse-driven, multi-window canvas.
 
-| Concern    | Mobile                             | **Desktop**                                                                                                               |
-| ---------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Canvas     | one narrow column, vertical scroll | **wide** — multi-column grids, master-detail, side panels, dense tables. Use the width; don't center a phone-width strip. |
-| Navigation | bottom tabs                        | **persistent left icon-rail sidebar** (active = emerald).                                                                 |
-| Pointer    | touch, ≥44px targets, `hitSlop`    | **mouse** — precise targets fine; **hover is a first-class state** (reveal actions, brighten borders/text on hover).      |
-| Density    | compact                            | **denser still** — desktop shows more at once (5-col galleries, 3-col dashboards, long lists).                            |
-| Input      | on-screen                          | **keyboard** — shortcuts (space/arrows in Replay, Cmd+[ / Cmd+] nav), Enter-to-submit.                                    |
-| Chrome     | full-screen flows                  | **window + menu-bar tray** (pause/recalibrate), title is always "Off Grid AI Desktop".                                    |
-| Detail     | push a screen                      | **detail screens / side panels** (e.g. click a connector row → its own detail view).                                      |
+| Concern    | **Desktop**                                                                                 |
+| ---------- | ------------------------------------------------------------------------------------------- |
+| Canvas     | Wide: multi-column grids, master-detail, side panels, dense tables. Use the width.          |
+| Navigation | Persistent left icon rail; the active item glows emerald.                                   |
+| Pointer    | Hover is first-class: surfaces catch the pointer's light, borders brighten, actions reveal. |
+| Density    | Dense within groups, generous between them.                                                 |
+| Input      | Keyboard shortcuts everywhere repeated (Cmd+K, Cmd+[ / ]), Enter to submit.                 |
+| Chrome     | Window plus menu-bar tray; the title is always "Off Grid AI Desktop".                       |
+| Detail     | Detail screens and side panels, never a detail crammed into a row.                          |
 
 ---
 
-## Implementation (Tailwind, not RN)
+## Implementation
 
-Desktop is React + Tailwind v4. Use utility classes; tokens come from `@offgrid/design` / `main.css`. **Menlo = `font-mono`** (set globally). Prefer the exact emerald tokens; Tailwind `green-500/400` is an accepted stand-in already in the codebase.
+Desktop is React + Tailwind v4. The look comes from `@offgrid/operator-ui` in three layers,
+wired once in the renderer (see the library's `docs/HOST_INTEGRATION.md`):
+
+1. **Skin** — `@offgrid/operator-ui/ogad/skin.css` re-renders the existing utility vocabulary
+   below. Write the classes as listed; the skin supplies the new look.
+2. **Primitives** — `src/renderer/src/components/ui/*` re-export
+   `@offgrid/operator-ui/ogad/ui/*`. Same APIs, premium visuals.
+3. **Motion** — `@offgrid/operator-ui/alive.css` plus `AliveProvider` (and `LivingField` for the
+   background) give every primitive and surface its reactions.
 
 ```
-Base        bg-neutral-950 (#0a0a0a)
-Surface     bg-neutral-900/40–60 (cards, panels)
-Surface+    bg-neutral-800 (badges, active pills, inputs)
-Borders     border-neutral-800 (default) · border-neutral-700 (hover) · border-green-500 (focus/active)
-Accent      text-green-500 / bg-green-500 (emerald) — sparingly
+Base        bg-neutral-950            translucent base over the living background
+Surface     bg-neutral-900/40–60      glass layer, hairline edge, faint top highlight
+Surface+    bg-neutral-800            active pills, badges, inputs (a slightly brighter layer)
+Borders     border-neutral-800        hairline · hover border-neutral-700 · focus border-green-500 (glows)
+Accent      text-green-500 / bg-green-500   emerald; bg fills glow
 Text tiers  text-white → text-neutral-300 → text-neutral-500 → text-neutral-600
-Radius      rounded-md (8px) default · rounded-full (pills/tabs/badges)
-Font        font-mono everywhere
+Radius      rounded-md (9px) · rounded-lg / rounded-2xl for cards · rounded-full pills
+Font        body is Geist; `uppercase`, `tabular-nums`, code, kbd, pre and time are Geist Mono
 ```
 
----
-
-## Text hierarchy (5 categories, desktop sizes)
-
-Same 5 roles as mobile, scaled for a monitor:
-
-| Role             | Tailwind                                                                              | Use                                                    |
-| ---------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| **TITLE**        | `text-lg tracking-tight text-white`                                                   | one per screen (page title)                            |
-| **BODY**         | `text-sm text-neutral-200/300`                                                        | primary content, list items, inputs, buttons           |
-| **SUBTITLE**     | `text-sm text-white` / section `<h2>`                                                 | section/card/modal titles                              |
-| **DESCRIPTION**  | `text-xs text-neutral-500`                                                            | explanatory text under a title                         |
-| **META / LABEL** | `text-[11px]` or `text-[10px]`, labels `uppercase tracking-wide text-neutral-500/600` | timestamps, counts, tags, section markers ("whispers") |
-
-Rules: hierarchy from size+opacity (not color); section labels are tiny, **uppercase**, widely tracked, muted; metadata whispers.
+Never hard-code hex or shadows in components; the skin and tokens own them.
 
 ---
 
-## Components (desktop)
+## Text hierarchy
 
-- **Sidebar** — left icon rail; active item emerald, hover brightens. Items: Day, Replay, Reflect, Entities, Projects, Actions, Integrations, Chat, Models, Settings.
-- **Screen header** — title (TITLE) left, a tab toggle and/or action on the right, hairline `border-b border-neutral-900`, `px-6 py-4`.
-- **Cards** — `rounded-md border border-neutral-800 bg-neutral-900/30–40 p-4–5`; hover `border-neutral-700`. No gradients/shadows.
-- **Tabs / segmented control** — `rounded-full border border-neutral-800 p-0.5`; active pill `bg-neutral-800 text-green-500`.
-- **Buttons** — primary: `bg-green-500 text-neutral-950 hover:bg-green-400`; secondary: `border border-neutral-700 text-neutral-300 hover:border-green-500 hover:text-green-500`; icon-only muted, brighten on hover.
-- **Inputs** — `rounded-md border border-neutral-800 bg-neutral-950 text-neutral-200 focus:border-neutral-600`.
-- **Lists / rows** — compact, clickable rows with a trailing chevron; hover brightens border; click → detail.
-- **Badges/tags** — `rounded-sm bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400`; the entity/source chip uses emerald text.
-- **Master-detail** — list/grid → click → dedicated detail view (with a "← back" link). Don't cram a detail into a row.
-- **Empty states** — centered muted icon + one terse line.
-- **Logos** — real brand marks (Simple Icons), shown bare (no tile/background behind them).
+| Role             | Tailwind                                                          | Use                               |
+| ---------------- | ----------------------------------------------------------------- | --------------------------------- |
+| **TITLE**        | `text-lg tracking-tight text-white` (large, light)                | one per screen                    |
+| **BODY**         | `text-sm text-neutral-200/300`                                    | content, list items, controls     |
+| **SUBTITLE**     | `text-sm text-white` / section `<h2>`                             | section, card and dialog titles   |
+| **DESCRIPTION**  | `text-xs text-neutral-500`                                        | explanation under a title         |
+| **META / LABEL** | `text-[10px]–[11px] uppercase tracking-wide text-neutral-500/600` | labels, counts, timestamps (mono) |
 
 ---
 
-## Interaction
+## Components
 
-- **Hover reveals**: actions fade in (`opacity-0 group-hover:opacity-100`), borders/text brighten. This is the desktop affordance the mobile guide lacks.
-- **Focus**: `focus:border-neutral-600` / emerald for active.
-- **Loading**: small spinner (`IconLoader2 animate-spin`), muted text. No skeletons, no elaborate animation.
-- **Destructive**: red only for delete (`hover:text-red-400`).
-- **Live updates**: surfaces refresh on `crm:changed` (capture/sync) — keep old content visible while updating, don't blank-then-flash.
-
-### Motion & micro-interactions (every interaction is smooth)
-
-**Rule: nothing pops. Every state change animates.** Functional motion is required — this is separate from the "no _decorative_ animation" brand rule (no spinning logos, no ambient flourishes). A control that changes, a panel that appears, a value that updates should transition, not snap.
-
-- **Every interactive control** gets `transition-all duration-150` (or `transition-colors`) + `active:scale-95` / `active:scale-[0.99]`. Hover, focus, press, and disabled states are all transitioned.
-- **Panels, slide-overs, modals, dropdowns** enter and leave with a fade + slide/scale (120–200ms, ease-out in / ease-in out), never a hard mount/unmount. Prefer a mounted-flag or the library's state hook so exits animate too.
-- **Respect `prefers-reduced-motion`** — the global block in `main.css` already neutralizes durations; don't fight it.
-- **Gotcha — modals don't animate for free, and never animate `translate`.** The shared shadcn `Dialog` (`ui/dialog.tsx`) ships `animate-in` / `zoom-in-95` classes from **tailwindcss-animate, which this project does NOT include**, so those classes are no-ops. Dialog transitions come from the hand-written `[data-slot='dialog-*'][data-state]` keyframes in `main.css` (`og-dialog-in/out`, `og-overlay-in/out`). Those keyframes animate **only `transform: scale()` + `opacity`** — never `translate`: Tailwind v4 centers the dialog with the separate **`translate` CSS property** (`translate-x/y-[-50%]`), so a keyframe that also does `transform: translate(…)` stacks a second translate during the animation and the modal flies to the top-left then snaps back to center. Any new Radix overlay animates via the same `data-state` hook, scale+opacity only.
+- **Sidebar** — left icon rail; the active item glows emerald, hover brightens.
+- **Screen header** — title left; a segmented control or action right; hairline
+  `border-b border-neutral-900`, `px-6 py-4`.
+- **Cards** — `rounded-2xl border border-neutral-800 bg-neutral-900/40–60 p-5–6`; hover
+  `border-neutral-700`. The skin lights and lifts them.
+- **Segmented control** — `@offgrid/operator-ui/operator/segmented`, or
+  `rounded-full border border-neutral-800 p-0.5` with an active pill; the highlight glides.
+- **Icon buttons first** — any action with a clear glyph (stop, pause, continue, retry, copy,
+  delete, edit, close, send, download, refresh, settings, add, more) is a `size="icon-*"` button
+  with the label as `aria-label` and a tooltip. Words only when an icon would be ambiguous or for
+  the screen's one primary call to action.
+- **Buttons** — `ui/button` variants. Hand-built primary: `bg-green-500 text-neutral-950`;
+  secondary: `border border-neutral-700 text-neutral-300 hover:border-green-500 hover:text-green-500`.
+- **Inputs** — `rounded-md border border-neutral-800 bg-neutral-950 text-neutral-200`; focus glows.
+- **Lists / rows** — thin rows (about 40–52px): title + meta inline, badges inline, a trailing icon action
+  or chevron revealed on hover; click → detail. Never a tall card per item with a button row.
+- **Badges** — `rounded-md bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400`; active
+  ones emerald.
+- **Popups, menus, tooltips, dialogs** — the `ui/*` primitives: glass, spring in from their
+  trigger, items cascade, exits animate.
+- **Empty states** — one muted icon, one line, one action when useful.
+- **Logos** — real brand marks, bare.
 
 ---
 
-## Anti-patterns (same as mobile, plus desktop)
+## Space and density
 
-❌ Multiple accent colors · gradients · bold-for-emphasis · heavy borders/3D · mixed fonts · emojis in UI · color-coded status · decorative animation.
-❌ **Desktop-specific:** centering a phone-width column on a wide screen · ignoring hover · touch-only patterns (oversized targets, no hover) · cramming everything inline instead of using detail panels.
+Use these rules across the product, including panels and settings:
+
+- Put names on the left, short facts in aligned columns, and state and controls on the right.
+  Use `ListRow` metadata and trailing slots. Use compact rows when the content fits on one line.
+- Use the width before adding height. A short status belongs beside a name when there is room.
+  Keep useful space between groups, but avoid large empty areas inside repeated rows.
+- Keep labels readable. Let controls wrap when a panel is narrow; do not squeeze several cards
+  side by side until their labels disappear. Use the available panel width, not only window width.
+- Keep long descriptions and detail in the appropriate panel. Do not hide required facts just to
+  make a row shorter. Preserve keyboard focus, clear actions, and loading and error states.
+- Apply a repeated layout change in its shared component so each use has the same behavior.
+  Keep its motion and reduced-motion support.
+
+---
+
+## Interaction and motion
+
+**Nothing pops. Every state change animates, and the parts move together.**
+
+- **Pointer:** surfaces near the pointer catch its light; a press sends a soft wave through
+  nearby surfaces. This is automatic once `AliveProvider` is mounted.
+- **Hover:** lift slightly, brighten borders and text, reveal secondary actions
+  (`opacity-0 group-hover:opacity-100`).
+- **Press:** give way (scale ~0.96) and spring back.
+- **Focus:** the field's edge glows emerald; keyboard focus shows a soft ring.
+- **Loading:** mark busy regions `aria-busy` or use the Button `loading` prop; the page's busy
+  signal quickens the primary glow. Skeletons share one sweep. Keep old content visible while
+  refreshing.
+- **Results:** status lines use `role="status"`; when one changes it settles with a soft flash.
+- **Panels and dialogs:** rise from 0.94 with blur; the page recedes; exits animate. Never animate
+  `translate` on centred overlays (Tailwind centres them with it).
+- **Timings:** micro 90–180ms, hover and spring 300–460ms, reveal 420–760ms; use
+  `--og-ease-out` and `--og-ease-spring`.
+- **Reduced motion:** always honoured, by the library layers and by `main.css`.
+
+---
+
+## Anti-patterns
+
+❌ Flat dead surfaces · things that pop or snap · thick borders and boxes inside boxes · hard dark
+shadows · a second accent or rainbow gradients · colour-coded status · decorative motion ·
+emojis in the UI.
+❌ **Desktop-specific:** a phone-width column on a wide screen · ignoring hover · cramming detail
+inline instead of using panels.
 
 ---
 
 ## Checklist
 
-- [ ] Menlo (`font-mono`) everywhere; weights light.
-- [ ] Emerald is the _only_ accent, used sparingly; rest monochrome.
-- [ ] Uses the full width — multi-column / master-detail where it helps.
-- [ ] Hierarchy from size + opacity, not color; labels tiny/uppercase/muted.
-- [ ] Hover states reveal/brighten; focus is emerald.
-- [ ] Cards flat (border + transparent bg), 8px radius, no gradients/shadows.
-- [ ] Real logos bare; no emojis.
-- [ ] Title says/реflects "Off Grid AI Desktop".
+- [ ] Geist for text, Geist Mono for labels, numbers and code.
+- [ ] Emerald is the only accent and the light source.
+- [ ] Uses the full width where it helps.
+- [ ] Hierarchy from size, weight and space.
+- [ ] Every interactive state animates; overlays exit smoothly; reduced motion respected.
+- [ ] Results in `role="status"`, loading in `aria-busy`.
+- [ ] Primitives from `ui/*`; no hard-coded colours or shadows.
+- [ ] Clear actions are icon buttons with an `aria-label` and tooltip, not text labels.

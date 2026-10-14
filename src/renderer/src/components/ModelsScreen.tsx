@@ -1,16 +1,56 @@
 import { modelShowsOnTab } from '../../../shared/model-settings-rules'
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { isDecisionModel, useTaskRoles } from '../lib/task-roles'
-import { AnimatePresence } from 'motion/react'
-import { Button } from '@offgrid/operator-ui/operator/button'
-import '@offgrid/operator-ui/styles.css'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import {
+  Progress,
+  ProgressIndicator,
+  ProgressTrack
+} from '@offgrid/operator-ui/operator/coss/progress'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
+import { PageHeader, Section } from '@offgrid/operator-ui/operator/experience'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle
+} from '@offgrid/operator-ui/operator/coss/empty'
+import { Card } from '@offgrid/operator-ui/operator/coss/card'
+import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
+} from '@offgrid/operator-ui/operator/coss/table'
+import { AnimatedBackground } from '@offgrid/operator-ui/operator/motion/animated-background'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput
+} from '@offgrid/operator-ui/operator/coss/input-group'
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue
+} from '@offgrid/operator-ui/operator/coss/select'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { GlyphSwap, IconTip } from './IconTip'
 import {
   IconDownload,
   IconCircleCheck,
   IconLoader2,
   IconSearch,
-  IconChevronDown,
-  IconCheck,
   IconX,
   IconTrash,
   IconUpload,
@@ -19,7 +59,11 @@ import {
   IconEye,
   IconDatabase,
   IconStarFilled,
-  IconClock
+  IconClock,
+  IconLayoutGrid,
+  IconList,
+  IconRefresh,
+  IconSettings
 } from '@tabler/icons-react'
 import { StoragePanel } from './setup/StoragePanel'
 import { SidePanel } from './SidePanel'
@@ -73,59 +117,32 @@ function Sel({
   allLabel?: string
   prefix?: string
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const onDoc = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDoc)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
   const items = allLabel ? [{ key: 'all', label: allLabel }, ...options] : [...options]
-  const current = items.find((o) => o.key === value) ?? items[0]
+  const labelFor = (key: string): string =>
+    (items.find((o) => o.key === key) ?? items[0])?.label ?? ''
   return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className={`flex items-center gap-1 rounded border bg-neutral-900/60 px-2 py-1 text-[10px] transition-colors ${open ? 'border-green-500 text-white' : 'border-neutral-800 text-neutral-400 hover:border-neutral-600 hover:text-white'}`}
+    <Select
+      value={value}
+      onValueChange={(next) => {
+        if (next != null) onChange(next)
+      }}
+      items={items.map((o) => ({ value: o.key, label: o.label }))}
+    >
+      <SelectTrigger
+        size="sm"
+        aria-label={prefix ? prefix.replace(/:\s*$/, '') : (allLabel ?? labelFor(value))}
+        className="min-h-0 w-auto min-w-0 gap-1 rounded px-2 py-1 text-[10px] sm:min-h-0 sm:text-[10px]"
       >
-        <span>
-          {prefix ?? ''}
-          {current?.label}
-        </span>
-        <IconChevronDown
-          className={`h-2.5 w-2.5 text-neutral-500 transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
-        />
-      </button>
-      {open && (
-        <div className="absolute left-0 z-30 mt-1 min-w-[150px] overflow-hidden rounded border border-neutral-800 bg-neutral-950 py-0.5 shadow-xl">
-          {items.map((o) => (
-            <button
-              key={o.key}
-              onClick={() => {
-                onChange(o.key)
-                setOpen(false)
-              }}
-              className={`flex w-full items-center gap-1.5 px-2.5 py-1 text-left text-[10px] transition-colors hover:bg-neutral-900 ${o.key === value ? 'text-green-500' : 'text-neutral-300'}`}
-            >
-              <IconCheck
-                className={`h-2.5 w-2.5 shrink-0 transition-opacity ${o.key === value ? 'opacity-100' : 'opacity-0'}`}
-              />
-              {o.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+        <SelectValue>{(key: string) => `${prefix ?? ''}${labelFor(key)}`}</SelectValue>
+      </SelectTrigger>
+      <SelectPopup>
+        {items.map((o) => (
+          <SelectItem key={o.key} value={o.key} className="text-[10px] sm:text-[10px]">
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectPopup>
+    </Select>
   )
 }
 
@@ -322,6 +339,19 @@ function downloadFailureText(error?: string): string {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (window as any).api
 
+// The collections chapter's motion: one spring for cards and rows arriving, leaving and reflowing.
+const COLLECTION_SPRING = { type: 'spring', stiffness: 380, damping: 32 } as const
+const COLLECTION_EASE = [0.16, 1, 0.3, 1] as const
+const RISE = {
+  initial: { opacity: 0, y: 8, filter: 'blur(4px)' },
+  animate: { opacity: 1, y: 0, filter: 'blur(0px)' },
+  exit: { opacity: 0, y: -6, filter: 'blur(4px)' },
+  transition: { duration: 0.35, ease: COLLECTION_EASE }
+}
+const ACTIVE_RING =
+  'shadow-[inset_0_0_0_1px_rgb(var(--og-rgb-primary)/0.55),0_0_28px_-10px_rgb(var(--og-rgb-primary)/0.8)]'
+const MotionRow = motion.create(TableRow)
+
 export function ModelsScreen({
   navigationSubroute,
   onNavigateSubroute
@@ -331,6 +361,10 @@ export function ModelsScreen({
 } = {}): React.JSX.Element {
   const [kinds, setKinds] = useState<string[]>([])
   const [models, setModels] = useState<ModelEntry[]>([])
+  // False until the first catalog answer, so the grid draws its shape instead of "no match".
+  const [catalogLoaded, setCatalogLoaded] = useState(false)
+  const [view, setView] = useState<'grid' | 'list'>('grid')
+  const reducedMotion = useReducedMotion()
   const [installed, setInstalled] = useState<string[]>([])
   // Per-model optional companion readiness from the backend (derived from files + disk).
   // Drives repair actions for projectors and DFlash draft models.
@@ -417,7 +451,10 @@ export function ModelsScreen({
   const [variantError, setVariantError] = useState<string | null>(null)
   const variantGuidance = useMemo(() => modelFileGuidance(variants, ramGb), [variants, ramGb])
   const [detailFiles, setDetailFiles] = useState<DownloadableModelFile[]>([])
-  const detailFileGuidance = useMemo(() => modelFileGuidance(detailFiles, ramGb), [detailFiles, ramGb])
+  const detailFileGuidance = useMemo(
+    () => modelFileGuidance(detailFiles, ramGb),
+    [detailFiles, ramGb]
+  )
   const [detailFilesLoading, setDetailFilesLoading] = useState(false)
   const [detailFilesError, setDetailFilesError] = useState<string | null>(null)
   const [chosenVariants, setChosenVariants] = useState<Record<string, string>>({})
@@ -514,13 +551,17 @@ export function ModelsScreen({
       .systemHealth?.()
       .then((h: { ramGb?: number }) => setRamGb(h.ramGb ?? null))
       .catch(() => {})
-    api.getModelCatalog?.().then((c: { kinds: string[]; models: ModelEntry[] }) => {
-      setKinds(c.kinds)
-      setModels(c.models)
-      setActiveKind((current) =>
-        current === 'storage' || c.kinds.includes(current) ? current : (c.kinds[0] ?? 'text')
-      )
-    })
+    const catalog = api.getModelCatalog?.()
+    if (!catalog) setCatalogLoaded(true)
+    catalog
+      ?.then((c: { kinds: string[]; models: ModelEntry[] }) => {
+        setKinds(c.kinds)
+        setModels(c.models)
+        setActiveKind((current) =>
+          current === 'storage' || c.kinds.includes(current) ? current : (c.kinds[0] ?? 'text')
+        )
+      })
+      .finally(() => setCatalogLoaded(true))
     api.getInstalledModels?.().then(setInstalled)
     refreshVision()
     refreshActive()
@@ -689,10 +730,27 @@ export function ModelsScreen({
   const displayed = useMemo(
     () =>
       filterAndSort(
-        [...list.filter((model) => {
-          const name = `${model.name} ${model.id}`.toLowerCase()
-          return deferredQuery.trim().toLowerCase().split(/\s+/).every((term) => name.includes(term))
-        }).map((model) => ({ id: model.id, name: model.name, org: model.org ?? '', downloads: undefined, likes: undefined, lastModified: undefined, credibility: undefined })), ...hfResults.filter((result) => !list.some((model) => model.id === result.id))].map((r) => ({
+        [
+          ...list
+            .filter((model) => {
+              const name = `${model.name} ${model.id}`.toLowerCase()
+              return deferredQuery
+                .trim()
+                .toLowerCase()
+                .split(/\s+/)
+                .every((term) => name.includes(term))
+            })
+            .map((model) => ({
+              id: model.id,
+              name: model.name,
+              org: model.org ?? '',
+              downloads: undefined,
+              likes: undefined,
+              lastModified: undefined,
+              credibility: undefined
+            })),
+          ...hfResults.filter((result) => !list.some((model) => model.id === result.id))
+        ].map((r) => ({
           id: r.id,
           name: r.name,
           org: r.org,
@@ -834,50 +892,47 @@ export function ModelsScreen({
     const recommended =
       !isHf && (bonsaiFits(m) || (!!recommendedImageId && m.id === recommendedImageId))
 
-    return (
-      <div
-        key={m.id}
-        role="listitem"
-        className={`group flex flex-col gap-2 rounded-md border p-3 transition-all duration-150 hover:border-neutral-700 ${active ? 'border-green-500/50 bg-green-500/5' : 'border-neutral-800 bg-neutral-900/40'}`}
+    // One model, two layouts: the collections chapter's grid card and its table row share every
+    // piece below, so a state (downloading, failed, active) reads the same in either view.
+    const nameRow = (
+      <div className="flex flex-wrap items-center gap-1">
+        <button
+          onClick={() => openDetail(m)}
+          className="truncate text-left text-xs text-neutral-100 transition-colors duration-100 hover:text-emerald-500"
+        >
+          {m.name}
+        </button>
+        {worksBest && (
+          <span className="shrink-0 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
+            Works best
+          </span>
+        )}
+        {m.kind === 'vision' && (
+          <span className="flex shrink-0 items-center gap-0.5 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
+            <IconEye className="h-2 w-2" /> Vision
+          </span>
+        )}
+        {m.isNew && (
+          <span className="shrink-0 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
+            New
+          </span>
+        )}
+      </div>
+    )
+    const metaLine = (
+      <>{meta && <div className="mt-0.5 truncate text-[10px] text-neutral-600">{meta}</div>}</>
+    )
+    const detailsButton = (
+      <button
+        onClick={() => openDetail(m)}
+        title="Details"
+        className="shrink-0 rounded p-0.5 text-neutral-700 opacity-0 transition-all duration-150 hover:text-neutral-300 active:scale-90 group-hover:opacity-100"
       >
-        {/* Title row */}
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-1">
-              <button
-                onClick={() => openDetail(m)}
-                className="truncate text-left text-xs text-neutral-100 transition-colors duration-100 hover:text-emerald-500"
-              >
-                {m.name}
-              </button>
-              {worksBest && (
-                <span className="shrink-0 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-                  Works best
-                </span>
-              )}
-              {m.kind === 'vision' && (
-                <span className="flex shrink-0 items-center gap-0.5 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-                  <IconEye className="h-2 w-2" /> Vision
-                </span>
-              )}
-              {m.isNew && (
-                <span className="shrink-0 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-                  New
-                </span>
-              )}
-            </div>
-            {meta && <div className="mt-0.5 truncate text-[10px] text-neutral-600">{meta}</div>}
-          </div>
-          <button
-            onClick={() => openDetail(m)}
-            title="Details"
-            className="shrink-0 rounded p-0.5 text-neutral-700 opacity-0 transition-all duration-150 hover:text-neutral-300 active:scale-90 group-hover:opacity-100"
-          >
-            <IconInfoCircle className="h-3.5 w-3.5" />
-          </button>
-        </div>
-
-        {/* Badges row */}
+        <IconInfoCircle className="h-3.5 w-3.5" />
+      </button>
+    )
+    const badgeRow = (
+      <>
         {(comingSoon ||
           recommended ||
           tags.length > 0 ||
@@ -937,146 +992,171 @@ export function ModelsScreen({
             )}
           </div>
         )}
-
+      </>
+    )
+    const availabilityNote = (
+      <>
         {comingSoon && m.availabilityNote && (
           <p className="text-[9px] leading-relaxed text-neutral-600">{m.availabilityNote}</p>
         )}
-
-        {/* Action row */}
-        <div className="mt-auto flex items-center justify-between gap-2 pt-1">
-          {comingSoon ? (
-            <span className="text-[10px] text-neutral-500">
-              Available after support is fully tested
-            </span>
-          ) : active ? (
-            <span className="flex items-center gap-1 text-[11px] text-green-500">
-              <IconCircleCheck className="h-3.5 w-3.5 shrink-0" />{' '}
-              {/* A task model says the role it plays, and where: several are active at once. */}
-              {(m.kind === 'computer_use' && taskRoles?.badges[m.id]) || 'Active'}
-            </span>
-          ) : isInstalled ? (
-            // Every installed model is activatable for its type — no kind branch.
-            // Includes a downloaded HF model (registered as installed), so its search
-            // card flips from Download to Use instead of resetting.
-            <button
-              onClick={() => activateModel(m.id)}
-              disabled={!!switching}
-              className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:opacity-40"
-            >
-              {switching === m.id ? (
-                <>
-                  <IconLoader2 className="h-3 w-3 animate-spin" /> Switching
-                </>
-              ) : (
-                'Use'
-              )}
-            </button>
-          ) : downloading ? (
-            // Status left, action right, across the full width of the card. Stacked in a column on
-            // the left they left half the card empty and the whole thing read as lopsided; the row
-            // is already justify-between, so the pair simply uses the space that was there.
-            // The percent is NOT in the button: a control whose meaning is "Cancel" is the one place
-            // the card's main number should not live.
+      </>
+    )
+    // The status half of the action row: what is happening to this model right now (coming soon,
+    // downloading, failed). Null when there is nothing to say, so a card stays one line shorter.
+    const statusNode = comingSoon ? (
+      <span className="text-[10px] text-neutral-500">Available after support is fully tested</span>
+    ) : active || isInstalled ? null : downloading ? (
+      // The percent is NOT in the button: a control whose meaning is "Cancel" is the one place
+      // the card's main number should not live.
+      <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[10px] text-neutral-500">
+        <span className="text-neutral-300">
+          {prog.status === 'queued' ? (
+            'Queued'
+          ) : downloadProgress?.determinate ? (
             <>
-              <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[10px] text-neutral-500">
-                <span className="text-neutral-300">
-                  {prog.status === 'queued'
-                    ? 'Queued'
-                    : downloadProgress?.determinate
-                      ? `${Math.round(downloadProgress.percentage ?? 0)}%`
-                      : 'Downloading'}
-                </span>
-                {downloadProgress && downloadProgress.totalBytes !== undefined ? (
-                  <span className="whitespace-nowrap">
-                    {formatSize(downloadProgress.currentBytes)} of{' '}
-                    {formatSize(downloadProgress.totalBytes)}
-                  </span>
-                ) : prog.downloadedMB && prog.totalMB ? (
-                  <span className="whitespace-nowrap">
-                    {formatTransferred(prog.downloadedMB)} of {formatTransferred(prog.totalMB)}
-                  </span>
-                ) : null}
-                {downloadProgress?.bytesPerSecond !== undefined ? (
-                  <span className="whitespace-nowrap">
-                    · {formatTransferSpeed(downloadProgress.bytesPerSecond)}
-                  </span>
-                ) : null}
-                {timeRemaining ? (
-                  <span className="whitespace-nowrap">· {timeRemaining}</span>
-                ) : null}
-                <span className="min-w-0 truncate">{downloadPartLabel(prog)}</span>
-              </div>
-              <button
-                onClick={() => cancelDownload(m.id)}
-                className="flex shrink-0 items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-400 transition-all duration-150 hover:border-red-500/60 hover:text-red-400 active:scale-95"
-              >
-                {prog.status === 'queued' ? (
-                  <IconClock className="h-3 w-3" />
-                ) : (
-                  <IconX className="h-3 w-3" />
-                )}
-                Cancel
-              </button>
-            </>
-          ) : prog?.status === 'failed' ? (
-            // A failure is a STATE of the action row, not a banner under it. As its own block it
-            // stacked a second button beneath "Download" and asked you to choose between two ways
-            // of doing the same thing. Reason left, one button right, on the row that was already
-            // there.
-            <>
-              <span
-                className="min-w-0 truncate text-[10px] text-red-400/90"
-                title={prog.error}
-                role="status"
-              >
-                {downloadFailureText(prog.error)}
-              </span>
-              <button
-                onClick={() => retryDownload(m.id)}
-                className="flex shrink-0 items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
-              >
-                <IconDownload className="h-3 w-3" /> Try again
-              </button>
+              <AnimatedNumber value={Math.round(downloadProgress.percentage ?? 0)} />%
             </>
           ) : (
-            <button
+            <TextShimmer as="span">Downloading</TextShimmer>
+          )}
+        </span>
+        {downloadProgress && downloadProgress.totalBytes !== undefined ? (
+          <span className="whitespace-nowrap">
+            {formatSize(downloadProgress.currentBytes)} of {formatSize(downloadProgress.totalBytes)}
+          </span>
+        ) : prog.downloadedMB && prog.totalMB ? (
+          <span className="whitespace-nowrap">
+            {formatTransferred(prog.downloadedMB)} of {formatTransferred(prog.totalMB)}
+          </span>
+        ) : null}
+        {downloadProgress?.bytesPerSecond !== undefined ? (
+          <span className="whitespace-nowrap">
+            · {formatTransferSpeed(downloadProgress.bytesPerSecond)}
+          </span>
+        ) : null}
+        {timeRemaining ? <span className="whitespace-nowrap">· {timeRemaining}</span> : null}
+        <span className="min-w-0 truncate">{downloadPartLabel(prog)}</span>
+      </div>
+    ) : prog?.status === 'failed' ? (
+      // A failure is a STATE of the action row, not a banner under it: reason here, one retry
+      // control in the trailing actions.
+      <span
+        className="min-w-0 truncate text-[10px] text-red-400/90"
+        title={prog.error}
+        role="status"
+      >
+        {downloadFailureText(prog.error)}
+      </span>
+    ) : null
+    // The action half: trailing icon controls (the old label is each one's name and tooltip).
+    const actionIcons = (
+      <div className="flex shrink-0 items-center gap-1">
+        {comingSoon ? null : active ? (
+          <span className="flex items-center gap-1 text-[11px] text-green-500">
+            <IconCircleCheck className="h-3.5 w-3.5 shrink-0" />{' '}
+            {/* A task model says the role it plays, and where: several are active at once. */}
+            {(m.kind === 'computer_use' && taskRoles?.badges[m.id]) || 'Active'}
+          </span>
+        ) : isInstalled ? (
+          // Every installed model is activatable for its type — no kind branch.
+          // Includes a downloaded HF model (registered as installed), so its search
+          // card flips from Download to Use instead of resetting.
+          <button
+            onClick={() => activateModel(m.id)}
+            disabled={!!switching}
+            aria-busy={switching === m.id || undefined}
+            className="flex items-center gap-1 rounded border border-neutral-700 px-2 py-0.5 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:opacity-40"
+          >
+            {switching === m.id ? (
+              <>
+                <IconLoader2 className="h-3 w-3 animate-spin" />{' '}
+                <TextShimmer as="span">Switching</TextShimmer>
+              </>
+            ) : (
+              'Use'
+            )}
+          </button>
+        ) : downloading ? (
+          <IconTip label="Cancel">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Cancel"
+              onClick={() => cancelDownload(m.id)}
+              className="text-neutral-400 hover:text-red-400"
+            >
+              <GlyphSwap glyphKey={prog.status === 'queued' ? 'queued' : 'running'}>
+                {prog.status === 'queued' ? (
+                  <IconClock className="h-3.5 w-3.5" />
+                ) : (
+                  <IconX className="h-3.5 w-3.5" />
+                )}
+              </GlyphSwap>
+            </Button>
+          </IconTip>
+        ) : prog?.status === 'failed' ? (
+          <IconTip label="Try again">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Try again"
+              onClick={() => retryDownload(m.id)}
+              className="text-neutral-300 hover:text-emerald-500"
+            >
+              <IconRefresh className="h-3.5 w-3.5" />
+            </Button>
+          </IconTip>
+        ) : (
+          <IconTip label={mtpUnavailable ? 'MTP unavailable' : 'Download'}>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label={mtpUnavailable ? 'MTP unavailable' : 'Download'}
               onClick={() => (isHf || useMtpDownloads ? void chooseVariant(m) : download(m.id))}
               disabled={mtpUnavailable}
-              className="flex items-center gap-1 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+              className="text-neutral-300 hover:text-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <IconDownload className="h-3 w-3" /> {mtpUnavailable ? 'MTP unavailable' : 'Download'}
-            </button>
-          )}
-          {isInstalled && (
-            <div className="flex shrink-0 items-center gap-1">
-              {active && !isRemote && supportsModelSettings(m.kind) && (
-                <button
-                  onClick={() => openModelSettings(m.kind)}
-                  aria-label="Open model settings"
-                  title="Open settings for the active model"
-                  className="rounded border border-neutral-800 px-1.5 py-1 text-[9px] text-neutral-500 transition-all duration-150 hover:border-green-500/60 hover:text-emerald-500 active:scale-95"
-                >
-                  Settings
-                </button>
-              )}
-              {!isRemote && !m.id.startsWith('external:') && (
-                <button
-                  onClick={() => removeModel(m.id, m.name)}
-                  disabled={deleting === m.id || active}
-                  title={active ? 'Switch to another model before deleting' : 'Delete from disk'}
-                  className="rounded p-1 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
-                >
-                  {deleting === m.id ? (
-                    <IconLoader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <IconTrash className="h-3 w-3" />
-                  )}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
+              <IconDownload className="h-3.5 w-3.5" />
+            </Button>
+          </IconTip>
+        )}
+        {isInstalled && active && !isRemote && supportsModelSettings(m.kind) && (
+          <IconTip label="Open settings for the active model">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              onClick={() => openModelSettings(m.kind)}
+              aria-label="Open model settings"
+              className="text-neutral-500 hover:text-emerald-500"
+            >
+              <IconSettings className="h-3.5 w-3.5" />
+            </Button>
+          </IconTip>
+        )}
+        {isInstalled && !isRemote && !m.id.startsWith('external:') && (
+          <button
+            onClick={() => removeModel(m.id, m.name)}
+            disabled={deleting === m.id || active}
+            title={active ? 'Switch to another model before deleting' : 'Delete from disk'}
+            className="rounded p-1 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
+          >
+            {deleting === m.id ? (
+              <IconLoader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <IconTrash className="h-3 w-3" />
+            )}
+          </button>
+        )}
+      </div>
+    )
+    const actionRow = (
+      <>
+        {statusNode ?? <span />}
+        {actionIcons}
+      </>
+    )
+    const repairActions = (
+      <>
         {/* Vision-capable but projector not downloaded — offer to add it. Hidden while a
             download is in flight (the progress UI covers that). */}
         {!comingSoon && projectorMissing && !dflashMissing && !mtpMissing && !downloading && (
@@ -1101,86 +1181,226 @@ export function ModelsScreen({
             <IconDownload className="h-3 w-3" /> {mtpMissing ? 'Add MTP' : 'Repair'}
           </button>
         )}
-
+      </>
+    )
+    const progressBar = (
+      <>
         {/* Download progress: one bar, one line. It used to be four stacked rows — a percent chip,
             a shouted status, the bytes, then the bar — which said the same thing three times and
             grew the card by half while it ran. The bar carries the shape of the progress, the line
             carries the exact amount, and the part being fetched is named at the end of it where it
             belongs (adding a projector to a model already on disk is not a re-download). */}
         {downloading && (
-          <div className="h-0.5 w-full overflow-hidden rounded-full bg-neutral-800">
-            <div
-              className="h-full w-full origin-left bg-green-500 transition-transform duration-300 ease-out motion-reduce:transition-none"
-              style={{ transform: `scaleX(${(downloadProgress?.percentage ?? 0) / 100})` }}
-            />
-          </div>
+          <Progress
+            aria-label={`${m.name} download progress`}
+            value={downloadProgress?.percentage ?? 0}
+          >
+            <ProgressTrack className="h-0.5">
+              <ProgressIndicator
+                className={
+                  prog.status === 'queued'
+                    ? 'bg-primary/40 shadow-none duration-300 ease-out motion-reduce:transition-none'
+                    : 'duration-300 ease-out motion-reduce:transition-none'
+                }
+              />
+            </ProgressTrack>
+          </Progress>
         )}
-      </div>
+      </>
+    )
+
+    if (view === 'list') {
+      return (
+        <MotionRow
+          key={m.id}
+          layout
+          initial={{ opacity: 0, x: -8 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: 8 }}
+          transition={COLLECTION_SPRING}
+          data-state={active ? 'selected' : undefined}
+          className="group align-top transition-colors"
+        >
+          <TableCell className="whitespace-normal py-2">
+            {nameRow}
+            {metaLine}
+          </TableCell>
+          <TableCell className="whitespace-normal py-2">
+            {badgeRow}
+            {availabilityNote}
+          </TableCell>
+          <TableCell className="whitespace-normal py-2">
+            {/* Status, actions and any repair on one line; only a running download adds its bar. */}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                {actionRow}
+              </div>
+              {repairActions}
+              {downloading ? <div className="basis-full">{progressBar}</div> : null}
+            </div>
+          </TableCell>
+          <TableCell className="py-2">{detailsButton}</TableCell>
+        </MotionRow>
+      )
+    }
+
+    return (
+      <motion.div
+        key={m.id}
+        role="listitem"
+        layout
+        initial={{ opacity: 0, scale: 0.96, filter: 'blur(4px)' }}
+        animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+        exit={{ opacity: 0, scale: 0.96, filter: 'blur(4px)' }}
+        transition={COLLECTION_SPRING}
+        whileHover={reducedMotion ? undefined : { y: -2 }}
+        className="group relative"
+      >
+        <Card
+          className={`h-full gap-1.5 p-2.5 transition-shadow duration-300 ${active ? ACTIVE_RING : ''}`}
+        >
+          {/* Title row: name and meta on the left, the actions trailing on the same line. */}
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              {nameRow}
+              {metaLine}
+            </div>
+            {actionIcons}
+            {detailsButton}
+          </div>
+          {badgeRow}
+          {availabilityNote}
+          {statusNode}
+          {repairActions}
+          {progressBar}
+        </Card>
+      </motion.div>
     )
   }
 
   const GRID = 'grid grid-cols-2 gap-2 px-6 py-3 lg:grid-cols-3 2xl:grid-cols-4'
+  // Inside a Section the section carries the side padding.
+  const SECTION_GRID = 'grid grid-cols-2 gap-2 lg:grid-cols-3 2xl:grid-cols-4'
+
+  // A named group of models as cards (a list of listitems) or as table rows. Both lay out with the
+  // same spring, so filtering or a model changing state reflows its neighbours instead of jumping.
+  const renderCollection = (
+    label: string,
+    items: React.ReactNode,
+    gridClassName: string,
+    listClassName = ''
+  ): React.JSX.Element =>
+    view === 'list' ? (
+      <div className={listClassName}>
+        <Table aria-label={label} className="table-fixed">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[34%]">Model</TableHead>
+              <TableHead className="w-[24%]">Labels</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="w-10">
+                <span className="sr-only">Details</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <AnimatePresence mode="popLayout" initial={false}>
+              {items}
+            </AnimatePresence>
+          </TableBody>
+        </Table>
+      </div>
+    ) : (
+      <div role="list" aria-label={label} className={`relative ${gridClassName}`}>
+        <AnimatePresence mode="popLayout" initial={false}>
+          {items}
+        </AnimatePresence>
+      </div>
+    )
+
+  const filtersNarrowing =
+    hasActiveFilters(filterState) ||
+    sizeBucket !== null ||
+    selectedTags.length > 0 ||
+    (activeKind === 'text' && useCase !== 'all')
+  const clearFilters = (): void => {
+    setFilterState(initialFilterState)
+    setSizeBucket(null)
+    setSelectedTags([])
+    setUseCase('all')
+  }
 
   return (
     <div className="flex h-full flex-col font-mono">
       {/* Header */}
-      <div className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-6 py-3">
-        <h1 className="text-xs font-medium uppercase tracking-widest text-neutral-400">Models</h1>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={importModel}
-            disabled={importing}
-            className="flex items-center gap-1.5 rounded border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-400 transition-all duration-150 hover:border-green-500/60 hover:text-emerald-500 active:scale-95 disabled:opacity-50"
-          >
-            {importing ? (
-              <IconLoader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <IconUpload className="h-3 w-3" />
-            )}
-            {importing ? 'Importing…' : 'Import .gguf'}
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        className="shrink-0 px-6 pb-4 pt-5"
+        title="Models"
+        description={`Download, switch, and manage the models that run on this ${deviceNoun()}.`}
+        actions={
+          <IconTip label={importing ? 'Importing…' : 'Import .gguf'}>
+            <Button
+              size="icon-sm"
+              variant="outline"
+              aria-label={importing ? 'Importing…' : 'Import .gguf'}
+              aria-busy={importing || undefined}
+              onClick={importModel}
+              disabled={importing}
+              className="text-neutral-400 hover:border-green-500/60 hover:text-emerald-500 disabled:opacity-50"
+            >
+              <GlyphSwap glyphKey={importing ? 'busy' : 'idle'}>
+                {importing ? (
+                  <IconLoader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <IconUpload className="h-3.5 w-3.5" />
+                )}
+              </GlyphSwap>
+            </Button>
+          </IconTip>
+        }
+      />
 
       {/* Tabs */}
-      <div className="flex shrink-0 items-end gap-0 border-b border-neutral-800 px-6">
-        {tabs.map(({ id: kind, label }) => (
-          <button
-            key={kind}
-            aria-current={activeKind === kind ? 'page' : undefined}
-            onClick={() => selectKind(kind)}
-            className={`flex items-center gap-1.5 px-3 py-2 text-[10px] uppercase tracking-wider transition-colors duration-150 ${activeKind === kind ? 'border-b-2 border-green-500 text-white' : 'text-neutral-500 hover:text-neutral-300'}`}
-          >
-            {kind === 'storage' ? (
-              <>
-                <IconDatabase className="h-3 w-3" /> Storage
-                {/* Live counts: installed, transferring, queued, and failed. */}
-                <span className="ml-1 font-normal normal-case tracking-normal text-neutral-600">
-                  {installed.length}
+      <div className="flex shrink-0 items-center gap-3 border-b border-neutral-800 px-6 py-2">
+        <Segmented
+          label="Model types"
+          size="sm"
+          value={activeKind}
+          onValueChange={selectKind}
+          options={tabs.map(({ id: kind, label }) => ({
+            id: kind,
+            label: kind === 'storage' ? 'Storage' : label,
+            icon:
+              kind === 'storage' ? (
+                <span className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider">
+                  <IconDatabase className="h-3 w-3" /> Storage
+                  {/* Live counts: installed, transferring, queued, and failed. */}
+                  <span className="ml-1 font-normal normal-case tracking-normal text-neutral-600">
+                    {installed.length}
+                  </span>
+                  {storageCounts.downloading > 0 && (
+                    <Badge size="sm" variant="success">
+                      {storageCounts.downloading}↓
+                    </Badge>
+                  )}
+                  {storageCounts.queued > 0 && (
+                    <Badge size="sm" variant="secondary">
+                      {storageCounts.queued} queued
+                    </Badge>
+                  )}
+                  {storageCounts.failed > 0 && (
+                    <Badge size="sm" variant="error">
+                      {storageCounts.failed}✕
+                    </Badge>
+                  )}
                 </span>
-                {storageCounts.downloading > 0 && (
-                  <span className="rounded-sm bg-green-500/15 px-1 text-[8px] text-green-500">
-                    {storageCounts.downloading}↓
-                  </span>
-                )}
-                {storageCounts.queued > 0 && (
-                  <span className="rounded-sm bg-neutral-800 px-1 text-[8px] text-neutral-400">
-                    {storageCounts.queued} queued
-                  </span>
-                )}
-                {storageCounts.failed > 0 && (
-                  <span className="rounded-sm bg-red-500/15 px-1 text-[8px] text-red-400">
-                    {storageCounts.failed}✕
-                  </span>
-                )}
-              </>
-            ) : (
-              label
-            )}
-          </button>
-        ))}
+              ) : (
+                <span className="text-[10px] uppercase tracking-wider">{label}</span>
+              )
+          }))}
+        />
         {ramGb && activeKind !== 'storage' && (
-          <span className="ml-auto pb-2 text-[9px] text-neutral-700">
+          <span className="ml-auto text-[9px] text-neutral-700">
             {ramGb}GB RAM · fits ≤{Math.round(ramGb * FIT_OK_FRAC)}GB
           </span>
         )}
@@ -1199,25 +1419,28 @@ export function ModelsScreen({
           {/* Filter bar */}
           <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-neutral-800/60 px-6 py-2">
             {searchEnabled && (
-              <div
-                data-focus-surface="models-search"
-                className="flex items-center gap-1.5 rounded border border-neutral-800 bg-neutral-900/60 px-2 py-1 focus-within:border-neutral-600"
-              >
-                <IconSearch className="h-3 w-3 shrink-0 text-neutral-600" />
-                <input
+              <InputGroup data-focus-surface="models-search" className="w-auto rounded">
+                <InputGroupAddon>
+                  <IconSearch className="h-3 w-3 shrink-0 text-neutral-600" aria-hidden="true" />
+                </InputGroupAddon>
+                <InputGroupInput
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder={`Search HuggingFace…`}
-                  className="w-44 bg-transparent text-[10px] text-white placeholder-neutral-600 outline-none"
+                  className="w-44 text-[10px]"
                 />
-                {searching && <IconLoader2 className="h-3 w-3 animate-spin text-neutral-600" />}
-              </div>
+                {searching && (
+                  <InputGroupAddon align="inline-end">
+                    <IconLoader2 className="h-3 w-3 animate-spin text-neutral-600" />
+                  </InputGroupAddon>
+                )}
+              </InputGroup>
             )}
             {['text', 'vision', 'computer_use'].includes(activeKind) && (
               <Button
-                size="sm"
+                size="xs"
                 variant={mtpDownloads ? 'secondary' : 'outline'}
-                className="min-h-0 rounded px-2 py-1 text-[10px] leading-normal shadow-none"
+                className="text-[10px]"
                 aria-pressed={mtpDownloads}
                 onClick={() => {
                   setMtpDownloads((enabled) => !enabled)
@@ -1226,7 +1449,7 @@ export function ModelsScreen({
                 }}
                 title="Choose full models with Multi-Token Prediction weights"
               >
-                MTP downloads: {mtpDownloads ? 'On' : 'Off'}
+                <TextMorph as="span">{`MTP downloads: ${mtpDownloads ? 'On' : 'Off'}`}</TextMorph>
               </Button>
             )}
             <Sel
@@ -1249,49 +1472,79 @@ export function ModelsScreen({
               options={SORT_OPTIONS}
               prefix="Sort: "
             />
-            {!searchingMode &&
-              (SIZE_BUCKETS as readonly number[]).map((b) => (
-                <button
-                  key={b}
-                  onClick={() => setSizeBucket((c) => (c === b ? null : b))}
-                  className={`rounded border px-2 py-0.5 text-[9px] transition-all duration-150 active:scale-95 ${sizeBucket === b ? 'border-green-500 bg-green-500/10 text-green-500' : 'border-neutral-800 text-neutral-500 hover:border-neutral-600 hover:text-neutral-300'}`}
-                >
-                  ≤{b}GB
-                </button>
-              ))}
-            {hasActiveFilters(filterState) && (
-              <button
-                onClick={() => {
-                  setFilterState(initialFilterState)
-                  setSizeBucket(null)
-                }}
-                className="rounded border border-neutral-800 px-2 py-0.5 text-[9px] text-neutral-500 transition-all duration-150 hover:border-green-500/60 hover:text-emerald-500 active:scale-95"
-              >
-                Clear
-              </button>
+            {!searchingMode && (
+              <Segmented
+                label="Fits in memory"
+                size="sm"
+                tone="quiet"
+                value={sizeBucket === null ? 'any' : String(sizeBucket)}
+                onValueChange={(id) => setSizeBucket(id === 'any' ? null : Number(id))}
+                options={[
+                  { id: 'any', label: 'Any' },
+                  ...(SIZE_BUCKETS as readonly number[]).map((b) => ({
+                    id: String(b),
+                    label: `≤${b}GB`
+                  }))
+                ]}
+              />
             )}
-            <span className="ml-auto text-[9px] text-neutral-700">
-              {searchingMode ? displayed.length : displayedCatalog.length} models
+            {hasActiveFilters(filterState) && (
+              <IconTip label="Clear">
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="Clear"
+                  onClick={() => {
+                    setFilterState(initialFilterState)
+                    setSizeBucket(null)
+                  }}
+                  className="text-neutral-500 hover:text-emerald-500"
+                >
+                  <IconX className="h-3 w-3" />
+                </Button>
+              </IconTip>
+            )}
+            <span className="ml-auto text-[9px] text-muted-foreground">
+              <AnimatedNumber value={searchingMode ? displayed.length : displayedCatalog.length} />{' '}
+              models
             </span>
+            <Segmented
+              label="Layout"
+              size="sm"
+              tone="quiet"
+              value={view}
+              onValueChange={setView}
+              options={[
+                { id: 'grid', label: 'Grid view', icon: <IconLayoutGrid className="h-3 w-3" /> },
+                { id: 'list', label: 'List view', icon: <IconList className="h-3 w-3" /> }
+              ]}
+            />
           </div>
 
           {/* Use-case chips (text only, browse mode) */}
           {activeKind === 'text' && !searchingMode && (
             <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-neutral-800/40 px-6 py-1.5">
-              {USE_CASES.filter((u) => u.id !== 'all').map((u) => (
-                <button
-                  key={u.id}
-                  onClick={() => setUseCase((cur) => (cur === u.id ? 'all' : u.id))}
-                  className={`rounded-full border px-2 py-0.5 text-[9px] transition-all duration-150 active:scale-95 ${useCase === u.id ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-600 hover:border-neutral-700 hover:text-neutral-400'}`}
-                >
-                  {u.label}
-                </button>
-              ))}
-              {useCase !== 'all' && (
-                <span className="ml-2 text-[9px] text-neutral-600">
-                  {USE_CASES.find((u) => u.id === useCase)?.blurb}
-                </span>
-              )}
+              <Segmented
+                label="Use case"
+                size="sm"
+                value={useCase}
+                onValueChange={setUseCase}
+                options={USE_CASES.map((u) => ({ id: u.id, label: u.label }))}
+              />
+              <AnimatePresence mode="wait" initial={false}>
+                {useCase !== 'all' && (
+                  <motion.span
+                    key={useCase}
+                    initial={{ opacity: 0, y: 6, filter: 'blur(4px)' }}
+                    animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                    exit={{ opacity: 0, y: -6, filter: 'blur(4px)' }}
+                    transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+                    className="ml-2 text-[9px] text-neutral-600"
+                  >
+                    {USE_CASES.find((u) => u.id === useCase)?.blurb}
+                  </motion.span>
+                )}
+              </AnimatePresence>
             </div>
           )}
 
@@ -1299,26 +1552,40 @@ export function ModelsScreen({
               Anime … A chip narrows the list to models carrying every selected tag. */}
           {!searchingMode && availableTags.length > 0 && (
             <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-neutral-800/40 px-6 py-1.5">
-              {availableTags.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setSelectedTags((cur) => toggleTag(cur, t))}
-                  className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide transition-all duration-150 active:scale-95 ${
-                    selectedTags.includes(t)
-                      ? 'border-green-500 text-green-500'
-                      : 'border-neutral-800 text-neutral-600 hover:border-neutral-700 hover:text-neutral-400'
-                  }`}
-                >
-                  {t}
-                </button>
-              ))}
+              {/* One hover light glides from chip to chip (the collections chapter's rows). */}
+              <AnimatedBackground
+                enableHover
+                className="rounded-full bg-[rgb(var(--og-rgb-text)/0.06)]"
+                transition={{ type: 'spring', bounce: 0.1, duration: 0.35 }}
+              >
+                {availableTags.map((t) => (
+                  <button
+                    key={t}
+                    data-id={t}
+                    aria-pressed={selectedTags.includes(t)}
+                    onClick={() => setSelectedTags((cur) => toggleTag(cur, t))}
+                    className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide transition-[color,border-color,transform] duration-150 active:scale-95 ${
+                      selectedTags.includes(t)
+                        ? 'border-primary/60 text-primary'
+                        : 'border-border text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </AnimatedBackground>
               {selectedTags.length > 0 && (
-                <button
-                  onClick={() => setSelectedTags([])}
-                  className="ml-2 text-[9px] text-neutral-600 transition-colors hover:text-neutral-400"
-                >
-                  clear
-                </button>
+                <IconTip label="clear">
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label="clear"
+                    onClick={() => setSelectedTags([])}
+                    className="ml-1 text-neutral-600 hover:text-neutral-400"
+                  >
+                    <IconX className="h-3 w-3" />
+                  </Button>
+                </IconTip>
               )}
             </div>
           )}
@@ -1333,13 +1600,31 @@ export function ModelsScreen({
           <div className="flex-1 overflow-y-auto">
             {searchingMode ? (
               <>
-                {displayed.length === 0 && !searching && (
-                  <p className="px-6 py-4 text-xs text-neutral-600">
-                    No results for &quot;{query}&quot;.
-                  </p>
-                )}
-                <div role="list" aria-label="Model search results" className={GRID}>
-                  {displayed
+                <AnimatePresence initial={false}>
+                  {displayed.length === 0 && !searching && (
+                    <motion.div key="no-results" {...RISE}>
+                      <Empty className="px-6 py-10 md:py-10">
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon">
+                            <IconSearch />
+                          </EmptyMedia>
+                          <EmptyTitle className="text-[15px] font-normal">No results</EmptyTitle>
+                          <EmptyDescription className="text-xs">
+                            No results for &quot;{query}&quot;.
+                          </EmptyDescription>
+                        </EmptyHeader>
+                        <EmptyContent>
+                          <Button size="sm" variant="outline" onClick={() => setQuery('')}>
+                            Clear search
+                          </Button>
+                        </EmptyContent>
+                      </Empty>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                {renderCollection(
+                  'Model search results',
+                  displayed
                     .filter(
                       (result, index, results) =>
                         !mtpDownloads ||
@@ -1362,16 +1647,58 @@ export function ModelsScreen({
                         },
                         !list.some((model) => model.id === r.id)
                       )
-                    )}
-                </div>
+                    ),
+                  GRID,
+                  'px-6 py-3'
+                )}
               </>
             ) : (
               (() => {
+                if (!catalogLoaded) {
+                  // The catalog draws its own shape while it arrives, never a false "no match".
+                  return (
+                    <div
+                      aria-busy="true"
+                      aria-label="Loading models"
+                      className="grid grid-cols-2 gap-2 px-6 pt-6 lg:grid-cols-3 2xl:grid-cols-4"
+                    >
+                      {[0, 1, 2, 3, 4, 5].map((card) => (
+                        <div key={card} className="space-y-3 rounded-2xl p-3">
+                          <Skeleton className="h-3" style={{ width: `${62 - card * 5}%` }} />
+                          <Skeleton className="h-2.5 w-2/5" />
+                          <div className="flex items-center justify-between pt-3">
+                            <Skeleton className="h-6 w-20 rounded-md" />
+                            <Skeleton className="h-2.5 w-10" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                }
                 if (displayedCatalog.length === 0) {
                   return (
-                    <p className="px-6 py-4 text-xs text-neutral-600">
-                      No models match the current filters.
-                    </p>
+                    <motion.div key="no-match" {...RISE}>
+                      <Empty className="px-6 py-10 md:py-10">
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon">
+                            <IconSearch />
+                          </EmptyMedia>
+                          <EmptyTitle className="text-[15px] font-normal">
+                            No matching models
+                          </EmptyTitle>
+                          <EmptyDescription className="text-xs">
+                            No models match the current filters.
+                          </EmptyDescription>
+                        </EmptyHeader>
+                        {filtersNarrowing && (
+                          <EmptyContent>
+                            <Button size="sm" variant="outline" onClick={clearFilters}>
+                              Clear filters
+                            </Button>
+                          </EmptyContent>
+                        )}
+                      </Empty>
+                    </motion.div>
                   )
                 }
                 // One group of cards, the same rows on every tab: on this device, remote (a saved
@@ -1409,18 +1736,28 @@ export function ModelsScreen({
                       comingSoonModels
                     ]
                   ]
-                  return rows.map(([heading, label, list]) =>
-                    list.length > 0 ? (
-                      <div key={label}>
-                        <div className="px-6 pt-3 text-[9px] uppercase tracking-widest text-neutral-600">
-                          {heading}
-                        </div>
-                        <div role="list" aria-label={label} className={GRID}>
-                          {list.map((m) => renderCard(m))}
-                        </div>
+                  return rows.map(([heading, label, list]) => {
+                    if (list.length === 0) return null
+                    const collection = renderCollection(
+                      label,
+                      list.map((m) => renderCard(m)),
+                      SECTION_GRID
+                    )
+                    // A heading over a single model is noise; the list keeps its name for readers.
+                    return list.length === 1 ? (
+                      <div key={label} className="px-6 pt-6 first:pt-4">
+                        {collection}
                       </div>
-                    ) : null
-                  )
+                    ) : (
+                      <Section
+                        key={label}
+                        label={group ? label : heading}
+                        className="px-6 pt-6 first:pt-4"
+                      >
+                        {collection}
+                      </Section>
+                    )
+                  })
                 }
                 if (activeKind !== 'computer_use') return <>{cardRows(displayedCatalog)}</>
                 // Tasks: grounding specialists and decision models are different jobs, run side by
@@ -1433,10 +1770,9 @@ export function ModelsScreen({
                   <>
                     {groups.map(([group, models]) =>
                       models.length > 0 ? (
-                        <section key={group} aria-label={group} className="pt-2">
-                          <h3 className="px-6 pt-3 text-xs font-medium text-neutral-200">
-                            {group}
-                          </h3>
+                        // One heading per group: each row's label already names the job
+                        // ("Grounding specialists on this device"), so no title above it.
+                        <section key={group} aria-label={group}>
                           {cardRows(models, group)}
                         </section>
                       ) : null
@@ -1491,12 +1827,17 @@ export function ModelsScreen({
                     </div>
                     <div className="mt-0.5 truncate text-[10px] text-neutral-600">{m.id}</div>
                   </div>
-                  <button
-                    onClick={closeDetail}
-                    className="rounded border border-neutral-800 px-2.5 py-1 text-[10px] text-neutral-400 transition-all duration-150 hover:border-neutral-600 hover:text-white active:scale-95"
-                  >
-                    Close
-                  </button>
+                  <IconTip label="Close">
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label="Close"
+                      onClick={closeDetail}
+                      className="text-neutral-400 hover:text-white"
+                    >
+                      <IconX className="h-3.5 w-3.5" />
+                    </Button>
+                  </IconTip>
                 </div>
 
                 <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -1513,7 +1854,7 @@ export function ModelsScreen({
                       </p>
                     </div>
                   )}
-                  <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2">
+                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
                     {rows
                       .filter(([, v]) => v)
                       .map(([k, v]) => (
@@ -1526,7 +1867,7 @@ export function ModelsScreen({
                       ))}
                   </dl>
                   {ramGb && bytes > 0 && (
-                    <p className="mt-4 text-[10px] text-neutral-500">
+                    <p className="mt-3 text-[10px] text-neutral-500">
                       {fitLevel(bytes / 1e9, ramGb) === 'ok'
                         ? `Comfortable fit on your ${deviceNoun()}.`
                         : fitLevel(bytes / 1e9, ramGb) === 'tight'
@@ -1553,7 +1894,7 @@ export function ModelsScreen({
                           window as { api?: { openExternal?: (u: string) => void } }
                         ).api?.openExternal?.(hfUrl)
                       }
-                      className="mt-4 flex items-center gap-1 text-[10px] text-green-500 transition-colors duration-150 hover:text-emerald-500"
+                      className="mt-3 flex items-center gap-1 text-[10px] text-green-500 transition-colors duration-150 hover:text-emerald-500"
                     >
                       <IconExternalLink className="h-3 w-3" /> View on Hugging Face
                     </button>
@@ -1561,7 +1902,7 @@ export function ModelsScreen({
                   {m.id === KEV_4B_ID && (
                     <section
                       aria-label="Kev model format"
-                      className="mt-5 border-t border-neutral-800 pt-4"
+                      className="mt-3 border-t border-neutral-800 pt-3"
                     >
                       <h3 className="text-[10px] uppercase tracking-wide text-neutral-400">
                         Model format
@@ -1583,7 +1924,7 @@ export function ModelsScreen({
                     ['text', 'vision', 'computer_use'].includes(m.kind) && (
                       <section
                         aria-label="Available model files"
-                        className="mt-5 border-t border-neutral-800 pt-4"
+                        className="mt-3 border-t border-neutral-800 pt-3"
                       >
                         <h3 className="mb-2 text-[10px] uppercase tracking-wide text-neutral-400">
                           Available GGUF files
@@ -1666,14 +2007,18 @@ export function ModelsScreen({
                                       </p>
                                     )}
                                   </div>
-                                  <button
-                                    onClick={() => download(m.id, file.fileName)}
-                                    disabled={comingSoon || !!downloading || !!detailFilesError}
-                                    aria-label={`Download ${file.fileName}`}
-                                    className="shrink-0 rounded border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 hover:border-green-500 hover:text-green-500 disabled:cursor-not-allowed disabled:opacity-40"
-                                  >
-                                    Download
-                                  </button>
+                                  <IconTip label="Download">
+                                    <Button
+                                      size="icon-xs"
+                                      variant="ghost"
+                                      onClick={() => download(m.id, file.fileName)}
+                                      disabled={comingSoon || !!downloading || !!detailFilesError}
+                                      aria-label={`Download ${file.fileName}`}
+                                      className="shrink-0 text-neutral-300 hover:text-green-500 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      <IconDownload className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </IconTip>
                                 </div>
                               )
                             })}
@@ -1703,15 +2048,22 @@ export function ModelsScreen({
                       >
                         Use this model
                       </button>
-                      {!m.id.startsWith('external:') && <button
-                        onClick={() => {
-                          void removeModel(m.id, m.name)
-                          closeDetail()
-                        }}
-                        className="rounded border border-neutral-800 px-3 py-1.5 text-xs text-neutral-500 transition-all duration-150 hover:border-red-500/60 hover:text-red-400 active:scale-95"
-                      >
-                        Delete
-                      </button>}
+                      {!m.id.startsWith('external:') && (
+                        <IconTip label="Delete">
+                          <Button
+                            size="icon-sm"
+                            variant="outline"
+                            aria-label="Delete"
+                            onClick={() => {
+                              void removeModel(m.id, m.name)
+                              closeDetail()
+                            }}
+                            className="border-neutral-800 text-neutral-500 hover:border-red-500/60 hover:text-red-400"
+                          >
+                            <IconTrash className="h-3.5 w-3.5" />
+                          </Button>
+                        </IconTip>
+                      )}
                     </>
                   ) : downloading ? (
                     <span className="text-xs text-neutral-400">

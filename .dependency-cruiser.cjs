@@ -114,6 +114,7 @@ module.exports = {
     tsConfig: { fileName: 'tsconfig.web.json' },
     exclude: { path: 'node_modules|e2e/' },
     tsPreCompilationDeps: true,
+    webpackConfig: { fileName: 'scripts/config/dependency-cruiser-resolve.cjs' },
     // Follow package "exports" subpaths (e.g. @modelcontextprotocol/sdk/client/*.js)
     // so real imports resolve and not-to-unresolvable doesn't false-positive on them.
     enhancedResolveOptions: {

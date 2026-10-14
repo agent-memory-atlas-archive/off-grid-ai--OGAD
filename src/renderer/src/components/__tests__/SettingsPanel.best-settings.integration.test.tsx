@@ -74,7 +74,7 @@ it('offers the fastest settings in one slim row, applies them, then slides the r
 
   expect(await screen.findByText('Fastest settings on for Apple M5, Metal GPU')).toBeTruthy()
   await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Chat and vision backend' }).textContent).toContain(
+    expect(screen.getByRole('combobox', { name: 'Chat and vision backend' }).textContent).toContain(
       'Metal'
     )
   )
@@ -83,7 +83,9 @@ it('offers the fastest settings in one slim row, applies them, then slides the r
     { timeout: 4000 }
   )
   await user.click(screen.getByRole('button', { name: /^Performance/ }))
-  expect(screen.getByRole('button', { name: 'Speculative decoding' }).textContent).toContain('MTP')
+  expect(screen.getByRole('combobox', { name: 'Speculative decoding' }).textContent).toContain(
+    'MTP'
+  )
 })
 
 it('stays out of the way when this machine already runs its fastest settings', async () => {
@@ -92,6 +94,6 @@ it('stays out of the way when this machine already runs its fastest settings', a
   await (window.api as unknown as { applyBestSettings: () => Promise<unknown> }).applyBestSettings()
   render(<SettingsPanel embedded onClose={() => {}} />)
 
-  await screen.findByRole('button', { name: 'Chat and vision backend' })
+  await screen.findByRole('combobox', { name: 'Chat and vision backend' })
   expect(screen.queryByRole('button', { name: 'Use fastest settings' })).toBeNull()
 })

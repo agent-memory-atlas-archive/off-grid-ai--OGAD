@@ -1,14 +1,27 @@
 import { useEffect, useState } from 'react'
-import { Button } from '@offgrid/operator-ui/operator/button'
+import { ArrowsClockwise, Check, Copy, Prohibit, Swap, X } from '@phosphor-icons/react'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { Field } from '@offgrid/operator-ui/operator/coss/field'
+import { Alert } from '@offgrid/operator-ui/operator/coss/alert'
+import { Input } from '@offgrid/operator-ui/operator/coss/input'
+import { Label } from '@offgrid/operator-ui/operator/coss/label'
 import {
-  Field,
-  FieldDescription,
-  FieldError,
-  Input,
-  Label,
-  NativeSelect
-} from '@offgrid/operator-ui/operator/forms'
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle
+} from '@offgrid/operator-ui/operator/animate/alert-dialog'
 import type { GatewayApiKeySettingsContract } from '../../../shared/ipc-contracts'
+import { AnimatePresence, motion } from 'motion/react'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
+import { SettingsSelect } from './SettingsSelect'
+import { GlyphSwap, IconTip } from './IconTip'
+import { ListRow } from '@offgrid/operator-ui/operator/list-row'
+import { LiveStatus, StatePill } from '@offgrid/operator-ui/operator/presence'
 
 export function GatewayApiKeysSettings(): React.JSX.Element {
   const [settings, setSettings] = useState<GatewayApiKeySettingsContract | null>(null)
@@ -32,9 +45,13 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
       .then((value) => {
         if (mounted) setSettings(value)
       })
-      .catch(() => {
+      .catch((reason: unknown) => {
         if (mounted)
-          setError('Could not read API keys. Unlock system key storage and reopen this page.')
+          setError(
+            reason instanceof Error && reason.message.includes('API key storage is locked')
+              ? 'API key storage is locked. Unlock system key storage and reopen this page.'
+              : 'Could not read API keys. Unlock system key storage and reopen this page.'
+          )
       })
     return () => {
       mounted = false
@@ -69,7 +86,13 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
   }
 
   if (!settings)
-    return error ? <FieldError>{error}</FieldError> : <p role="status">Loading API keys...</p>
+    return error ? (
+      <Alert className="py-2 text-xs">
+        {error}
+      </Alert>
+    ) : <p role="status">
+        <TextShimmer as="span">Loading API keys...</TextShimmer>
+      </p>
 
   return (
     <div className="space-y-4 text-xs">
@@ -78,7 +101,12 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
         Authorization: Bearer header.
       </p>
       <div className="flex flex-wrap items-center gap-3">
-        <span role="status">{settings.enabled ? 'API key required' : 'API key not required'}</span>
+        <span role="status">
+          <StatePill
+            tone={settings.enabled ? 'on' : 'off'}
+            label={settings.enabled ? 'API key required' : 'API key not required'}
+          />
+        </span>
         <Button
           size="sm"
           variant="outline"
@@ -91,7 +119,9 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
                 })
           }
         >
-          {settings.enabled ? 'Turn off authentication' : 'Require API keys'}
+          <TextMorph as="span">
+            {settings.enabled ? 'Turn off authentication' : 'Require API keys'}
+          </TextMorph>
         </Button>
       </div>
       <form
@@ -115,18 +145,20 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
         </Field>
         <Field>
           <Label htmlFor="gateway-key-expiry">Expiry</Label>
-          <NativeSelect
+          <SettingsSelect
             id="gateway-key-expiry"
+            label="Expiry"
             value={expiry}
             disabled={busy}
-            onChange={(e) => setExpiry(e.target.value)}
-          >
-            <option value="7">7 days</option>
-            <option value="30">30 days</option>
-            <option value="90">90 days</option>
-            <option value="custom">Custom date and time</option>
-            <option value="never">No expiry</option>
-          </NativeSelect>
+            onValueChange={setExpiry}
+            options={[
+              { value: '7', label: '7 days' },
+              { value: '30', label: '30 days' },
+              { value: '90', label: '90 days' },
+              { value: 'custom', label: 'Custom date and time' },
+              { value: 'never', label: 'No expiry' }
+            ]}
+          />
         </Field>
         {expiry === 'custom' && (
           <Field>
@@ -145,11 +177,11 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
           Create key
         </Button>
       </form>
-      <FieldDescription>
-        Creating a key turns authentication on. Keys allow all model API operations. Local-only
-        settings still require a local connection. MCP and paired browser connections keep their
-        separate credentials.
-      </FieldDescription>
+      <p className="text-xs text-muted-foreground">
+        Creating a key turns authentication on. Phones need the next Off Grid AI Mobile release to
+        send keys. Keys allow all model API operations. Local-only settings still require a local
+        connection. MCP and paired browser connections keep their separate credentials.
+      </p>
       {createdKey && (
         <section className="space-y-2 rounded-md border border-neutral-800 p-3">
           <Label htmlFor="gateway-new-key">Copy this key now. It will not be shown again.</Label>
@@ -161,41 +193,68 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
             autoComplete="off"
           />
           <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                void run(async () => {
-                  await navigator.clipboard.writeText(createdKey)
-                  setNotice('Key copied.')
-                })
-              }
-            >
-              Copy key
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setCreatedKey('')}>
-              Done
-            </Button>
+            <IconTip label="Copy key">
+              <Button
+                size="icon-sm"
+                variant="outline"
+                aria-label="Copy key"
+                onClick={() =>
+                  void run(async () => {
+                    await navigator.clipboard.writeText(createdKey)
+                    setNotice('Key copied.')
+                  })
+                }
+              >
+                <GlyphSwap glyphKey={notice === 'Key copied.' ? 'copied' : 'copy'}>
+                  {notice === 'Key copied.' ? <Check className="text-emerald-400" /> : <Copy />}
+                </GlyphSwap>
+              </Button>
+            </IconTip>
+            <IconTip label="Done">
+              <Button
+                size="icon-sm"
+                variant="outline"
+                aria-label="Done"
+                onClick={() => setCreatedKey('')}
+              >
+                <X />
+              </Button>
+            </IconTip>
           </div>
         </section>
       )}
-      {confirm && (
-        <section
-          className="space-y-2 rounded-md border border-neutral-800 p-3"
-          aria-label="Confirm API key change"
-        >
-          <p>
-            {confirm.action === 'disable'
-              ? 'Allow model API requests without a key?'
-              : confirm.action === 'replace'
-                ? `Replace ${confirm.name}? The old key will stop working. The new key uses the expiry selected above.`
-                : `Revoke ${confirm.name}? Requests with this key will be rejected.`}
-          </p>
-          <div className="flex gap-2">
+      <AlertDialog open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
+        <AlertDialogPopup className="sm:max-w-md" aria-label="Confirm API key change">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-[17px] font-normal">
+              {confirm?.action === 'disable'
+                ? 'Turn off authentication?'
+                : confirm?.action === 'replace'
+                  ? `Replace ${confirm.name}?`
+                  : `Revoke ${confirm?.name ?? 'this key'}?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-[13px]">
+              {confirm?.action === 'disable'
+                ? 'Allow model API requests without a key?'
+                : confirm?.action === 'replace'
+                  ? `Replace ${confirm.name}? The old key will stop working. The new key uses the expiry selected above.`
+                  : `Revoke ${confirm?.name}? Requests with this key will be rejected.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose
+              disabled={busy}
+              render={<Button size="sm" variant="ghost" />}
+            >
+              Cancel
+            </AlertDialogClose>
             <Button
               size="sm"
-              disabled={busy || (confirm.action === 'replace' && !!createdKey)}
-              onClick={() =>
+              variant={confirm?.action === 'replace' ? 'default' : 'destructive'}
+              loading={busy}
+              disabled={busy || (confirm?.action === 'replace' && !!createdKey)}
+              onClick={() => {
+                if (!confirm) return
                 void run(async () => {
                   if (confirm.action === 'disable')
                     setSettings(await window.api.setGatewayApiKeyRequired(false))
@@ -204,22 +263,24 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
                   else await create(confirm.id, confirm.name)
                   setConfirm(null)
                 })
-              }
+              }}
             >
               Confirm
             </Button>
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirm(null)}>
-              Cancel
-            </Button>
-          </div>
-        </section>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+      {error && (
+        <Alert className="py-2 text-xs">
+          {error}
+        </Alert>
       )}
-      {error && <FieldError>{error}</FieldError>}
-      {notice && <p role="status">{notice}</p>}
+      {notice && <LiveStatus travel="across">{notice}</LiveStatus>}
       {!settings.keys.length && (
         <p className="text-neutral-500">No API keys. Create a separate key for each client.</p>
       )}
-      <ul className="space-y-2" aria-label="API keys">
+      <ul className="divide-y divide-neutral-900" aria-label="API keys">
+        <AnimatePresence initial={false}>
         {settings.keys.map((key) => {
           const status =
             key.revokedAt !== null
@@ -228,63 +289,80 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
                 ? 'Expired'
                 : 'Active'
           return (
-            <li
+            <motion.li
               key={key.id}
-              className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-800 py-3"
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
             >
-              <div className="min-w-0">
-                <p className="break-words">
-                  {key.name} · {status}
-                </p>
-                <p className="text-neutral-500">
-                  {key.prefix}… · Created {new Date(key.createdAt).toLocaleString()}
-                </p>
-                <p className="text-neutral-500">
-                  {key.expiresAt === null
-                    ? 'No expiry'
-                    : `Expires ${new Date(key.expiresAt).toLocaleString()}`}{' '}
-                  ·{' '}
-                  {key.lastUsedAt === null
+              <ListRow
+                title={`${key.name} · ${status}`}
+                description={`${key.prefix}… · Created ${new Date(key.createdAt).toLocaleString()} · ${
+                  key.lastUsedAt === null
                     ? 'Never used'
-                    : `Last used ${new Date(key.lastUsedAt).toLocaleString()}`}
-                </p>
-              </div>
-              {key.revokedAt === null && (
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy || !!createdKey}
-                    onClick={() => setConfirm({ action: 'replace', id: key.id, name: key.name })}
-                  >
-                    Replace {key.name}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() => setConfirm({ action: 'revoke', id: key.id, name: key.name })}
-                  >
-                    Revoke {key.name}
-                  </Button>
-                </div>
-              )}
-            </li>
+                    : `Last used ${new Date(key.lastUsedAt).toLocaleString()}`
+                }`}
+                meta={
+                  key.expiresAt === null
+                    ? 'No expiry'
+                    : `Expires ${new Date(key.expiresAt).toLocaleString()}`
+                }
+                actions={
+                  key.revokedAt === null ? (
+                    <>
+                      <IconTip label={`Replace ${key.name}`}>
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label={`Replace ${key.name}`}
+                          disabled={busy || !!createdKey}
+                          onClick={() =>
+                            setConfirm({ action: 'replace', id: key.id, name: key.name })
+                          }
+                        >
+                          <Swap />
+                        </Button>
+                      </IconTip>
+                      <IconTip label={`Revoke ${key.name}`}>
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label={`Revoke ${key.name}`}
+                          className="hover:text-red-400"
+                          disabled={busy}
+                          onClick={() =>
+                            setConfirm({ action: 'revoke', id: key.id, name: key.name })
+                          }
+                        >
+                          <Prohibit />
+                        </Button>
+                      </IconTip>
+                    </>
+                  ) : undefined
+                }
+              />
+            </motion.li>
           )
         })}
+        </AnimatePresence>
       </ul>
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={busy}
-        onClick={() =>
-          void run(async () => {
-            setSettings(await window.api.gatewayApiKeys())
-          })
-        }
-      >
-        Refresh status
-      </Button>
+      <IconTip label="Refresh status">
+        <Button
+          size="icon-sm"
+          variant="outline"
+          aria-label="Refresh status"
+          disabled={busy}
+          onClick={() =>
+            void run(async () => {
+              setSettings(await window.api.gatewayApiKeys())
+            })
+          }
+        >
+          <ArrowsClockwise />
+        </Button>
+      </IconTip>
     </div>
   )
 }

@@ -96,7 +96,7 @@ describe('<PermissionGate/> Local Network recovery', () => {
 
     await user.click(screen.getByRole('button', { name: 'Set up' }))
 
-    expect(await screen.findByRole('heading', { name: 'Local Network' })).toBeTruthy()
+    expect(await screen.findByRole('status', { name: 'Local Network permission' })).toBeTruthy()
     expect(
       screen.getByText('Find and sync directly with your devices on this network.')
     ).toBeTruthy()
@@ -130,7 +130,7 @@ describe('<PermissionGate/> Local Network recovery', () => {
     expect(requestScreenRecordingPermission).not.toHaveBeenCalled()
 
     await user.click(screen.getByRole('button', { name: 'Set up' }))
-    expect(await screen.findByRole('heading', { name: 'Screen Recording' })).toBeTruthy()
+    expect(await screen.findByRole('status', { name: 'Screen Recording permission' })).toBeTruthy()
     expect(requestScreenRecordingPermission).not.toHaveBeenCalled()
 
     await user.click(screen.getByRole('button', { name: 'Enable Screen Recording' }))

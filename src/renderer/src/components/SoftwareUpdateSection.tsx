@@ -1,9 +1,25 @@
 import { useEffect, useState } from 'react'
 import { persistToggle } from '@renderer/lib/persist-toggle'
+import { ArrowsClockwise, ClockCounterClockwise, DownloadSimple } from '@phosphor-icons/react'
 import { Button } from './ui/button'
+import { IconTip } from './IconTip'
 import { formatTransferSpeed } from '@offgrid/sync'
 import { projectProgress } from '@offgrid/ui'
 import { formatStorageBytes } from './setup/storage-format'
+import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
+import { LiveStatus, SettingRow } from '@offgrid/operator-ui/operator/presence'
+import {
+  Progress,
+  ProgressIndicator,
+  ProgressTrack
+} from '@offgrid/operator-ui/operator/coss/progress'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
+import { Skeleton } from '@offgrid/operator-ui/operator/coss/skeleton'
+import { ListRow } from '@offgrid/operator-ui/operator/list-row'
+import { Section } from '@offgrid/operator-ui/operator/experience'
+import { AnimatePresence, motion } from 'motion/react'
 import {
   Dialog,
   DialogClose,
@@ -51,37 +67,53 @@ function PreviousVersionsPanel({
   onSelect
 }: PreviousVersionsPanelProps): React.ReactElement {
   return (
-    <div className="mt-3 border border-neutral-800 bg-neutral-950/40">
-      <div className="border-b border-neutral-800 px-3 py-2 text-[11px] uppercase tracking-wide text-neutral-500">
-        Signed releases for this device
-      </div>
-      {loading ? <p className="px-3 py-3 text-xs text-neutral-500">Loading...</p> : null}
+    <Section className="mt-3" label="Signed releases for this device">
+      {loading ? (
+        <div className="space-y-2 px-3 py-3" aria-busy="true">
+          <p className="sr-only">Loading...</p>
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+        </div>
+      ) : null}
       {error ? <p className="px-3 py-3 text-xs text-red-400">{error}</p> : null}
       {!loading && !error && releases.length === 0 ? (
         <p className="px-3 py-3 text-xs text-neutral-500">
           No compatible previous versions were found.
         </p>
       ) : null}
-      <div className="max-h-52 overflow-y-auto divide-y divide-neutral-800">
-        {releases.map((release) => (
-          <div
-            key={release.version}
-            className="flex items-center justify-between gap-4 px-3 py-2 transition-colors duration-150 hover:bg-neutral-900/70"
-          >
-            <div className="min-w-0">
-              <div className="text-xs text-neutral-200">v{release.version}</div>
-              <div className="text-[11px] text-neutral-600">
-                {release.channel === 'nightly' ? 'Nightly' : 'Stable'} ·{' '}
-                {releaseDate(release.publishedAt)}
-              </div>
-            </div>
-            <Button size="xs" variant="outline" onClick={() => onSelect(release)}>
-              Use v{release.version}
-            </Button>
-          </div>
-        ))}
+      <div className="max-h-52 divide-y divide-neutral-900 overflow-y-auto">
+        <AnimatePresence initial={false}>
+          {releases.map((release) => (
+            <motion.div
+              key={release.version}
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <ListRow
+                title={`v${release.version}`}
+                description={`${release.channel === 'nightly' ? 'Nightly' : 'Stable'} · ${releaseDate(release.publishedAt)}`}
+                actions={
+                  <IconTip label={`Use v${release.version}`}>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label={`Use v${release.version}`}
+                      onClick={() => onSelect(release)}
+                    >
+                      <DownloadSimple />
+                    </Button>
+                  </IconTip>
+                }
+              />
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
-    </div>
+    </Section>
   )
 }
 
@@ -116,7 +148,9 @@ function RollbackDialog({
             <Button variant="outline">Cancel</Button>
           </DialogClose>
           <Button onClick={onDownload} disabled={downloading}>
-            {downloading ? 'Starting download...' : `Download v${selected?.version}`}
+            <TextMorph as="span">
+              {downloading ? 'Starting download...' : `Download v${selected?.version}`}
+            </TextMorph>
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -297,55 +331,53 @@ export function SoftwareUpdateSection(): React.ReactElement {
 
   return (
     <div>
-      <div className="flex items-start justify-between gap-4">
-        <p className="text-sm text-neutral-500">
-          Off Grid AI Desktop checks for updates in the background and installs them when you quit.
-          Turn this off to update only when you choose.
-        </p>
-        <button
-          type="button"
-          onClick={toggle}
-          role="switch"
-          aria-label="Automatic updates"
-          aria-checked={auto}
-          className={`relative mt-1 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${auto ? 'bg-emerald-500' : 'bg-neutral-700'}`}
+      <div className="divide-y divide-neutral-800">
+        <SettingRow
+          title="Automatic updates"
+          description="Off Grid AI Desktop checks for updates in the background and installs them when you quit. Turn this off to update only when you choose."
+          className="pt-0"
         >
-          <span
-            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${auto ? 'translate-x-6' : 'translate-x-1'}`}
-          />
-        </button>
-      </div>
-      <div className="mt-4 flex items-start justify-between gap-4 border-t border-neutral-800 pt-4">
-        <p className="text-sm text-neutral-500">
-          Get nightly builds. New features land here first, on every change, before they reach
-          stable. These are pre-release - expect rough edges. Off by default.
-        </p>
-        <button
-          type="button"
-          onClick={toggleBeta}
-          role="switch"
-          aria-label="Nightly builds"
-          aria-checked={beta}
-          className={`relative mt-1 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${beta ? 'bg-emerald-500' : 'bg-neutral-700'}`}
+          <Switch aria-label="Automatic updates" checked={auto} onCheckedChange={toggle} />
+        </SettingRow>
+        <SettingRow
+          title="Nightly builds"
+          description="Get nightly builds. New features land here first, on every change, before they reach stable. These are pre-release - expect rough edges. Off by default."
         >
-          <span
-            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${beta ? 'translate-x-6' : 'translate-x-1'}`}
-          />
-        </button>
+          <Switch aria-label="Nightly builds" checked={beta} onCheckedChange={toggleBeta} />
+        </SettingRow>
       </div>
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button size="xs" variant="outline" onClick={() => void check()} disabled={checking}>
-          {checking ? 'Checking...' : 'Check for updates'}
-        </Button>
-        <Button size="xs" variant="ghost" onClick={() => void toggleHistory()}>
-          {historyVisible ? 'Hide previous versions' : 'Previous versions'}
-        </Button>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <IconTip label={checking ? 'Checking...' : 'Check for updates'}>
+          <Button
+            size="icon-xs"
+            variant="outline"
+            aria-label={checking ? 'Checking...' : 'Check for updates'}
+            aria-busy={checking || undefined}
+            onClick={() => void check()}
+            disabled={checking}
+          >
+            <ArrowsClockwise className={checking ? 'animate-spin' : undefined} />
+          </Button>
+        </IconTip>
+        <IconTip label={historyVisible ? 'Hide previous versions' : 'Previous versions'}>
+          <Button
+            size="icon-xs"
+            variant={historyVisible ? 'secondary' : 'ghost'}
+            aria-label={historyVisible ? 'Hide previous versions' : 'Previous versions'}
+            aria-expanded={historyVisible}
+            onClick={() => void toggleHistory()}
+          >
+            <ClockCounterClockwise />
+          </Button>
+        </IconTip>
         {version && <span className="text-xs text-neutral-600">Current: v{version}</span>}
       </div>
       {availableVersion ? (
         <div className="mt-3 flex items-center gap-2">
           <Button size="xs" onClick={() => void download()} disabled={downloading}>
-            {downloading ? 'Starting download...' : `Download ${availableVersion}`}
+            <TextMorph as="span">
+              {downloading ? 'Starting download...' : `Download ${availableVersion}`}
+            </TextMorph>
           </Button>
           <Button size="xs" variant="outline" onClick={() => void skip()}>
             Skip {availableVersion}
@@ -368,11 +400,7 @@ export function SoftwareUpdateSection(): React.ReactElement {
           onSelect={setSelectedVersion}
         />
       ) : null}
-      {status && (
-        <p className="mt-2 text-xs text-neutral-500" aria-live="polite">
-          {status}
-        </p>
-      )}
+      {status && <LiveStatus className="mt-2 text-xs text-neutral-500">{status}</LiveStatus>}
       {downloadProgress && downloadProgress.status !== 'failed' ? (
         <div className="mt-3 border border-neutral-800 bg-neutral-950/40 px-3 py-2.5">
           <div className="flex items-center justify-between gap-3 text-xs text-neutral-400">
@@ -382,17 +410,24 @@ export function SoftwareUpdateSection(): React.ReactElement {
                 : `Downloading v${downloadProgress.version ?? ''}`}
             </span>
             <span className="tabular-nums">
-              {presentedProgress?.determinate
-                ? `${Math.round(presentedProgress.percentage ?? 0)}%`
-                : 'Downloading'}
+              {presentedProgress?.determinate ? (
+                <>
+                  <AnimatedNumber value={Math.round(presentedProgress.percentage ?? 0)} />%
+                </>
+              ) : (
+                <TextShimmer as="span">Downloading</TextShimmer>
+              )}
             </span>
           </div>
-          <div className="mt-2 h-1 overflow-hidden bg-neutral-800">
-            <div
-              className="h-full bg-emerald-500 transition-all duration-150"
-              style={{ width: `${presentedProgress?.percentage ?? 0}%` }}
-            />
-          </div>
+          <Progress
+            aria-label="Update download progress"
+            value={presentedProgress?.percentage ?? 0}
+            className="mt-2"
+          >
+            <ProgressTrack className="h-1 rounded-none bg-neutral-800">
+              <ProgressIndicator className="bg-emerald-500 duration-150" />
+            </ProgressTrack>
+          </Progress>
           <div className="mt-1.5 text-[11px] tabular-nums text-neutral-600">
             {presentedProgress?.totalBytes !== undefined
               ? `${formatStorageBytes(presentedProgress.currentBytes)} / ${formatStorageBytes(presentedProgress.totalBytes)}`

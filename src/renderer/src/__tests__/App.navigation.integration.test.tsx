@@ -40,9 +40,9 @@ vi.mock('../bootstrap/loadProFeaturesRenderer', () => ({
 
 let App: typeof import('../App').default
 
-function routedTabButton(label: string): HTMLButtonElement {
+function routedTabButton(label: string, role: 'button' | 'radio'): HTMLButtonElement {
   const button = screen
-    .getAllByRole('button', { name: new RegExp(`^${label}`) })
+    .getAllByRole(role, { name: new RegExp(`^${label}(?:$|\\s)`) })
     .find((candidate) => !candidate.className.includes('group/nav'))
   if (!(button instanceof HTMLButtonElement)) throw new Error(`No routed tab button for ${label}`)
   return button
@@ -79,6 +79,12 @@ describe('<App/> desktop navigation integration', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
+    // jsdom drives requestAnimationFrame from a Node setInterval it starts on first use. A frame
+    // requested under fake timers lands on a fake interval; dropping fake timers with that frame
+    // still pending leaves jsdom believing its interval is running, so no frame ever fires again
+    // and every screen transition later in this file stalls on its exit animation. Fire the
+    // pending frame first so jsdom stops its interval and starts a real one on the next request.
+    if (vi.isFakeTimers()) vi.runOnlyPendingTimers()
     vi.useRealTimers()
     clearRegisteredSlots()
   })
@@ -95,9 +101,9 @@ describe('<App/> desktop navigation integration', () => {
     )
     await user.click(await screen.findByRole('button', { name: 'Project Beta' }))
     expect(screen.getAllByText('Project Beta')).toHaveLength(2)
-    expect(screen.getByRole('button', { name: 'Chats' })).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Artifacts' })).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Knowledge & settings' })).not.toBeNull()
+    expect(screen.getByRole('radio', { name: 'Chats' })).not.toBeNull()
+    expect(screen.getByRole('radio', { name: 'Artifacts' })).not.toBeNull()
+    expect(screen.getByRole('radio', { name: 'Knowledge & settings' })).not.toBeNull()
 
     let shortcutDispatched = false
     const observer = new MutationObserver(() => {
@@ -584,7 +590,10 @@ describe('<App/> desktop navigation integration', () => {
     }
   ])(
     'keeps every $name tab in direct URLs, refresh, and app Back history',
-    async ({ startPath, startTab, routes }) => {
+    async ({ name, startPath, startTab, routes }) => {
+      const role = name === 'Sync' ? 'button' : 'radio'
+      const selectedAttribute = role === 'radio' ? 'aria-checked' : 'aria-current'
+      const selectedValue = role === 'radio' ? 'true' : 'page'
       const routeEntries = routes
       const { registerProView } = await import('../bootstrap/proView')
       const { proView } = await import('../../../../pro/renderer/proView')
@@ -608,17 +617,17 @@ describe('<App/> desktop navigation integration', () => {
 
       const mounted = render(<App />)
 
-      await screen.findAllByRole('button', { name: new RegExp(`^${startTab}`) })
-      const initial = routedTabButton(startTab)
-      expect(initial.getAttribute('aria-current')).toBe('page')
+      await screen.findAllByRole(role, { name: new RegExp(`^${startTab}`) })
+      const initial = routedTabButton(startTab, role)
+      expect(initial.getAttribute(selectedAttribute)).toBe(selectedValue)
       expect(window.location.pathname).toBe(startPath)
 
       for (const [label, path] of routeEntries) {
-        const tab = await waitFor(() => routedTabButton(label), { timeout: 10_000 })
+        const tab = await waitFor(() => routedTabButton(label, role), { timeout: 10_000 })
         await user.click(tab)
         await waitFor(() => expect(window.location.pathname).toBe(path))
         await waitFor(() =>
-          expect(routedTabButton(label).getAttribute('aria-current')).toBe('page')
+          expect(routedTabButton(label, role).getAttribute(selectedAttribute)).toBe(selectedValue)
         )
       }
 
@@ -627,13 +636,17 @@ describe('<App/> desktop navigation integration', () => {
       await user.click(screen.getByRole('button', { name: 'Back' }))
       await waitFor(() => expect(window.location.pathname).toBe(previousPath))
       await waitFor(() =>
-        expect(routedTabButton(previousTab).getAttribute('aria-current')).toBe('page')
+        expect(routedTabButton(previousTab, role).getAttribute(selectedAttribute)).toBe(
+          selectedValue
+        )
       )
 
       mounted.unmount()
       render(<App />)
       await waitFor(() =>
-        expect(routedTabButton(previousTab).getAttribute('aria-current')).toBe('page')
+        expect(routedTabButton(previousTab, role).getAttribute(selectedAttribute)).toBe(
+          selectedValue
+        )
       )
       expect(window.location.pathname).toBe(previousPath)
     }
@@ -646,7 +659,8 @@ describe('<App/> desktop navigation integration', () => {
     ['Notifications', '/notifications/approvals', 'All', '/notifications']
   ])(
     'recovers the invalid %s route to its default tab',
-    async (_name, invalidPath, defaultTab, canonicalPath) => {
+    async (name, invalidPath, defaultTab, canonicalPath) => {
+      const role = name === 'Sync' ? 'button' : 'radio'
       const { registerProView } = await import('../bootstrap/proView')
       const { proView } = await import('../../../../pro/renderer/proView')
       registerProView(proView)
@@ -665,10 +679,16 @@ describe('<App/> desktop navigation integration', () => {
 
       render(<App />)
 
-      await waitFor(() => {
-        const buttons = screen.getAllByRole('button', { name: new RegExp(`^${defaultTab}`) })
-        expect(buttons.some((button) => button.getAttribute('aria-current') === 'page')).toBe(true)
-      }, { timeout: 10_000 })
+      await waitFor(
+        () => {
+          expect(
+            routedTabButton(defaultTab, role).getAttribute(
+              role === 'radio' ? 'aria-checked' : 'aria-current'
+            )
+          ).toBe(role === 'radio' ? 'true' : 'page')
+        },
+        { timeout: 10_000 }
+      )
       await waitFor(() => expect(window.location.pathname).toBe(canonicalPath))
     }
   )
@@ -709,8 +729,9 @@ describe('<App/> desktop navigation integration', () => {
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeTruthy()
     expect(window.location.pathname).toBe('/settings/permissions')
     expect(await screen.findByText('System permissions')).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'Screen Recording' })).toBeTruthy()
-    expect(screen.getByText('Permission needed')).toBeTruthy()
+    const recordingPermission = screen.getByRole('status', { name: 'Screen Recording permission' })
+    expect(recordingPermission).toBeTruthy()
+    expect(within(recordingPermission).getByText('Permission needed')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Permissions' })).toBeNull()
 
     await user.click(screen.getByText('Setup & health'))

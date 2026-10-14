@@ -119,10 +119,8 @@ export async function listVoiceCatalog(
   onProgress?: (progress: number) => void
 ): Promise<RuntimeSpeechVoice[]> {
   const remote = getActiveRemoteVisionServerForModality('voice')
-  if (remote)
-    return remote.provider === 'openrouter' || remote.provider === 'ogad'
-      ? listRemoteVoices(remote)
-      : []
+  // Every remote provider owns its speakers; the remote model, not this machine, decides them.
+  if (remote) return listRemoteVoices(remote)
   const voices = speechCapabilities.voices.map(({ id, language }) => ({
     id,
     label: kokoroVoiceLabel(id),

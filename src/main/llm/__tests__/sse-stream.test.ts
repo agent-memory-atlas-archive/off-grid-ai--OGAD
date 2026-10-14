@@ -171,6 +171,29 @@ describe('createThinkSplitter', () => {
   })
 })
 
+describe('createToolCallAccumulator - reporting calls while the round streams', () => {
+  it('reports each call once the next one starts, and the last one when the stream ends', () => {
+    const ready: string[] = []
+    const acc = createToolCallAccumulator((call) => ready.push(call.arguments))
+    acc.push([
+      { index: 0, id: 'a', function: { name: 'generate_image', arguments: '{"prompt":' } } as never
+    ])
+    acc.push([{ index: 0, function: { arguments: '"page 1"}' } }])
+    expect(ready).toEqual([])
+    acc.push([
+      {
+        index: 1,
+        id: 'b',
+        function: { name: 'generate_image', arguments: '{"prompt":"page 2"}' }
+      } as never
+    ])
+    expect(ready).toEqual(['{"prompt":"page 1"}'])
+    acc.end()
+    acc.end()
+    expect(ready).toEqual(['{"prompt":"page 1"}', '{"prompt":"page 2"}'])
+  })
+})
+
 describe('createToolCallAccumulator - assembling streamed tool_calls', () => {
   it('assembles one tool call from its streamed fragments (name + concatenated args)', () => {
     const acc = createToolCallAccumulator()

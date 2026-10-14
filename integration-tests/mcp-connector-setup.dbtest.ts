@@ -71,7 +71,7 @@ describe('<ConnectorsScreen/> connector setup', () => {
 
     await screen.findByText('Nothing connected yet. Pick one above.')
     await user.click(screen.getByRole('button', { name: /custom/i }))
-    await user.click(screen.getByRole('button', { name: 'stdio (local)' }))
+    await user.click(screen.getByRole('radio', { name: 'stdio (local)' }))
     await user.type(screen.getByPlaceholderText('Name'), 'Reachable synthetic MCP')
     await user.type(screen.getByPlaceholderText('command (e.g. npx)'), process.execPath)
     await user.type(screen.getByPlaceholderText('args'), MCP_SERVER)

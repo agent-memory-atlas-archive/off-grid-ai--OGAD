@@ -1,57 +1,117 @@
-import { memo } from 'react'
+import { memo, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
+import { FilePreview, type FilePreviewState } from '@offgrid/operator-ui/operator/media/file-preview'
+import pdfWorkerUrl from '@offgrid/operator-ui/pdf.worker.min.mjs?url'
 import { captureUrlForPath } from '../../../../../shared/ogcapture-url'
 
-function DocumentPaneComponent({ path, title }: { path: string; title: string }): React.JSX.Element {
-  console.log('MemoryChat DocumentPane rendered')
-  // The SAME transport images use. The loopback media server already serves `uploads` (see
-  // media-roots.ts) with canonicalisation and root admission, and captureUrlForPath is how every
-  // other local file reaches the renderer.
-  //
-  // The first attempt used a data: URL from files:data-url and drew a blank page: frame-src did not
-  // allow data:, so Chromium blocked the frame silently. Reusing the media origin keeps one file
-  // path for all local media instead of adding a second, weaker one to the CSP.
-  const src = captureUrlForPath(path)
-  if (!src) {
-    return (
-      <div className="w-full max-w-3xl rounded-md border border-neutral-800 bg-neutral-950 p-5 text-sm text-neutral-400">
-        This file could not be opened. Its bytes are not on this device.
-      </div>
-    )
-  }
+const ease = [0.16, 1, 0.3, 1] as const
+const PDF_OPTIONS = { useSystemFonts: true }
+
+// CodeMirror's default light theme wins over the operator theme inside FilePreview; keep the
+// editor on the panel surface (the same dressing the preview's file chapter uses).
+const PREVIEW_SURFACE =
+  'overflow-hidden rounded-xl [&_.cm-activeLine]:bg-transparent! [&_.cm-activeLineGutter]:bg-transparent! [&_.cm-content]:py-3! [&_.cm-editor]:rounded-xl [&_.cm-editor]:bg-foreground/[0.03]! [&_.cm-editor]:text-[12.5px] [&_.cm-gutters]:border-border/40! [&_.cm-gutters]:bg-transparent! [&_.cm-gutters]:text-muted-foreground/60!'
+
+export interface AttachmentViewerContent {
+  title: string
+  text: string
+  path?: string
+  kind?: string
+  renderer?: 'image' | 'document' | 'audio' | 'video' | 'text'
+}
+
+/**
+ * A document that is not a PDF (a .docx) still opens through Chromium in a frame. The SAME
+ * transport images use: the loopback media server already serves `uploads` (see media-roots.ts)
+ * with canonicalisation and root admission, and captureUrlForPath is how every other local file
+ * reaches the renderer.
+ */
+function FramedDocument({ src, title }: { src: string; title: string }): React.JSX.Element {
   return (
     <iframe
       src={src}
       title={title}
+      data-og-still
       className="h-full max-h-full w-full max-w-3xl rounded-md border border-neutral-800 bg-neutral-950"
     />
   )
 }
 
-/**
- * A voice note, played rather than looked at.
- *
- * attachment-kind already answers `renderer: 'audio'`; the viewer simply had no branch for it, so a
- * .wav fell through to the text pane and drew an empty page - a note that HAD synced looked like a
- * note that had not. Same media-origin transport as images and documents, so there is one way local
- * bytes reach the renderer.
- */
-function AudioPaneComponent({ path, title }: { path: string; title: string }): React.JSX.Element {
-  console.log('MemoryChat AudioPane rendered')
-  const src = captureUrlForPath(path)
-  if (!src) {
-    return (
-      <div className="w-full max-w-3xl rounded-md border border-neutral-800 bg-neutral-950 p-5 text-sm text-neutral-400">
-        This voice note could not be played. Its bytes are not on this device.
-      </div>
-    )
+function previewFor(
+  content: AttachmentViewerContent,
+  src: string,
+  pdf: { page: number; setPage: (page: number) => void; scale: number; setScale: (s: number) => void }
+): FilePreviewState {
+  const missing = (what: string): FilePreviewState => ({
+    kind: 'unavailable',
+    message: `This ${what} could not be opened. Its bytes are not on this device.`
+  })
+  if (content.renderer === 'audio' && content.path) {
+    // A voice note, played rather than looked at: it starts as soon as it opens, as it always has.
+    return src ? { kind: 'audio', src, autoPlay: true } : missing('voice note')
   }
+  if (content.renderer === 'video' && content.path) {
+    return src ? { kind: 'video', src } : missing('video')
+  }
+  if (content.renderer === 'document' && content.path) {
+    // A document renders from its BYTES, served by the loopback media origin (connect-src allows it).
+    if (!src) return missing('file')
+    return {
+      kind: 'pdf',
+      viewer: {
+        file: src,
+        workerSrc: pdfWorkerUrl,
+        pageNumber: pdf.page,
+        onPageChange: pdf.setPage,
+        scale: pdf.scale,
+        onScaleChange: pdf.setScale,
+        options: PDF_OPTIONS
+      }
+    }
+  }
+  return { kind: 'text', text: content.text }
+}
+
+/** The attachment viewer's body: one FilePreview surface for every kind of file. */
+function AttachmentPreviewComponent({
+  content
+}: {
+  content: AttachmentViewerContent
+}): React.JSX.Element {
+  console.log('MemoryChat AttachmentPreview rendered')
+  const [page, setPage] = useState(1)
+  const [scale, setScale] = useState(1)
+  const src = content.path ? captureUrlForPath(content.path) : ''
+  const framedDocument = content.renderer === 'document' && content.kind !== 'pdf' && content.path
+  const preview = previewFor(content, src, { page, setPage, scale, setScale })
+
   return (
-    <div className="w-full max-w-3xl rounded-md border border-neutral-800 bg-neutral-950 p-5">
-      <div className="mb-3 truncate text-xs text-neutral-400">{title}</div>
-      <audio src={src} controls autoPlay className="w-full" />
-    </div>
+    <AnimatePresence mode="popLayout" initial={false}>
+      <motion.div
+        key={`${content.renderer ?? 'text'}:${content.path ?? content.title}`}
+        initial={{ opacity: 0, y: 8, filter: 'blur(6px)' }}
+        animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+        exit={{ opacity: 0, y: -4, filter: 'blur(6px)' }}
+        transition={{ duration: 0.4, ease }}
+        className={framedDocument ? 'h-full' : PREVIEW_SURFACE}
+      >
+        {framedDocument ? (
+          src ? (
+            <FramedDocument src={src} title={content.title} />
+          ) : (
+            <FilePreview
+              preview={{
+                kind: 'unavailable',
+                message: 'This file could not be opened. Its bytes are not on this device.'
+              }}
+            />
+          )
+        ) : (
+          <FilePreview preview={preview} />
+        )}
+      </motion.div>
+    </AnimatePresence>
   )
 }
 
-export const DocumentPane = memo(DocumentPaneComponent)
-export const AudioPane = memo(AudioPaneComponent)
+export const AttachmentPreview = memo(AttachmentPreviewComponent)

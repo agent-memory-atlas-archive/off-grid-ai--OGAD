@@ -82,7 +82,10 @@ test('populated projects stay dense, adjacent, and reachable on a wide desktop (
   // and named controls; generic roles omit plain divs from the accessible tree.
   const master = heading.locator('../..')
   const projectList = lastProject.locator('..')
-  const detail = page.getByRole('button', { name: 'Chats', exact: true }).locator('../../..')
+  const detail = page
+    .getByRole('banner')
+    .filter({ has: page.getByRole('radiogroup', { name: 'Project view' }) })
+    .locator('..')
 
   await expect(master.getByRole('button', { name: /^Synthetic Project \d{2}$/ })).toHaveCount(12)
   await lastProject.click()
@@ -116,7 +119,7 @@ test('populated projects stay dense, adjacent, and reachable on a wide desktop (
   expect(selectedBox.y + selectedBox.height).toBeLessThanOrEqual(listBox.y + listBox.height)
 
   const viewControls = ['Chats', 'Artifacts', 'Knowledge & settings'].map((name) =>
-    detail.getByRole('button', { name, exact: true })
+    detail.getByRole('radio', { name, exact: true })
   )
   for (const control of viewControls) {
     await expect(control).toBeVisible()

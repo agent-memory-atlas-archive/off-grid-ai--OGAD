@@ -39,6 +39,8 @@ it('keeps a message edit in its editor and sends the saved text', async () => {
     }
   )
   await user.click(await screen.findByRole('menuitem', { name: 'Edit' }))
+  // The menu animates out; until it is gone it holds focus and the transcript is inert.
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
   const editor = screen.getByDisplayValue('Original question')
   await user.clear(editor)
   await user.type(editor, 'Updated question')
@@ -98,7 +100,7 @@ it('completes a skill in the draft and sends it from a populated chat', async ()
   await screen.findByText('Earlier answer')
   const composer = await screen.findByPlaceholderText('Ask about “Project Alpha”…')
   fireEvent.change(composer, { target: { value: '/summ' } })
-  expect(await screen.findByRole('button', { name: /summarize/i })).toBeTruthy()
+  expect(await screen.findByRole('option', { name: /summarize/i })).toBeTruthy()
   fireEvent.keyDown(composer, { key: 'Tab' })
   expect((composer as HTMLTextAreaElement).value).toBe('/summarize ')
   fireEvent.change(composer, { target: { value: '/summarize the release' } })
@@ -139,7 +141,7 @@ it.each([
 
   const composer = await screen.findByPlaceholderText('Ask about “Project Alpha”…')
   fireEvent.change(composer, { target: { value: draft } })
-  expect(await screen.findByRole('button', { name: /proofread/i })).toBeTruthy()
+  expect(await screen.findByRole('option', { name: /proofread/i })).toBeTruthy()
   fireEvent.keyDown(composer, { key: 'Tab' })
   expect((composer as HTMLTextAreaElement).value).toBe(completed)
   await user.click(screen.getByRole('button', { name: 'Send' }))

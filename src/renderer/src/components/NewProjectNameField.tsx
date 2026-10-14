@@ -1,13 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
-
-/**
- * Focus lands AFTER the dropdown returns focus to its trigger. Without the delay, Radix's
- * focus-return blurs the input immediately and its blur handler tears the field down before the
- * user can type.
- */
-const FOCUS_DELAY_MS = 80
+import { useState, type Ref } from 'react'
+import { motion, useReducedMotion } from 'motion/react'
+import { Input } from '@offgrid/operator-ui/operator/coss/input'
 
 interface NewProjectNameFieldProps {
+  readonly inputRef: Ref<HTMLInputElement>
   /** Create the project with this name. Called on Enter and on blur, as it always has been. */
   readonly onCreate: (name: string) => void
   readonly onCancel: () => void
@@ -21,21 +17,23 @@ interface NewProjectNameFieldProps {
  * commits it.
  */
 export function NewProjectNameField({
+  inputRef,
   onCreate,
   onCancel
 }: NewProjectNameFieldProps): React.JSX.Element {
   const [name, setName] = useState('')
-  const input = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    const timer = setTimeout(() => input.current?.focus(), FOCUS_DELAY_MS)
-    return () => clearTimeout(timer)
-  }, [])
+  const reduceMotion = useReducedMotion()
 
   return (
-    <div className="mb-2">
-      <input
-        ref={input}
+    <motion.div
+      className="mb-2"
+      initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+    >
+      <Input
+        ref={inputRef}
+        size="sm"
         value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => {
@@ -44,8 +42,8 @@ export function NewProjectNameField({
         }}
         onBlur={() => onCreate(name)}
         placeholder="New project name…  (Enter to create, Esc to cancel)"
-        className="w-full rounded-md border border-green-500 bg-neutral-900 px-3 py-2 text-xs text-white placeholder-neutral-600 outline-none"
+        className="text-xs"
       />
-    </div>
+    </motion.div>
   )
 }

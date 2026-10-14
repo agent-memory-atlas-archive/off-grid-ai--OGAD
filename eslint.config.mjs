@@ -120,6 +120,7 @@ export default defineConfig(
       '.claude/**',
       '.offgrid/**',
       '.demo-profile/**',
+      '.demo-capture/**',
       'component-library-animations/**',
       'resources/artifacts/**',
       'resources/bin/**',

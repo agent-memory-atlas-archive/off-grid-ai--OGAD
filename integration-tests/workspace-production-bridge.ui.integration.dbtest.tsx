@@ -12,7 +12,7 @@ import path from 'node:path'
 // The DB Vitest config uses the classic JSX transform, which reads this binding at runtime.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import React from 'react'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -281,6 +281,7 @@ describe('production workspace bridge', () => {
         await user.click(screen.getByRole('menuitem', { name: 'ConnectorsOff' }))
       }
       await user.keyboard('{Escape}')
+      await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
       fireEvent.change(composer, {
         target: { value: 'Read the supplied web addresses and reject unsupported URL schemes' }
       })
@@ -304,7 +305,7 @@ describe('production workspace bridge', () => {
       expect(await screen.findByText('Angle wrapper content')).toBeTruthy()
       await user.click(toolResults[2]!)
       await waitFor(() =>
-        expect(toolResults[2]!.closest('li')?.textContent).toContain(
+        expect(toolResults[2]!.closest('[role="listitem"]')?.textContent).toContain(
           'Invalid URL: unsupported scheme ftp'
         )
       )
@@ -511,6 +512,7 @@ describe('production workspace bridge', () => {
         await user.click(screen.getByRole('menuitem', { name: 'ConnectorsOff' }))
       }
       await user.keyboard('{Escape}')
+      await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
       fireEvent.change(composer, {
         target: { value: 'Use calculator to multiply six times seven' }
       })
@@ -518,8 +520,8 @@ describe('production workspace bridge', () => {
 
       expect(await inTranscript('Gemini used the calculator and returned 42.')).toBeTruthy()
       await user.click(await screen.findByRole('button', { name: 'Work done' }, { timeout: 5_000 }))
-      await user.click(await screen.findByRole('button', { name: 'Thought process' }))
-      expect(await screen.findByText('I will calculate this value.')).toBeTruthy()
+      const timeline = screen.getByRole('list', { name: 'Thinking and tool calls' })
+      expect(await within(timeline).findByText('I will calculate this value.')).toBeTruthy()
       expect(await screen.findByRole('button', { name: 'Calculator, complete' })).toBeTruthy()
     } finally {
       await window.api.setRemoteVisionServer({
@@ -560,7 +562,7 @@ describe('production workspace bridge', () => {
     expect(await screen.findByText('Durable planning chat')).toBeTruthy()
     expect(screen.getByText(/2 messages/)).toBeTruthy()
 
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Artifacts' }))
+    await userEvent.setup().click(screen.getByRole('radio', { name: 'Artifacts' }))
     expect(await screen.findByText('Durable artifact')).toBeTruthy()
 
     cleanup()

@@ -1,0 +1,64 @@
+name: Publish engine update
+
+# Publishes an official llama.cpp CUDA build to the runtime store's signed engine index. Apps with
+# "Keep engines up to date" on (the default) install it in the background, without an app release.
+# The engine is staged from the ggml-org release asset and checked against GitHub's published
+# SHA-256; only files the store does not already hold are uploaded.
+on:
+  workflow_dispatch:
+    inputs:
+      llama_ref:
+        description: 'llama.cpp build to publish, e.g. b11551'
+        required: true
+      min_app_version:
+        description: 'Oldest app version that may install it (optional)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-engine-index
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.platform }} engine
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: true
+      max-parallel: 1 # both platforms rewrite their own index, but keep uploads easy to follow
+      matrix:
+        platform: [linux, win32]
+    env:
+      LLAMA_REF: ${{ inputs.llama_ref }}
+      MIN_APP_VERSION: ${{ inputs.min_app_version }}
+    steps:
+      - name: Check inputs
+        run: |
+          [[ "$LLAMA_REF" =~ ^b[0-9]+$ ]] || { echo 'llama_ref must look like b11551' >&2; exit 1; }
+          [[ -z "$MIN_APP_VERSION" || "$MIN_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'min_app_version must look like 0.0.56' >&2; exit 1; }
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Stage engine
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/stage-llama-engine.mjs --platform "${{ matrix.platform }}" --ref "$LLAMA_REF" --out "$RUNNER_TEMP/engine"
+      - name: Check the Linux engine's libraries resolve
+        if: matrix.platform == 'linux'
+        run: |
+          deps="$(LD_LIBRARY_PATH="$RUNNER_TEMP/engine/llama-cuda:$RUNNER_TEMP/engine/cuda-runtime" ldd "$RUNNER_TEMP/engine/llama-cuda/llama-server")"
+          printf '%s\n' "$deps"
+          # The NVIDIA driver library comes from the user's machine, never from the engine.
+          if printf '%s\n' "$deps" | grep 'not found' | grep -v 'libcuda.so.1'; then exit 1; fi
+      - name: Publish to the runtime store
+        env:
+          R2_ENDPOINT: https://0693da34a224264a4ec10f07fc8336ae.r2.cloudflarestorage.com
+          R2_BUCKET: offgrid-desktop-runtime-packs
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ENGINE_SIGNING_PRIVATE_KEY: ${{ secrets.ENGINE_SIGNING_PRIVATE_KEY }}
+        run: |
+          test -n "$ENGINE_SIGNING_PRIVATE_KEY" || { echo 'Add the ENGINE_SIGNING_PRIVATE_KEY secret (from pro/.env).' >&2; exit 1; }
+          node scripts/publish-engine.mjs --platform "${{ matrix.platform }}" --dir "$RUNNER_TEMP/engine" \
+            ${MIN_APP_VERSION:+--min-app "$MIN_APP_VERSION"}

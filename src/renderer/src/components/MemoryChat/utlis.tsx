@@ -144,7 +144,7 @@ export function renderedMessageContent(message: ChatMessage): string {
 }
 
 export function standardMessageRowClass(message: ChatMessage): string {
-  const margin = isSupportingMessage(message) ? 'my-1' : 'my-2.5'
+  const margin = isSupportingMessage(message) ? 'my-1' : 'my-4'
   const alignment = message.role === 'user' ? 'items-end' : 'items-start'
   return `${margin} flex flex-col ${alignment}`
 }
@@ -163,8 +163,33 @@ export function standardMessageBubbleClass(message: ChatMessage, editing: boolea
   if (message.context?.taskGuidance) {
     return `rounded-md border border-green-500/50 bg-green-500/5 px-3.5 py-2.5 text-sm leading-relaxed text-foreground ${width}`
   }
+  if (message.role === 'user' && width === 'max-w-full') {
+    // The preview's user turn: a soft rounded surface, so the two voices read apart at a glance.
+    return `rounded-2xl bg-foreground/[0.06] px-4 py-2.5 text-sm leading-relaxed ${width} text-neutral-100`
+  }
   const color = message.role === 'user' ? 'text-neutral-100' : 'text-neutral-200'
   return `py-1 text-sm leading-relaxed ${width} ${color}`
+}
+
+/**
+ * The same bubble as standardMessageBubbleClass, written for the library's MessageContent inside a
+ * Message. MessageContent styles a user turn through `group-[.is-user]:` (it outranks a plain
+ * utility), so the user-turn surface is restated in that variant; the block/overflow overrides
+ * keep the bubble's inner flow as it was.
+ */
+export function messageContentClass(message: ChatMessage, editing: boolean): string {
+  const bubble = standardMessageBubbleClass(message, editing)
+  if (bubble === 'hidden') return 'hidden'
+  const flow = 'block min-w-0 gap-0 overflow-visible group-[.is-assistant]:text-neutral-200'
+  if (message.role !== 'user') return `${flow} ${bubble}`
+  const wide = Boolean(editing || message.image || message.attachments?.length)
+  if (message.context?.taskGuidance) {
+    return `${flow} ${bubble} group-[.is-user]:rounded-md group-[.is-user]:bg-green-500/5 group-[.is-user]:px-3.5 group-[.is-user]:py-2.5 group-[.is-user]:text-foreground`
+  }
+  if (!wide) {
+    return `${flow} ${bubble} group-[.is-user]:rounded-2xl group-[.is-user]:bg-foreground/[0.06] group-[.is-user]:px-4 group-[.is-user]:py-2.5 group-[.is-user]:text-neutral-100`
+  }
+  return `${flow} ${bubble} group-[.is-user]:rounded-none group-[.is-user]:bg-transparent group-[.is-user]:px-0 group-[.is-user]:py-1 group-[.is-user]:text-neutral-100`
 }
 
 export function assistantWorkIsSettled(message: ChatMessage): boolean {

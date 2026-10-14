@@ -44,6 +44,8 @@ export interface StreamOptions {
   signal?: AbortSignal
   timeoutMs?: number
   onToolCallStart?: (name?: string) => void
+  /** One complete tool call, reported while the rest of the round is still streaming. */
+  onToolCallReady?: (call: AssembledToolCall) => void
 }
 
 export interface CompletionStreamAccumulator {
@@ -56,7 +58,8 @@ export interface CompletionStreamAccumulator {
  * accumulator so model location cannot change the caller-visible contract. */
 export function createCompletionStreamAccumulator(
   onDelta: (text: string, kind: 'content' | 'reasoning') => void,
-  onToolCallStart?: (name?: string) => void
+  onToolCallStart?: (name?: string) => void,
+  onToolCallReady?: (call: AssembledToolCall) => void
 ): CompletionStreamAccumulator {
   let buffer = ''
   let finishReason: string | null = null
@@ -72,7 +75,7 @@ export function createCompletionStreamAccumulator(
     if (event.kind === 'content') markup.push(event.text)
     else reasoningMarkup.push(event.text)
   })
-  const tools = createToolCallAccumulator()
+  const tools = createToolCallAccumulator(onToolCallReady)
   let toolCallStarted = false
   const reasoningDetails: SseReasoningDetail[] = []
 
@@ -118,6 +121,7 @@ export function createCompletionStreamAccumulator(
       }
       markup.end()
       reasoningMarkup.end()
+      tools.end()
       return {
         content: splitter.answer(),
         toolCalls: tools.list(),
@@ -157,10 +161,14 @@ export function streamCompletion(
     let timedOut = false
     let aborted = false
     const log = currentAIRequest()
-    const accumulator = createCompletionStreamAccumulator((text, kind) => {
-      log?.delta(text, kind)
-      onDelta(text, kind)
-    }, opts.onToolCallStart)
+    const accumulator = createCompletionStreamAccumulator(
+      (text, kind) => {
+        log?.delta(text, kind)
+        onDelta(text, kind)
+      },
+      opts.onToolCallStart,
+      opts.onToolCallReady
+    )
     // opts.signal is REUSED across the whole tool loop, so every completed stream
     // must detach its abort listener — otherwise handlers accumulate on the shared
     // signal for the loop's lifetime. cleanup() runs on every terminal path.

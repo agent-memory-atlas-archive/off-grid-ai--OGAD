@@ -66,7 +66,7 @@ describe('<SettingsPanel/> dismissal', () => {
     const onClose = vi.fn()
     render(<SettingsPanel onClose={onClose} />)
     // The tab strip lives inside the panel; clicking it must not bubble to the scrim.
-    fireEvent.click(screen.getByRole('button', { name: /voice/i }))
+    fireEvent.click(screen.getByRole('radio', { name: /voice/i }))
     expect(onClose).not.toHaveBeenCalled()
   })
 })

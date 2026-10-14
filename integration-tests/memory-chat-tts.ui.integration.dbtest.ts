@@ -392,10 +392,13 @@ describe('assistant reply speech integration (#105)', () => {
     expect(RecorderBoundary.instances[0]!.state).toBe('recording')
     await user.click(screen.getByRole('button', { name: 'Stop voice recording' }))
 
-    await waitFor(() => expect(screen.getAllByText('Show transcript')).toHaveLength(1), {
-      timeout: 10_000
-    })
-    await user.click(screen.getByText('Show transcript'))
+    await waitFor(
+      () => expect(screen.getAllByRole('button', { name: 'Show transcript' })).toHaveLength(1),
+      {
+        timeout: 10_000
+      }
+    )
+    await user.click(screen.getByRole('button', { name: 'Show transcript' }))
     expect(screen.getByText('Schedule the stable release review')).toBeTruthy()
     await waitFor(
       () => expect(inTranscript('The release review is scheduled locally.')).toBeTruthy(),
@@ -427,7 +430,7 @@ describe('assistant reply speech integration (#105)', () => {
     renderChat({ conversationId })
 
     expect(await screen.findByRole('button', { name: 'Voice', pressed: true })).toBeTruthy()
-    const reopenedTranscripts = await screen.findAllByText('Show transcript')
+    const reopenedTranscripts = await screen.findAllByRole('button', { name: 'Show transcript' })
     expect(reopenedTranscripts).toHaveLength(1)
     await user.click(reopenedTranscripts[0]!)
     await waitFor(

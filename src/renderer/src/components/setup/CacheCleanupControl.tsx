@@ -1,7 +1,10 @@
 import { useState } from 'react'
-import { Broom } from '@phosphor-icons/react'
+import { Broom, CircleNotch } from '@phosphor-icons/react'
 import type { CacheCleanupResultContract } from '../../../../shared/ipc-contracts'
 import { formatStorageBytes } from './storage-format'
+import { GlyphSwap, IconTip } from '../IconTip'
+import { Button } from '@offgrid/operator-ui/operator/coss/button'
+import { LiveStatus } from '@offgrid/operator-ui/operator/presence'
 
 /** Temporary Storage control. Durable-store reassurance stays beside the action. */
 export function CacheCleanupControl(): React.ReactElement {
@@ -32,18 +35,26 @@ export function CacheCleanupControl(): React.ReactElement {
           Clears app cache and incomplete model downloads. Installed models and your data stay.
         </div>
         {notice && (
-          <div role="status" className="mt-1 text-[10px] text-neutral-500">
+          <LiveStatus as="div" className="mt-1 text-[10px] text-neutral-500">
             {notice}
-          </div>
+          </LiveStatus>
         )}
       </div>
-      <button
-        onClick={clear}
-        disabled={busy}
-        className="flex shrink-0 items-center gap-1.5 rounded-md border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-300 transition-all duration-150 hover:border-green-500/60 hover:text-white active:scale-95 disabled:opacity-50"
-      >
-        <Broom className="h-3 w-3" /> {busy ? 'Clearing…' : 'Clear storage'}
-      </button>
+      <IconTip label={busy ? 'Clearing…' : 'Clear storage'}>
+        <Button
+          size="icon-xs"
+          variant="outline"
+          aria-label={busy ? 'Clearing…' : 'Clear storage'}
+          aria-busy={busy || undefined}
+          onClick={clear}
+          disabled={busy}
+          className="shrink-0"
+        >
+          <GlyphSwap glyphKey={busy ? 'busy' : 'idle'}>
+            {busy ? <CircleNotch className="animate-spin" /> : <Broom />}
+          </GlyphSwap>
+        </Button>
+      </IconTip>
     </div>
   )
 }

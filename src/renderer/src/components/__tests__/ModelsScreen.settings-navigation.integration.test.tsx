@@ -139,7 +139,7 @@ describe('<ModelsScreen/> active model settings', () => {
     window.addEventListener('og:open-model-settings-panel', openSettings, { once: true })
     render(<ModelsScreen />)
 
-    await user.click(await screen.findByRole('button', { name: kind }))
+    await user.click(await screen.findByRole('radio', { name: kind }))
     await user.click(
       within(cardFor(modelName)).getByRole('button', { name: 'Open model settings' })
     )
@@ -153,7 +153,7 @@ describe('<ModelsScreen/> active model settings', () => {
     window.addEventListener('og:open-model-settings-panel', openSettings, { once: true })
     render(<ModelsScreen />)
 
-    await user.click(await screen.findByRole('button', { name: 'Transcription' }))
+    await user.click(await screen.findByRole('radio', { name: 'Transcription' }))
     await user.click(
       within(cardFor('Active Transcription Model')).getByRole('button', {
         name: 'Open model settings'

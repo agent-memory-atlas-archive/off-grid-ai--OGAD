@@ -175,17 +175,28 @@ function chatBoundary(
 
 function timelineLabels(): string[] {
   const timeline = screen.getByRole('list', { name: 'Thinking and tool calls' })
-  return Array.from(timeline.children).map(
-    (row) =>
-      within(row as HTMLElement)
-        .getByRole('button')
-        .textContent?.trim() ?? ''
-  )
+  return Array.from(timeline.children).map((row) => {
+    const header = within(row as HTMLElement).queryAllByRole('button')[0]
+    if (header) return header.textContent?.trim() ?? ''
+    // The timeline's own thinking row has no button: its title is the first thing it reads.
+    const words = document.createTreeWalker(row, NodeFilter.SHOW_TEXT)
+    for (let node = words.nextNode(); node; node = words.nextNode()) {
+      const text = node.textContent?.trim()
+      if (text) return text
+    }
+    return ''
+  })
+}
+
+/** Rows of the work timeline still titled "Thinking"; none when the timeline is folded away. */
+function liveThinkingRows(): HTMLElement[] {
+  const timeline = screen.queryByRole('list', { name: 'Thinking and tool calls' })
+  return timeline ? within(timeline).queryAllByText('Thinking') : []
 }
 
 async function openCompletedWork(): Promise<void> {
   const toggle = (await screen.findAllByRole('button', { name: 'Work done' })).at(-1)
-  if (toggle?.getAttribute('data-state') === 'closed') await userEvent.click(toggle)
+  if (toggle?.getAttribute('aria-expanded') === 'false') await userEvent.click(toggle)
 }
 
 afterEach(cleanup)
@@ -247,9 +258,9 @@ describe('<MemoryChat/> ordered tool turn', () => {
     expect(await screen.findByAltText('Generated')).toBeTruthy()
     await openCompletedWork()
     expect(timelineLabels().map((label) => label.split('Created the requested image.')[0])).toEqual([
-      'Thought process',
+      'Reasoning',
       'Generated image',
-      'Thought process',
+      'Reasoning',
       'Enhanced prompt'
     ])
 
@@ -262,9 +273,9 @@ describe('<MemoryChat/> ordered tool turn', () => {
     expect(screen.getAllByTitle('Play')).toHaveLength(2)
     await openCompletedWork()
     expect(timelineLabels().map((label) => label.split('Created the requested image.')[0])).toEqual([
-      'Thought process',
+      'Reasoning',
       'Generated image',
-      'Thought process',
+      'Reasoning',
       'Enhanced prompt'
     ])
   })
@@ -317,13 +328,13 @@ describe('<MemoryChat/> ordered tool turn', () => {
 
     const progress = await screen.findByText('Generating image · Step 4 of 17')
     expect(timelineLabels()).toEqual([
-      'Thought process',
+      'Reasoning',
       expect.stringContaining('Generated image'),
       'Enhanced prompt'
     ])
     expect(screen.queryByRole('button', { name: 'Tools sent in request (1)' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Generation details' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Working' }).getAttribute('data-state')).toBe('open')
+    expect(screen.getByRole('button', { name: 'Working' }).getAttribute('aria-expanded')).toBe('true')
     expect(progress).toBeTruthy()
     expect(screen.getAllByText('Off Grid AI')).toHaveLength(1)
   })
@@ -409,9 +420,9 @@ describe('<MemoryChat/> ordered tool turn', () => {
       boundary.emit({ type: 'reasoning', text: 'Second thought.' })
     })
     expect(timelineLabels()).toEqual([
-      'Thought process',
+      'Reasoning',
       expect.stringContaining('Searched the web'),
-      'Thinking…'
+      'Thinking'
     ])
 
     await act(async () => {
@@ -423,17 +434,17 @@ describe('<MemoryChat/> ordered tool turn', () => {
       boundary.emit({ type: 'content', text: 'The answer is ready.' })
     })
     expect(timelineLabels()).toEqual([
-      'Thought process',
+      'Reasoning',
       expect.stringContaining('Searched the web'),
-      'Thought process',
+      'Reasoning',
       expect.stringContaining('Read web page')
     ])
 
     await act(async () => boundary.finish())
     expect(await screen.findByText('The answer is ready.')).toBeTruthy()
-    expect(screen.queryByText('Thinking…')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Work done' }).getAttribute('data-state')).toBe(
-      'closed'
+    expect(liveThinkingRows()).toHaveLength(0)
+    expect(screen.getByRole('button', { name: 'Work done' }).getAttribute('aria-expanded')).toBe(
+      'false'
     )
 
     chat.unmount()
@@ -445,12 +456,12 @@ describe('<MemoryChat/> ordered tool turn', () => {
     expect(await screen.findByText('The answer is ready.')).toBeTruthy()
     await openCompletedWork()
     expect(timelineLabels()).toEqual([
-      'Thought process',
+      'Reasoning',
       expect.stringContaining('Searched the web'),
-      'Thought process',
+      'Reasoning',
       expect.stringContaining('Read web page')
     ])
-    expect(screen.queryByText('Thinking…')).toBeNull()
+    expect(liveThinkingRows()).toHaveLength(0)
   })
 
   it('keeps the existing layout for saved replies without an ordered timeline', async () => {
@@ -474,11 +485,11 @@ describe('<MemoryChat/> ordered tool turn', () => {
     expect(await screen.findByText('An older answer.')).toBeTruthy()
     await openCompletedWork()
     expect(timelineLabels()).toEqual([
-      'Thought process',
+      'Reasoning',
       expect.stringContaining('Searched the web'),
       expect.stringContaining('Read web page')
     ])
-    expect(screen.queryByText('Thinking…')).toBeNull()
+    expect(liveThinkingRows()).toHaveLength(0)
   })
 
   it.each([false, true])(
@@ -616,17 +627,21 @@ describe('<MemoryChat/> ordered tool turn', () => {
       await user.click(replyPlayback) // pause before changing voice
 
       await user.click(screen.getByTitle('Settings'))
-      await user.click(screen.getByRole('button', { name: 'voice' }))
-      const voiceSelect = await screen.findByRole('button', { name: 'Voice selection' })
+      await user.click(screen.getByRole('radio', { name: 'voice' }))
+      const voiceSelect = await screen.findByRole('combobox', { name: 'Voice selection' })
       await waitFor(() => expect((voiceSelect as HTMLButtonElement).disabled).toBe(false))
       voiceSelect.focus()
       await user.keyboard('{Enter}')
-      expect(voiceSelect.getAttribute('aria-expanded')).toBe('true')
-      expect(screen.queryAllByRole('menuitemradio').map((item) => item.textContent)).toEqual([
+      await waitFor(() => expect(voiceSelect.getAttribute('aria-expanded')).toBe('true'))
+      // The list opens before its options are read, as a person sees it open.
+      await screen.findByRole('option', { name: 'Michael' })
+      expect(screen.queryAllByRole('option').map((item) => item.textContent)).toEqual([
         'Heart',
         'Michael'
       ])
-      await user.click(await screen.findByRole('menuitemradio', { name: 'Michael' }))
+      // Picked from the keyboard: jsdom gives every element a zero-size box at (0, 0), so the
+      // chat's resize handles claim every pointer press and a mouse pick never reaches the option.
+      await user.keyboard('{ArrowDown}{Enter}')
       await waitFor(() => expect(boundary.status().voice).toBe('am_michael'))
       await user.click(screen.getByRole('button', { name: 'Close' }))
       await user.click(replyPlayback)

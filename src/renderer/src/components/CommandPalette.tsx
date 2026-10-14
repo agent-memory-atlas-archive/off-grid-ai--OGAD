@@ -10,15 +10,25 @@ import {
   IconLayoutSidebar,
   IconLock
 } from '@tabler/icons-react'
-import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
+import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
+import { Kbd, KbdGroup } from '@offgrid/operator-ui/operator/coss/kbd'
 import {
   Command,
-  CommandInput,
-  CommandList,
-  CommandItem,
+  CommandCollection,
+  CommandDialog,
+  CommandDialogPopup,
+  CommandDialogPrimitive,
+  CommandEmpty,
+  CommandFooter,
   CommandGroup,
-  CommandEmpty
-} from './ui/command'
+  CommandGroupLabel,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandPanel
+} from '@offgrid/operator-ui/operator/coss/command'
+import { Highlight } from '@offgrid/operator-ui/operator/presence'
+import { acquireNativeSurfaceOcclusion } from '@renderer/lib/native-surface-occlusion'
 import type { SearchHit } from '@/types'
 import { paletteScreenMatches, type PaletteScreen } from '../lib/paletteScreens'
 
@@ -41,9 +51,13 @@ interface CommandPaletteProps {
   onGoTo?: (view: string, subroute?: string) => void
 }
 
+const SEE_ALL = '__see_all__'
+const screenId = (screen: PaletteScreen): string =>
+  `__screen_${screen.view}_${screen.subroute ?? ''}`
+
 // ⌘K universal search launcher. Fast (keyword-only) results; Enter opens, or jump
-// to the full Search screen for the semantic pass. Pre-ranked server-side, so
-// cmdk's own filtering is disabled (shouldFilter={false}).
+// to the full Search screen for the semantic pass. Pre-ranked server-side, so the
+// command bar's own filtering is off (mode="none"): it shows exactly the groups built here.
 export function CommandPalette({
   onOpenHit,
   onSeeAll,
@@ -107,79 +121,120 @@ export function CommandPalette({
   // Screens never crowd out content: a handful at most once something is typed, everything when not.
   const screenMatches = onGoTo ? paletteScreenMatches(screens, needle, hits.length > 0 ? 3 : 6) : []
 
+  const screenById = new Map(screenMatches.map((screen) => [screenId(screen), screen]))
+  const hitById = new Map(hits.map((hit) => [hit.key, hit]))
+  const groups = [
+    ...(screenMatches.length > 0
+      ? [{ value: needle ? 'Screens' : 'Go to', items: screenMatches.map(screenId) }]
+      : []),
+    ...(hits.length > 0 ? [{ value: 'Results', items: hits.map((hit) => hit.key) }] : []),
+    ...(query.trim() ? [{ value: '', items: [SEE_ALL] }] : [])
+  ]
+
+  const renderItem = (id: string): React.ReactElement | null => {
+    if (id === SEE_ALL) {
+      return (
+        <CommandItem key={id} value={id} onClick={seeAll} className="gap-2 text-green-500">
+          <IconCornerDownLeft className="h-4 w-4 shrink-0" aria-hidden />
+          See all results for “{query}”
+        </CommandItem>
+      )
+    }
+    const screen = screenById.get(id)
+    if (screen) {
+      return (
+        <CommandItem
+          key={id}
+          value={id}
+          onClick={() => goTo(screen.view, screen.subroute)}
+          className="gap-3"
+          data-testid={`palette-screen-${screen.view}-${screen.subroute ?? 'root'}`}
+        >
+          <IconLayoutSidebar className="h-4 w-4 shrink-0 text-neutral-500" aria-hidden />
+          <span className="min-w-0 flex-1 truncate text-sm text-white">
+            <Highlight text={screen.label} query={query.trim()} />
+          </span>
+          {screen.locked && (
+            <IconLock className="h-3.5 w-3.5 shrink-0 text-neutral-500" aria-hidden />
+          )}
+        </CommandItem>
+      )
+    }
+    const hit = hitById.get(id)
+    if (!hit) return null
+    const Icon = KIND_ICON[hit.kind] ?? IconSearch
+    return (
+      <CommandItem key={id} value={id} onClick={() => open_(hit)} className="gap-3">
+        <Icon className="h-4 w-4 shrink-0 text-neutral-500" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm text-white">
+            <Highlight text={hit.title} query={query.trim()} />
+          </div>
+          <div className="truncate text-xs text-neutral-500">
+            <Highlight text={hit.snippet} query={query.trim()} />
+          </div>
+        </div>
+        <Badge variant="outline" size="sm" className="shrink-0">
+          {hit.kind}
+        </Badge>
+      </CommandItem>
+    )
+  }
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent showCloseButton={false} className="overflow-hidden p-0">
-        <DialogTitle className="sr-only">Search Off Grid AI</DialogTitle>
-        <Command shouldFilter={false} className="font-mono">
+    <CommandDialog open={open} onOpenChange={setOpen}>
+      {/* Native child views stay below the bar from the moment it opens until its exit ends. */}
+      <CommandDialogPopup className="border-border/60" occlusion={acquireNativeSurfaceOcclusion}>
+        <CommandDialogPrimitive.Title className="sr-only">
+          Search Off Grid AI
+        </CommandDialogPrimitive.Title>
+        <Command
+          items={groups}
+          mode="none"
+          value={query}
+          onValueChange={(value, details) => {
+            // Choosing an item runs its action; it must not write the item's id into the box.
+            if (details.reason === 'item-press') return
+            setQuery(value)
+            if (!value.trim()) setHits([])
+          }}
+        >
           <CommandInput
-            value={query}
-            onValueChange={(value) => {
-              setQuery(value)
-              if (!value.trim()) setHits([])
-            }}
+            aria-label="Search everything"
             placeholder="Search everything, or jump to a screen…"
+            className="font-mono"
           />
-          <CommandList>
-            {query.trim() && hits.length === 0 && screenMatches.length === 0 && (
-              <CommandEmpty>No matches — press Enter for a deep search.</CommandEmpty>
-            )}
-            {screenMatches.length > 0 && (
-              <CommandGroup heading={needle ? 'Screens' : 'Go to'}>
-                {screenMatches.map((screen) => (
-                  <CommandItem
-                    key={`${screen.view}:${screen.subroute ?? ''}`}
-                    value={`__screen_${screen.view}_${screen.subroute ?? ''}`}
-                    onSelect={() => goTo(screen.view, screen.subroute)}
-                    className="gap-3"
-                    data-testid={`palette-screen-${screen.view}-${screen.subroute ?? 'root'}`}
-                  >
-                    <IconLayoutSidebar className="h-4 w-4 shrink-0 text-neutral-500" aria-hidden />
-                    <span className="min-w-0 flex-1 truncate text-sm text-white">
-                      {screen.label}
-                    </span>
-                    {screen.locked && (
-                      <IconLock className="h-3.5 w-3.5 shrink-0 text-neutral-500" aria-hidden />
-                    )}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            )}
-            {hits.length > 0 && (
-              <CommandGroup heading="Results">
-                {hits.map((h) => {
-                  const Icon = KIND_ICON[h.kind] ?? IconSearch
-                  return (
-                    <CommandItem
-                      key={h.key}
-                      value={h.key}
-                      onSelect={() => open_(h)}
-                      className="gap-3"
-                    >
-                      <Icon className="h-4 w-4 shrink-0 text-neutral-500" aria-hidden />
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm text-white">{h.title}</div>
-                        <div className="truncate text-xs text-neutral-500">{h.snippet}</div>
-                      </div>
-                      <span className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase text-neutral-400">
-                        {h.kind}
-                      </span>
-                    </CommandItem>
-                  )
-                })}
-              </CommandGroup>
-            )}
-            {query.trim() && (
-              <CommandGroup>
-                <CommandItem value="__see_all__" onSelect={seeAll} className="gap-2 text-green-500">
-                  <IconCornerDownLeft className="h-4 w-4 shrink-0" aria-hidden />
-                  See all results for “{query}”
-                </CommandItem>
-              </CommandGroup>
-            )}
-          </CommandList>
+          <CommandPanel>
+            <CommandEmpty>
+              {query.trim() ? 'No matches — press Enter for a deep search.' : null}
+            </CommandEmpty>
+            <CommandList>
+              {(group: { value: string; items: string[] }) => (
+                <CommandGroup key={group.value || 'actions'} items={group.items}>
+                  {group.value ? <CommandGroupLabel>{group.value}</CommandGroupLabel> : null}
+                  <CommandCollection>{(id: string) => renderItem(id)}</CommandCollection>
+                </CommandGroup>
+              )}
+            </CommandList>
+          </CommandPanel>
         </Command>
-      </DialogContent>
-    </Dialog>
+        {/* Keyboard hints, as the library's command bar shows them. */}
+        <CommandFooter>
+          <span className="flex items-center gap-2">
+            <KbdGroup>
+              <Kbd>↑</Kbd>
+              <Kbd>↓</Kbd>
+            </KbdGroup>
+            to move
+            <Kbd className="ms-2">↵</Kbd>
+            to open
+          </span>
+          <span className="flex items-center gap-2">
+            <Kbd>Esc</Kbd>
+            to close
+          </span>
+        </CommandFooter>
+      </CommandDialogPopup>
+    </CommandDialog>
   )
 }

@@ -3,6 +3,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { wholeText } from './harness/whole-text'
 
 type ProgressListener = (progress: Record<string, unknown>) => void
 let listeners: ProgressListener[] = []
@@ -107,7 +108,7 @@ describe('Models > Storage download rows', () => {
     const user = userEvent.setup()
     render(<StoragePanel />)
 
-    expect(await screen.findByText('35%')).toBeTruthy()
+    expect(await screen.findByText(wholeText('35%'))).toBeTruthy()
     expect(screen.getByText(/244 MB of 703 MB/)).toBeTruthy()
     expect(screen.getByText(/2\.7 MB\/s/)).toBeTruthy()
     expect(screen.getByText(/~3 min left/)).toBeTruthy()
@@ -159,7 +160,7 @@ describe('Models > Storage download rows', () => {
     }
     listeners.forEach((listener) => listener(progress))
 
-    await waitFor(() => expect(screen.getAllByText('22%')).toHaveLength(2))
+    await waitFor(() => expect(screen.getAllByText(wholeText('22%'))).toHaveLength(2))
     // A reduced registry poll must not clobber the authoritative live event.
     await userEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     await waitFor(() => expect(screen.getAllByText(/1\.3 GB of 6\.0 GB/)).toHaveLength(2))

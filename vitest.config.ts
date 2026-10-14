@@ -56,11 +56,14 @@ export default defineConfig({
     // those browser boundaries in one renderer harness so Radix-backed components
     // exercise the real product tree without every suite redefining the platform.
     setupFiles: ['src/renderer/src/__tests__/browser-boundaries.setup.ts'],
+    // The ui/* primitives come from @offgrid/operator-ui; inline it so the suite's
+    // motion/react stub reaches those components as it reaches local ones.
+    server: { deps: { inline: ['@offgrid/operator-ui'] } },
     // jsdom render tests (userEvent + waitFor over real DOM) and DB/crypto integration
-    // tests legitimately exceed the 5s default under CI/parallel load — this was
-    // intermittently failing the pre-push gate. 15s is generous headroom without
-    // masking a real hang (a genuinely stuck test still fails).
-    testTimeout: 15000,
+    // tests exceed the default under parallel load. The full hosted coverage run
+    // takes about three times the local test time; voice journeys can exceed 15s
+    // there. Keep each UI wait bounded and allow 30s for the whole CI journey.
+    testTimeout: process.env.CI && usesAggregateCoverageGate ? 30000 : 15000,
     // .ts = pure/main unit + integration tests (node env, the default). .tsx = renderer
     // component render tests, which opt into jsdom per-file via `// @vitest-environment jsdom`
     // so the default suite stays node-fast. (React render harness: jsdom + @testing-library/react.)

@@ -41,6 +41,11 @@ export function installAppBoundary(overrides: Record<string, unknown> = {}): voi
     listProjects: async () => APP_PROJECTS.map((project) => ({ ...project })),
     getRagConversations: async () => [],
     getSettings: async () => ({}),
+    // main's 'mcp:list' always resolves an array of connectors (src/main/mcp-ipc.ts).
+    mcpList: async () => [],
+    // Search IPC returns arrays, including when there are no indexed sources or hits.
+    searchFacets: async () => [],
+    universalSearch: async () => [],
     onNewAction: eventSubscription,
     onUpdateDownloaded: eventSubscription,
     onReprocessProgress: eventSubscription,

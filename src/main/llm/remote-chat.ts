@@ -6,6 +6,7 @@ import {
   type CompletionStreamAccumulator,
   type StreamResult
 } from './stream'
+import type { AssembledToolCall } from './sse-stream'
 import { writeDiagnosticLog } from '../diagnostics-log'
 import { currentAIRequest } from '../ai-request-log'
 import { screenTaskRequestSource } from '../actions/remote-screen-session'
@@ -33,6 +34,7 @@ export interface RemoteChatOptions {
   signal?: AbortSignal
   timeoutMs?: number
   onToolCallStart?: (name?: string) => void
+  onToolCallReady?: (call: AssembledToolCall) => void
 }
 
 export interface RemoteNativeToolCapability {
@@ -389,7 +391,7 @@ export async function streamRemoteChatCompletion(input: {
   const accumulator = createCompletionStreamAccumulator((text, kind) => {
     log?.delta(text, kind)
     input.onDelta(text, kind)
-  }, options.onToolCallStart)
+  }, options.onToolCallStart, options.onToolCallReady)
   if (options.signal?.aborted) return accumulator.finish()
 
   if (request.tools?.length) {

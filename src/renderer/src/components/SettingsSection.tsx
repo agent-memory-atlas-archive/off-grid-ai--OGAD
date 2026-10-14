@@ -6,6 +6,7 @@
 import { useState, type ReactNode } from 'react'
 import { CaretDownIcon } from '@phosphor-icons/react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
+import { Section } from '@offgrid/operator-ui/operator/experience'
 
 const OPEN_KEY = 'offgrid:settings-sections-open'
 
@@ -45,13 +46,13 @@ export function SettingsSection(props: {
         setOpen(next)
         rememberOpen(props.id, next)
       }}
-      className="group mb-3 rounded-md border border-neutral-800 bg-neutral-950/40"
+      className="group mb-2 rounded-md border border-neutral-800 bg-neutral-950/40"
     >
-      <CollapsibleTrigger className="flex w-full items-start justify-between gap-3 px-3 py-2.5 text-left transition-colors hover:bg-neutral-900/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500/60">
+      <CollapsibleTrigger className="flex w-full items-start justify-between gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-neutral-900/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-500/60">
         <span className="min-w-0">
-          <span className="block text-xs font-medium text-neutral-200">{props.title}</span>
+          <span className="block text-[13px] font-medium text-neutral-200">{props.title}</span>
           {props.summary ? (
-            <span className="mt-0.5 block truncate text-[11px] text-neutral-500">
+            <span className="mt-0.5 block truncate text-[11.5px] text-neutral-500">
               {props.summary}
             </span>
           ) : null}
@@ -62,7 +63,10 @@ export function SettingsSection(props: {
         />
       </CollapsibleTrigger>
       <CollapsibleContent className="offgrid-smooth-collapsible overflow-hidden">
-        <div className="border-t border-neutral-800 px-3 pb-1 pt-3">{props.children}</div>
+        <div className="border-t border-neutral-900 px-3.5 pb-2 pt-2">
+          {/* The rows arrive as one block, the way every section does in the preview. */}
+          <Section>{props.children}</Section>
+        </div>
       </CollapsibleContent>
     </Collapsible>
   )

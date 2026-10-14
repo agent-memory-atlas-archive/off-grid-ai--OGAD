@@ -85,6 +85,11 @@ function installApi(): {
   return { bridgeWrite, browserWrite }
 }
 
+// A menu that just closed animates out; until it is gone it holds focus and the transcript is inert.
+async function menuGone(): Promise<void> {
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+}
+
 function renderConversation(): void {
   render(
     <TooltipProvider>
@@ -116,6 +121,7 @@ describe('<MemoryChat/> clipboard and preview accessibility', () => {
 
     await waitFor(() => expect(browserWrite).toHaveBeenCalledWith('assistant reply copied exactly'))
     expect(bridgeWrite).toHaveBeenCalledWith('assistant reply copied exactly')
+    await menuGone()
     fireEvent.pointerDown(within(reply).getByRole('button', { name: 'Message actions' }), {
       button: 0,
       ctrlKey: false
@@ -141,6 +147,7 @@ describe('<MemoryChat/> clipboard and preview accessibility', () => {
 
     await waitFor(() => expect(browserWrite).toHaveBeenCalledWith('copy this exact text'))
     expect(bridgeWrite).toHaveBeenCalledWith('copy this exact text')
+    await menuGone()
     fireEvent.pointerDown(within(message).getByRole('button', { name: 'Message actions' }), {
       button: 0,
       ctrlKey: false

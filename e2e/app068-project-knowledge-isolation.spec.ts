@@ -119,9 +119,7 @@ async function createProject(project: string, document: string, content: string)
   await page.getByPlaceholder('Project name…').fill(project)
   await page.keyboard.press('Enter')
   await expect(page.getByText(project, { exact: true }).first()).toBeVisible()
-  await expect(
-    page.getByRole('button', { name: 'Knowledge & settings', exact: true })
-  ).toBeVisible()
+  await expect(page.getByRole('radio', { name: 'Knowledge & settings', exact: true })).toBeVisible()
 
   const filePath = path.join(rootDir, document)
   fs.writeFileSync(filePath, content)
@@ -136,7 +134,7 @@ async function createProject(project: string, document: string, content: string)
 async function startFreshProjectChat(project: string): Promise<void> {
   await openProjects()
   await page.getByText(project, { exact: true }).first().click()
-  await page.getByRole('button', { name: 'Chats', exact: true }).click()
+  await page.getByRole('radio', { name: 'Chats', exact: true }).click()
   await page.getByRole('button', { name: 'New chat', exact: true }).click()
   // The composer is named Message; the project scope shows in its placeholder.
   await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveAttribute(

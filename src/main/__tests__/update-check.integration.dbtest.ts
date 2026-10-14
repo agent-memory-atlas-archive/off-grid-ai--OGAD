@@ -212,14 +212,22 @@ describe('manual update check', () => {
 
     const card = await renderUpdateCard()
     expect(await within(card).findByText('Downloading v0.0.104')).toBeTruthy()
-    expect(within(card).getByText('25%')).toBeTruthy()
+    expect(
+      within(card)
+        .getByRole('progressbar', { name: 'Update download progress' })
+        .getAttribute('aria-valuenow')
+    ).toBe('25')
     expect(within(card).getByText(/26 MB \/ 105 MB/)).toBeTruthy()
     expect(within(card).getByText(/2\.0 MB\/s/)).toBeTruthy()
 
     updaterEvents.emit('update-downloaded', { version: '0.0.104' })
     const restored = await renderUpdateCard()
     expect(await within(restored).findByText('v0.0.104 ready to install')).toBeTruthy()
-    expect(within(restored).getByText('100%')).toBeTruthy()
+    expect(
+      within(restored)
+        .getByRole('progressbar', { name: 'Update download progress' })
+        .getAttribute('aria-valuenow')
+    ).toBe('100')
     expect(restored.textContent).not.toContain('NaN')
   })
 

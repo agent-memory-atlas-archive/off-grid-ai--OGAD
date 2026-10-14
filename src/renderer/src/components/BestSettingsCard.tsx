@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { CheckCircleIcon, LightningIcon } from '@phosphor-icons/react'
 import { Button } from './ui/button'
+import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { Collapsible, CollapsibleContent } from './ui/collapsible'
 import { deviceNoun } from '@renderer/lib/device'
 import type { BestSettingsPlan, MachineProfile } from '../../../shared/best-settings'
@@ -98,7 +99,9 @@ export function BestSettingsCard({ onApplied }: { onApplied: () => void }): Reac
               className="shrink-0 transition-all duration-150 active:scale-95"
             >
               <LightningIcon weight="fill" />
-              {status.kind === 'applying' ? 'Applying…' : 'Use fastest settings'}
+              <TextMorph as="span">
+                {status.kind === 'applying' ? 'Applying…' : 'Use fastest settings'}
+              </TextMorph>
             </Button>
           )}
         </div>

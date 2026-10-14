@@ -95,7 +95,9 @@ test('runtime residency controls persist across relaunch while chat stays requir
   const { chat } = residencyControls()
   await expect(chat).toBeChecked()
   await expect(chat).toBeDisabled()
-  await expect(page.getByText(residencyStatusText({ locked: true }, true))).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Model memory' })).toContainText(
+    residencyStatusText({ locked: true }, true)
+  )
 
   // a89c70dc8 added grounding and embeddings with in-memory defaults.
   // Check those defaults, then exercise off -> on for every editable control.

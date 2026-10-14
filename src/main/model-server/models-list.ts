@@ -3,6 +3,8 @@
 // and the ollama-style mirror are unit-testable. The handler still does the
 // actual upstream fetch + active-model lookups; it feeds the results here.
 
+import { detectThinkingDialect } from '../llm/thinking-dialect'
+
 /** Tag an upstream LLM entry chat vs vision from its advertised capabilities. */
 export function tagLlmEntry(m: Record<string, unknown>): Record<string, unknown> {
   const caps = Array.isArray(m.capabilities) ? (m.capabilities as string[]) : []
@@ -39,7 +41,7 @@ export function specialistModelEntries(
     .map((model) =>
       modelEntry(model.id, model.tags?.includes('Decision') ? 'chat' : 'vision', now, {
         name: model.name,
-        capabilities: model.tags?.includes('Decision') ? [] : ['vision'],
+        ...(model.tags?.includes('Decision') ? {} : { capabilities: ['vision'] }),
         architecture: {
           input_modalities: model.tags?.includes('Decision') ? ['text'] : ['text', 'image'],
           output_modalities: model.tags?.includes('Decision') ? ['decisions'] : ['text']
@@ -56,7 +58,52 @@ export function installedTextModelEntries(
   return catalog.filter((model) => !model.remoteServerId &&
     (model.kind === 'text' || model.kind === 'vision') && installed.includes(model.id)
   ).map((model) => modelEntry(model.id, model.kind === 'vision' ? 'vision' : 'chat', now, {
-    name: model.name,
-    capabilities: model.kind === 'vision' ? ['vision'] : []
+    name: model.name
   }))
+}
+
+/** The loaded model's capabilities, read from the llama-server /props payload the same way a
+ *  client probing /props reads them. null when the payload carries no capability data, so the
+ *  entry stays unknown and clients probe for themselves. */
+export function liveChatCapabilities(props: Record<string, unknown>): string[] | null {
+  const modalities = props.modalities as { vision?: unknown } | undefined
+  const templateCaps = props.chat_template_caps as { supports_tools?: unknown } | undefined
+  if (!modalities && !templateCaps) return null
+  const template = typeof props.chat_template === 'string' ? props.chat_template : undefined
+  return [
+    ...(modalities?.vision === true ? ['vision'] : []),
+    ...(templateCaps?.supports_tools === true ? ['tools'] : []),
+    ...(detectThinkingDialect(template) !== 'none' ? ['reasoning'] : [])
+  ]
+}
+
+/** The saved chat model leads, marked active, so clients that take the first entry keep the user's
+ *  choice; every local chat entry carries the context window the local engine serves, and only
+ *  the loaded model carries capabilities (its live ones). */
+export function leadWithActiveChatModel(
+  entries: readonly Record<string, unknown>[],
+  activeId: string | null,
+  contextLength: number,
+  loaded: { id: string; capabilities: string[] } | null = null
+): Record<string, unknown>[] {
+  const marked = entries.map((entry) => ({
+    ...entry,
+    context_length: contextLength,
+    ...(activeId !== null && entry.id === activeId ? { active: true } : {}),
+    ...(loaded && entry.id === loaded.id ? { capabilities: loaded.capabilities } : {})
+  }))
+  return [
+    ...marked.filter((entry) => entry.active === true),
+    ...marked.filter((entry) => entry.active !== true)
+  ]
+}
+
+/** Every installed image model can be selected; the active pick leads so it stays the default. */
+export function installedImageModelEntries(
+  installed: readonly string[],
+  active: string | null,
+  now: number
+): Record<string, unknown>[] {
+  const ids = active ? [active, ...installed.filter((id) => id !== active)] : [...installed]
+  return ids.map((id) => modelEntry(id, 'image', now))
 }

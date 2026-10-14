@@ -43,6 +43,13 @@ beforeEach(() => {
   Object.defineProperty(window, 'api', { configurable: true, value: api })
 })
 afterEach(cleanup)
+/** The connected count rolls in its own number span, so read the status line whole. */
+const connectedCount =
+  (count: number) =>
+  (_content: string, element: Element | null): boolean =>
+    element?.getAttribute('role') === 'status' &&
+    element.textContent?.trim() === `${count} connected`
+
 describe('quick connections', () => {
   it('connects directly once and shows verified success', async () => {
     const user = userEvent.setup()
@@ -53,7 +60,7 @@ describe('quick connections', () => {
       )
     )
     await user.click(screen.getAllByRole('button', { name: 'Connect' })[0]!)
-    await screen.findByText('1 connected')
+    await screen.findByText(connectedCount(1))
     expect(api.mcpAdd).toHaveBeenCalledWith(
       expect.objectContaining({ url: 'https://mcp.notion.com/mcp', liveOnly: true })
     )
@@ -75,7 +82,7 @@ describe('quick connections', () => {
     expect(api.mcpSetEnabled).not.toHaveBeenCalled()
     testResult = { ok: true }
     await user.click(screen.getAllByRole('button', { name: 'Connect' })[0]!)
-    await screen.findByText('1 connected')
+    await screen.findByText(connectedCount(1))
   })
   it('cancels pending sign-in without marking the connection ready', async () => {
     waitForLogin = true

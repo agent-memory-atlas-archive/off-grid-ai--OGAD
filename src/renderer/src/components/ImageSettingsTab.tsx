@@ -7,9 +7,19 @@ import {
 } from '@renderer/lib/image-params'
 import { announceImageSettingsChanged } from '@renderer/lib/image-settings-events'
 import { resolveModelName } from '@renderer/lib/model-summary'
+import { useRuntimeBackends } from '@renderer/hooks/useRuntimeBackends'
 import { SettingsSelect } from './SettingsSelect'
 import { BackendPreferencesSection } from './ProcessingControls'
 import { SettingsSection } from './SettingsSection'
+import { SettingsRow } from './SettingsRow'
+import {
+  NumberField,
+  NumberFieldDecrement,
+  NumberFieldGroup,
+  NumberFieldIncrement,
+  NumberFieldInput
+} from '@offgrid/operator-ui/operator/coss/number-field'
+import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
 
 type ImageSettings = {
   imageParams?: ImageParamStore
@@ -17,6 +27,13 @@ type ImageSettings = {
   imgNegative?: string
   enhanceImagePrompts?: boolean
 }
+
+// The number field hands typed input over already clamped into range, so a partial "1" on the
+// way to "12" would arrive as 4 and be saved. Range-check the text that was actually typed.
+const typedText = (value: number | null, details: { reason: string; event: Event }): string =>
+  details.reason === 'input-change'
+    ? ((details.event.target as HTMLInputElement | null)?.value ?? '')
+    : String(value ?? '')
 
 const modelLabel = (model: string): string =>
   (resolveModelName([], model) ?? model).replace(/\.gguf$/i, '').replace(/-Q\d.*$/i, '')
@@ -29,6 +46,11 @@ export function ImageSettingsTab(): React.JSX.Element {
   const [negativePrompt, setNegativePrompt] = useState('')
   const [enhance, setEnhance] = useState(true)
   const settingsChangedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // On CUDA the image and chat models stay loaded together (runtime-manager), so they share
+  // GPU memory. Only a running engine's confirmed backend counts; nothing here probes the GPU.
+  const onCuda = useRuntimeBackends().some(
+    (runtime) => runtime.state === 'loaded' && /CUDA/i.test(runtime.backend ?? '')
+  )
 
   useEffect(
     () => () => {
@@ -95,6 +117,19 @@ export function ImageSettingsTab(): React.JSX.Element {
     persist('imageParams', next)
   }
 
+  // Save each complete value as it is typed. Closing Settings with Esc or an outside click
+  // removes the field without a blur, so a blur-only save silently dropped the edit.
+  const saveTypedOverride = (
+    key: keyof ImageParamOverride,
+    raw: string,
+    min: number,
+    max: number
+  ): void => {
+    const value = Number(raw)
+    if (raw.trim() && Number.isFinite(value) && value >= min && value <= max)
+      saveOverride(key, value)
+  }
+
   const processing = (
     <SettingsSection
       id="image.processing"
@@ -129,11 +164,17 @@ export function ImageSettingsTab(): React.JSX.Element {
         summary={generationSummary}
         defaultOpen
       >
-        <div className="space-y-4 pb-3">
-          <div>
-            <span className="mb-1 block text-[11px] uppercase tracking-wide text-neutral-400">
-              Active image model
-            </span>
+        <div className="divide-y divide-neutral-900">
+          <SettingsRow
+            label="Active image model"
+            controlId="active-image-model"
+            inline
+            hint={
+              onCuda
+                ? 'Chat and image models stay loaded together on CUDA and share GPU memory. Generation may fail on smaller cards.'
+                : undefined
+            }
+          >
             <SettingsSelect
               id="active-image-model"
               label="Active image model"
@@ -141,11 +182,8 @@ export function ImageSettingsTab(): React.JSX.Element {
               onValueChange={chooseModel}
               options={models}
             />
-          </div>
-          <div>
-            <span className="mb-1 block text-[11px] uppercase tracking-wide text-neutral-400">
-              Size
-            </span>
+          </SettingsRow>
+          <SettingsRow label="Size" controlId="image-size" inline>
             <SettingsSelect
               id="image-size"
               label="Image size"
@@ -156,7 +194,7 @@ export function ImageSettingsTab(): React.JSX.Element {
                 label: `${size} × ${size}`
               }))}
             />
-          </div>
+          </SettingsRow>
         </div>
       </SettingsSection>
 
@@ -166,40 +204,50 @@ export function ImageSettingsTab(): React.JSX.Element {
             <span className="mb-1 block text-[11px] uppercase tracking-wide text-neutral-400">
               Steps
             </span>
-            <input
+            <NumberField
               key={model}
-              aria-label="Image steps"
-              type="number"
+              size="sm"
               min={4}
               max={50}
               defaultValue={effective.steps}
-              onBlur={(event) => {
-                const steps = Math.max(4, Math.min(50, Number(event.target.value) || 4))
-                event.target.value = String(steps)
-                saveOverride('steps', steps)
-              }}
-              className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-neutral-200 outline-none focus:border-green-500"
-            />
+              onValueChange={(value, details) =>
+                saveTypedOverride('steps', typedText(value, details), 4, 50)
+              }
+              onValueCommitted={(value) =>
+                saveOverride('steps', Math.max(4, Math.min(50, value || 4)))
+              }
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput aria-label="Image steps" />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
           </label>
           <label>
             <span className="mb-1 block text-[11px] uppercase tracking-wide text-neutral-400">
               Guidance
             </span>
-            <input
+            <NumberField
               key={model}
-              aria-label="Image guidance"
-              type="number"
+              size="sm"
               min={0}
               max={20}
               step={0.5}
               defaultValue={effective.cfgScale}
-              onBlur={(event) => {
-                const guidance = Math.max(0, Math.min(20, Number(event.target.value) || 0))
-                event.target.value = String(guidance)
-                saveOverride('cfgScale', guidance)
-              }}
-              className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-neutral-200 outline-none focus:border-green-500"
-            />
+              onValueChange={(value, details) =>
+                saveTypedOverride('cfgScale', typedText(value, details), 0, 20)
+              }
+              onValueCommitted={(value) =>
+                saveOverride('cfgScale', Math.max(0, Math.min(20, value || 0)))
+              }
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput aria-label="Image guidance" />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
           </label>
           <label>
             <span className="mb-1 block text-[11px] uppercase tracking-wide text-neutral-400">
@@ -238,22 +286,21 @@ export function ImageSettingsTab(): React.JSX.Element {
             />
           </label>
 
-          <label className="flex items-start gap-2 border border-neutral-800 bg-neutral-900/40 p-3">
-            <input
-              type="checkbox"
-              checked={enhance}
-              onChange={(event) => {
-                setEnhance(event.target.checked)
-                persist('enhanceImagePrompts', event.target.checked)
-              }}
-              className="mt-0.5 accent-green-500"
-            />
-            <span>
-              <span className="block text-xs text-neutral-200">Enhance prompts</span>
-              <span className="mt-0.5 block text-[10px] text-neutral-600">
+          <label className="flex cursor-pointer items-center justify-between gap-8 py-1">
+            <span className="min-w-0">
+              <span className="block text-[13px] text-neutral-200">Enhance prompts</span>
+              <span className="mt-1 block text-[11.5px] leading-relaxed text-neutral-500">
                 Let the local chat model add useful visual detail before generation.
               </span>
             </span>
+            <Switch
+              aria-label="Enhance prompts"
+              checked={enhance}
+              onCheckedChange={(checked) => {
+                setEnhance(checked)
+                persist('enhanceImagePrompts', checked)
+              }}
+            />
           </label>
         </div>
       </SettingsSection>

@@ -1,4 +1,4 @@
-import { restoredStreamMessage } from '@renderer/lib/chat-stream-restore'
+import { restoredStreamMessage, withRestoredStream } from '@renderer/lib/chat-stream-restore'
 import { stopChatRun } from '@renderer/lib/chat-stop'
 import { observeOwnedRun, type RunEvent } from '@renderer/lib/chat-run-owner'
 import { persistObservedTurn } from '@renderer/lib/chat-turn-persistence'
@@ -6,7 +6,8 @@ import type { ResponseVersion } from '../../../../shared/chat-versions'
 import {
   appendAnswerVersion,
   selectAnswerVersion,
-  failedAnswerVersion
+  failedAnswerVersion,
+  withAnswerVersions
 } from '@renderer/lib/chat-versions'
 import { replaceChatTurn, type ReplacementDependencies } from '@renderer/lib/chat-turn-replacement'
 import {
@@ -78,6 +79,12 @@ import { ModelPicker } from '../ModelPicker'
 import { SettingsPanel } from '../SettingsPanel'
 import { OPEN_ACTIVE_MODELS_PANEL_EVENT } from '@renderer/lib/model-settings-panel'
 import { LoadingDots } from '../ui/loading-dots'
+import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import ElasticSlider from '@offgrid/operator-ui/operator/bits/elastic-slider'
+import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
+import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
+import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { SidePanel } from '../SidePanel'
 import { ImageLightbox } from '../media/ImageLightbox'
 import { resolveImageParams, setOverride, type ImageParamStore } from '@renderer/lib/image-params'
@@ -103,8 +110,20 @@ import {
   type ImageGenerationRequestContract
 } from '../../../../shared/image-generation-contract'
 import { Button } from '@renderer/components/ui/button'
-import { Button as QueueActionButton } from '@offgrid/operator-ui/operator/button'
-import '@offgrid/operator-ui/styles.css'
+import {
+  MessageQueue,
+  type MessageQueueLabels,
+  type QueueEdit
+} from '@offgrid/operator-ui/operator/workflows/queue'
+import { AttachmentList } from '@offgrid/operator-ui/operator/workflows/attachments'
+import { AutoHeight } from '@offgrid/operator-ui/operator/presence'
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputFooter,
+  PromptInputHeader,
+  PromptInputTools
+} from '@offgrid/operator-ui/operator/elements/prompt-input'
 import {
   Dialog,
   DialogContent,
@@ -156,8 +175,9 @@ import {
   CaretDown,
   Lightning,
   WarningCircle,
-  ArrowElbowDownLeft,
-  Trash
+  DownloadSimple,
+  Trash,
+  Stop
 } from '@phosphor-icons/react'
 import type { MemoryChatProps } from './interfaces'
 import { announceAssistantActivity, announceAssistantListening } from '../../lib/assistant-activity'
@@ -182,7 +202,10 @@ import {
   groupChatTurnWork,
   mapRagMessages,
   mergeDurableAndStreaming,
-  mergeRemotePreviewTools
+  mergeRemotePreviewTools,
+  queuedTurnId,
+  toProcessingAttachment,
+  toQueuedMessage
 } from './helper'
 import {
   findDurableWorkMessageId,
@@ -196,7 +219,7 @@ import {
   readOpenChatTabs
 } from './utlis'
 import { ToolMessageTimelineRow } from './components/ToolMessageTimelineRow'
-import { AudioPane, DocumentPane } from './components/AttachmentPanes'
+import { AttachmentPreview } from './components/AttachmentPanes'
 import {
   ASK_EXAMPLES,
   ASK_EXAMPLES_PRO,
@@ -211,7 +234,8 @@ import {
   applyStreamViewEvent,
   clearStreamViewMessage,
   resetStreamViewMessage,
-  seedStreamViewMessage
+  seedStreamViewMessage,
+  streamViewMessage
 } from './stream-view-store'
 
 import { stopLiveTask, stopLiveWebUseForConversation } from './helper'
@@ -224,6 +248,38 @@ import {
   textRecordingButtonLabel,
   textRecordingTooltip
 } from './utlis'
+
+/** OGAD's names for the queue's rows and actions. */
+const QUEUE_LABELS: MessageQueueLabels = {
+  queue: 'Queued messages',
+  section: 'queued',
+  attachmentsOnly: (message) => {
+    const count = message.attachments?.length ?? 0
+    return `(${count} attachment${count === 1 ? '' : 's'})`
+  },
+  sendNow: 'Send queued message now',
+  remove: 'Delete queued message',
+  cancel: 'Cancel queued message',
+  copy: 'Copy queued message',
+  copied: 'Copied queued message',
+  edit: 'Edit queued message',
+  moveUp: 'Move queued message up',
+  moveDown: 'Move queued message down',
+  editField: 'Edit queued message'
+}
+
+/** The image sizes the composer offers, as segmented options. */
+const IMAGE_SIZE_OPTIONS = [256, 512, 640, 768, 1024].map((size) => ({
+  id: String(size),
+  label: String(size)
+}))
+
+/** A new turn rises into the thread; it animates on mount only, never as tokens stream. */
+const MESSAGE_ROW_ENTER = {
+  initial: { opacity: 0, y: 6 },
+  animate: { opacity: 1, y: 0 },
+  transition: { duration: 0.4, ease: [0.16, 1, 0.3, 1] }
+} as const
 
 /** God's own voice turn mode (hands-free unless changed in its voice composer). */
 
@@ -545,6 +601,13 @@ export function MemoryChat({
   const [noMemory, setNoMemory] = useState(!isPro)
   const [, setProjectMenuOpen] = useState(false)
   const [projCreating, setProjCreating] = useState(false)
+  const projectNameInput = useRef<HTMLInputElement>(null)
+  const focusProjectName = (event: Event): void => {
+    if (!projCreating) return
+    // Transfer focus after the menu exit finishes, regardless of animation duration.
+    event.preventDefault()
+    projectNameInput.current?.focus()
+  }
   const [toolsOn, setToolsOn] = useState(false)
   const [toolsEnabled, setToolsEnabled] = useState(true)
   const [assistantGateOpen, setAssistantGateOpen] = useState(false)
@@ -786,6 +849,7 @@ export function MemoryChat({
     renderer?: 'image' | 'document' | 'audio' | 'video' | 'text'
   } | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [queueEdit, setQueueEdit] = useState<QueueEdit | null>(null)
   const [lightbox, setLightbox] = useState<{ url: string; path?: string } | null>(null)
   // Pro registers this slot after the core renderer starts. Resolve it on each render so an
   // execution-chat approval cannot stay hidden behind a value cached before Pro activation.
@@ -891,6 +955,11 @@ export function MemoryChat({
   useEffect(() => queueStore.subscribe(renderQueuedByConv), [queueStore])
   // Map streamId → convId so the onRagStream handler can route tokens to the right
   // conversation regardless of which tab is active when the event fires.
+  // Image requests a turn receives while the model is still writing, by stream. Only comic turns
+  // whose images run on a remote server register here (see the tools:chat handler).
+  const earlyImageRequestByStream = useRef(
+    new Map<string, (request: { prompt: string; enhancePrompt?: boolean }) => void>()
+  )
   const streamConvRef = useRef<Map<string, string>>(new Map())
   // The async sender survives navigation. Its listener owns cancellation and the final
   // save; mounted views only observe it. No model "done" event releases this reservation.
@@ -1611,7 +1680,14 @@ export function MemoryChat({
         queueStore,
         targetConv,
         generatingRef.current,
-        { text: typed, atts, assistantEnabled: assistantForTurn, projectId, mode: turnMode },
+        {
+          id: crypto.randomUUID(),
+          text: typed,
+          atts,
+          assistantEnabled: assistantForTurn,
+          projectId,
+          mode: turnMode
+        },
         {
           draftStore,
           sendNow: opts?.sendNow,
@@ -1954,39 +2030,44 @@ export function MemoryChat({
             imageRequest.prompt,
             img.prompt
           )
-          const assistantMessage: ChatMessage = {
-            id: `a-${Date.now()}`,
-            role: 'assistant',
-            ...completedImage,
-            image: img.dataUrl,
-            imagePath: img.path,
-            imageMetadata,
-            ...(img.durationMs === undefined ? {} : { generationTimeMs: img.durationMs }),
-            ...(imageMetrics ? { metrics: imageMetrics } : {})
-          }
+          const imageContext = withGeneratedImageReference(
+            {
+              imageMetadata,
+              ...(img.durationMs === undefined ? {} : { durationMs: img.durationMs }),
+              ...(imageMetrics ? { metrics: imageMetrics } : {})
+            },
+            { id: img.syncId, path: img.path }
+          )
+          // A regenerate keeps the answers it replaces as earlier versions of this one.
+          const assistantMessage = withAnswerVersions(
+            {
+              id: `a-${Date.now()}`,
+              role: 'assistant',
+              ...completedImage,
+              image: img.dataUrl,
+              imagePath: img.path,
+              imageMetadata,
+              context: imageContext as RagContext,
+              ...(img.durationMs === undefined ? {} : { generationTimeMs: img.durationMs }),
+              ...(imageMetrics ? { metrics: imageMetrics } : {})
+            },
+            opts?.priorVariants
+          )
           setConvMessages(convId, (prev) => [...prev, assistantMessage])
           if (voiceMode) setAutoPlayId(assistantMessage.id)
           try {
-            const imageContext = withGeneratedImageReference(
-              {
-                imageMetadata,
-                ...(img.durationMs === undefined ? {} : { durationMs: img.durationMs }),
-                ...(imageMetrics ? { metrics: imageMetrics } : {})
-              },
-              { id: img.syncId, path: img.path }
-            )
             const stored = opts?.replacementMessageId
               ? await window.api.updateRagMessage(
                   convId,
                   opts.replacementMessageId,
                   completedImage.storedContent,
-                  imageContext
+                  assistantMessage.context
                 )
               : await window.api.addRagMessage(
                   convId,
                   'assistant',
                   completedImage.storedContent,
-                  imageContext
+                  assistantMessage.context
                 )
             if (!stored) throw new Error('Saved response was not found')
             const storedId = stored === true ? opts!.replacementMessageId! : stored.uuid
@@ -2082,6 +2163,11 @@ export function MemoryChat({
       const comicPages: ComicBookPage[] = []
       let comicTitle = comicPageTotal ? (comicBookTitle(modelQuery) ?? 'Comic Book') : 'Comic Book'
       let comicReaderMessageId = `comic-reader-${toolStreamId}`
+      // The written answer, shown above the reader while its pages generate (set after the text turn).
+      let comicAnswer = ''
+      // Failed pages are reported inside the reader row: a separate row after it would become the
+      // row Chat shows for the turn and hide both the answer and the reader.
+      const comicFailures: ChatMessage[] = []
       const comicReaderPersistence = { saved: false }
       let comicArtifactId: string | null = null
       const updateComicReader = async (): Promise<void> => {
@@ -2107,7 +2193,11 @@ export function MemoryChat({
           const reader: ChatMessage = {
             id: comicReaderMessageId,
             role: 'assistant',
-            content
+            // The finished turn saves the answer above the reader in this one row. Chat shows a tool
+            // turn through its last answering row, so the tool row's own text is not shown here.
+            content: [comicAnswer, content, ...comicFailures.map((failure) => failure.content)]
+              .filter((text) => text.trim())
+              .join('\n\n')
           }
           const existing = previous.findIndex(
             (message) => message.id === comicReaderMessageId || message.id === previousMessageId
@@ -2141,7 +2231,62 @@ export function MemoryChat({
         }
       }
       if (comicPageTotal) await updateComicReader()
-      const tr = await window.api.toolChat(modelQuery, fullHistory.slice(0, -1), {
+      // The hero reference is kept before the turn so a page can start as soon as its prompt is
+      // written.
+      const comicHeroSource = comicPageTotal ? comicBookHeroImage(modelQuery) : null
+      const keptComicHero = comicHeroSource
+        ? await window.api.keepInitImage(comicHeroSource).catch(() => null)
+        : null
+      const comicHeroPath = keptComicHero?.path ?? comicHeroSource
+      const imageGenerationParams = (imageRequest: {
+        prompt: string
+        enhancePrompt?: boolean
+      }): Parameters<typeof window.api.generateImage>[0] => {
+        const comicPage = comicPageTotal ? comicBookPageFromPrompt(imageRequest.prompt) : null
+        return {
+          prompt: comicPage?.prompt ?? imageRequest.prompt,
+          ...(imageRequest.enhancePrompt === undefined
+            ? {}
+            : { enhancePrompt: imageRequest.enhancePrompt }),
+          ...(comicHeroPath
+            ? { initImage: comicHeroPath, strength: 0.72 }
+            : keptInit?.path || imagePaths[0] || imgInit
+              ? {
+                  initImage: keptInit?.path ?? imagePaths[0] ?? imgInit ?? undefined,
+                  strength: imgStrength
+                }
+              : {}),
+          conversationId: convId,
+          projectId: projectId
+        }
+      }
+      // Comic pages still generate one at a time. With a remote image server, each page starts
+      // when the model finishes writing its prompt instead of after every prompt is written; the
+      // finished turn then shows these results in page order.
+      const earlyComicImages = new Map<string, ReturnType<typeof window.api.generateImage>>()
+      let earlyComicChain: Promise<unknown> = Promise.resolve()
+      let earlyComicCancelled = false
+      if (comicPageTotal) {
+        earlyImageRequestByStream.current.set(toolStreamId, (request) => {
+          if (
+            earlyComicCancelled ||
+            cancelledRef.current.has(convId) ||
+            earlyComicImages.has(request.prompt)
+          ) return
+          const image = earlyComicChain.then(() =>
+            earlyComicCancelled || cancelledRef.current.has(convId)
+              ? Promise.reject(new Error('Image generation cancelled.'))
+              : window.api.generateImage(imageGenerationParams(request))
+          )
+          image.catch(() => {
+            /* The finished turn reports this page's failure in place. */
+          })
+          earlyComicChain = image.catch(() => undefined)
+          earlyComicImages.set(request.prompt, image)
+        })
+      }
+      const tr = await window.api
+        .toolChat(modelQuery, fullHistory.slice(0, -1), {
         assistantOnly: assistantForTurn,
         connectors: god ? true : connectorsOn,
         conversationId: convId,
@@ -2155,7 +2300,14 @@ export function MemoryChat({
         imageAvailable,
         streamId: toolStreamId,
         thinking: god ? true : thinkingEnabled
-      })
+        })
+        .catch(async (error) => {
+          earlyComicCancelled = true
+          if (earlyComicImages.size) await window.api.cancelImageGen().catch(() => {})
+          await earlyComicChain
+          throw error
+        })
+        .finally(() => earlyImageRequestByStream.current.delete(toolStreamId))
       const toolCalls: ProjectedSyncedTool[] = (tr?.toolCalls || []).map(
         (c: { name: string; result: string; status?: 'completed' | 'failed' | 'pending' }) => ({
           name: c.name,
@@ -2170,6 +2322,10 @@ export function MemoryChat({
           ? { unified: tr?.unified ?? [], toolCalls, toolsOffered: tr?.toolsOffered }
           : undefined
       if (cancelledRef.current.has(convId)) {
+        // Stop also ends a comic page that started while the model was writing.
+        earlyComicCancelled = true
+        if (earlyComicImages.size) await window.api.cancelImageGen().catch(() => {})
+        await earlyComicChain
         // The tool calls made before the stop are kept, exactly as a completed tool turn keeps
         // them: rendered from `toolCalls`, stored in `toolCtx` beside the citation sources.
         await finalizeStoppedTurn(convId, toolStreamId, {
@@ -2282,13 +2438,10 @@ export function MemoryChat({
         let generatedImageCount = 0
         if (comicPageTotal) {
           comicTitle = comicBookTitle(imageRequests[0]?.prompt ?? '') ?? comicTitle
+          // A tool row without tool calls is not grouped with the reader and still shows its answer.
+          comicAnswer = pendingToolCalls.length ? visibleToolAnswer : ''
           await updateComicReader()
         }
-        const comicHeroSource = comicPageTotal ? comicBookHeroImage(modelQuery) : null
-        const keptComicHero = comicHeroSource
-          ? await window.api.keepInitImage(comicHeroSource).catch(() => null)
-          : null
-        const comicHeroPath = keptComicHero?.path ?? comicHeroSource
         const setComicImageToolStatus = (
           requestIndex: number,
           status: 'completed' | 'failed'
@@ -2314,24 +2467,12 @@ export function MemoryChat({
             if (cancelledRef.current.has(convId)) break
             setImgProgress(null)
             const comicPage = comicPageTotal ? comicBookPageFromPrompt(imageRequest.prompt) : null
-            const generationPrompt = comicPage?.prompt ?? imageRequest.prompt
+            const generationParams = imageGenerationParams(imageRequest)
+            const generationPrompt = generationParams.prompt
+            const earlyImage = earlyComicImages.get(imageRequest.prompt)
+            earlyComicImages.delete(imageRequest.prompt)
             try {
-              const img = await window.api.generateImage({
-                prompt: generationPrompt,
-                ...(imageRequest.enhancePrompt === undefined
-                  ? {}
-                  : { enhancePrompt: imageRequest.enhancePrompt }),
-                ...(comicHeroPath
-                  ? { initImage: comicHeroPath, strength: 0.72 }
-                  : keptInit?.path || imagePaths[0] || imgInit
-                    ? {
-                        initImage: keptInit?.path ?? imagePaths[0] ?? imgInit ?? undefined,
-                        strength: imgStrength
-                      }
-                    : {}),
-                conversationId: convId,
-                projectId: projectId
-              })
+              const img = await (earlyImage ?? window.api.generateImage(generationParams))
               const imageMetadata: ImageGenerationMetadata | undefined =
                 typeof img.width === 'number' &&
                 typeof img.height === 'number' &&
@@ -2440,22 +2581,25 @@ export function MemoryChat({
                 (error instanceof Error ? error.message : 'Image generation failed.')
               if (!/cancel/i.test(message)) {
                 setComicImageToolStatus(imageRequestIndex, 'failed')
-                setConvMessages(convId, (previous) => [
-                  ...previous,
-                  {
-                    id: crypto.randomUUID(),
-                    role: 'assistant',
-                    content: message,
-                    imageMemoryRetry: memoryGuard
-                      ? {
-                          request: { prompt: imageRequest.prompt },
-                          prompt: imageRequest.prompt,
-                          conversationId: convId,
-                          projectId
-                        }
-                      : undefined
-                  }
-                ])
+                const failure: ChatMessage = {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: comicPageTotal ? `Page ${imageRequestIndex + 1}: ${message}` : message,
+                  imageMemoryRetry: memoryGuard
+                    ? {
+                        request: { prompt: imageRequest.prompt },
+                        prompt: imageRequest.prompt,
+                        conversationId: convId,
+                        projectId
+                      }
+                    : undefined
+                }
+                if (comicPageTotal) {
+                  comicFailures.push(failure)
+                  await updateComicReader()
+                } else {
+                  setConvMessages(convId, (previous) => [...previous, failure])
+                }
               }
             }
           }
@@ -2463,7 +2607,8 @@ export function MemoryChat({
             const finalHtml = buildComicBookReader(comicPages, comicPageTotal, comicTitle)
             const finalContent = [
               visibleToolAnswer,
-              `Comic book reader: ${comicPages.length} of ${comicPageTotal} pages ready.\n\n\`\`\`html\n${finalHtml}\n\`\`\``
+              `Comic book reader: ${comicPages.length} of ${comicPageTotal} pages ready.\n\n\`\`\`html\n${finalHtml}\n\`\`\``,
+              ...comicFailures.map((failure) => failure.content)
             ]
               .filter((text) => text.trim())
               .join('\n\n')
@@ -2515,9 +2660,11 @@ export function MemoryChat({
                 current.filter((artifact) => artifact.id !== savedComicArtifactId)
               )
             }
-            setConvMessages(convId, (previous) =>
-              previous.filter((message) => message.id !== comicReaderMessageId)
-            )
+            // With no reader left to hold them, failed pages are reported as their own rows again.
+            setConvMessages(convId, (previous) => [
+              ...previous.filter((message) => message.id !== comicReaderMessageId),
+              ...comicFailures
+            ])
             setCanvasArtifact(null)
           }
         } finally {
@@ -2712,6 +2859,36 @@ export function MemoryChat({
       projectIdOverride: item.projectId,
       modeOverride: item.mode
     })
+  }
+
+  const findQueuedMessage = (conversationId: string, id: string): QueuedTurn | undefined =>
+    (queuedRef.current[conversationId] ?? []).find((queued) => queuedTurnId(queued) === id)
+
+  /** Rewrite one waiting turn in place; a turn that already left the queue is left alone. */
+  const saveQueuedEdit = (conversationId: string): void => {
+    const edit = queueEdit
+    setQueueEdit(null)
+    if (!edit) return
+    const queue = queuedRef.current[conversationId] ?? []
+    const item = findQueuedMessage(conversationId, edit.id)
+    if (!item) return
+    const text = edit.text.trim()
+    if (!text && item.atts.length === 0) return
+    setQueuedByConv({
+      ...queuedRef.current,
+      [conversationId]: queue.map((queued) =>
+        queued === item ? { ...queued, id: queuedTurnId(queued), text } : queued
+      )
+    })
+  }
+
+  const moveQueuedMessage = (conversationId: string, id: string, direction: -1 | 1): void => {
+    const queue = [...(queuedRef.current[conversationId] ?? [])]
+    const index = queue.findIndex((queued) => queuedTurnId(queued) === id)
+    const target = index + direction
+    if (index < 0 || target < 0 || target >= queue.length) return
+    ;[queue[index], queue[target]] = [queue[target]!, queue[index]!]
+    setQueuedByConv({ ...queuedRef.current, [conversationId]: queue })
   }
 
   async function settleObservedRun(
@@ -3106,7 +3283,14 @@ export function MemoryChat({
   useEffect(() => {
     console.log('MemoryChat effect: RAG stream subscription')
     let disposed = false
-    const off = window.api.onRagStream((data) => {
+    const off = window.api.onRagStream((incoming) => {
+      // An early image request belongs to the comic turn waiting for it, not to the stream view.
+      if (incoming.type === 'image_request') {
+        if (incoming.request)
+          earlyImageRequestByStream.current.get(incoming.streamId)?.(incoming.request)
+        return
+      }
+      const data = { ...incoming, type: incoming.type }
       const cid = streamConvRef.current.get(data.streamId)
       if (!cid) return
       if (unownedTerminal(data.type, rendererOwnsRun(cid))) {
@@ -3259,19 +3443,16 @@ export function MemoryChat({
           attachRendererRun(stream.conversationId)
           streamConvRef.current.set(stream.streamId, stream.conversationId)
           reasoningByStream.current[stream.streamId] = stream.reasoning
-          const restored = restoredStreamMessage(stream)
+          // The sender's view still names the answer a regenerate replaces and its versions.
+          const restored = restoredStreamMessage(stream, streamViewMessage(stream.streamId))
           timelineByStream.current[stream.streamId] = restored.timeline ?? []
           toolCallsByStream.current[stream.streamId] = restored.toolCalls ?? []
           answerByStream.current[stream.streamId] = stream.content
           markGenerating(stream.conversationId, true)
           seedStreamViewMessage(restored)
-          setConvMessages(stream.conversationId, (previous) => {
-            const index = previous.findIndex((message) => message.id === stream.streamId)
-            if (index < 0) return [...previous, restored]
-            return previous.map((message, messageIndex) =>
-              messageIndex === index ? { ...message, ...restored } : message
-            )
-          })
+          setConvMessages(stream.conversationId, (previous) =>
+            withRestoredStream(previous, restored)
+          )
         }
         for (const cid of Object.keys(queuedRef.current)) {
           if (!generatingRef.current.has(cid)) drainQueue(cid)
@@ -3630,20 +3811,29 @@ export function MemoryChat({
       />
     ) : undefined
   const activeImageProgress = showGenerationProgress ? (
-    <div className="w-full rounded-md border border-neutral-800 bg-neutral-900/40 p-3">
+    <div
+      className={
+        imgProgress?.preview
+          ? 'w-full rounded-md border border-neutral-800 bg-neutral-900/40 p-3'
+          : 'w-fit max-w-full py-1'
+      }
+    >
       {imgProgress?.preview ? (
         <img
           src={imgProgress.preview}
           alt="forming"
           className={`mb-2 aspect-square w-full rounded-md border border-neutral-800 object-cover ${qwenLatentPreview ? 'grayscale' : ''}`}
         />
-      ) : (
-        <div className="mb-2 flex aspect-square w-full items-center justify-center rounded-md border border-neutral-800 text-[11px] text-neutral-600">
-          Preparing image…
-        </div>
-      )}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-neutral-500">
-        <span>{imageProgressLabel(imageJobStage, imgProgress)}</span>
+      ) : null}
+      <div
+        role="status"
+        className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-neutral-500"
+      >
+        <TextShimmer as="span">
+          {imgProgress || imageJobStage
+            ? imageProgressLabel(imageJobStage, imgProgress)
+            : 'Preparing image…'}
+        </TextShimmer>
         {imgProgress && imgProgress.step < imgProgress.total ? (
           <span className="text-neutral-600">
             · ~
@@ -3928,30 +4118,37 @@ export function MemoryChat({
                   {/* Chat tabs — quick-switch between open conversations */}
                   {(openTabs.length > 0 || activeConversationId) && (
                     <div className="flex items-center gap-1 overflow-x-auto border-b border-neutral-900 px-2 py-1">
-                      {openTabs.map((id) => {
-                        const t = conversations.find((c) => c.id === id)
-                        const active = activeConversationId === id
-                        return (
-                          <div
-                            key={id}
-                            className={`group flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors ${active ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-400 hover:bg-neutral-900'}`}
-                          >
-                            <button
-                              onClick={() => switchConversation(id)}
-                              className="max-w-[12rem] truncate"
+                      <AnimatePresence initial={false}>
+                        {openTabs.map((id) => {
+                          const t = conversations.find((c) => c.id === id)
+                          const active = activeConversationId === id
+                          return (
+                            <motion.div
+                              key={id}
+                              layout
+                              initial={{ opacity: 0, y: 6 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0 }}
+                              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                              className={`group flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors ${active ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-400 hover:bg-neutral-900'}`}
                             >
-                              {t?.title || 'Untitled'}
-                            </button>
-                            <button
-                              onClick={() => closeTab(id)}
-                              className="text-neutral-600 transition-colors hover:text-red-400"
-                              title="Close tab"
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        )
-                      })}
+                              <button
+                                onClick={() => switchConversation(id)}
+                                className="max-w-[12rem] truncate"
+                              >
+                                {t?.title || 'Untitled'}
+                              </button>
+                              <button
+                                onClick={() => closeTab(id)}
+                                className="text-neutral-600 transition-colors hover:text-red-400"
+                                title="Close tab"
+                              >
+                                ✕
+                              </button>
+                            </motion.div>
+                          )
+                        })}
+                      </AnimatePresence>
                       {!activeConversationId && (
                         <div className="flex shrink-0 items-center rounded-md bg-neutral-800 px-2.5 py-1 text-xs text-neutral-100">
                           New chat
@@ -4035,13 +4232,18 @@ export function MemoryChat({
                                     />
                                   </svg>
                                 </div>
-                                <h2 className="text-3xl font-semibold tracking-tight text-foreground">
+                                <TextEffect
+                                  as="h2"
+                                  preset="fade-in-blur"
+                                  per="char"
+                                  className="text-3xl font-semibold tracking-tight text-foreground"
+                                >
                                   {god
                                     ? `Ask ${god.name}`
                                     : mode === 'image'
                                       ? 'Create an image'
                                       : 'Start a conversation'}
-                                </h2>
+                                </TextEffect>
                                 <p className="mt-3 max-w-md text-sm text-muted-foreground">
                                   {god
                                     ? 'It knows your day, memory and accounts, and asks before it acts.'
@@ -4074,109 +4276,122 @@ export function MemoryChat({
                                   />
                                 ) : null
                               ) : (
-                                <div className="mt-6 grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+                                <AnimatedGroup
+                                  preset="blur-slide"
+                                  className="mt-6 grid w-full grid-cols-1 gap-2 sm:grid-cols-2"
+                                >
                                   {examples.map((ex) => (
                                     <button
                                       key={ex}
                                       onClick={() => sendMessage(ex)}
-                                      className="rounded-md border border-border bg-background px-3 py-2.5 text-left text-xs text-muted-foreground transition-colors hover:border-primary hover:bg-accent hover:text-foreground"
+                                      className="h-full w-full rounded-md border border-border bg-background px-3 py-2.5 text-left text-xs text-muted-foreground transition-colors hover:border-primary hover:bg-accent hover:text-foreground"
                                     >
                                       {ex}
                                     </button>
                                   ))}
-                                </div>
+                                </AnimatedGroup>
                               )}
                             </>
                           )}
                         </div>
                       ) : (
                         <div className="w-full px-6 py-5">
-                          {displayMessages.map((message, messageIndex) => {
-                            if (message.role === 'tool') {
-                              if (displayMessages[messageIndex - 1]?.role === 'tool') return null
-                              const run: ChatMessage[] = []
-                              for (
-                                let index = messageIndex;
-                                displayMessages[index]?.role === 'tool';
-                                index += 1
-                              ) {
-                                run.push(displayMessages[index]!)
+                          {/* New turns rise in. Rows are keyed by position, not message id, so a draft id
+                    swapping for its saved id (or a streamed answer settling) never replays the entrance. */}
+                          <AnimatePresence initial={false}>
+                            {displayMessages.map((message, messageIndex) => {
+                              if (message.role === 'tool') {
+                                if (displayMessages[messageIndex - 1]?.role === 'tool') return null
+                                const run: ChatMessage[] = []
+                                for (
+                                  let index = messageIndex;
+                                  displayMessages[index]?.role === 'tool';
+                                  index += 1
+                                ) {
+                                  run.push(displayMessages[index]!)
+                                }
+                                return (
+                                  <motion.div key={messageIndex} {...MESSAGE_ROW_ENTER}>
+                                    <ToolMessageTimelineRow key={message.id} messages={run} />
+                                  </motion.div>
+                                )
                               }
-                              return <ToolMessageTimelineRow key={message.id} messages={run} />
-                            }
-                            const displayedMessage =
-                              message.id === mergedRemoteWorkMessageId
-                                ? {
-                                  ...message,
-                                  streaming: true,
-                                  toolCalls: mergeRemotePreviewTools(
-                                    message.toolCalls,
-                                    remoteWorkPreview
-                                  )
-                                }
-                                : message
-                            return (
-                              <MessageRow
-                                key={message.id}
-                                message={displayedMessage}
-                                onStreamRender={followStreamRender}
-                                journeyId={activeConversationId}
-                                nextMessageRole={displayMessages[messageIndex + 1]?.role}
-                                timelineThinking={
-                                  message.id === activeImageTimelineMessageId
-                                    ? activeEnhancedPrompt
-                                    : message.id === mergedRemoteWorkMessageId
-                                      ? remoteWorkPreview?.reasoning?.trim()
-                                        ? (
-                                          <ChatThinkingBlock
-                                            content={remoteWorkPreview.reasoning}
-                                            live
-                                            className="max-w-full"
-                                          />
-                                        )
-                                        : undefined
-                                      : undefined
-                                }
-                                workFooter={
-                                  message.id === mergedRemoteWorkMessageId ? (
-                                    <LoadingDots size="small" className="px-0" />
-                                  ) : undefined
-                                }
-                                continuation={
-                                  message.id === activeImageTimelineMessageId ? (
-                                    <div
-                                      className={`flex ${IMAGE_MESSAGE_COLUMN_WIDTH} flex-col items-start gap-2`}
-                                    >
-                                      {activeImageProgress}
-                                    </div>
-                                  ) : undefined
-                                }
-                                voiceMode={voiceMode}
-                                state={{
-                                  autoPlayId,
-                                  copiedKey,
-                                  editingId,
-                                  loading,
-                                  speakingId,
-                                  speakLoadingId,
-                                  speakError,
-                                  ttsEnabled,
-                                  ttsSpeed,
-                                  latestVoiceAssistantId,
-                                  askSelections: askSel,
-                                  incomingFiles: incomingFilesFor(message.id),
-                                  // God shows the answer and its actions, not how it was made.
-                                  showGenerationDetails: god ? false : showGenerationDetails,
-                                  // The tool list is request detail, shown with the other generation details.
-                                  showToolsSent: !god && showGenerationDetails,
-                                  regenerationDisabled:
-                                    !!activeConversationId && generatingConvs.has(activeConversationId)
-                                }}
-                                actions={messageActions}
-                                navigation={messageNavigation}
-                              />
-                            )
-                          })}
+                              const displayedMessage =
+                                message.id === mergedRemoteWorkMessageId
+                                  ? {
+                                    ...message,
+                                    streaming: true,
+                                    toolCalls: mergeRemotePreviewTools(
+                                      message.toolCalls,
+                                      remoteWorkPreview
+                                    )
+                                  }
+                                  : message
+                              return (
+                                <motion.div key={messageIndex} {...MESSAGE_ROW_ENTER}>
+                                  <MessageRow
+                                    key={message.id}
+                                    message={displayedMessage}
+                                    onStreamRender={followStreamRender}
+                                    journeyId={activeConversationId}
+                                    nextMessageRole={displayMessages[messageIndex + 1]?.role}
+                                    timelineThinking={
+                                      message.id === activeImageTimelineMessageId
+                                        ? activeEnhancedPrompt
+                                        : message.id === mergedRemoteWorkMessageId
+                                          ? remoteWorkPreview?.reasoning?.trim()
+                                            ? (
+                                              <ChatThinkingBlock
+                                                content={remoteWorkPreview.reasoning}
+                                                live
+                                                className="max-w-full"
+                                              />
+                                            )
+                                            : undefined
+                                          : undefined
+                                    }
+                                    workFooter={
+                                      message.id === mergedRemoteWorkMessageId ? (
+                                        <LoadingDots size="small" className="px-0" />
+                                      ) : undefined
+                                    }
+                                    continuation={
+                                      message.id === activeImageTimelineMessageId ? (
+                                        <div
+                                          className={`flex ${IMAGE_MESSAGE_COLUMN_WIDTH} flex-col items-start gap-2`}
+                                        >
+                                          {activeImageProgress}
+                                        </div>
+                                      ) : undefined
+                                    }
+                                    voiceMode={voiceMode}
+                                    state={{
+                                      autoPlayId,
+                                      copiedKey,
+                                      editingId,
+                                      loading,
+                                      speakingId,
+                                      speakLoadingId,
+                                      speakError,
+                                      ttsEnabled,
+                                      ttsSpeed,
+                                      latestVoiceAssistantId,
+                                      askSelections: askSel,
+                                      incomingFiles: incomingFilesFor(message.id),
+                                      // God shows the answer and its actions, not how it was made.
+                                      showGenerationDetails: god ? false : showGenerationDetails,
+                                      // The tool list is request detail, shown with the other generation details.
+                                      showToolsSent: !god && showGenerationDetails,
+                                      regenerationDisabled:
+                                        !!activeConversationId && generatingConvs.has(activeConversationId)
+                                    }}
+                                    actions={messageActions}
+                                    navigation={messageNavigation}
+                                  />
+                                </motion.div>
+                              )
+                            })}
+                          </AnimatePresence>
                           {/* A reply generating on another one of your devices, streaming here live. Pro
                     registers the renderer; the free build has no slot and this is nothing. */}
                           {ChatMessagesFooter && activeConversationId ? (
@@ -4209,8 +4424,10 @@ export function MemoryChat({
                                   live
                                   thinkingHasContent={false}
                                   thinking={
-                                    <span className="text-[11px] text-neutral-500" role="status">
-                                      {waitingLabel({ noMemory, hasProject: !!activeProjectId })}
+                                    <span className="text-[11px]" role="status">
+                                      <TextShimmer as="span">
+                                        {waitingLabel({ noMemory, hasProject: !!activeProjectId })}
+                                      </TextShimmer>
                                     </span>
                                   }
                                   footer={<LoadingDots />}
@@ -4259,51 +4476,49 @@ export function MemoryChat({
                               </select>
                             </label>
                           )}
-                          <label className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5">
                             Size
-                            <select
-                              value={imgSize}
-                              onChange={(e) => setSizeOverride(Number(e.target.value))}
-                              className="rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-neutral-300 outline-none focus:border-green-500"
-                            >
-                              <option value={256}>256</option>
-                              <option value={512}>512</option>
-                              <option value={640}>640</option>
-                              <option value={768}>768</option>
-                              <option value={1024}>1024</option>
-                            </select>
-                          </label>
-                          <label className="flex items-center gap-1.5">
+                            <Segmented
+                              label="Size"
+                              size="sm"
+                              value={String(imgSize)}
+                              options={IMAGE_SIZE_OPTIONS}
+                              onValueChange={(value) => setSizeOverride(Number(value))}
+                            />
+                          </div>
+                          <div className="flex items-center gap-1.5">
                             Steps
-                            <input
-                              type="number"
-                              min={4}
-                              max={50}
+                            <ElasticSlider
+                              aria-label="Steps"
+                              className="pt-3"
                               value={imgSteps}
-                              onChange={(e) =>
-                                setStepsOverride(
-                                  Math.max(4, Math.min(50, Number(e.target.value) || 16))
-                                )
+                              onValueChange={(value) =>
+                                setStepsOverride(Math.max(4, Math.min(50, Math.round(value) || 16)))
                               }
-                              className="w-14 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-neutral-300 outline-none focus:border-green-500 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                              startingValue={4}
+                              maxValue={50}
+                              isStepped
+                              stepSize={1}
                             />
-                          </label>
-                          <label className="flex items-center gap-1.5">
+                          </div>
+                          <div className="flex items-center gap-1.5">
                             Guidance
-                            <input
-                              type="number"
-                              min={0}
-                              max={20}
-                              step={0.5}
+                            <ElasticSlider
+                              aria-label="Guidance"
+                              className="pt-3"
                               value={imgCfgScale}
-                              onChange={(e) =>
+                              onValueChange={(value) =>
                                 setCfgScaleOverride(
-                                  Math.max(0, Math.min(20, Number(e.target.value) || 0))
+                                  Math.max(0, Math.min(20, Math.round(value * 2) / 2 || 0))
                                 )
                               }
-                              className="w-14 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-neutral-300 outline-none focus:border-green-500 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                              startingValue={0}
+                              maxValue={20}
+                              isStepped
+                              stepSize={0.5}
+                              formatValue={(value) => value.toFixed(1)}
                             />
-                          </label>
+                          </div>
                           <label className="flex items-center gap-1.5">
                             Seed
                             <input
@@ -4334,25 +4549,27 @@ export function MemoryChat({
                           {imgInit ? (
                             <span className="flex items-center gap-2 rounded-md border border-green-500/40 px-2 py-1 text-green-500">
                               {imgInit.split('/').pop()}
-                              <label
+                              <span
                                 className="flex items-center gap-1 text-neutral-500"
                                 title="img2img strength: how much to change the init image (0.1 = subtle, 1 = ignore it)"
                               >
                                 Strength
-                                <input
-                                  type="number"
-                                  min={0.1}
-                                  max={1}
-                                  step={0.05}
+                                <ElasticSlider
+                                  aria-label="Strength"
+                                  className="pt-3"
                                   value={imgStrength}
-                                  onChange={(e) =>
+                                  onValueChange={(value) =>
                                     setImgStrength(
-                                      Math.max(0.1, Math.min(1, Number(e.target.value) || 0.6))
+                                      Math.max(0.1, Math.min(1, Math.round(value * 20) / 20 || 0.6))
                                     )
                                   }
-                                  className="w-14 rounded border border-neutral-800 bg-neutral-950 px-1.5 py-0.5 text-neutral-300 outline-none focus:border-green-500"
+                                  startingValue={0.1}
+                                  maxValue={1}
+                                  isStepped
+                                  stepSize={0.05}
+                                  formatValue={(value) => value.toFixed(2)}
                                 />
-                              </label>
+                              </span>
                               <button
                                 onClick={() => setImgInit(null)}
                                 className="text-neutral-500 hover:text-red-400"
@@ -4398,109 +4615,63 @@ export function MemoryChat({
 
                       {projCreating && (
                         <NewProjectNameField
+                          inputRef={projectNameInput}
                           onCreate={createAndAssignProject}
                           onCancel={() => setProjCreating(false)}
                         />
                       )}
 
-                      {queuedCount(queuedByConv, activeConversationId) > 0 && (
-                        <div className="mb-2 flex flex-col gap-1">
-                          {(activeConversationId
-                            ? (queuedByConv[activeConversationId] ?? [])
-                            : []
-                          ).map((q, i) => (
-                            <div
-                              key={i}
-                              role="group"
-                              aria-label={`Queued message ${i + 1}`}
-                              className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-1.5 text-[11px] text-neutral-400"
-                            >
-                              <svg
-                                className="h-3 w-3 shrink-0 text-neutral-600"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth={2}
-                                  d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                                />
-                              </svg>
-                              <span className="flex-1 select-text cursor-text whitespace-pre-wrap break-words">
-                                {q.text ||
-                                  `(${q.atts.length} attachment${q.atts.length > 1 ? 's' : ''})`}
-                              </span>
-                              {q.atts.length > 0 ? (
-                                <span
-                                  className="flex shrink-0 items-center gap-1 text-neutral-500"
-                                  title={q.atts.map((a) => a.name).join(', ')}
-                                >
-                                  <svg
-                                    className="h-3 w-3"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                  >
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      strokeWidth={2}
-                                      d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"
-                                    />
-                                  </svg>
-                                  {q.atts.length}
-                                </span>
-                              ) : null}
-                              <button
-                                onClick={() => copyText(q.text)}
-                                className="shrink-0 cursor-pointer text-neutral-600 transition-colors hover:text-green-500"
-                                title="Copy"
-                              >
-                                <svg
-                                  className="h-3 w-3"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M8 16h8M8 12h8m-7 8h6a2 2 0 002-2V6a2 2 0 00-2-2h-3.586a1 1 0 00-.707.293l-2.414 2.414A1 1 0 009 7.414V18a2 2 0 002 2z"
-                                  />
-                                </svg>
-                              </button>
-                              <span className="shrink-0 text-neutral-600">queued</span>
-                              <QueueActionButton
-                                variant="ghost"
-                                size="icon"
-                                className="size-6 min-h-6 min-w-6 text-muted-foreground hover:text-primary"
-                                aria-label="Send queued message now"
-                                title="Send now"
-                                onClick={() => {
-                                  if (activeConversationId) sendQueuedMessage(activeConversationId, q)
-                                }}
-                              >
-                                <ArrowElbowDownLeft size={14} aria-hidden="true" />
-                              </QueueActionButton>
-                              <QueueActionButton
-                                variant="ghost"
-                                size="icon"
-                                className="size-6 min-h-6 min-w-6 text-muted-foreground hover:text-destructive"
-                                aria-label="Delete queued message"
-                                title="Delete queued message"
-                                onClick={() => {
-                                  if (activeConversationId) removeQueuedMessage(activeConversationId, q)
-                                }}
-                              >
-                                <Trash size={14} aria-hidden="true" />
-                              </QueueActionButton>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                      {/* The queue rises above the composer: rows can be edited, reordered, sent now
+                  or dropped while the current reply finishes. */}
+                      <AutoHeight>
+                        {activeConversationId &&
+                        queuedCount(queuedByConv, activeConversationId) > 0 ? (
+                          <div className="mb-2">
+                            <MessageQueue
+                              items={(queuedByConv[activeConversationId] ?? []).map(toQueuedMessage)}
+                              rowRole="group"
+                              rowLabel={(_message, index) => `Queued message ${index + 1}`}
+                              labels={QUEUE_LABELS}
+                              edit={queueEdit}
+                              copiedId={
+                                copiedKey?.startsWith('queued:') ? copiedKey.slice('queued:'.length) : null
+                              }
+                              onCopy={(id) => {
+                                const item = findQueuedMessage(activeConversationId, id)
+                                if (item) void copyText(item.text, `queued:${id}`)
+                              }}
+                              onEdit={(id) => {
+                                const item = findQueuedMessage(activeConversationId, id)
+                                if (item) setQueueEdit({ id, text: item.text })
+                              }}
+                              onEditChange={(text) =>
+                                setQueueEdit((current) => (current ? { ...current, text } : null))
+                              }
+                              onSaveEdit={() => saveQueuedEdit(activeConversationId)}
+                              onCancelEdit={() => setQueueEdit(null)}
+                              onMove={(id, direction) =>
+                                moveQueuedMessage(activeConversationId, id, direction)
+                              }
+                              onSendNow={(id) => {
+                                const item = findQueuedMessage(activeConversationId, id)
+                                if (item) sendQueuedMessage(activeConversationId, item)
+                              }}
+                              onRetry={(id) => {
+                                const item = findQueuedMessage(activeConversationId, id)
+                                if (item) sendQueuedMessage(activeConversationId, item)
+                              }}
+                              onCancel={(id) => {
+                                const item = findQueuedMessage(activeConversationId, id)
+                                if (item) removeQueuedMessage(activeConversationId, item)
+                              }}
+                              onRemove={(id) => {
+                                const item = findQueuedMessage(activeConversationId, id)
+                                if (item) removeQueuedMessage(activeConversationId, item)
+                              }}
+                            />
+                          </div>
+                        ) : null}
+                      </AutoHeight>
 
                       {/* Unified composer — the SAME toolbar (attach / image / project /
                   skills / tools / memory scope / thinking) serves chat and voice
@@ -4520,7 +4691,7 @@ export function MemoryChat({
                           setDragOver(false)
                           if (e.dataTransfer.files.length) void addFiles(e.dataTransfer.files)
                         }}
-                        className={`relative rounded-xl border bg-card text-card-foreground shadow-sm transition-colors ${dragOver ? 'border-primary' : 'border-input focus-within:border-ring'}`}
+                        className="relative"
                       >
                         {dragOver ? (
                           <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center rounded-xl bg-card/80 text-xs text-primary">
@@ -4548,11 +4719,22 @@ export function MemoryChat({
                             e.target.value = ''
                           }}
                         />
+                        {/* The composer sends through its own handlers (Enter, ⌘Enter, the send button), so
+                        a stray form submit (a button without a type, Enter in a gate field) does nothing
+                        and leaves the draft as it is. */}
+                        <PromptInput
+                          onSubmit={() => {}}
+                          resetOnSubmit={false}
+                          groupClassName={`h-auto flex-col items-stretch rounded-xl bg-card text-card-foreground shadow-sm transition-colors ${dragOver ? 'border-primary' : ''}`}
+                        >
+                        <PromptInputHeader className="cursor-auto select-auto flex-col items-stretch gap-0 p-0 font-normal text-foreground">
+                        <AutoHeight>
                         {attachWarn && (
                           <div className="mx-3 mt-3 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
                             <WarningCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" weight="fill" />
                             <span className="flex-1">{attachWarn}</span>
                             <button
+                              type="button"
                               onClick={() => setAttachWarn(null)}
                               className="shrink-0 text-amber-400/70 hover:text-amber-200"
                             >
@@ -4560,88 +4742,42 @@ export function MemoryChat({
                             </button>
                           </div>
                         )}
-                        {attachments.length > 0 && (
-                          <div className="flex flex-wrap gap-2 px-3 pt-3">
-                            {attachments.map((a) => (
-                              <div
-                                key={a.id}
-                                className="group relative flex w-40 flex-col gap-1 rounded-lg border border-neutral-800 bg-neutral-900 p-2"
-                              >
-                                <button
-                                  onClick={() => removeAttachment(a.id)}
-                                  className="absolute -right-1.5 -top-1.5 z-10 flex h-4 w-4 items-center justify-center rounded-full border border-neutral-700 bg-neutral-950 text-[10px] text-neutral-400 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
-                                >
-                                  ✕
-                                </button>
-                                {a.kind === 'image' ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const url =
-                                        a.preview || (a.path ? captureUrlForPath(a.path) : '')
-                                      if (url) {
-                                        closePanels()
-                                        setLightbox({ url, path: a.path })
-                                      }
-                                    }}
-                                    title="Click to view"
-                                    className="relative h-[2.6rem] overflow-hidden rounded-md"
-                                  >
-                                    <img
-                                      src={a.preview || (a.path ? captureUrlForPath(a.path) : '')}
-                                      alt={a.name}
-                                      className="h-full w-full object-cover"
-                                    />
-                                    {a.status === 'loading' ? (
-                                      <span className="absolute inset-0 flex items-center justify-center bg-neutral-950/50 text-[9px] text-neutral-300">
-                                        Reading…
-                                      </span>
-                                    ) : a.status === 'error' ? (
-                                      <span className="absolute inset-0 flex items-center justify-center bg-neutral-950/85 px-2 text-center text-[9px] text-red-300">
-                                        {a.error || 'Could not read this image.'}
-                                      </span>
-                                    ) : null}
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    disabled={!a.text}
-                                    onClick={() => {
-                                      if (a.text || a.path) {
-                                        closePanels()
-                                        setViewer({
-                                          title: a.kind === 'pasted' ? 'Pasted text' : a.name,
-                                          text: a.text || '',
-                                          path: a.path,
-                                          kind: a.kind
-                                        })
-                                      }
-                                    }}
-                                    title={a.text ? 'Click to expand' : undefined}
-                                    className="line-clamp-3 h-[2.6rem] overflow-hidden text-left text-[10px] leading-snug text-neutral-500 enabled:hover:text-neutral-300"
-                                  >
-                                    {a.status === 'loading'
-                                      ? 'Processing…'
-                                      : a.status === 'error'
-                                        ? a.error || 'Could not read this file.'
-                                        : a.text.slice(0, 140) || a.name}
-                                  </button>
-                                )}
-                                <div className="flex items-center justify-between">
-                                  <span
-                                    className="truncate text-[10px] text-neutral-400"
-                                    title={a.name}
-                                  >
-                                    {a.kind === 'pasted' ? '' : a.name}
-                                  </span>
-                                  <span className="rounded-sm border border-neutral-700 px-1 py-0.5 text-[9px] uppercase tracking-wide text-neutral-400">
-                                    {a.kind === 'pasted' ? 'Pasted' : a.kind}
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                        </AutoHeight>
+                        <AutoHeight>
+                          {attachments.length > 0 ? (
+                            <div
+                              className="px-3 pt-3"
+                              aria-busy={attachments.some((a) => a.status === 'loading')}
+                            >
+                              <AttachmentList
+                                attachments={attachments.map(toProcessingAttachment)}
+                                onRemove={removeAttachment}
+                                onOpen={(id) => {
+                                  const a = attachments.find((attachment) => attachment.id === id)
+                                  if (!a) return
+                                  if (a.kind === 'image') {
+                                    const url = a.preview || (a.path ? captureUrlForPath(a.path) : '')
+                                    if (url) {
+                                      closePanels()
+                                      setLightbox({ url, path: a.path })
+                                    }
+                                    return
+                                  }
+                                  if (a.text || a.path) {
+                                    closePanels()
+                                    setViewer({
+                                      title: a.kind === 'pasted' ? 'Pasted text' : a.name,
+                                      text: a.text || '',
+                                      path: a.path,
+                                      kind: a.kind
+                                    })
+                                  }
+                                }}
+                              />
+                            </div>
+                          ) : null}
+                        </AutoHeight>
+                        </PromptInputHeader>
                         {/* Approval UX v2: pending gate cards + outcomes, in-flow above the composer */}
                         <ActionGateDock conversationId={activeConversationId} />
                         {/* Vision rail: the supervisor overlay slides in during a computer-use task */}
@@ -4679,6 +4815,7 @@ export function MemoryChat({
                             suspended={voiceTurns.suspended}
                             transcriptionLabel={voiceTurns.transcriptionLabel}
                             error={voiceTurns.error}
+                            subscribeAmplitudes={voiceTurns.subscribeAmplitudes}
                             onToggleRecording={toggleRecording}
                             onTurnModeChange={(mode: VoiceTurnMode) => {
                               setVoiceTurnMode(mode)
@@ -4686,6 +4823,7 @@ export function MemoryChat({
                             }}
                           />
                         ) : (
+                          <PromptInputBody>
                           <ChatDraftInput
                             ref={draftInputRef}
                             store={draftStore}
@@ -4707,11 +4845,12 @@ export function MemoryChat({
                             onSendNow={() => void sendMessage(undefined, { sendNow: true })}
                             busy={Boolean(activeConversationId && generatingConvs.has(activeConversationId))}
                           />
+                          </PromptInputBody>
                         )}
-                        <div className="flex flex-wrap items-center justify-between gap-y-2 gap-x-2 px-2.5 pb-2.5 pt-1">
+                        <PromptInputFooter className="cursor-auto select-auto flex-wrap gap-x-2 gap-y-2 px-2.5 pb-2.5 pt-1 font-normal text-foreground">
                           {/* Chips wrap to a new line on narrow widths instead of overflowing the composer
                       (the Image chip used to clip off the right edge). */}
-                          <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <PromptInputTools className="flex-wrap gap-2">
                             {/* "+" menu — attach / image / project / tools */}
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
@@ -4730,6 +4869,7 @@ export function MemoryChat({
                                 side="top"
                                 sideOffset={8}
                                 className="w-56"
+                                onCloseAutoFocus={focusProjectName}
                               >
                                 <DropdownMenuItem onSelect={() => fileInputRef.current?.click()}>
                                   <Paperclip /> Attach files
@@ -4857,6 +4997,7 @@ export function MemoryChat({
                                 side="top"
                                 sideOffset={8}
                                 className="w-56"
+                                onCloseAutoFocus={focusProjectName}
                               >
                                 <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
                                   Memory for this chat
@@ -5040,22 +5181,29 @@ export function MemoryChat({
                             </Tooltip></>
 )}
                             {mode === 'image' && (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setShowImageOptions((o) => !o)}
-                                className={`h-8 gap-1.5 rounded-full ${showImageOptions ? 'text-primary' : ''}`}
-                              >
-                                <SlidersHorizontal className="h-3.5 w-3.5" /> Image options
-                              </Button>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon"
+                                    aria-label="Image options"
+                                    onClick={() => setShowImageOptions((o) => !o)}
+                                    className={`size-8 rounded-full ${showImageOptions ? 'border-green-500 text-primary' : ''}`}
+                                  >
+                                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Image options</TooltipContent>
+                              </Tooltip>
                             )}
                             {queuedCount(queuedByConv, activeConversationId) > 0 && (
                               <span className="flex h-8 items-center rounded-full border border-neutral-800 px-2.5 text-[11px] text-neutral-400">
-                                {queuedCount(queuedByConv, activeConversationId)} queued
+                                <AnimatedNumber value={queuedCount(queuedByConv, activeConversationId)} />{' '}
+                                queued
                               </span>
                             )}
-                          </div>
+                          </PromptInputTools>
 
                           <div className={`flex shrink-0 items-center gap-1.5 ${voiceMode ? 'mr-10' : ''}`}>
                             {!voiceMode && (
@@ -5155,22 +5303,26 @@ export function MemoryChat({
                                 </Tooltip>
                               )}
                             {loading && generatingImage ? (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => {
-                                  void stopGeneration(
-                                    activeConversationId,
-                                    guidanceTaskForJourney(getTaskSessionState().tasks, activeConversationId)
-                                  )
-                                }}
-                                className="h-8 gap-1.5 border-red-500/50 text-red-400 hover:bg-red-500/10"
-                              >
-                                <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
-                                  <rect x="6" y="6" width="12" height="12" rx="2" />
-                                </svg>
-                                Stop
-                              </Button>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon"
+                                    aria-label="Stop"
+                                    onClick={() => {
+                                      void stopGeneration(
+                                        activeConversationId,
+                                        guidanceTaskForJourney(getTaskSessionState().tasks, activeConversationId)
+                                      )
+                                    }}
+                                    className="size-8 rounded-full border-red-500/50 text-red-400 hover:bg-red-500/10"
+                                  >
+                                    <Stop className="h-3.5 w-3.5" weight="fill" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Stop</TooltipContent>
+                              </Tooltip>
                             ) : voiceMode ? null : (
                               <ChatDraftSendButton
                                 store={draftStore}
@@ -5182,7 +5334,8 @@ export function MemoryChat({
                               />
                             )}
                           </div>
-                        </div>
+                        </PromptInputFooter>
+                        </PromptInput>
                       </div>
                     </div>
                   </div>
@@ -5297,38 +5450,41 @@ export function MemoryChat({
                 <h2 className="min-w-0 truncate text-sm font-normal text-neutral-200">
                   {viewer.title}
                 </h2>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex shrink-0 items-center gap-1.5">
                   {viewer.path && (
-                    <button
-                      type="button"
-                      onClick={() => downloadImage(viewer.path, viewer.title)}
-                      className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 transition-colors hover:border-green-500 hover:text-green-500"
-                    >
-                      Download
-                    </button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="outline"
+                          aria-label="Download"
+                          onClick={() => downloadImage(viewer.path, viewer.title)}
+                        >
+                          <DownloadSimple />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Download</TooltipContent>
+                    </Tooltip>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => setViewer(null)}
-                    className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 transition-colors hover:text-white"
-                  >
-                    Close
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        aria-label="Close"
+                        onClick={() => setViewer(null)}
+                      >
+                        <X />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Close</TooltipContent>
+                  </Tooltip>
                 </div>
               </header>
               <div className="min-h-0 flex-1 overflow-auto p-4">
-                {viewer.renderer === 'audio' && viewer.path ? (
-                  <AudioPane path={viewer.path} title={viewer.title} />
-                ) : viewer.renderer === 'document' && viewer.path ? (
-                  // A document renders from its BYTES. main already serves them as a data URL for
-                  // exactly this - Chromium draws the PDF itself - and the old code path never called
-                  // it, so every PDF fell through to the text pane below and showed an empty page.
-                  <DocumentPane path={viewer.path} title={viewer.title} />
-                ) : (
-                  <pre className="min-h-full w-full whitespace-pre-wrap break-words rounded-md border border-neutral-800 bg-neutral-950 p-5 text-sm leading-relaxed text-neutral-200">
-                    {viewer.text}
-                  </pre>
-                )}
+                <AttachmentPreview key={`${viewer.path ?? ''}:${viewer.title}`} content={viewer} />
               </div>
             </SidePanel>
           )}
@@ -5348,20 +5504,36 @@ export function MemoryChat({
           actions={
             lightbox?.path ? (
               <>
-                <button
-                  type="button"
-                  onClick={() => downloadImage(lightbox.path!, lightbox.path?.split('/').pop())}
-                  className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 transition-colors hover:border-green-500 hover:text-green-500"
-                >
-                  Download
-                </button>
-                <button
-                  type="button"
-                  onClick={() => deleteImage(lightbox.path!)}
-                  className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 transition-colors hover:border-red-500 hover:text-red-400"
-                >
-                  Delete
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="outline"
+                      aria-label="Download"
+                      onClick={() => downloadImage(lightbox.path!, lightbox.path?.split('/').pop())}
+                      className="hover:border-green-500 hover:text-green-500"
+                    >
+                      <DownloadSimple />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Download</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="outline"
+                      aria-label="Delete"
+                      onClick={() => deleteImage(lightbox.path!)}
+                      className="hover:border-red-500 hover:text-red-400"
+                    >
+                      <Trash />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Delete</TooltipContent>
+                </Tooltip>
               </>
             ) : undefined
           }
@@ -5443,11 +5615,11 @@ export function MemoryChat({
                         No artifacts in this {galleryScope === 'all' ? 'app' : galleryScope}.
                       </p>
                     ) : (
-                      <div className="flex flex-col gap-2">
+                      <div className="flex flex-col divide-y divide-neutral-900 overflow-hidden rounded-md border border-neutral-800">
                         {artifacts.map((a) => (
                           <div
                             key={a.id}
-                            className="group flex items-center gap-2 rounded-md border border-neutral-800 p-2 transition-colors hover:border-green-500"
+                            className="group flex items-center gap-2 px-3 py-2 transition-colors hover:bg-neutral-900/60"
                           >
                             <button
                               onClick={() =>
@@ -5473,13 +5645,21 @@ export function MemoryChat({
                               )}
                               <span className="truncate text-xs text-neutral-200">{a.title}</span>
                             </button>
-                            <button
-                              onClick={() => deleteArtifact(a.id)}
-                              className="text-neutral-600 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
-                              title="Delete"
-                            >
-                              ✕
-                            </button>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  type="button"
+                                  size="icon-xs"
+                                  variant="ghost"
+                                  onClick={() => deleteArtifact(a.id)}
+                                  aria-label="Delete"
+                                  className="text-neutral-600 opacity-0 transition-opacity hover:text-red-400 focus-visible:opacity-100 group-hover:opacity-100"
+                                >
+                                  <Trash />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Delete</TooltipContent>
+                            </Tooltip>
                           </div>
                         ))}
                       </div>

@@ -54,12 +54,25 @@ vi.mock('motion/react', async () => {
     component.displayName = `MotionTest${tag}`
     return component
   }
+  // motion.create(Component) wraps a custom component the same way motion.div wraps
+  // a host element: render the component itself, animation props stripped.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const create = (Component: any): any => {
+    const component = React.forwardRef((props: Record<string, unknown>, ref) =>
+      React.createElement(Component, { ...strip(props), ref })
+    )
+    component.displayName = 'MotionTestCreate'
+    return component
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cache = new Map<string, any>()
   const motion = new Proxy(
     {},
     {
       get: (_t, tag: string) => {
+        if (tag === 'create') {
+          return create
+        }
         if (!cache.has(tag)) {
           cache.set(tag, host(tag))
         }

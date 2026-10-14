@@ -29,9 +29,16 @@ describe('isImageModelFile', () => {
     expect(isImageModelFile('gemma-3-4b.gguf')).toBe(false)
     expect(isImageModelFile('qwen3-4b-instruct-q4.gguf')).toBe(false)
     expect(isImageModelFile('ae.safetensors')).toBe(false)
+    expect(isImageModelFile('vae.safetensors')).toBe(false)
+    expect(isImageModelFile('vae_bf16.safetensors')).toBe(false)
     expect(isImageModelFile('clip_l.safetensors')).toBe(false)
     expect(isImageModelFile('sdxl-vae.safetensors')).toBe(false)
     expect(isImageModelFile('model-t5xxl.safetensors')).toBe(false)
+  })
+
+  it('excludes a companion whose marker is followed by more of the name', () => {
+    expect(isImageModelFile('qwen_image_2.1_vae_bf16.safetensors')).toBe(false)
+    expect(isImageModelFile('qwen-image-2.1-turbo-Q4_K_M.gguf')).toBe(true)
   })
 
   it('excludes non-diffusion companions (whisper .bin, TTS .onnx, mmproj)', () => {
