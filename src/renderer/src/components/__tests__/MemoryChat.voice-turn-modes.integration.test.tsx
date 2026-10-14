@@ -295,6 +295,10 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     const user = userEvent.setup()
     renderChat({ conversationId: 'conversation-a' })
 
+    // Keep the turn active until the mode switch, even on a slow coverage runner.
+    // Auto's silence deadline is exercised separately above.
+    const turns = await screen.findByRole('group', { name: 'Voice turn mode' })
+    await user.click(within(turns).getByRole('button', { name: 'Manual' }))
     await user.click(await screen.findByRole('button', { name: 'Start voice recording' }))
     await user.click(screen.getByRole('button', { name: 'Voice' }))
 
