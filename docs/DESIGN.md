@@ -89,6 +89,10 @@ Never hard-code hex or shadows in components; the skin and tokens own them.
   `border-neutral-700`. The skin lights and lifts them.
 - **Segmented control** — `@offgrid/operator-ui/operator/segmented`, or
   `rounded-full border border-neutral-800 p-0.5` with an active pill; the highlight glides.
+- **Icon buttons first** — any action with a clear glyph (stop, pause, continue, retry, copy,
+  delete, edit, close, send, download, refresh, settings, add, more) is a `size="icon-*"` button
+  with the label as `aria-label` and a tooltip. Words only when an icon would be ambiguous or for
+  the screen's one primary call to action.
 - **Buttons** — `ui/button` variants. Hand-built primary: `bg-green-500 text-neutral-950`;
   secondary: `border border-neutral-700 text-neutral-300 hover:border-green-500 hover:text-green-500`.
 - **Inputs** — `rounded-md border border-neutral-800 bg-neutral-950 text-neutral-200`; focus glows.
@@ -143,3 +147,4 @@ inline instead of using panels.
 - [ ] Every interactive state animates; overlays exit smoothly; reduced motion respected.
 - [ ] Results in `role="status"`, loading in `aria-busy`.
 - [ ] Primitives from `ui/*`; no hard-coded colours or shadows.
+- [ ] Clear actions are icon buttons with an `aria-label` and tooltip, not text labels.

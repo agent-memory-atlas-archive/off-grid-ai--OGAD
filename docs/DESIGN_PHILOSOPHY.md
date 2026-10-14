@@ -72,6 +72,14 @@ Controls are slim and precise (32px default height on desktop, hairline borders,
 fully round for pills and segmented controls). Padding is generous between groups and tight
 within them. Nothing thick, nothing bulky, no boxes inside boxes.
 
+**Icons over labels.** Wherever a glyph is widely understood, an action is an icon button, not a
+text-labelled one: stop, pause, play/continue, retry, copy, delete, edit, close, send, download,
+refresh, settings, add, expand, more. The label stays as its accessible name (`aria-label`) and
+appears as a tooltip on hover and focus. Text stays only where an icon would be ambiguous, or for
+the one primary call to action whose meaning needs words (an icon plus a short label is fine
+there). Icon buttons change state by morphing the glyph (play↔pause, copy→check), not by swapping
+words.
+
 ### 6. Motion is the language
 
 Motion explains state; it is not decoration, and it is never optional.
