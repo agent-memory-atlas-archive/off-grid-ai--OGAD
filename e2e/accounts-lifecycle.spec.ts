@@ -120,7 +120,8 @@ for (const provider of [
     await expect(panel.getByRole('button', { name: `Connect ${provider.name}` })).toBeEnabled()
 
     // Use your own application: client ID (and Google's secret) saved on this device.
-    await panel.getByLabel('Connection option').selectOption('own')
+    await panel.getByLabel('Connection option').click()
+    await page.getByRole('option', { name: 'Use your own application', exact: true }).click()
     await panel.getByLabel('Application client ID').fill(provider.ownId)
     if (provider.ownSecret) await panel.getByLabel('Client secret').fill(provider.ownSecret)
     else await expect(panel.getByLabel('Client secret')).toHaveCount(0)
@@ -192,7 +193,7 @@ test('Obsidian: add two vaults, change one, remove one after confirming', async 
 test('MCP connector: add, test, rename, remove after confirming', async () => {
   await page.getByRole('button', { name: /Custom/ }).click()
   await page.getByPlaceholder('Name').fill('Synthetic notes')
-  await page.getByRole('button', { name: 'stdio (local)' }).click()
+  await page.getByRole('radio', { name: 'stdio (local)' }).click()
   await page.getByPlaceholder('command (e.g. npx)').fill(process.execPath)
   await page.getByPlaceholder('args').fill(MCP_SERVER)
   await page.getByRole('button', { name: 'Add', exact: true }).click()
