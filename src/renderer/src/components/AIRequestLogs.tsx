@@ -56,6 +56,8 @@ import {
   SelectValue
 } from '@offgrid/operator-ui/operator/coss/select'
 import { SettingsSelect } from './SettingsSelect'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
+import { Checkbox } from '@offgrid/operator-ui/operator/animate/checkbox'
 import { CopyButton } from './ui/CopyButton'
 import {
   DropdownMenu,
@@ -235,7 +237,9 @@ function Attachment({
           disabled={loading}
           onClick={() => (url ? setUrl(null) : void load())}
         >
-          {loading ? 'Loading media...' : url ? 'Hide media' : 'Open media'}
+          <TextMorph as="span">
+            {loading ? 'Loading media...' : url ? 'Hide media' : 'Open media'}
+          </TextMorph>
         </Button>
       </div>
       {error && (
@@ -347,12 +351,16 @@ function RequestDetail({
             <>
               <Payload title="Request" value={record.request} />
               {record.effectiveRequest !== undefined && (
-                <details className="border-t border-border pt-3">
-                  <summary className="text-xs">Effective request / parameters</summary>
-                  <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs">
-                    {JSON.stringify(record.effectiveRequest, null, 2)}
-                  </pre>
-                </details>
+                <Collapsible className="border-t border-border pt-3">
+                  <CollapsibleTrigger className="text-xs">
+                    Effective request / parameters
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs">
+                      {JSON.stringify(record.effectiveRequest, null, 2)}
+                    </pre>
+                  </CollapsibleContent>
+                </Collapsible>
               )}
             </>
           )}
@@ -408,10 +416,10 @@ function RelatedRequest({
   const [record, setRecord] = useState<AIRequestRecord | null>(null)
   const [error, setError] = useState('')
   return (
-    <details
+    <Collapsible
       className="border-b border-border py-2"
-      onToggle={(event) => {
-        if (event.currentTarget.open && !record)
+      onOpenChange={(open) => {
+        if (open && !record)
           void window.api
             .aiLogsDetail(row.id)
             .then((value) => {
@@ -421,11 +429,11 @@ function RelatedRequest({
             .catch((error) => setError(errorMessage(error)))
       }}
     >
-      <summary className="text-xs">
+      <CollapsibleTrigger className="text-xs">
         {row.source} · {row.status} · {duration(row.durationMs)}
         {display.model ? ` · ${row.backend ?? 'Backend not reported'}` : ''}
-      </summary>
-      <div className="mt-3 space-y-3">
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-3 space-y-3">
         {error && (
           <p role="alert" className="text-xs">
             {error}
@@ -439,8 +447,8 @@ function RelatedRequest({
             )}
           </>
         )}
-      </div>
-    </details>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 
@@ -721,12 +729,7 @@ export function AIRequestLogs({
                 options={['all', 'hour', 'day']}
               />
               <label className="flex items-center gap-2 py-2 text-xs">
-                <input
-                  type="checkbox"
-                  className="accent-primary"
-                  checked={slow}
-                  onChange={(event) => setSlow(event.target.checked)}
-                />
+                <Checkbox checked={slow} onCheckedChange={(checked) => setSlow(checked)} />
                 Over 10 seconds
               </label>
               <IconTip label="Reset filters">
@@ -1036,15 +1039,17 @@ export function AIRequestLogs({
             Local history · Up to {AI_LOG_POLICY.maxAgeDays} days /{' '}
             {AI_LOG_POLICY.maxRecords.toLocaleString()} requests / 256 MB
           </p>
-          <details>
-            <summary className="w-fit cursor-pointer hover:text-foreground">
+          <Collapsible>
+            <CollapsibleTrigger className="w-fit cursor-pointer hover:text-foreground">
               Storage details
-            </summary>
-            <p className="mt-2">
-              Large payloads are marked when truncated. Media up to 8 MB is retained. Clearing logs
-              does not delete your chats.
-            </p>
-          </details>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <p className="mt-2">
+                Large payloads are marked when truncated. Media up to 8 MB is retained. Clearing
+                logs does not delete your chats.
+              </p>
+            </CollapsibleContent>
+          </Collapsible>
         </div>
         <IconTip label="Clear history">
           <Button
