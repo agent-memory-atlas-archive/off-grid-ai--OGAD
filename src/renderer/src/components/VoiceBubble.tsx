@@ -143,13 +143,30 @@ function joinShortLead(phrases: string[], phrase: string): string[] {
  * of the real duration that its character count takes of the whole text. That is close enough for the highlight to follow the voice and
  * for a click on a phrase to land near it, and no closer.
  */
+/** Cuts a line after a word ending in punctuation and before a word opening with a dash. */
+function cutAtPunctuation(line: string): string[] {
+  const out: string[] = []
+  let current: string[] = []
+  const flush = (): void => {
+    if (current.length > 0) out.push(current.join(' '))
+    current = []
+  }
+  for (const word of line.split(' ')) {
+    if (!word) continue
+    if (/^[—–]/.test(word)) flush()
+    current.push(word)
+    if (/[.!?;:,—–]$/.test(word)) flush()
+  }
+  flush()
+  return out
+}
+
 function phraseSegments(text: string, duration: number): TimedSegment[] {
   const phrases = text
-    .split(/(?<=[.!?;:,—–])\s+|\s+(?=[—–])|\n+/)
-    .map((phrase) => phrase.trim())
-    .filter(Boolean)
-    .reduce<string[]>(joinShortLead, [])
-    .flatMap(splitLongPhrase)
+    .split('\n')
+    .flatMap((line) => cutAtPunctuation(line.replace(/\s/g, ' ')))
+    .reduce<string[]>((joined, phrase) => joinShortLead(joined, phrase), [])
+    .flatMap((phrase) => splitLongPhrase(phrase))
   const total = phrases.reduce((sum, phrase) => sum + phrase.length, 0) || 1
   let at = 0
   return phrases.map((phrase) => {
