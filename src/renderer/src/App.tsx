@@ -1064,7 +1064,11 @@ function AppContent(): React.JSX.Element {
         className={navRowClass(sidebarOpen, active)}
       >
         {/* One highlight across the rail: it glides from the old item to the new one. */}
-        <NavHighlight active={active} group="sidebar" />
+        <NavHighlight
+          active={active}
+          group="sidebar"
+          className="bg-[linear-gradient(90deg,rgb(var(--og-rgb-primary)/0.18),rgb(var(--og-rgb-primary)/0.04)_75%)] shadow-[inset_2px_0_0_rgb(var(--og-rgb-primary)),inset_0_0_0_1px_rgb(var(--og-rgb-primary)/0.18),0_0_18px_-4px_rgb(var(--og-rgb-primary)/0.55)]"
+        />
         <span
           className={cn(
             'relative z-10 flex shrink-0 transition-[scale,rotate,filter] duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] group-hover/nav:-rotate-6 group-hover/nav:scale-110 group-active/nav:scale-95 motion-reduce:transition-none',
