@@ -357,6 +357,7 @@ function AppContent(): React.JSX.Element {
   const [replayTarget, setReplayTarget] = useState<number | null>(null)
   // A search hit can deep-link to a specific meeting; cleared on leaving Meetings.
   const [meetingTarget, setMeetingTarget] = useState<number | null>(null)
+  const [meetingsMode, setMeetingsMode] = useState<'calendar' | 'recorded' | null>(null)
   // Which tab the Actions screen opens on when reached via a Day "View all" link.
   const [actionsMode, setActionsMode] = useState<'todo' | 'approvals' | null>(null)
   const [actionTarget, setActionTarget] = useState<number | null>(null)
@@ -459,6 +460,7 @@ function AppContent(): React.JSX.Element {
     setSearchSort('relevance')
     setReplayTarget(null)
     setMeetingTarget(null)
+    setMeetingsMode(null)
     setActionsMode(null)
     setActionTarget(null)
     setApprovalTarget(null)
@@ -857,6 +859,7 @@ function AppContent(): React.JSX.Element {
           setReplayTarget(intent.seekMs ?? null)
         } else {
           setMeetingTarget(intent.meetingId ?? null)
+          setMeetingsMode(intent.mode ?? null)
         }
       })
     },
@@ -1457,6 +1460,7 @@ function AppContent(): React.JSX.Element {
                         navigateBack,
                         replayTarget,
                         meetingTarget,
+                        meetingsMode,
                         actionTarget,
                         approvalTarget,
                         calendarEventTarget,

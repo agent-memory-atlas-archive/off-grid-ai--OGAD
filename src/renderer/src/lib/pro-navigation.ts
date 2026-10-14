@@ -10,7 +10,7 @@ export type ProNavigationIntent =
     }
   | { view: 'day'; calendarEventId?: number }
   | { view: 'replay'; seekMs?: number }
-  | { view: 'meetings'; meetingId?: number }
+  | { view: 'meetings'; meetingId?: number; mode?: 'calendar' | 'recorded' }
   | { view: 'chat'; approvalId: number }
   | { view: 'chat'; conversationId: string }
 

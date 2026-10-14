@@ -16,6 +16,8 @@ export interface ProViewContext {
   navigateBack: () => void
   replayTarget: number | null
   meetingTarget: number | null
+  /** Which Meetings list a navigation asked for; null keeps the screen's default. */
+  meetingsMode?: 'calendar' | 'recorded' | null
   actionTarget: number | null
   approvalTarget: number | null
   calendarEventTarget: number | null
