@@ -185,7 +185,8 @@ it('creates, replaces, and revokes keys from Gateway with one-time disclosure', 
   const section = within(screen.getByRole('region', { name: 'API keys' }))
   await section.findByText('API key not required')
   await user.type(section.getByLabelText('Key name'), 'Studio client')
-  await user.selectOptions(section.getByLabelText('Expiry'), 'never')
+  await user.click(section.getByRole('combobox', { name: 'Expiry' }))
+  await user.click(await screen.findByRole('option', { name: 'No expiry', exact: true }))
   await user.click(section.getByRole('button', { name: 'Create key' }))
   const issued = (await section.findByLabelText(
     'Copy this key now. It will not be shown again.'
@@ -196,9 +197,10 @@ it('creates, replaces, and revokes keys from Gateway with one-time disclosure', 
   ).toBe(200)
   await user.click(section.getByRole('button', { name: 'Done' }))
   expect(section.queryByDisplayValue(key)).toBeNull()
-  await user.selectOptions(section.getByLabelText('Expiry'), '7')
+  await user.click(section.getByRole('combobox', { name: 'Expiry' }))
+  await user.click(await screen.findByRole('option', { name: '7 days', exact: true }))
   await user.click(section.getByRole('button', { name: 'Replace Studio client' }))
-  await user.click(section.getByRole('button', { name: 'Confirm' }))
+  await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Confirm' }))
   const replacement = (
     (await section.findByLabelText(
       'Copy this key now. It will not be shown again.'
@@ -214,7 +216,7 @@ it('creates, replaces, and revokes keys from Gateway with one-time disclosure', 
   ).toBe(200)
   await user.click(section.getByRole('button', { name: 'Done' }))
   await user.click(section.getByRole('button', { name: 'Revoke Studio client' }))
-  await user.click(section.getByRole('button', { name: 'Confirm' }))
+  await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Confirm' }))
   await expect
     .poll(
       async () =>
@@ -226,11 +228,34 @@ it('creates, replaces, and revokes keys from Gateway with one-time disclosure', 
     )
     .toBe(401)
   await user.click(section.getByRole('button', { name: 'Turn off authentication' }))
-  await user.click(section.getByRole('button', { name: 'Cancel' }))
+  await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }))
   expect((await fetch(`${base}/v1/requests`)).status).toBe(401)
   await user.click(section.getByRole('button', { name: 'Turn off authentication' }))
-  await user.click(section.getByRole('button', { name: 'Confirm' }))
+  await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Confirm' }))
   await section.findByText('API key not required')
   expect((await fetch(`${base}/v1/requests`)).status).toBe(200)
-  cleanup()
+  keychainLocked = true
+  try {
+    await user.click(section.getByRole('button', { name: 'Refresh status' }))
+    expect((await section.findByRole('alert')).textContent).toContain('API key storage is locked')
+    expect(section.getByRole('button', { name: 'Create key' })).toBeTruthy()
+  } finally {
+    keychainLocked = false
+    cleanup()
+  }
+})
+
+it('keeps Gateway visible when API key storage is locked on entry', async () => {
+  ;(window as unknown as { api: Record<string, unknown> }).api = {
+    gatewayApiKeys: async () => gatewayApiKeySettings()
+  }
+  keychainLocked = true
+  try {
+    render(<GatewayScreen />)
+    expect((await screen.findByRole('alert')).textContent).toContain('API key storage is locked')
+    expect(screen.getByRole('heading', { name: 'Gateway', exact: true })).toBeTruthy()
+  } finally {
+    keychainLocked = false
+    cleanup()
+  }
 })

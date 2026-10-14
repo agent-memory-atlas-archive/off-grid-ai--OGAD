@@ -601,6 +601,13 @@ export function MemoryChat({
   const [noMemory, setNoMemory] = useState(!isPro)
   const [, setProjectMenuOpen] = useState(false)
   const [projCreating, setProjCreating] = useState(false)
+  const projectNameInput = useRef<HTMLInputElement>(null)
+  const focusProjectName = (event: Event): void => {
+    if (!projCreating) return
+    // Transfer focus after the menu exit finishes, regardless of animation duration.
+    event.preventDefault()
+    projectNameInput.current?.focus()
+  }
   const [toolsOn, setToolsOn] = useState(false)
   const [toolsEnabled, setToolsEnabled] = useState(true)
   const [assistantGateOpen, setAssistantGateOpen] = useState(false)
@@ -4586,6 +4593,7 @@ export function MemoryChat({
 
                       {projCreating && (
                         <NewProjectNameField
+                          inputRef={projectNameInput}
                           onCreate={createAndAssignProject}
                           onCancel={() => setProjCreating(false)}
                         />
@@ -4839,6 +4847,7 @@ export function MemoryChat({
                                 side="top"
                                 sideOffset={8}
                                 className="w-56"
+                                onCloseAutoFocus={focusProjectName}
                               >
                                 <DropdownMenuItem onSelect={() => fileInputRef.current?.click()}>
                                   <Paperclip /> Attach files
@@ -4966,6 +4975,7 @@ export function MemoryChat({
                                 side="top"
                                 sideOffset={8}
                                 className="w-56"
+                                onCloseAutoFocus={focusProjectName}
                               >
                                 <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
                                   Memory for this chat

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { ArrowsClockwise, Check, Copy, Prohibit, Swap, X } from '@phosphor-icons/react'
 import { Button } from '@offgrid/operator-ui/operator/coss/button'
-import { Field, FieldDescription, FieldError } from '@offgrid/operator-ui/operator/coss/field'
+import { Field } from '@offgrid/operator-ui/operator/coss/field'
+import { Alert } from '@offgrid/operator-ui/operator/coss/alert'
 import { Input } from '@offgrid/operator-ui/operator/coss/input'
 import { Label } from '@offgrid/operator-ui/operator/coss/label'
 import {
@@ -86,9 +87,9 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
 
   if (!settings)
     return error ? (
-      <FieldError match role="alert">
+      <Alert className="py-2 text-xs">
         {error}
-      </FieldError>
+      </Alert>
     ) : <p role="status">
         <TextShimmer as="span">Loading API keys...</TextShimmer>
       </p>
@@ -176,11 +177,11 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
           Create key
         </Button>
       </form>
-      <FieldDescription>
+      <p className="text-xs text-muted-foreground">
         Creating a key turns authentication on. Phones need the next Off Grid AI Mobile release to
         send keys. Keys allow all model API operations. Local-only settings still require a local
         connection. MCP and paired browser connections keep their separate credentials.
-      </FieldDescription>
+      </p>
       {createdKey && (
         <section className="space-y-2 rounded-md border border-neutral-800 p-3">
           <Label htmlFor="gateway-new-key">Copy this key now. It will not be shown again.</Label>
@@ -270,9 +271,9 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
         </AlertDialogPopup>
       </AlertDialog>
       {error && (
-        <FieldError match role="alert">
+        <Alert className="py-2 text-xs">
           {error}
-        </FieldError>
+        </Alert>
       )}
       {notice && <LiveStatus travel="across">{notice}</LiveStatus>}
       {!settings.keys.length && (
