@@ -1,3 +1,4 @@
+import { gotoSettings, openSettingsSection } from './helpers/settings'
 /**
  * Chat + memory regression tests for:
  *   - No-memory toggle actually sticking (fix: assignProject no longer overrides noMemory)
@@ -351,6 +352,10 @@ test('cancelling a tool-owned image keeps its text answer after a full relaunch'
   installExecutable('fake-sd-cli.mjs', path.join(sdDir, 'sd-cli'))
 
   await launchApp()
+  // This cancellation journey exercises the one-shot image runtime.
+  await gotoSettings(page)
+  await openSettingsSection(page, 'Capture & processing')
+  await page.getByRole('switch', { name: 'Image generation residency', exact: true }).uncheck()
   await page.evaluate(async () => {
     await window.api.saveSetting('composerToolsOn', true)
     await window.api.setActiveModalModel('image', 'sdxl-lightning-e2e.gguf')
@@ -411,7 +416,9 @@ test('cold relaunch after a forced quit boots cleanly and keeps committed chat d
     await window.api.createRagConversation('forced-quit-chat', 'Forced Quit Chat', null)
     await window.api.addRagMessage('forced-quit-chat', 'user', 'committed before forced quit')
   })
-  await page.getByRole('textbox', { name: 'Message', exact: true }).fill('uncommitted draft during forced quit')
+  await page
+    .getByRole('textbox', { name: 'Message', exact: true })
+    .fill('uncommitted draft during forced quit')
 
   await forceCloseApp()
   await launchApp()

@@ -113,10 +113,11 @@ test('120 persisted chats keep search, scroll, and detail usable on desktop (#14
   await search.fill('')
   await expect(titles.first()).toBeVisible()
   const oldest = rail.getByText('Synthetic chat 001', { exact: true })
-  await list.evaluate((el) => {
-    el.scrollTop = el.scrollHeight
-  })
-  await expect(oldest).toBeVisible()
+  await expect(async () => {
+    await list.hover()
+    await page.mouse.wheel(0, 1500)
+    await expect(oldest).toBeVisible({ timeout: 500 })
+  }).toPass({ timeout: 15_000 })
   await oldest.click()
 
   const listBox = await list.boundingBox()
