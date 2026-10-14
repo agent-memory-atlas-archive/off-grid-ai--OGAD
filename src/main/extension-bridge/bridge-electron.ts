@@ -1,3 +1,4 @@
+import { forgetModelReads, shortLivedRead } from './bridge-model-reads'
 import { remoteVisionModelId } from '../../shared/remote-vision-server'
 import { activeTextAvailability, remoteTextVision } from '../../shared/model-settings-rules'
 import type { TextSettings } from './bridge-settings'
@@ -301,6 +302,18 @@ export async function listBridgeTools(task?: string): Promise<unknown[]> {
   })
 }
 
+// The catalog part of a settings read walks every model folder; the active choices are cheap
+// and stay live.
+const readTaskModelFiles = shortLivedRead(async () => {
+  const [catalog, installed, companionStatus] = await Promise.all([
+    getCatalog(),
+    listInstalled(),
+    getVisionStatuses()
+  ])
+  return { catalog: catalog.models as Record<string, unknown>[], installed, companionStatus }
+})
+const readActiveModelIds = shortLivedRead(getActiveModelIds)
+
 // The same functions Settings here uses, so a browser and this window always agree.
 const settingsStore = createSettingsStore({
   text: async () => {
@@ -327,7 +340,7 @@ const settingsStore = createSettingsStore({
   setText: async (patch: TextSettings) => {
     await llm.setSettings(patch)
   },
-  activeIds: getActiveModelIds,
+  activeIds: readActiveModelIds,
   web: getWebUseSettings,
   setWeb: (next) => void setWebUseSettings(next),
   computer: getComputerUseSettings,
@@ -346,22 +359,13 @@ const settingsStore = createSettingsStore({
   },
   remoteOff: deactivateRemoteVisionModel,
   taskModels: async () => {
-    const [catalog, installed, companionStatus] = await Promise.all([
-      getCatalog(),
-      listInstalled(),
-      getVisionStatuses()
-    ])
+    const files = await readTaskModelFiles()
     const active = (getActiveModalities() as Record<string, string | null>).computer_use
-    return {
-      catalog: catalog.models as Record<string, unknown>[],
-      installed,
-      activeGrounder: active ?? null,
-      activeChatId: getActiveModel(),
-      companionStatus
-    }
+    return { ...files, activeGrounder: active ?? null, activeChatId: getActiveModel() }
   },
   setLocalGrounder: async (modelId) => {
     await setActiveModalChoice('computer_use', modelId)
+    forgetModelReads()
   },
   appSettings: () => getSettings() as Record<string, unknown>,
   saveSetting,

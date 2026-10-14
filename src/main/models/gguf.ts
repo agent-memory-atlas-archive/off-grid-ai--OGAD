@@ -26,7 +26,7 @@ export function isValidGgufHeader(sizeBytes: number, firstFourBytes: Buffer): bo
  *  against a real temp file (or a fake) without importing node fs into callers'
  *  test setups. */
 export interface GgufFs {
-  statSync(p: string): { size: number }
+  statSync(p: string): { size: number; mtimeMs?: number }
   openSync(p: string, flags: string): number
   readSync(fd: number, buffer: Buffer, offset: number, length: number, position: number): number
   closeSync(fd: number): void
