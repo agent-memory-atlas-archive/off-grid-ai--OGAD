@@ -198,7 +198,7 @@ describe('<MemoryChat/> saved voice actions', () => {
     })
     await user.click(await screen.findByRole('menuitem', { name: 'Transcribe again' }))
     await waitFor(() => expect(screen.queryByText('Transcribing...')).toBeNull())
-    await user.click(screen.getAllByRole('button', { name: 'Show transcript' })[0]!)
+    await user.click((await screen.findAllByRole('button', { name: 'Show transcript' }))[0]!)
     expect(await screen.findByText('Corrected transcript')).toBeTruthy()
 
     chat.unmount()
