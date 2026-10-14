@@ -14,6 +14,33 @@
    accent and type vocabulary. Unlayered on purpose, so it wins over the theme. */
 @import '@offgrid/operator-ui/ogad/skin.css';
 
+/* Light-mode contrast uses the existing design tokens and shared skin slots.
+   Supporting text needs ink contrast; content surfaces should separate from the field. */
+:root[data-theme='light'] {
+  --og-text-muted: var(--og-text-secondary);
+  --og-rgb-text-muted: var(--og-rgb-text-secondary);
+  --color-card: rgb(var(--og-rgb-background) / 0.92);
+  --color-popover: var(--og-background);
+  --color-primary: var(--og-primary-dark);
+  --color-green-500: var(--og-primary-dark);
+  --color-green-400: var(--og-primary-dark);
+  --color-emerald-300: var(--og-primary-dark);
+  --color-emerald-400: var(--og-primary-dark);
+}
+
+/* This legacy text class otherwise inherits the translucent border colour. */
+:root[data-theme='light'] .text-neutral-700 {
+  color: var(--og-text-secondary);
+}
+
+:root[data-theme='light'] [data-slot='living-field-glow'] {
+  opacity: 0.3;
+}
+
+:root[data-theme='light'] [data-slot='living-field-echo'] {
+  opacity: 0.25;
+}
+
 /* The ui/* primitives are re-exports of @offgrid/operator-ui/ogad/ui/*; scan
    their built files so the utilities they use are generated. */
 @source "../../../../node_modules/@offgrid/operator-ui/dist";
