@@ -233,7 +233,7 @@ test('runs Web Use through Pause, Take Over, HITL, Resume, and terminal Stop', a
   await page.evaluate((url) => window.api.browser.openUrl(url), localPageUrl)
   await page.getByRole('tab', { name: 'CU-004 Pointer Lab', exact: true }).last().click()
   await page
-    .getByRole('complementary', { name: 'Task history' })
+    .getByRole('complementary', { name: 'Task details' })
     .getByRole('button', { name: 'Retry', exact: true })
     .click()
   await waitForTaskStatus('running')
@@ -255,7 +255,9 @@ test('runs Web Use through Pause, Take Over, HITL, Resume, and terminal Stop', a
 
   await releaseUntilUserHandoff()
   await expect(
-    page.getByText('Confirm the protected account step yourself.', { exact: true })
+    page
+      .getByTestId('task-live-activity')
+      .getByText('Confirm the protected account step yourself.', { exact: true })
   ).toBeVisible()
   await controls.getByRole('button', { name: 'Continue', exact: true }).click()
   await waitForTaskStatus('running')
