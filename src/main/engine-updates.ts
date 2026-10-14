@@ -30,6 +30,7 @@ const execFileAsync = promisify(execFile)
 const FIRST_CHECK_DELAY_MS = 60_000
 const CHECK_INTERVAL_MS = 6 * 60 * 60_000
 const INDEX_TIMEOUT_MS = 15_000
+const FILE_IDLE_TIMEOUT_MS = 60_000
 const SMOKE_TEST_TIMEOUT_MS = 30_000
 
 /** Everything outside this module the updater touches, injectable for tests. */
@@ -48,6 +49,7 @@ export interface EngineUpdaterDeps {
   indexUrl?: (platform: EnginePlatform) => string
   fileUrl?: (sha256: string) => string
   publicKey?: string
+  fileIdleTimeoutMs?: number
 }
 
 interface InstalledEngines {
@@ -199,30 +201,40 @@ export function createEngineUpdater(deps: EngineUpdaterDeps): EngineUpdater {
       publish()
       return target
     }
-    const response = await doFetch((deps.fileUrl ?? engineFileUrl)(file.sha256))
-    if (!response.ok || !response.body) {
-      throw new Error(`Downloading ${file.path} failed with HTTP ${response.status}.`)
-    }
+    const controller = new AbortController()
+    const idleTimeout = deps.fileIdleTimeoutMs ?? FILE_IDLE_TIMEOUT_MS
+    let idle = setTimeout(() => controller.abort(), idleTimeout)
     const hash = createHash('sha256')
     let received = 0
-    const out = fs.createWriteStream(partial)
+    let out: fs.WriteStream | undefined
     try {
+      const response = await doFetch((deps.fileUrl ?? engineFileUrl)(file.sha256), {
+        signal: controller.signal
+      })
+      if (!response.ok || !response.body) {
+        throw new Error(`Downloading ${file.path} failed with HTTP ${response.status}.`)
+      }
+      out = fs.createWriteStream(partial)
       for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+        clearTimeout(idle)
+        idle = setTimeout(() => controller.abort(), idleTimeout)
         received += chunk.byteLength
         if (received > file.size) throw new Error(`${file.path} is larger than published.`)
         hash.update(chunk)
         if (!out.write(chunk))
-          await new Promise<void>((resolve) => out.once('drain', () => resolve()))
+          await new Promise<void>((resolve) => out!.once('drain', () => resolve()))
         downloadedBytes += chunk.byteLength
         publish()
       }
       await new Promise<void>((resolve, reject) =>
-        out.end((err?: Error | null) => (err ? reject(err) : resolve()))
+        out!.end((err?: Error | null) => (err ? reject(err) : resolve()))
       )
     } catch (err) {
-      out.destroy()
+      out?.destroy()
       fs.rmSync(partial, { force: true })
       throw err
+    } finally {
+      clearTimeout(idle)
     }
     if (received !== file.size || hash.digest('hex') !== file.sha256) {
       fs.rmSync(partial, { force: true })
@@ -307,7 +319,7 @@ export function createEngineUpdater(deps: EngineUpdaterDeps): EngineUpdater {
   }
 
   async function runCheck(): Promise<EngineUpdateStatus> {
-    if (!platform || !deps.hasGpu() || !deps.enabled()) return status()
+    if (!platform || !deps.hasGpu() || !deps.packBin() || !deps.enabled()) return status()
     phase = 'checking'
     error = undefined
     publish()

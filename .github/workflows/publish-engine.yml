@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: publish-engine-index
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Publish ${{ matrix.platform }} engine

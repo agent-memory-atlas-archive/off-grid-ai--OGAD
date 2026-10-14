@@ -23,6 +23,7 @@ let requested: string[]
 let dataDir: string
 let packBin: string
 let enabled: boolean
+let stalledFile: 'headers' | 'body' | null
 
 const RUNTIME = Buffer.from('cuda runtime library bytes')
 
@@ -54,7 +55,7 @@ function publish(
   routes.set('/index.json.sig', Buffer.from(sign(null, index, signWith).toString('base64')))
 }
 
-function updater(): EngineUpdater {
+function updater(fileIdleTimeoutMs?: number): EngineUpdater {
   return createEngineUpdater({
     platform: 'linux',
     dataDir: () => dataDir,
@@ -64,10 +65,11 @@ function updater(): EngineUpdater {
       enabled = value
     },
     hasGpu: () => true,
-    packBin: () => packBin,
+    packBin: () => packBin || null,
     indexUrl: () => `${base}/index.json`,
     fileUrl: (hash) => `${base}/files/${hash}`,
-    publicKey
+    publicKey,
+    fileIdleTimeoutMs
   })
 }
 
@@ -77,6 +79,7 @@ beforeEach(async () => {
   fs.mkdirSync(path.join(packBin, 'cuda-runtime'), { recursive: true })
   fs.writeFileSync(path.join(packBin, 'cuda-runtime', 'libcudart.so.12'), RUNTIME)
   enabled = true
+  stalledFile = null
   requested = []
   routes = new Map()
   server = http.createServer((req, res) => {
@@ -84,6 +87,13 @@ beforeEach(async () => {
     const body = routes.get(req.url ?? '')
     if (!body) {
       res.writeHead(404).end()
+      return
+    }
+    if (stalledFile && req.url?.startsWith('/files/')) {
+      if (stalledFile === 'body') {
+        res.writeHead(200, { 'content-length': body.length })
+        res.write(body.subarray(0, 1))
+      }
       return
     }
     res.writeHead(200, { 'content-length': body.length }).end(body)
@@ -99,6 +109,23 @@ afterEach(async () => {
 })
 
 describe('engine updates', () => {
+  it('makes no network request when the CUDA pack was not installed', async () => {
+    packBin = ''
+    publish([{ version: 'b11551', server: engineScript('b11551') }])
+    expect((await updater().check()).installed).toEqual({})
+    expect(requested).toEqual([])
+  })
+
+  it.each(['headers', 'body'] as const)('recovers after a file stalls at %s', async (stage) => {
+    publish([{ version: 'b11551', server: engineScript('b11551') }])
+    stalledFile = stage
+    const engines = updater(150)
+    expect((await engines.check()).phase).toBe('failed')
+    expect(fs.readdirSync(path.join(dataDir, 'engines', 'files'))).toEqual([])
+    stalledFile = null
+    expect((await engines.check()).installed).toEqual({ 'llama-cuda': 'b11551' })
+  })
+
   it('installs a signed engine, reuses the pack’s identical files, and searches it first', async () => {
     publish([{ version: 'b11551', server: engineScript('b11551') }])
     const engines = updater()
