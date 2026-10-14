@@ -36,8 +36,14 @@ describe('speech synthesis input', () => {
     const server = createServer(async (req, res) => {
       let body = ''
       for await (const chunk of req) body += chunk
+      if (req.method === 'GET' && req.url === '/v1/models?output_modalities=speech') {
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({ data: [{ id: 'router-tts', supported_voices: ['nova'] }] }))
+        return
+      }
       if (req.method === 'POST' && req.url === '/v1/audio/speech') {
-        inputs.push(JSON.parse(body).input)
+        const payload = JSON.parse(body)
+        inputs.push(`${payload.voice ?? ''}:${payload.input}`)
         res.setHeader('content-type', 'audio/wav')
         res.end('fixture-audio')
         return
@@ -59,7 +65,19 @@ describe('speech synthesis input', () => {
       expect(activateRemoteVisionMediaModel(serverId, 'voice', 'fixture-tts')).toBe(true)
 
       await synthesize('Ship it 🚀', 'af_heart')
-      expect(inputs).toEqual(['Ship it'])
+
+      // A router lists its speakers; an unknown voice falls back to the first one it offers.
+      const router = setRemoteVisionServerSettings({
+        provider: 'openrouter',
+        endpoint: `http://127.0.0.1:${address.port}/v1`,
+        model: '',
+        mediaModels: { voice: 'router-tts' }
+      })
+      const routerId = router.servers.find((saved) => saved.provider === 'openrouter')!.id
+      expect(activateRemoteVisionMediaModel(routerId, 'voice', 'router-tts')).toBe(true)
+      await synthesize('Hello 👋', 'not-a-voice')
+
+      expect(inputs).toEqual(['af_heart:Ship it', 'nova:Hello'])
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
