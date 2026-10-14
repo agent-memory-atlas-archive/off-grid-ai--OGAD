@@ -940,8 +940,8 @@ const offGridApi = {
   crmAhead: (nowSec?: number) => ipcRenderer.invoke('crm:ahead', nowSec),
   crmCalendar: (startSec: number, endSec: number) =>
     ipcRenderer.invoke('crm:calendar', startSec, endSec),
-  crmEventPrep: (title: string, attendees: string[]) =>
-    ipcRenderer.invoke('crm:event-prep', title, attendees),
+  crmEventPrep: (title: string, attendees: string[], emails: string[] = []) =>
+    ipcRenderer.invoke('crm:event-prep', title, attendees, emails),
   crmDayPlan: (nowSec?: number) => ipcRenderer.invoke('crm:day-plan', nowSec),
   crmDayPlanCached: (nowSec?: number) => ipcRenderer.invoke('crm:day-plan-cached', nowSec),
   crmProposeActions: (nowSec?: number) => ipcRenderer.invoke('crm:propose-actions', nowSec),
@@ -977,6 +977,8 @@ const offGridApi = {
   crmDayJournal: (startSec: number, endSec: number) =>
     ipcRenderer.invoke('crm:day-journal', startSec, endSec),
   crmDayJournalCached: (startSec: number) => ipcRenderer.invoke('crm:day-journal-cached', startSec),
+  crmDayJournalSentences: (startSec: number, endSec: number) =>
+    ipcRenderer.invoke('crm:day-journal-sentences', startSec, endSec),
   crmReplayFrames: (startSec: number, endSec: number) =>
     ipcRenderer.invoke('crm:replay-frames', startSec, endSec),
   crmReplaySaveFrameEdit: (imagePath: string, caption: string, tags: string[]) =>
