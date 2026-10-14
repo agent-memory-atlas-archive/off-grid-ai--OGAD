@@ -66,7 +66,7 @@ test('window and runtime use the canonical desktop product name', async () => {
 test('Models: merged tab + use-cases + import', async () => {
   await expect(page.getByRole('heading', { name: 'Models' })).toBeVisible()
   await expect(page.getByRole('button', { name: /Import \.gguf/i })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Coding', exact: true })).toBeVisible() // use-case chip
+  await expect(page.getByRole('radio', { name: 'Coding', exact: true })).toBeVisible() // use-case chip
 })
 
 test('Settings: setup, resource modes, storage, data & privacy all render', async () => {
@@ -84,7 +84,7 @@ test('Settings: setup, resource modes, storage, data & privacy all render', asyn
   // The resource-mode selector now lives inside the Configure card.
   for (const m of ['Conservative', 'Balanced', 'Extreme']) {
     // The mode button's accessible name includes its description, so match by substring.
-    await expect(page.getByRole('button', { name: m }).first()).toBeVisible()
+    await expect(page.getByRole('radio', { name: m }).first()).toBeVisible()
   }
 
   await openSettingsSection(page, 'Data & privacy')
@@ -96,9 +96,9 @@ test('Resource mode is selectable (Conservative)', async () => {
   // The modes live in the Setup & health body. A previous test may have left another
   // section open, so always route through the helper rather than probing visibility.
   await openSettingsSection(page, 'Setup & health')
-  const cons = page.getByRole('button', { name: 'Conservative' }).first()
+  const cons = page.getByRole('radio', { name: 'Conservative' }).first()
   await cons.click()
-  await expect(cons).toHaveAttribute('aria-pressed', 'true')
+  await expect(cons).toHaveAttribute('aria-checked', 'true')
 })
 
 test('every locked Pro navigation item renders its matching upgrade screen', async () => {
