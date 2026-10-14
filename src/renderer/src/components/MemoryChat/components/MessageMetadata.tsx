@@ -55,7 +55,7 @@ function GenerationMetricsRowComponent({
           limit={contextWindowTokens}
           breakdown={[
             { label: estimated ? 'Prompt (estimated)' : 'Prompt', tokens: promptTokens },
-            ...(metrics?.completionTokens
+            ...(metrics.completionTokens
               ? [{ label: 'Output', tokens: metrics.completionTokens }]
               : [])
           ]}
