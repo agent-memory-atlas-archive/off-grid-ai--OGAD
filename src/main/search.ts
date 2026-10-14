@@ -340,9 +340,35 @@ function likeFrameHits(query: string, limit: number): RawHit[] {
       `SELECT 'frame:'||id AS key, 'screen' AS kind, id AS refId, COALESCE(surface,'Screen') AS title,
               substr(text,1,300) AS snippet, COALESCE(surface,'') AS surface, url AS url,
               ${epochMsSql('ts')} AS ts
-         FROM frames WHERE text IS NOT NULL AND ${where} ORDER BY ts DESC LIMIT ?`
+         FROM frames
+        WHERE text IS NOT NULL AND COALESCE(source, '') != 'connector' AND ${where}
+        ORDER BY ts DESC LIMIT ?`
     )
     .all(...args, limit) as RawHit[]
+}
+
+/** Ranking penalty for bulk mail (newsletters, promos): still searchable, never on top of the
+ *  user's real conversations just because it is recent. */
+const BULK_MAIL_PENALTY = 0.02
+
+/** Push bulk-mail observations down the ranking. Reads their category in one query. */
+function demoteBulkMail(results: Iterable<SearchResult>): void {
+  const byId = new Map<number, SearchResult>()
+  for (const r of results) {
+    if (r.key.startsWith('obs:')) byId.set(Number(r.key.slice(4)), r)
+  }
+  if (!byId.size) return
+  try {
+    const ids = JSON.stringify([...byId.keys()])
+    const rows = getDB()
+      .prepare(
+        "SELECT id FROM observations WHERE id IN (SELECT value FROM json_each(?)) AND category = 'consumption'"
+      )
+      .all(ids) as { id: number }[]
+    for (const { id } of rows) byId.get(id)!.score -= BULK_MAIL_PENALTY
+  } catch {
+    // Observations are a Pro table; without it there is nothing to demote.
+  }
 }
 
 function sourceRowExists(sql: string, id: number): boolean {
@@ -468,6 +494,7 @@ export async function universalSearch(
   // older), plus a small nudge for your own deliberate content (chats / KB docs) so
   // it isn't buried under thousands of ambient screen captures.
   applyBoosts(fused.values(), Date.now())
+  demoteBulkMail(fused.values())
 
   // Filter (source / current chat) then sort (relevance / recency / match).
   const ordered = rankResults(Array.from(fused.values()), {

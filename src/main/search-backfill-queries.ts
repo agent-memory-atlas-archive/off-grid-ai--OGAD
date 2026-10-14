@@ -9,7 +9,7 @@ export const PENDING_SOURCE_SQL = [
           ${epochMsSql('f.ts')} AS ts
      FROM frames f
     WHERE NOT EXISTS (SELECT 1 FROM vec_indexed v WHERE v.key = 'frame:'||f.id)
-      AND f.text IS NOT NULL
+      AND f.text IS NOT NULL AND COALESCE(f.source, '') != 'connector'
     LIMIT ?`,
   `SELECT 'obs:'||o.id AS key, 'screen' AS kind, o.id AS refId, o.summary AS text,
           COALESCE(o.surface,'') AS surface, COALESCE(o.url,'') AS url,
