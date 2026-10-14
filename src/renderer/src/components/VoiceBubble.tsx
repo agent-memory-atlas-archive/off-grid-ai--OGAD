@@ -493,7 +493,9 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
               barWidth={2}
               barGap={2}
               fadeEdges={false}
-              className="opacity-35 [--foreground:var(--primary)]"
+              // The canvas paints with whatever --foreground computes to and falls back to black, so it
+              // must be a token this app defines. --primary is not one: the bars drew black on black.
+              className="opacity-70 [--foreground:var(--og-text-muted)]"
               aria-hidden="true"
             />
             <div
@@ -507,7 +509,7 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
                 barGap={2}
                 fadeEdges={false}
                 aria-hidden="true"
-                className="[--foreground:var(--primary)] drop-shadow-[0_0_8px_rgb(var(--og-rgb-primary)/0.55)]"
+                className="[--foreground:var(--og-primary)] drop-shadow-[0_0_8px_rgb(var(--og-rgb-primary)/0.55)]"
               />
             </div>
             {progress > 0 ? (
