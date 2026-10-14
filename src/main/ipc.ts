@@ -1,3 +1,4 @@
+import { settingsChanged } from './settings-version'
 import { withStorageDownload, storageDownloadsActive } from './model-storage-guard'
 import { moveModelStorage } from './model-storage-move'
 import { ipcMain, BrowserWindow, app, clipboard } from 'electron'
@@ -1943,6 +1944,7 @@ export function setupIPC(): void {
         m.addModelScanFolder(app.getPath('userData'), result.filePaths[0]!)
       )
       BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('models:inventory-changed'))
+      settingsChanged()
       return { folders }
     } catch (error) {
       return { error: error instanceof Error ? error.message : 'Cannot read this folder.' }
@@ -1953,6 +1955,7 @@ export function setupIPC(): void {
       m.removeModelScanFolder(app.getPath('userData'), directory)
     )
     BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('models:inventory-changed'))
+      settingsChanged()
     return folders
   })
   ipcMain.handle('models:delete-orphans', () =>

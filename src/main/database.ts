@@ -1,3 +1,4 @@
+import { settingsChanged } from './settings-version'
 import { selectedVersionRepairs, type StoredVersionRow } from '../shared/chat-versions'
 // better-sqlite3-multiple-ciphers is a drop-in superset of better-sqlite3 that
 // adds SQLCipher-style `PRAGMA key` encryption. Same API surface + types.
@@ -1747,6 +1748,7 @@ export function getSettings(): AppSettings {
 
 export function saveSetting(key: string, value: unknown): void {
   createSettingsStore(getDB()).set(key, value)
+  settingsChanged()
 }
 
 export function getSetting<T>(key: string, defaultValue: T): T {
@@ -1755,4 +1757,5 @@ export function getSetting<T>(key: string, defaultValue: T): T {
 
 export function deleteSetting(key: string): void {
   createSettingsStore(getDB()).delete(key)
+  settingsChanged()
 }

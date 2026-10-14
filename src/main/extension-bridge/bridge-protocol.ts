@@ -212,6 +212,7 @@ export const RPC_METHODS = [
   'vault',
   'settings.get',
   'settings.set',
+  'settings.watch',
   'unpair'
 ] as const
 export type RpcMethod = (typeof RPC_METHODS)[number]
