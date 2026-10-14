@@ -54,10 +54,11 @@ export function SidebarNavigationMenu<Item extends { view: string; label: string
               <button
                 type="button"
                 title={!expanded ? group.label : undefined}
+                data-slot="button"
                 aria-label={
                   !open && activeItem ? `${group.label}, current: ${activeItem.label}` : group.label
                 }
-                className={`group relative flex h-9 w-full items-center rounded-lg py-2 text-neutral-500 transition-colors hover:bg-neutral-500/10 hover:text-white active:scale-95 ${
+                className={`group relative flex h-9 w-full items-center rounded-lg py-2 text-neutral-500 hover:bg-neutral-500/10 hover:text-white ${
                   expanded
                     ? 'gap-2 px-3 text-left text-[10px] uppercase tracking-[0.14em]'
                     : `justify-center px-0 ${activeItem && !open ? 'text-emerald-400' : ''}`
