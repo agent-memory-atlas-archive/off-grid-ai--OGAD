@@ -13,7 +13,15 @@
  *    transcript-derived envelope (stable before/during playback).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Play, Pause, CaretDown, Copy, ArrowsClockwise, Check } from '@phosphor-icons/react'
+import {
+  Play,
+  Pause,
+  Copy,
+  ArrowsClockwise,
+  Check,
+  Subtitles,
+  SubtitlesSlash
+} from '@phosphor-icons/react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Button } from '@offgrid/operator-ui/operator/coss/button'
 import { ToggleGroup, ToggleGroupItem } from '@offgrid/operator-ui/operator/coss/toggle-group'
@@ -25,6 +33,7 @@ import {
 import { AutoHeight } from '@offgrid/operator-ui/operator/presence'
 import { claimVoicePlayback, onVoicePlaybackClaim } from '@renderer/lib/voice-playback-bus'
 import { LoadingDots } from './ui/loading-dots'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 
 const WAVEFORM_BARS = 48
 const SPEED_STEPS = [0.5, 0.8, 1.0, 1.25, 1.5, 2.0]
@@ -511,76 +520,121 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
         )}
       </div>
 
-      <div className="flex items-center justify-between">
-        {transcript ? (
-          <ToggleGroup
-            size="sm"
-            value={showTranscript ? ['transcript'] : []}
-            onValueChange={(values) => setShowTranscript(values.includes('transcript'))}
-          >
-            <ToggleGroupItem
-              value="transcript"
-              className="gap-1 text-[11px] text-neutral-500 hover:text-neutral-300"
+      {/* Its own provider: voice notes also render outside the app shell's provider. */}
+      <TooltipProvider delayDuration={300}>
+        <div className="flex items-center justify-between">
+          {transcript ? (
+            <ToggleGroup
+              size="sm"
+              value={showTranscript ? ['transcript'] : []}
+              onValueChange={(values) => setShowTranscript(values.includes('transcript'))}
             >
-              {showTranscript ? 'Hide transcript' : 'Show transcript'}
-              <CaretDown
-                size={11}
-                weight="bold"
-                className={`transition-transform duration-300 ${showTranscript ? 'rotate-180' : ''}`}
-              />
-            </ToggleGroupItem>
-          </ToggleGroup>
-        ) : (
-          <span />
-        )}
-        <div className="flex items-center gap-2.5">
-          <span className="min-w-[2rem] text-right text-[11px] text-neutral-500 tabular-nums">
-            {isLoading
-              ? '—'
-              : formatDuration(status === 'idle' ? totalDuration : currentTime || totalDuration)}
-          </span>
-          <button
-            type="button"
-            onClick={cycleSpeed}
-            className="cursor-pointer rounded-md border border-neutral-700 px-1.5 py-0.5 text-[10px] text-neutral-400 transition-colors hover:border-green-500 hover:text-green-500 active:scale-95"
-            title="Playback speed"
-          >
-            {speed}x
-          </button>
-          {!isLoading && onCopy ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <ToggleGroupItem
+                    value="transcript"
+                    aria-label={showTranscript ? 'Hide transcript' : 'Show transcript'}
+                    className="text-neutral-500 hover:text-neutral-300"
+                  >
+                    <AnimatePresence mode="popLayout" initial={false}>
+                      <motion.span
+                        key={showTranscript ? 'hide' : 'show'}
+                        initial={reduceMotion ? false : { opacity: 0, scale: 0.6 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.6 }}
+                        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                        className="flex"
+                      >
+                        {showTranscript ? (
+                          <SubtitlesSlash size={14} aria-hidden="true" />
+                        ) : (
+                          <Subtitles size={14} aria-hidden="true" />
+                        )}
+                      </motion.span>
+                    </AnimatePresence>
+                  </ToggleGroupItem>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {showTranscript ? 'Hide transcript' : 'Show transcript'}
+                </TooltipContent>
+              </Tooltip>
+            </ToggleGroup>
+          ) : (
+            <span />
+          )}
+          <div className="flex items-center gap-2.5">
+            <span className="min-w-[2rem] text-right text-[11px] text-neutral-500 tabular-nums">
+              {isLoading
+                ? '—'
+                : formatDuration(status === 'idle' ? totalDuration : currentTime || totalDuration)}
+            </span>
             <button
               type="button"
-              onClick={() => onCopy(transcript)}
-              className={`flex cursor-pointer items-center gap-1 text-[11px] transition-colors active:scale-95 ${copied ? 'text-green-500' : 'text-neutral-600 hover:text-green-500'}`}
-              title={copied ? 'Copied' : 'Copy transcript'}
-              aria-label={copied ? 'Copied' : 'Copy transcript'}
+              onClick={cycleSpeed}
+              className="cursor-pointer rounded-md border border-neutral-700 px-1.5 py-0.5 text-[10px] text-neutral-400 transition-colors hover:border-green-500 hover:text-green-500 active:scale-95"
+              title="Playback speed"
             >
-              {copied ? (
-                <>
-                  <Check size={13} weight="bold" />
-                  <span role="status" aria-live="polite">
-                    Copied
-                  </span>
-                </>
-              ) : (
-                <Copy size={13} />
-              )}
+              {speed}x
             </button>
-          ) : null}
-          {!isLoading && onRetry ? (
-            <button
-              type="button"
-              onClick={onRetry}
-              className="flex cursor-pointer items-center gap-1 text-[11px] text-neutral-600 transition-colors hover:text-green-500 active:scale-95"
-              title={isUser ? 'Resend' : 'Regenerate'}
-              aria-label={isUser ? 'Resend' : 'Regenerate'}
-            >
-              <ArrowsClockwise size={13} />
-              {isUser ? 'Resend' : null}
-            </button>
-          ) : null}
+            {!isLoading && onCopy ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    onClick={() => onCopy(transcript)}
+                    className={copied ? 'text-green-500' : 'text-neutral-600 hover:text-green-500'}
+                    aria-label={copied ? 'Copied' : 'Copy transcript'}
+                  >
+                    <AnimatePresence mode="popLayout" initial={false}>
+                      <motion.span
+                        key={copied ? 'copied' : 'copy'}
+                        initial={reduceMotion ? false : { opacity: 0, scale: 0.5, rotate: -30 }}
+                        animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                        exit={
+                          reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.5, rotate: 30 }
+                        }
+                        transition={{ type: 'spring', stiffness: 500, damping: 28 }}
+                        className="flex"
+                      >
+                        {copied ? (
+                          <Check size={13} weight="bold" aria-hidden="true" />
+                        ) : (
+                          <Copy size={13} aria-hidden="true" />
+                        )}
+                      </motion.span>
+                    </AnimatePresence>
+                    {copied ? (
+                      <span role="status" aria-live="polite" className="sr-only">
+                        Copied
+                      </span>
+                    ) : null}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{copied ? 'Copied' : 'Copy transcript'}</TooltipContent>
+              </Tooltip>
+            ) : null}
+            {!isLoading && onRetry ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    onClick={onRetry}
+                    className="text-neutral-600 hover:text-green-500"
+                    aria-label={isUser ? 'Resend' : 'Regenerate'}
+                  >
+                    <ArrowsClockwise size={13} aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{isUser ? 'Resend' : 'Regenerate'}</TooltipContent>
+              </Tooltip>
+            ) : null}
+          </div>
         </div>
-      </div>
+      </TooltipProvider>
 
       <AutoHeight>
         <AnimatePresence initial={false}>

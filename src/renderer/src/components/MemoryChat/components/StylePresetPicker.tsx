@@ -1,7 +1,9 @@
 import { memo } from 'react'
-import { Check } from '@phosphor-icons/react'
+import { Check, X } from '@phosphor-icons/react'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
 import { captureUrlForPath } from '../../../../../shared/ogcapture-url'
+import { Button } from '@renderer/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 
 export const ASK_EXAMPLES = [
   'Explain how RAG works, simply',
@@ -113,13 +115,21 @@ function StylePresetPickerComponent({
       <div className="mb-2 flex items-center justify-between">
         <span className="text-[10px] uppercase tracking-wider text-neutral-600">Style</span>
         {activeStyle ? (
-          <button
-            type="button"
-            onClick={() => onChange(null)}
-            className="text-[10px] text-neutral-600 transition-colors hover:text-neutral-300"
-          >
-            Clear {activeStyle}
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-label={`Clear ${activeStyle}`}
+                onClick={() => onChange(null)}
+                className="text-neutral-600 hover:text-neutral-300"
+              >
+                <X />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{`Clear ${activeStyle}`}</TooltipContent>
+          </Tooltip>
         ) : null}
       </div>
       <AnimatedGroup

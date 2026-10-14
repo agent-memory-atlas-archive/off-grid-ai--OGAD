@@ -132,11 +132,11 @@ function SourceScoresSectionComponent({
       <div className="mb-2 text-[10px] uppercase tracking-wide text-neutral-600">
         Sources ({sources.length})
       </div>
-      <div className="space-y-1">
+      <div className="overflow-hidden rounded-md border border-neutral-800 divide-y divide-neutral-900">
         {sources.slice(0, 8).map((source, index) => (
           <div
             key={`${source.name}-${index}`}
-            className="flex items-center gap-2 rounded-md border border-neutral-800 p-2 text-[11px] text-neutral-400"
+            className="flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-neutral-400"
           >
             <span className="min-w-0 flex-1 truncate">{source.name}</span>
             <span className="shrink-0 text-neutral-600">{(source.score * 100).toFixed(0)}%</span>
@@ -178,13 +178,13 @@ function MemoriesContextSectionComponent({
       <div className="mb-2 text-[10px] uppercase tracking-wide text-neutral-600">
         Memories ({memories.length})
       </div>
-      <div className="space-y-1">
+      <div className="overflow-hidden rounded-md border border-neutral-800 divide-y divide-neutral-900">
         {memories.slice(0, 5).map((memory, index) => (
           <button
             key={memory.id || index}
             type="button"
             onClick={() => onNavigate?.(memory.id)}
-            className="block w-full rounded-md border border-neutral-800 p-2 text-left transition-colors hover:border-neutral-700"
+            className="block w-full px-2.5 py-1.5 text-left transition-colors hover:bg-neutral-900/60"
           >
             <p className="line-clamp-2 text-[11px] text-neutral-400">
               {memory.content || memory.text || 'Memory'}
@@ -210,21 +210,19 @@ function SummariesContextSectionComponent({
       <div className="mb-2 text-[10px] uppercase tracking-wide text-neutral-600">
         Related chats ({summaries.length})
       </div>
-      <div className="space-y-1">
+      <div className="overflow-hidden rounded-md border border-neutral-800 divide-y divide-neutral-900">
         {summaries.slice(0, 5).map((summary, index) => (
           <button
             key={summary.session_id || index}
             type="button"
             onClick={() => onNavigate?.(summary.session_id)}
-            className="block w-full rounded-md border border-neutral-800 p-2 text-left transition-colors hover:border-neutral-700"
+            className="flex w-full items-baseline gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-neutral-900/60"
           >
-            <p className="line-clamp-2 text-[11px] text-neutral-400">
+            <span className="line-clamp-2 min-w-0 flex-1 text-[11px] text-neutral-400">
               {summary.summary || summary.title || 'Chat'}
-            </p>
+            </span>
             {summary.app_name ? (
-              <span className="mt-1 inline-block text-[10px] text-neutral-600">
-                {summary.app_name}
-              </span>
+              <span className="shrink-0 text-[10px] text-neutral-600">{summary.app_name}</span>
             ) : null}
           </button>
         ))}

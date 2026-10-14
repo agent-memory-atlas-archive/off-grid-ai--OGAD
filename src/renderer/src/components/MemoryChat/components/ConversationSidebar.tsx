@@ -7,7 +7,10 @@ import {
   InputGroupAddon,
   InputGroupInput
 } from '@offgrid/operator-ui/operator/coss/input-group'
+import { Plus } from '@phosphor-icons/react'
 import { timeAgo } from '@renderer/lib/time'
+import { Button } from '@renderer/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { ConversationTitleActions } from '../../ConversationTitleActions'
 import type { ConversationListRow } from '../types'
 
@@ -80,25 +83,10 @@ function ConversationSidebarComponent({
   return (
     <aside className="h-full overflow-hidden border-r border-neutral-900">
       <div className="flex h-full min-w-0 flex-col">
-        <div className="px-2 pb-2 pt-3">
-          <button
-            onClick={onStartNewConversation}
-            className="flex w-full items-center justify-center gap-2 rounded-md border border-neutral-800 px-3 py-2 text-xs text-neutral-300 transition-colors hover:border-green-500 hover:text-green-500"
-          >
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 4v16m8-8H4"
-              />
-            </svg>
-            New chat
-          </button>
-        </div>
-        {conversationCount > 0 && (
-          <div className="px-2 pb-2">
-            <InputGroup className="text-xs">
+        {/* One row: search beside the new-chat action, so the list starts higher. */}
+        <div className="flex items-center gap-1.5 px-2 pb-2 pt-3">
+          {conversationCount > 0 ? (
+            <InputGroup className="min-w-0 flex-1 text-xs">
               <InputGroupAddon>
                 <svg
                   className="h-3.5 w-3.5 shrink-0 text-neutral-600"
@@ -132,8 +120,25 @@ function ConversationSidebarComponent({
                 </InputGroupAddon>
               )}
             </InputGroup>
-          </div>
-        )}
+          ) : (
+            <div className="flex-1" />
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="outline"
+                aria-label="New chat"
+                onClick={onStartNewConversation}
+                className="shrink-0 border-neutral-800 text-neutral-300 hover:border-green-500 hover:text-green-500"
+              >
+                <Plus />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>New chat</TooltipContent>
+          </Tooltip>
+        </div>
         <div ref={listRef} className="flex-1 overflow-y-auto px-2 pb-2">
           {conversationCount === 0 ? (
             <Empty className="flex-none gap-0 px-2 py-4 md:py-4">

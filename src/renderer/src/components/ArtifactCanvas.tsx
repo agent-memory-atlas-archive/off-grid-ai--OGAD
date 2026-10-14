@@ -7,7 +7,9 @@ import { ARTIFACT_KIND_LABELS, type ArtifactKind } from '@renderer/lib/artifact-
 import { resolveModelName } from '@renderer/lib/model-summary'
 import { capturePathFromUrl } from '../../../shared/ogcapture-url'
 import { SidePanel } from './SidePanel'
+import { DownloadSimple, X } from '@phosphor-icons/react'
 import { Button } from './ui/button'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 
 // Renders a model-generated artifact (HTML / SVG / Mermaid / React) in a SANDBOXED
 // iframe with sandbox="allow-scripts" only and no same-origin access, so generated
@@ -517,14 +519,39 @@ else { __ogShow('No React component found — define a component named App or a 
         <span className="min-w-0 truncate text-sm text-foreground">
           {artifact.title || 'Canvas'}
         </span>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button type="button" size="sm" variant="outline" onClick={download}>
-            Download
-          </Button>
-          <Button type="button" size="sm" variant="ghost" onClick={onClose}>
-            Close
-          </Button>
-        </div>
+        {/* Its own provider: the canvas can open outside the app shell's provider. */}
+        <TooltipProvider delayDuration={300}>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="outline"
+                  aria-label="Download"
+                  onClick={download}
+                >
+                  <DownloadSimple />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Download</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Close"
+                  onClick={onClose}
+                >
+                  <X />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Close</TooltipContent>
+            </Tooltip>
+          </div>
+        </TooltipProvider>
       </div>
       {/* The inspection chapter's artifact frame: preview and code travel along one axis, with
           copy beside them. The frame fills the panel; its panes take the remaining height. */}

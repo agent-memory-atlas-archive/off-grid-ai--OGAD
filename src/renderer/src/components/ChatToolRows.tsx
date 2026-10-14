@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from 'react'
 import type { ChatStreamTool, ProjectedSyncedTool } from '@offgrid/sync'
+import { SidebarSimple, X } from '@phosphor-icons/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Button } from '@offgrid/operator-ui/operator/coss/button'
-import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { AutoHeight } from '@offgrid/operator-ui/operator/presence'
 import {
   ToolTimeline,
@@ -20,6 +21,7 @@ import {
 import { ComputerUseStepDetails } from './tasks/ComputerUseStepDetails'
 import { RetryTaskButton } from './tasks/RetryTaskButton'
 import { taskReferenceFromResult, visibleToolResult } from './chat-tool-projection'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 
 type DisplayTool =
   | Pick<ProjectedSyncedTool, 'name' | 'arguments' | 'result' | 'status' | 'durationMs' | 'error'>
@@ -383,12 +385,10 @@ export function ChatToolRows({
         {details ? <ChatMarkdown content={details} /> : null}
         <ComputerUseStepDetails details={linkedTask?.stepDetails} />
         {linkedTask ? (
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              onClick={() =>
+          <div className="flex flex-wrap items-start gap-1.5">
+            <TaskDetailsToggle
+              open={taskWorkspaceOpen}
+              onToggle={() =>
                 taskWorkspaceOpen
                   ? closeTaskWorkspace()
                   : openTaskSidePanel({
@@ -397,11 +397,7 @@ export function ChatToolRows({
                       detail: true
                     })
               }
-            >
-              <TextMorph as="span">
-                {taskWorkspaceOpen ? 'Close task details' : 'Open task details'}
-              </TextMorph>
-            </Button>
+            />
             <RetryTaskButton task={linkedTask} />
           </div>
         ) : null}
@@ -452,5 +448,44 @@ export function ChatToolRows({
         </div>
       ) : null}
     </>
+  )
+}
+
+/** Opens or closes the task's details beside Chat; the glyph turns with the state. */
+function TaskDetailsToggle({
+  open,
+  onToggle
+}: Readonly<{ open: boolean; onToggle: () => void }>): React.JSX.Element {
+  const reduceMotion = useReducedMotion()
+  const label = open ? 'Close task details' : 'Open task details'
+  return (
+    // Its own provider: work rows also render outside the app shell's provider.
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="outline"
+            aria-label={label}
+            onClick={onToggle}
+          >
+            <AnimatePresence mode="popLayout" initial={false}>
+              <motion.span
+                key={open ? 'close' : 'open'}
+                initial={reduceMotion ? false : { opacity: 0, scale: 0.6, rotate: -45 }}
+                animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: 45 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                className="flex"
+              >
+                {open ? <X aria-hidden="true" /> : <SidebarSimple aria-hidden="true" />}
+              </motion.span>
+            </AnimatePresence>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }

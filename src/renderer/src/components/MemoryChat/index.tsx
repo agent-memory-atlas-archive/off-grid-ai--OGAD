@@ -174,7 +174,10 @@ import {
   FolderOpen,
   CaretDown,
   Lightning,
-  WarningCircle
+  WarningCircle,
+  DownloadSimple,
+  Trash,
+  Stop
 } from '@phosphor-icons/react'
 import type { MemoryChatProps } from './interfaces'
 import { announceAssistantActivity, announceAssistantListening } from '../../lib/assistant-activity'
@@ -5146,15 +5149,21 @@ export function MemoryChat({
                             </Tooltip></>
 )}
                             {mode === 'image' && (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setShowImageOptions((o) => !o)}
-                                className={`h-8 gap-1.5 rounded-full ${showImageOptions ? 'text-primary' : ''}`}
-                              >
-                                <SlidersHorizontal className="h-3.5 w-3.5" /> Image options
-                              </Button>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon"
+                                    aria-label="Image options"
+                                    onClick={() => setShowImageOptions((o) => !o)}
+                                    className={`size-8 rounded-full ${showImageOptions ? 'border-green-500 text-primary' : ''}`}
+                                  >
+                                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Image options</TooltipContent>
+                              </Tooltip>
                             )}
                             {queuedCount(queuedByConv, activeConversationId) > 0 && (
                               <span className="flex h-8 items-center rounded-full border border-neutral-800 px-2.5 text-[11px] text-neutral-400">
@@ -5262,22 +5271,26 @@ export function MemoryChat({
                                 </Tooltip>
                               )}
                             {loading && generatingImage ? (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => {
-                                  void stopGeneration(
-                                    activeConversationId,
-                                    guidanceTaskForJourney(getTaskSessionState().tasks, activeConversationId)
-                                  )
-                                }}
-                                className="h-8 gap-1.5 border-red-500/50 text-red-400 hover:bg-red-500/10"
-                              >
-                                <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
-                                  <rect x="6" y="6" width="12" height="12" rx="2" />
-                                </svg>
-                                Stop
-                              </Button>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon"
+                                    aria-label="Stop"
+                                    onClick={() => {
+                                      void stopGeneration(
+                                        activeConversationId,
+                                        guidanceTaskForJourney(getTaskSessionState().tasks, activeConversationId)
+                                      )
+                                    }}
+                                    className="size-8 rounded-full border-red-500/50 text-red-400 hover:bg-red-500/10"
+                                  >
+                                    <Stop className="h-3.5 w-3.5" weight="fill" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Stop</TooltipContent>
+                              </Tooltip>
                             ) : voiceMode ? null : (
                               <ChatDraftSendButton
                                 store={draftStore}
@@ -5405,20 +5418,37 @@ export function MemoryChat({
                 <h2 className="min-w-0 truncate text-sm font-normal text-neutral-200">
                   {viewer.title}
                 </h2>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex shrink-0 items-center gap-1.5">
                   {viewer.path && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => downloadImage(viewer.path, viewer.title)}
-                    >
-                      Download
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="outline"
+                          aria-label="Download"
+                          onClick={() => downloadImage(viewer.path, viewer.title)}
+                        >
+                          <DownloadSimple />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Download</TooltipContent>
+                    </Tooltip>
                   )}
-                  <Button type="button" size="sm" variant="ghost" onClick={() => setViewer(null)}>
-                    Close
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        aria-label="Close"
+                        onClick={() => setViewer(null)}
+                      >
+                        <X />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Close</TooltipContent>
+                  </Tooltip>
                 </div>
               </header>
               <div className="min-h-0 flex-1 overflow-auto p-4">
@@ -5442,20 +5472,36 @@ export function MemoryChat({
           actions={
             lightbox?.path ? (
               <>
-                <button
-                  type="button"
-                  onClick={() => downloadImage(lightbox.path!, lightbox.path?.split('/').pop())}
-                  className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 transition-colors hover:border-green-500 hover:text-green-500"
-                >
-                  Download
-                </button>
-                <button
-                  type="button"
-                  onClick={() => deleteImage(lightbox.path!)}
-                  className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 transition-colors hover:border-red-500 hover:text-red-400"
-                >
-                  Delete
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="outline"
+                      aria-label="Download"
+                      onClick={() => downloadImage(lightbox.path!, lightbox.path?.split('/').pop())}
+                      className="hover:border-green-500 hover:text-green-500"
+                    >
+                      <DownloadSimple />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Download</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="outline"
+                      aria-label="Delete"
+                      onClick={() => deleteImage(lightbox.path!)}
+                      className="hover:border-red-500 hover:text-red-400"
+                    >
+                      <Trash />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Delete</TooltipContent>
+                </Tooltip>
               </>
             ) : undefined
           }
@@ -5537,11 +5583,11 @@ export function MemoryChat({
                         No artifacts in this {galleryScope === 'all' ? 'app' : galleryScope}.
                       </p>
                     ) : (
-                      <div className="flex flex-col gap-2">
+                      <div className="flex flex-col divide-y divide-neutral-900 overflow-hidden rounded-md border border-neutral-800">
                         {artifacts.map((a) => (
                           <div
                             key={a.id}
-                            className="group flex items-center gap-2 rounded-md border border-neutral-800 p-2 transition-colors hover:border-green-500"
+                            className="group flex items-center gap-2 px-3 py-2 transition-colors hover:bg-neutral-900/60"
                           >
                             <button
                               onClick={() =>
@@ -5567,13 +5613,21 @@ export function MemoryChat({
                               )}
                               <span className="truncate text-xs text-neutral-200">{a.title}</span>
                             </button>
-                            <button
-                              onClick={() => deleteArtifact(a.id)}
-                              className="text-neutral-600 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
-                              title="Delete"
-                            >
-                              ✕
-                            </button>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  type="button"
+                                  size="icon-xs"
+                                  variant="ghost"
+                                  onClick={() => deleteArtifact(a.id)}
+                                  aria-label="Delete"
+                                  className="text-neutral-600 opacity-0 transition-opacity hover:text-red-400 focus-visible:opacity-100 group-hover:opacity-100"
+                                >
+                                  <Trash />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Delete</TooltipContent>
+                            </Tooltip>
                           </div>
                         ))}
                       </div>

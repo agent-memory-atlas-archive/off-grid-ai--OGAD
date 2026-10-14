@@ -13,7 +13,7 @@ import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-gro
 
 /**
  * The Explore surface: the demo-preset catalog rendered as capability panels, each holding a
- * dense grid of runnable cards. A card shows the capability label + blurb only - never the raw
+ * compact list of runnable rows. A card shows the capability label + blurb only - never the raw
  * prompt; that stays behind the tap.
  *
  * Tapping a card calls `onRun(preset)` - the host opens a real chat with the preset's intake form.
@@ -77,41 +77,45 @@ export function ExploreSection({
               </span>
             </div>
 
-            {/* Cards cascade in; each lifts toward the pointer and its arrow leans forward. */}
+            {/* Thin rows in one surface, divided by hairlines; rows cascade in and each arrow
+                leans forward under the pointer. */}
             <AnimatedGroup
               preset="blur-slide"
-              className="grid grid-cols-[repeat(auto-fit,minmax(16rem,1fr))] gap-2"
+              className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-background"
             >
               {section.presets.map((preset) => (
                 <button
                   key={preset.id}
                   type="button"
                   onClick={() => onRun(preset)}
-                  className="group grid h-full min-h-28 w-full grid-cols-[1.5rem_minmax(0,1fr)_1rem] gap-x-2 rounded-lg border border-border bg-background p-3 text-left text-foreground transition-[border-color,background-color,transform] duration-300 hover:-translate-y-px hover:border-primary/50 hover:bg-accent active:scale-[0.99]"
+                  className="group flex w-full items-center gap-3 px-3 py-2 text-left text-foreground transition-colors duration-300 hover:bg-accent active:bg-accent/80"
                   data-testid={`explore-preset-${preset.id}`}
                 >
-                  <preset.icon className="mt-0.5 h-[18px] w-[18px] shrink-0 text-muted-foreground transition-colors duration-300 group-hover:text-primary" />
-                  <div className="min-w-0">
-                    <span className="block text-[13px] text-foreground transition-transform duration-300 group-hover:translate-x-0.5">
-                      {preset.title}
+                  <preset.icon className="h-4 w-4 shrink-0 text-muted-foreground transition-colors duration-300 group-hover:text-primary" />
+                  <div className="min-w-0 flex-1">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-[13px] text-foreground transition-transform duration-300 group-hover:translate-x-0.5">
+                        {preset.title}
+                      </span>
+                      {preset.requires ? (
+                        <Badge variant="outline" size="sm" className="shrink-0">
+                          {REQUIREMENT_LABEL[preset.requires]}
+                        </Badge>
+                      ) : preset.readiness === 'robust' ? (
+                        <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                          <span className="h-1 w-1 rounded-full bg-primary" />
+                          Ready to run
+                        </span>
+                      ) : null}
                     </span>
-                    <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                    <span
+                      className="block truncate text-xs text-muted-foreground"
+                      title={preset.blurb}
+                    >
                       {preset.blurb}
                     </span>
                   </div>
-                  <ArrowRight className="mt-0.5 h-3.5 w-3.5 shrink-0 -translate-x-0.5 text-muted-foreground/60 transition-all duration-300 group-hover:translate-x-0 group-hover:text-primary" />
-                  <div className="col-start-2 mt-2">
-                    {preset.requires ? (
-                      <Badge variant="outline" size="sm">
-                        {REQUIREMENT_LABEL[preset.requires]}
-                      </Badge>
-                    ) : preset.readiness === 'robust' ? (
-                      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <span className="h-1 w-1 rounded-full bg-primary" />
-                        Ready to run
-                      </span>
-                    ) : null}
-                  </div>
+                  <ArrowRight className="h-3.5 w-3.5 shrink-0 -translate-x-0.5 text-muted-foreground/60 transition-all duration-300 group-hover:translate-x-0 group-hover:text-primary" />
                 </button>
               ))}
             </AnimatedGroup>

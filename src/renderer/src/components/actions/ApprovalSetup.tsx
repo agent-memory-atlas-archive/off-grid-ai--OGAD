@@ -2,6 +2,7 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { ArrowLeft, CheckCircle } from '@phosphor-icons/react'
 import { Card } from '@offgrid/operator-ui/operator/coss/card'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 const FIELD_LABEL = 'text-[10px] uppercase tracking-widest text-muted-foreground'
 const FIELD_CONTROL =
@@ -80,76 +81,90 @@ export function ApprovalSetup({
   }
 
   return (
-    <Card className="w-full text-left">
-      <form
-        onSubmit={submit}
-        className="p-6"
-        aria-labelledby={`approval-setup-${record.id}`}
-        data-testid={`approval-intake-${record.id}`}
-      >
-        <div className="mb-6 flex items-start gap-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-primary">
-            <CheckCircle className="h-4 w-4" />
-          </span>
-          <div>
-            <p className={FIELD_LABEL}>Review action</p>
-            <h2 id={`approval-setup-${record.id}`} className="mt-1.5 text-base text-foreground">
-              Add the final details, then start it in Chat
-            </h2>
-            <p className="mt-1 text-sm leading-relaxed text-neutral-500">
-              This uses the same task flow as Assistant. You can edit everything before it starts.
-            </p>
+    // Its own provider: the setup card also renders outside the app shell's provider.
+    <TooltipProvider delayDuration={300}>
+      <Card className="w-full text-left">
+        <form
+          onSubmit={submit}
+          className="p-6"
+          aria-labelledby={`approval-setup-${record.id}`}
+          data-testid={`approval-intake-${record.id}`}
+        >
+          <div className="mb-6 flex items-start gap-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-primary">
+              <CheckCircle className="h-4 w-4" />
+            </span>
+            <div>
+              <p className={FIELD_LABEL}>Review action</p>
+              <h2 id={`approval-setup-${record.id}`} className="mt-1.5 text-base text-foreground">
+                Add the final details, then start it in Chat
+              </h2>
+              <p className="mt-1 text-sm leading-relaxed text-neutral-500">
+                This uses the same task flow as Assistant. You can edit everything before it starts.
+              </p>
+            </div>
           </div>
-        </div>
 
-        <div className="grid gap-x-6 gap-y-5 @3xl:grid-cols-2">
-          <label className={`@3xl:col-span-2 ${FIELD_LABEL}`}>
-            What should Off Grid AI do? *
-            <textarea
-              value={instruction}
-              onChange={(event) => setInstruction(event.target.value)}
-              required
-              rows={2}
-              className={`${FIELD_CONTROL} min-h-16`}
-            />
-          </label>
-          <label className={`@3xl:col-span-2 ${FIELD_LABEL}`}>
-            Useful context
-            <textarea
-              value={context}
-              onChange={(event) => setContext(event.target.value)}
-              rows={3}
-              className={`${FIELD_CONTROL} min-h-20`}
-            />
-          </label>
-          {Object.entries(args).map(([key, value]) => (
-            <label key={key} className={FIELD_LABEL}>
-              {key.replaceAll('_', ' ')} *
+          <div className="grid gap-x-6 gap-y-5 @3xl:grid-cols-2">
+            <label className={`@3xl:col-span-2 ${FIELD_LABEL}`}>
+              What should Off Grid AI do? *
               <textarea
-                value={value}
-                onChange={(event) =>
-                  setArgs((current) => ({ ...current, [key]: event.target.value }))
-                }
+                value={instruction}
+                onChange={(event) => setInstruction(event.target.value)}
                 required
-                rows={key === 'body' || value.length > 80 ? 3 : 1}
-                className={FIELD_CONTROL}
+                rows={2}
+                className={`${FIELD_CONTROL} min-h-16`}
               />
             </label>
-          ))}
-        </div>
-
-        <div className="mt-6 flex items-center justify-between gap-3 border-t border-neutral-900 pt-4">
-          <span className="text-xs text-muted-foreground">* Required before the task starts</span>
-          <div className="flex gap-2">
-            <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
-              <ArrowLeft /> Back
-            </Button>
-            <Button type="submit" size="sm" disabled={!canStart}>
-              Start in chat
-            </Button>
+            <label className={`@3xl:col-span-2 ${FIELD_LABEL}`}>
+              Useful context
+              <textarea
+                value={context}
+                onChange={(event) => setContext(event.target.value)}
+                rows={3}
+                className={`${FIELD_CONTROL} min-h-20`}
+              />
+            </label>
+            {Object.entries(args).map(([key, value]) => (
+              <label key={key} className={FIELD_LABEL}>
+                {key.replaceAll('_', ' ')} *
+                <textarea
+                  value={value}
+                  onChange={(event) =>
+                    setArgs((current) => ({ ...current, [key]: event.target.value }))
+                  }
+                  required
+                  rows={key === 'body' || value.length > 80 ? 3 : 1}
+                  className={FIELD_CONTROL}
+                />
+              </label>
+            ))}
           </div>
-        </div>
-      </form>
-    </Card>
+
+          <div className="mt-6 flex items-center justify-between gap-3 border-t border-neutral-900 pt-4">
+            <span className="text-xs text-muted-foreground">* Required before the task starts</span>
+            <div className="flex gap-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="Back"
+                    onClick={onCancel}
+                  >
+                    <ArrowLeft />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Back</TooltipContent>
+              </Tooltip>
+              <Button type="submit" size="sm" disabled={!canStart}>
+                Start in chat
+              </Button>
+            </div>
+          </div>
+        </form>
+      </Card>
+    </TooltipProvider>
   )
 }

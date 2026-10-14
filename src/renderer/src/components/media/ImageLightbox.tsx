@@ -1,7 +1,14 @@
 import type { ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { SidePanel } from '@renderer/components/SidePanel'
+import { X } from '@phosphor-icons/react'
 import { Button } from '@renderer/components/ui/button'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from '@renderer/components/ui/tooltip'
 
 export interface ImageLightboxImage {
   url: string
@@ -47,12 +54,26 @@ function ImageLightboxContent({
         <h2 className="min-w-0 truncate text-sm font-normal text-neutral-200">
           {image.dialogLabel}
         </h2>
-        <div className="flex shrink-0 items-center gap-2">
-          {actions}
-          <Button type="button" size="sm" variant="outline" onClick={onClose}>
-            Close
-          </Button>
-        </div>
+        {/* Its own provider: the lightbox also opens from surfaces mounted outside the app shell. */}
+        <TooltipProvider delayDuration={300}>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {actions}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="outline"
+                  aria-label="Close"
+                  onClick={onClose}
+                >
+                  <X />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Close</TooltipContent>
+            </Tooltip>
+          </div>
+        </TooltipProvider>
       </header>
       <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-6">
         <motion.img

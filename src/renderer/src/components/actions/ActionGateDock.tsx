@@ -13,11 +13,17 @@
  * touches the chat's message model, so non-action turns are untouched.
  */
 import { useEffect, useState } from 'react'
-import { X } from '@phosphor-icons/react'
+import { ArrowCounterClockwise, X } from '@phosphor-icons/react'
 import { motion, useReducedMotion } from 'motion/react'
 import { Card } from '@offgrid/operator-ui/operator/coss/card'
 import { Input } from '@offgrid/operator-ui/operator/coss/input'
 import { Button } from '@renderer/components/ui/button'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from '@renderer/components/ui/tooltip'
 import { presentActionApproval } from './action-approval-presentation'
 
 interface GateRequest {
@@ -208,35 +214,62 @@ export function ActionGateDock({
           </motion.div>
         )
       })}
-      {visibleOutcomes.map((event) => (
-        <motion.div
-          key={event.id}
-          {...arrive}
-          data-testid="outcome-row"
-          className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-xs"
-        >
-          <span className={event.outcome === 'done' ? 'text-primary' : 'text-muted-foreground'}>
-            {event.record?.intent ? `${event.record.intent} - ` : ''}
-            {undone[event.id] ?? OUTCOME_LABEL[event.outcome] ?? event.outcome}
-            {event.outcome === 'poisoned' && event.error ? ` (${event.error})` : ''}
-          </span>
-          <span className="flex items-center gap-1">
-            {event.undoable && !undone[event.id] ? (
-              <Button size="sm" variant="outline" onClick={() => void undo(event)}>
-                Undo
-              </Button>
-            ) : null}
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Dismiss"
-              onClick={() => setOutcomes((current) => current.filter((o) => o.id !== event.id))}
-            >
-              <X />
-            </Button>
-          </span>
-        </motion.div>
-      ))}
+      {visibleOutcomes.length > 0 ? (
+        // One surface, rows divided by hairlines; its own provider because the dock can mount
+        // outside the app shell's provider.
+        <TooltipProvider delayDuration={300}>
+          <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card">
+            {visibleOutcomes.map((event) => (
+              <motion.div
+                key={event.id}
+                {...arrive}
+                data-testid="outcome-row"
+                className="flex items-center justify-between gap-2 px-3 py-2 text-xs"
+              >
+                <span
+                  className={event.outcome === 'done' ? 'text-primary' : 'text-muted-foreground'}
+                >
+                  {event.record?.intent ? `${event.record.intent} - ` : ''}
+                  {undone[event.id] ?? OUTCOME_LABEL[event.outcome] ?? event.outcome}
+                  {event.outcome === 'poisoned' && event.error ? ` (${event.error})` : ''}
+                </span>
+                <span className="flex items-center gap-1">
+                  {event.undoable && !undone[event.id] ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="icon-sm"
+                          variant="outline"
+                          aria-label="Undo"
+                          onClick={() => void undo(event)}
+                        >
+                          <ArrowCounterClockwise />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Undo</TooltipContent>
+                    </Tooltip>
+                  ) : null}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        aria-label="Dismiss"
+                        onClick={() =>
+                          setOutcomes((current) => current.filter((o) => o.id !== event.id))
+                        }
+                      >
+                        <X />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Dismiss</TooltipContent>
+                  </Tooltip>
+                </span>
+              </motion.div>
+            ))}
+          </div>
+        </TooltipProvider>
+      ) : null}
     </div>
   )
 }
