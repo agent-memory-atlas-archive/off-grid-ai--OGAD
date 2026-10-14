@@ -79,6 +79,12 @@ describe('<App/> desktop navigation integration', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
+    // jsdom drives requestAnimationFrame from a Node setInterval it starts on first use. A frame
+    // requested under fake timers lands on a fake interval; dropping fake timers with that frame
+    // still pending leaves jsdom believing its interval is running, so no frame ever fires again
+    // and every screen transition later in this file stalls on its exit animation. Fire the
+    // pending frame first so jsdom stops its interval and starts a real one on the next request.
+    if (vi.isFakeTimers()) vi.runOnlyPendingTimers()
     vi.useRealTimers()
     clearRegisteredSlots()
   })
@@ -95,9 +101,9 @@ describe('<App/> desktop navigation integration', () => {
     )
     await user.click(await screen.findByRole('button', { name: 'Project Beta' }))
     expect(screen.getAllByText('Project Beta')).toHaveLength(2)
-    expect(screen.getByRole('button', { name: 'Chats' })).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Artifacts' })).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Knowledge & settings' })).not.toBeNull()
+    expect(screen.getByRole('radio', { name: 'Chats' })).not.toBeNull()
+    expect(screen.getByRole('radio', { name: 'Artifacts' })).not.toBeNull()
+    expect(screen.getByRole('radio', { name: 'Knowledge & settings' })).not.toBeNull()
 
     let shortcutDispatched = false
     const observer = new MutationObserver(() => {
