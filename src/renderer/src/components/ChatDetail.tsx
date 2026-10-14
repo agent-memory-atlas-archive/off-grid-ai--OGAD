@@ -547,8 +547,18 @@ export function ChatDetail({ sessionId, onBack, onSelectEntity, onSelectMemory }
                 }
               >
                 <div
-                  className="relative rounded-2xl p-4 bg-neutral-900/60 border border-neutral-800 overflow-hidden cursor-pointer hover:border-neutral-700 transition-colors"
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Expand summary"
+                  className="relative rounded-2xl p-4 bg-neutral-900/60 border border-neutral-800 overflow-hidden cursor-pointer hover:border-neutral-700 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-500"
                   onClick={() => handleExpand('summary')}
+                  onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget) return
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      handleExpand('summary')
+                    }
+                  }}
                 >
                   <BorderBeam
                     size={150}
@@ -585,8 +595,18 @@ export function ChatDetail({ sessionId, onBack, onSelectEntity, onSelectMemory }
                 }
               >
                 <div
-                  className="relative rounded-2xl p-4 bg-neutral-900/60 border border-neutral-800 overflow-hidden cursor-pointer hover:border-neutral-700 transition-colors"
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Expand memories"
+                  className="relative rounded-2xl p-4 bg-neutral-900/60 border border-neutral-800 overflow-hidden cursor-pointer hover:border-neutral-700 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-500"
                   onClick={() => handleExpand('memories')}
+                  onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget) return
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      handleExpand('memories')
+                    }
+                  }}
                 >
                   <BorderBeam
                     size={100}
@@ -631,8 +651,18 @@ export function ChatDetail({ sessionId, onBack, onSelectEntity, onSelectMemory }
                 }
               >
                 <div
-                  className="relative rounded-2xl p-4 bg-neutral-900/60 border border-neutral-800 overflow-hidden cursor-pointer hover:border-neutral-700 transition-colors"
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Expand entities"
+                  className="relative rounded-2xl p-4 bg-neutral-900/60 border border-neutral-800 overflow-hidden cursor-pointer hover:border-neutral-700 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-500"
                   onClick={() => handleExpand('entities')}
+                  onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget) return
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      handleExpand('entities')
+                    }
+                  }}
                 >
                   <BorderBeam
                     size={100}
