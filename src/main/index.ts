@@ -69,7 +69,7 @@ import {
 import { PERSONAL_MESH_ENTITLEMENT_REVALIDATION_INTERVAL_MS } from '@offgrid/sync'
 import { setupLicenseIpc } from './license-ipc'
 import { nativeImage } from 'electron'
-import { purgeLegacyChatImports, getSetting, saveSetting } from './database'
+import { purgeLegacyChatImports, getSetting, saveSetting, optimizeDB } from './database'
 import { modalityQueue } from './modality-queue/queue'
 import { applyQueueConfig, readQueueConfig } from './modality-queue/config'
 import { registerRuntime } from './runtime-manager'
@@ -514,6 +514,13 @@ app.whenReady().then(async () => {
   applicationShutdown.register({
     name: 'pro:entitlement-refresh',
     shutdown: () => clearInterval(entitlementRefresh)
+  })
+  // Keeps planner statistics current as capture history grows (and covers Pro tables).
+  const plannerStats = setInterval(optimizeDB, 6 * 60 * 60 * 1000)
+  plannerStats.unref()
+  applicationShutdown.register({
+    name: 'core:db-optimize',
+    shutdown: () => clearInterval(plannerStats)
   })
 
   await runStartupStage({

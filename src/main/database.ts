@@ -118,6 +118,13 @@ export function getDB(): Database.Database {
     console.log('[db] opened with encryption at rest')
   }
   db.pragma('journal_mode = WAL')
+  // Connection tuning only; durability (synchronous) and mmap stay at their defaults.
+  // busy_timeout lets a write wait briefly for another connection instead of failing with
+  // SQLITE_BUSY; the larger page cache and in-memory temp B-trees keep sorts and joins over
+  // capture history off the disk.
+  db.pragma('busy_timeout = 5000')
+  db.pragma('temp_store = MEMORY')
+  db.pragma('cache_size = -65536')
 
   // Register custom function for vector search. Declare the two params EXPLICITLY:
   // better-sqlite3 derives the SQL arity from fn.length, and a rest param
@@ -458,6 +465,14 @@ export function getDB(): Database.Database {
       // Column already exists, ignore
     }
   }
+  // The chat lists page by updated_at, optionally within one project. Without these every list
+  // and search page sorted the whole table.
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_rag_conversations_updated ON rag_conversations(updated_at, id)'
+  )
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_rag_conversations_project_updated ON rag_conversations(project_id, updated_at, id)'
+  )
 
   // Migration: Add a stable UUID to rag_messages so chat messages can replicate across devices.
   //
@@ -508,7 +523,28 @@ export function getDB(): Database.Database {
     })()
   }
 
+  // Profiles have never been ANALYZEd, so the planner had no statistics. The limit bounds each
+  // table's sample so this stays cheap on multi-GB databases; 0x10002 also analyzes tables
+  // whose statistics are missing. Later, optimizeDB() refreshes stats for Pro tables created
+  // after this point.
+  try {
+    db.pragma('analysis_limit = 1000')
+    db.pragma('optimize = 0x10002')
+  } catch (error) {
+    console.warn('[database] PRAGMA optimize failed', error)
+  }
+
   return db
+}
+
+/** Refresh planner statistics where SQLite judges them stale. Cheap; safe to call periodically. */
+export function optimizeDB(): void {
+  if (!db?.open) return
+  try {
+    db.pragma('optimize')
+  } catch (error) {
+    console.warn('[database] PRAGMA optimize failed', error)
+  }
 }
 
 /** Run an idempotent schema migration (CREATE TABLE IF NOT EXISTS …) on the

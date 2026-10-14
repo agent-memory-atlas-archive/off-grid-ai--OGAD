@@ -89,6 +89,107 @@ function parseEmbedding(s: string | null): number[] {
   }
 }
 
+// --- Parsed document-embedding cache ---------------------------------------
+// Chat turns rank every embedded chunk of a project's enabled documents. Parsing those JSON
+// vectors on every turn dominated retrieval, so parsed vectors are cached per document, keyed
+// by chunk id, in an LRU bounded by an estimate of their heap size. The candidate query still
+// runs every turn (without the embedding column), so name, content, position, the enabled flag,
+// project membership and row order always come from SQLite; only the parsed vector is reused.
+//
+// Every write to rag_chunks, from this file or any other writer on this connection (backup
+// restore, Delete all my data), fires a TEMP trigger that records the affected doc_id. The next
+// read evicts those documents before using the cache, so insert, re-embed, delete and project
+// deletion can never serve a stale vector.
+const EMBEDDING_CACHE_MAX_BYTES = 64 * 1024 * 1024
+type DocEmbeddings = { vectors: Map<number, number[]>; bytes: number }
+const embeddingCache = new Map<number, DocEmbeddings>()
+let embeddingCacheBytes = 0
+let embeddingCacheDb: object | undefined
+
+function evictDocEmbeddings(docId: number): void {
+  const entry = embeddingCache.get(docId)
+  if (!entry) return
+  embeddingCache.delete(docId)
+  embeddingCacheBytes -= entry.bytes
+}
+
+function clearEmbeddingCache(): void {
+  embeddingCache.clear()
+  embeddingCacheBytes = 0
+}
+
+/** Install this connection's change triggers and apply pending evictions. False: bypass cache. */
+function syncEmbeddingCache(): boolean {
+  const db = getDB()
+  try {
+    if (embeddingCacheDb !== db) {
+      clearEmbeddingCache()
+      db.exec(`
+        CREATE TEMP TABLE IF NOT EXISTS rag_embedding_dirty (doc_id INTEGER PRIMARY KEY);
+        CREATE TEMP TRIGGER IF NOT EXISTS rag_embedding_dirty_insert AFTER INSERT ON main.rag_chunks
+        BEGIN INSERT OR IGNORE INTO rag_embedding_dirty (doc_id) VALUES (NEW.doc_id); END;
+        CREATE TEMP TRIGGER IF NOT EXISTS rag_embedding_dirty_delete AFTER DELETE ON main.rag_chunks
+        BEGIN INSERT OR IGNORE INTO rag_embedding_dirty (doc_id) VALUES (OLD.doc_id); END;
+        CREATE TEMP TRIGGER IF NOT EXISTS rag_embedding_dirty_update AFTER UPDATE ON main.rag_chunks
+        BEGIN
+          INSERT OR IGNORE INTO rag_embedding_dirty (doc_id) VALUES (OLD.doc_id);
+          INSERT OR IGNORE INTO rag_embedding_dirty (doc_id) VALUES (NEW.doc_id);
+        END;
+        DELETE FROM temp.rag_embedding_dirty;
+      `)
+      embeddingCacheDb = db
+      return true
+    }
+    const dirty = db.prepare('DELETE FROM temp.rag_embedding_dirty RETURNING doc_id').all() as {
+      doc_id: number
+    }[]
+    for (const { doc_id } of dirty) evictDocEmbeddings(doc_id)
+    return true
+  } catch {
+    embeddingCacheDb = undefined
+    clearEmbeddingCache()
+    return false
+  }
+}
+
+function loadDocEmbeddings(docId: number): DocEmbeddings {
+  const rows = getDB()
+    .prepare('SELECT id, embedding FROM rag_chunks WHERE doc_id = ? AND embedding IS NOT NULL')
+    .all(docId) as { id: number; embedding: string }[]
+  const vectors = new Map<number, number[]>()
+  let bytes = 64
+  for (const row of rows) {
+    // Frozen: a shared cached vector must not be mutated by a caller.
+    const vector = Object.freeze(parseEmbedding(row.embedding)) as number[]
+    vectors.set(row.id, vector)
+    // V8 stores a numeric array as 8-byte doubles plus fixed overhead per array and map entry.
+    bytes += vector.length * 8 + 64
+  }
+  return { vectors, bytes }
+}
+
+function cachedDocEmbeddings(docId: number): DocEmbeddings {
+  const hit = embeddingCache.get(docId)
+  if (hit) {
+    // Refresh recency.
+    embeddingCache.delete(docId)
+    embeddingCache.set(docId, hit)
+    return hit
+  }
+  const entry = loadDocEmbeddings(docId)
+  if (entry.bytes <= EMBEDDING_CACHE_MAX_BYTES) {
+    embeddingCache.set(docId, entry)
+    embeddingCacheBytes += entry.bytes
+    for (const [oldest, old] of embeddingCache) {
+      if (embeddingCacheBytes <= EMBEDDING_CACHE_MAX_BYTES) break
+      embeddingCache.delete(oldest)
+      embeddingCacheBytes -= old.bytes
+    }
+  }
+  return entry
+}
+
+/** Current cache footprint, for tests and diagnostics. */
 /** Whether a project folds captured memories into its KB (default on). */
 export function projectIncludesMemory(projectId: string): boolean {
   ensureRagStoreSchema()
@@ -141,30 +242,71 @@ export const desktopVectorStore: VectorStore = {
     const out: ChunkCandidate[] = []
 
     // 1) Uploaded-document chunks for enabled docs in this project.
-    const rows = db
-      .prepare(
-        `SELECT c.doc_id AS docId, d.name AS name, c.content AS content, c.position AS position, c.embedding AS embedding
-         FROM rag_chunks c
-         JOIN rag_documents d ON d.id = c.doc_id
-         WHERE d.project_id = ? AND d.enabled = 1 AND c.embedding IS NOT NULL`
-      )
-      .all(projectId) as {
-      docId: number
-      name: string
-      content: string
-      position: number
-      embedding: string
-    }[]
-    for (const r of rows) {
-      const embedding = parseEmbedding(r.embedding)
-      if (embedding.length)
-        out.push({
-          docId: r.docId,
-          name: r.name,
-          content: r.content,
-          position: r.position,
-          embedding
-        })
+    if (syncEmbeddingCache()) {
+      const rows = db
+        .prepare(
+          `SELECT c.id AS chunkId, c.doc_id AS docId, d.name AS name, c.content AS content, c.position AS position
+           FROM rag_chunks c
+           JOIN rag_documents d ON d.id = c.doc_id
+           WHERE d.project_id = ? AND d.enabled = 1 AND c.embedding IS NOT NULL`
+        )
+        .all(projectId) as {
+        chunkId: number
+        docId: number
+        name: string
+        content: string
+        position: number
+      }[]
+      // A document is looked up once per turn even when it holds thousands of chunks.
+      const docs = new Map<number, { entry: DocEmbeddings; fresh: boolean }>()
+      for (const r of rows) {
+        let doc = docs.get(r.docId)
+        if (!doc) {
+          doc = { entry: cachedDocEmbeddings(r.docId), fresh: false }
+          docs.set(r.docId, doc)
+        }
+        // Defensive: a chunk the cached entry lacks reloads that document once this turn.
+        if (!doc.entry.vectors.has(r.chunkId) && !doc.fresh) {
+          evictDocEmbeddings(r.docId)
+          doc = { entry: cachedDocEmbeddings(r.docId), fresh: true }
+          docs.set(r.docId, doc)
+        }
+        const embedding = doc.entry.vectors.get(r.chunkId) ?? []
+        if (embedding.length)
+          out.push({
+            docId: r.docId,
+            name: r.name,
+            content: r.content,
+            position: r.position,
+            embedding
+          })
+      }
+    } else {
+      const rows = db
+        .prepare(
+          `SELECT c.doc_id AS docId, d.name AS name, c.content AS content, c.position AS position, c.embedding AS embedding
+           FROM rag_chunks c
+           JOIN rag_documents d ON d.id = c.doc_id
+           WHERE d.project_id = ? AND d.enabled = 1 AND c.embedding IS NOT NULL`
+        )
+        .all(projectId) as {
+        docId: number
+        name: string
+        content: string
+        position: number
+        embedding: string
+      }[]
+      for (const r of rows) {
+        const embedding = parseEmbedding(r.embedding)
+        if (embedding.length)
+          out.push({
+            docId: r.docId,
+            name: r.name,
+            content: r.content,
+            position: r.position,
+            embedding
+          })
+      }
     }
 
     // 2) Captured memories as an additional KB source (opt-out per project).
