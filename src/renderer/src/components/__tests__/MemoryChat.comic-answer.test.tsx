@@ -144,6 +144,35 @@ describe('<MemoryChat/> - comic book answer stays visible while pages generate',
     expectPlanAboveReader('Comic book reader: 1 of 10 pages ready.')
   })
 
+  it.each(['stop', 'failure'] as const)('settles early pages before a new turn after %s', async (ending) => {
+    const { boundary, pages } = installComicBoundary()
+    const user = userEvent.setup()
+    renderChat({ conversationId: 'conversation-a' })
+    await send(COMIC_REQUEST, user)
+    await waitFor(() => expect(boundary.calls).toHaveLength(1))
+    await act(async () => {
+      for (const request of PAGE_REQUESTS) {
+        boundary.emitStream({
+          streamId: boundary.calls[0]!.streamId,
+          type: 'image_request',
+          request
+        })
+      }
+    })
+    await waitFor(() => expect(pages).toHaveLength(1))
+    if (ending === 'stop') {
+      await user.click(screen.getByRole('button', { name: STOP }))
+    } else {
+      await act(async () => boundary.reject(0, new Error('Remote chat disconnected.')))
+    }
+    await waitFor(() => expect(screen.queryByRole('button', { name: STOP })).toBeNull())
+    await send('Start a new text turn', user)
+    await waitFor(() => expect(boundary.calls).toHaveLength(2))
+    await act(async () => boundary.resolve(1, 'A fresh reply.'))
+    expect(await screen.findByText('A fresh reply.')).toBeTruthy()
+    expect(pages).toHaveLength(1)
+  })
+
   it('keeps the plan and the reader visible when a page fails, and reports the failure', async () => {
     const { boundary, pages } = installComicBoundary()
     const user = userEvent.setup()

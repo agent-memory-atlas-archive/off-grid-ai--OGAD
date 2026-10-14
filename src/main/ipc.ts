@@ -2317,6 +2317,7 @@ export function setupIPC(): void {
                 ...(imageGenerationRunsBesideChat()
                   ? {
                       onImageRequest: (request: { prompt: string; enhancePrompt?: boolean }) => {
+                        toolStarted = true
                         try {
                           sender.send('rag:stream', { streamId, type: 'image_request', request })
                         } catch {

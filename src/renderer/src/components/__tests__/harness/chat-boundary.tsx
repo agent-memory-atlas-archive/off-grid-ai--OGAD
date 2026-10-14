@@ -10,7 +10,8 @@ import type {
 
 export type StreamEvent = {
   streamId: string
-  type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'done' | 'error' | 'cancel'
+  type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'done' | 'error' | 'cancel' | 'image_request'
+  request?: { prompt: string; enhancePrompt?: boolean }
   text?: string
   step?: unknown
   call?: { name: string; result: string; status: 'completed' | 'failed' | 'pending' }

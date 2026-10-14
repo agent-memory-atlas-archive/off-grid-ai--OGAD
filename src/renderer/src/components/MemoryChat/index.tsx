@@ -2265,11 +2265,16 @@ export function MemoryChat({
       // finished turn then shows these results in page order.
       const earlyComicImages = new Map<string, ReturnType<typeof window.api.generateImage>>()
       let earlyComicChain: Promise<unknown> = Promise.resolve()
+      let earlyComicCancelled = false
       if (comicPageTotal) {
         earlyImageRequestByStream.current.set(toolStreamId, (request) => {
-          if (cancelledRef.current.has(convId) || earlyComicImages.has(request.prompt)) return
+          if (
+            earlyComicCancelled ||
+            cancelledRef.current.has(convId) ||
+            earlyComicImages.has(request.prompt)
+          ) return
           const image = earlyComicChain.then(() =>
-            cancelledRef.current.has(convId)
+            earlyComicCancelled || cancelledRef.current.has(convId)
               ? Promise.reject(new Error('Image generation cancelled.'))
               : window.api.generateImage(imageGenerationParams(request))
           )
@@ -2296,6 +2301,12 @@ export function MemoryChat({
         streamId: toolStreamId,
         thinking: god ? true : thinkingEnabled
         })
+        .catch(async (error) => {
+          earlyComicCancelled = true
+          if (earlyComicImages.size) await window.api.cancelImageGen().catch(() => {})
+          await earlyComicChain
+          throw error
+        })
         .finally(() => earlyImageRequestByStream.current.delete(toolStreamId))
       const toolCalls: ProjectedSyncedTool[] = (tr?.toolCalls || []).map(
         (c: { name: string; result: string; status?: 'completed' | 'failed' | 'pending' }) => ({
@@ -2312,7 +2323,9 @@ export function MemoryChat({
           : undefined
       if (cancelledRef.current.has(convId)) {
         // Stop also ends a comic page that started while the model was writing.
-        if (earlyComicImages.size) void window.api.cancelImageGen().catch(() => {})
+        earlyComicCancelled = true
+        if (earlyComicImages.size) await window.api.cancelImageGen().catch(() => {})
+        await earlyComicChain
         // The tool calls made before the stop are kept, exactly as a completed tool turn keeps
         // them: rendered from `toolCalls`, stored in `toolCtx` beside the citation sources.
         await finalizeStoppedTurn(convId, toolStreamId, {

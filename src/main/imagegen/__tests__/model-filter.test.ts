@@ -29,6 +29,8 @@ describe('isImageModelFile', () => {
     expect(isImageModelFile('gemma-3-4b.gguf')).toBe(false)
     expect(isImageModelFile('qwen3-4b-instruct-q4.gguf')).toBe(false)
     expect(isImageModelFile('ae.safetensors')).toBe(false)
+    expect(isImageModelFile('vae.safetensors')).toBe(false)
+    expect(isImageModelFile('vae_bf16.safetensors')).toBe(false)
     expect(isImageModelFile('clip_l.safetensors')).toBe(false)
     expect(isImageModelFile('sdxl-vae.safetensors')).toBe(false)
     expect(isImageModelFile('model-t5xxl.safetensors')).toBe(false)

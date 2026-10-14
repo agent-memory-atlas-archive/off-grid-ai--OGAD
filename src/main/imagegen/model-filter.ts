@@ -5,7 +5,7 @@
 // image models (gemma/qwen LLMs, the Z-Image Qwen3 encoder + FLUX ae VAE,
 // whisper .bin, TTS .onnx, and standalone VAE/CLIP/T5 components).
 const EXCLUDE =
-  /qwen3-4b-instruct|gemma|^qwen(?![-_]?image)[^-]|mmproj|^ae\.|ggml-|kokoro|lessac|en_us|^clip[_-]?[lg]\b|[-_.](vae|clip|t5xxl|text_encoder|tokenizer)(?![a-z0-9])/i
+  /qwen3-4b-instruct|gemma|^qwen(?![-_]?image)[^-]|mmproj|^ae\.|ggml-|kokoro|lessac|en_us|^clip[_-]?[lg]\b|(?:^|[-_.])(vae|clip|t5xxl|text_encoder|tokenizer)(?![a-z0-9])/i
 
 // A .gguf counts as an image model only if the filename names a known diffusion
 // family — otherwise a stray gguf (an LLM missed by EXCLUDE) would show up.

@@ -156,3 +156,23 @@ it("offers no speakers when a compatible server lists none anywhere", async () =
   });
   expect(await listRemoteVoices(compatibleServer(endpoint, "plain-tts"))).toEqual([]);
 });
+
+it("reads the speaker route when the compatible catalog is unavailable", async () => {
+  const endpoint = await serveJson({
+    "GET /v1/audio/voices": { voices: ["ff_siwis"] },
+  });
+  expect(await listRemoteVoices(compatibleServer(endpoint, "kokoro-v1"))).toEqual([
+    { id: "ff_siwis", label: "Siwis", language: "fr", languageLabel: "French" },
+  ]);
+});
+
+it("uses catalog voices when supported_voices contains no valid IDs", async () => {
+  const endpoint = await serveJson({
+    "GET /v1/models?output_modalities=speech": {
+      data: [{ id: "plain-tts", supported_voices: [], voices: ["speaker-one"] }],
+    },
+  });
+  expect(await listRemoteVoices(compatibleServer(endpoint, "plain-tts"))).toEqual([
+    { id: "speaker-one", label: "Speaker One" },
+  ]);
+});

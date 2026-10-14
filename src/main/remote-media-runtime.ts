@@ -45,16 +45,22 @@ async function audioVoiceIds(server: RemoteServer): Promise<string[]> {
 }
 
 async function catalogVoiceIds(server: RemoteServer): Promise<string[]> {
-  const response = await checked(
-    await fetch(`${server.endpoint}/models?output_modalities=speech`, {
-      headers: headers(server)
-    })
-  )
-  const catalog = (await response.json()) as {
-    data?: Array<{ id?: unknown; supported_voices?: unknown; voices?: unknown }>
+  let ids: string[] = []
+  try {
+    const response = await checked(
+      await fetch(`${server.endpoint}/models?output_modalities=speech`, {
+        headers: headers(server)
+      })
+    )
+    const catalog = (await response.json()) as {
+      data?: Array<{ id?: unknown; supported_voices?: unknown; voices?: unknown }>
+    }
+    const model = catalog.data?.find((item) => item.id === server.selectedModel)
+    ids = voiceIds(model?.supported_voices)
+    if (!ids.length) ids = voiceIds(model?.voices)
+  } catch (error) {
+    if (server.provider === 'openrouter') throw error
   }
-  const model = catalog.data?.find((item) => item.id === server.selectedModel)
-  const ids = voiceIds(model?.supported_voices ?? model?.voices)
   if (ids.length || server.provider === 'openrouter') return ids
   // A compatible server that does not list speakers has none to offer; speech still works.
   return audioVoiceIds(server).catch(() => [])
