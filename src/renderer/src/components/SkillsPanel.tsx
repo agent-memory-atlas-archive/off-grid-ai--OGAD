@@ -204,7 +204,7 @@ export function SkillsPanel({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {draft ? (
           <div className="flex flex-col gap-3">
             <label className="text-[10px] uppercase tracking-wide text-neutral-500">
@@ -215,7 +215,7 @@ export function SkillsPanel({
               value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
               placeholder="proofread"
-              className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
+              className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
             />
             <label className="text-[10px] uppercase tracking-wide text-neutral-500">
               Description
@@ -224,7 +224,7 @@ export function SkillsPanel({
               value={draft.description}
               onChange={(e) => setDraft({ ...draft, description: e.target.value })}
               placeholder="What this skill does (shown in the / menu)"
-              className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
+              className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
             />
             <label className="text-[10px] uppercase tracking-wide text-neutral-500">
               Instructions
@@ -234,7 +234,7 @@ export function SkillsPanel({
               onChange={(e) => setDraft({ ...draft, instructions: e.target.value })}
               placeholder="The instructions the model follows when this skill is invoked…"
               rows={14}
-              className="resize-none rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm leading-relaxed text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
+              className="resize-none rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs leading-relaxed text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
             />
 
             {/* Automation (trigger → action) is a Pro feature — hidden in the free
@@ -268,7 +268,7 @@ export function SkillsPanel({
                       value={draft.triggerConfig}
                       onChange={(e) => setDraft({ ...draft, triggerConfig: e.target.value })}
                       placeholder="08:00"
-                      className="mt-2 w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
+                      className="mt-2 w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
                     />
                   )}
                   {draft.triggerKind === 'keyword' && (
@@ -276,7 +276,7 @@ export function SkillsPanel({
                       value={draft.triggerConfig}
                       onChange={(e) => setDraft({ ...draft, triggerConfig: e.target.value })}
                       placeholder="invoice, payment, contract"
-                      className="mt-2 w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
+                      className="mt-2 w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
                     />
                   )}
                   {draft.triggerKind === 'event' && (
@@ -304,7 +304,7 @@ export function SkillsPanel({
                         onChange={(e) => setDraft({ ...draft, action: e.target.value })}
                         placeholder="Summarize the new invoice and draft a reply to send for approval…"
                         rows={3}
-                        className="mt-2 w-full resize-none rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm leading-relaxed text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
+                        className="mt-2 w-full resize-none rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs leading-relaxed text-neutral-200 placeholder-neutral-600 outline-none focus:border-green-500"
                       />
                       <label className="mt-3 flex cursor-pointer items-center gap-3 text-xs text-neutral-400">
                         <Switch

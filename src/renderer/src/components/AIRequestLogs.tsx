@@ -305,7 +305,7 @@ function RequestDetail({
       (display.response && /\.response(\.|$)/.test(asset.label))
   )
   return (
-    <div className="min-w-0 space-y-5">
+    <div className="min-w-0 space-y-3">
       <div>
         <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{record.source}</p>
         <h2 className="mt-2 break-words text-base font-normal">{record.preview}</h2>
@@ -1006,7 +1006,7 @@ export function AIRequestLogs({
               />
             )}
           </div>
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-5">
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-3">
             {record ? (
               <motion.div
                 key={record.id}

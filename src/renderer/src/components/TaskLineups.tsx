@@ -62,7 +62,7 @@ export function TaskLineups(props: {
     }
   }
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       {props.view.tasks.map((lineup) => (
         // The named region stays on a plain section; the library Section owns label and arrival.
         <section key={lineup.task} aria-label={lineup.taskLabel}>
@@ -79,10 +79,10 @@ export function TaskLineups(props: {
             {lineup.slots.length ? (
               <AnimatedGroup
                 preset="blur-slide"
-                className="grid gap-3 sm:grid-cols-[repeat(auto-fit,minmax(12rem,1fr))]"
+                className="grid gap-2 sm:grid-cols-[repeat(auto-fit,minmax(12rem,1fr))]"
               >
                 {lineup.slots.map((slot) => (
-                  <Card key={slot.role} className="h-full w-full min-w-0 gap-2 p-4 text-xs">
+                  <Card key={slot.role} className="h-full w-full min-w-0 gap-1.5 p-3 text-xs">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[10px] uppercase tracking-widest text-neutral-500">
                         {slot.label}
@@ -97,7 +97,7 @@ export function TaskLineups(props: {
                         </span>
                       )}
                     </div>
-                    <p className="text-xs leading-relaxed text-neutral-500">{slot.does}</p>
+                    <p className="text-xs leading-snug text-neutral-500">{slot.does}</p>
                     {slot.role === 'reasoner' ? (
                       <span className="block truncate text-[13px] text-neutral-200">
                         {slot.modelName}

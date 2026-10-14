@@ -1221,22 +1221,25 @@ export function ModelsScreen({
           data-state={active ? 'selected' : undefined}
           className="group align-top transition-colors"
         >
-          <TableCell className="whitespace-normal py-3">
+          <TableCell className="whitespace-normal py-2">
             {nameRow}
             {metaLine}
           </TableCell>
-          <TableCell className="whitespace-normal py-3">
+          <TableCell className="whitespace-normal py-2">
             {badgeRow}
             {availabilityNote}
           </TableCell>
-          <TableCell className="whitespace-normal py-3">
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between gap-2">{actionRow}</div>
+          <TableCell className="whitespace-normal py-2">
+            {/* Status, actions and any repair on one line; only a running download adds its bar. */}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                {actionRow}
+              </div>
               {repairActions}
-              {progressBar}
+              {downloading ? <div className="basis-full">{progressBar}</div> : null}
             </div>
           </TableCell>
-          <TableCell className="py-3">{detailsButton}</TableCell>
+          <TableCell className="py-2">{detailsButton}</TableCell>
         </MotionRow>
       )
     }
@@ -1331,7 +1334,7 @@ export function ModelsScreen({
     <div className="flex h-full flex-col font-mono">
       {/* Header */}
       <PageHeader
-        className="shrink-0 px-6 pb-6 pt-8"
+        className="shrink-0 px-6 pb-4 pt-5"
         title="Models"
         description={`Download, switch, and manage the models that run on this ${deviceNoun()}.`}
         actions={
@@ -1733,17 +1736,28 @@ export function ModelsScreen({
                       comingSoonModels
                     ]
                   ]
-                  return rows.map(([heading, label, list]) =>
-                    list.length > 0 ? (
-                      <Section key={label} label={heading} className="px-6 pt-10 first:pt-6">
-                        {renderCollection(
-                          label,
-                          list.map((m) => renderCard(m)),
-                          SECTION_GRID
-                        )}
+                  return rows.map(([heading, label, list]) => {
+                    if (list.length === 0) return null
+                    const collection = renderCollection(
+                      label,
+                      list.map((m) => renderCard(m)),
+                      SECTION_GRID
+                    )
+                    // A heading over a single model is noise; the list keeps its name for readers.
+                    return list.length === 1 ? (
+                      <div key={label} className="px-6 pt-6 first:pt-4">
+                        {collection}
+                      </div>
+                    ) : (
+                      <Section
+                        key={label}
+                        label={group ? label : heading}
+                        className="px-6 pt-6 first:pt-4"
+                      >
+                        {collection}
                       </Section>
-                    ) : null
-                  )
+                    )
+                  })
                 }
                 if (activeKind !== 'computer_use') return <>{cardRows(displayedCatalog)}</>
                 // Tasks: grounding specialists and decision models are different jobs, run side by
@@ -1756,10 +1770,9 @@ export function ModelsScreen({
                   <>
                     {groups.map(([group, models]) =>
                       models.length > 0 ? (
-                        <section key={group} aria-label={group} className="pt-2">
-                          <h3 className="px-6 pt-3 text-xs font-medium text-neutral-200">
-                            {group}
-                          </h3>
+                        // One heading per group: each row's label already names the job
+                        // ("Grounding specialists on this device"), so no title above it.
+                        <section key={group} aria-label={group}>
                           {cardRows(models, group)}
                         </section>
                       ) : null
@@ -1841,7 +1854,7 @@ export function ModelsScreen({
                       </p>
                     </div>
                   )}
-                  <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2">
+                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
                     {rows
                       .filter(([, v]) => v)
                       .map(([k, v]) => (
@@ -1854,7 +1867,7 @@ export function ModelsScreen({
                       ))}
                   </dl>
                   {ramGb && bytes > 0 && (
-                    <p className="mt-4 text-[10px] text-neutral-500">
+                    <p className="mt-3 text-[10px] text-neutral-500">
                       {fitLevel(bytes / 1e9, ramGb) === 'ok'
                         ? `Comfortable fit on your ${deviceNoun()}.`
                         : fitLevel(bytes / 1e9, ramGb) === 'tight'
@@ -1881,7 +1894,7 @@ export function ModelsScreen({
                           window as { api?: { openExternal?: (u: string) => void } }
                         ).api?.openExternal?.(hfUrl)
                       }
-                      className="mt-4 flex items-center gap-1 text-[10px] text-green-500 transition-colors duration-150 hover:text-emerald-500"
+                      className="mt-3 flex items-center gap-1 text-[10px] text-green-500 transition-colors duration-150 hover:text-emerald-500"
                     >
                       <IconExternalLink className="h-3 w-3" /> View on Hugging Face
                     </button>
@@ -1889,7 +1902,7 @@ export function ModelsScreen({
                   {m.id === KEV_4B_ID && (
                     <section
                       aria-label="Kev model format"
-                      className="mt-5 border-t border-neutral-800 pt-4"
+                      className="mt-3 border-t border-neutral-800 pt-3"
                     >
                       <h3 className="text-[10px] uppercase tracking-wide text-neutral-400">
                         Model format
@@ -1911,7 +1924,7 @@ export function ModelsScreen({
                     ['text', 'vision', 'computer_use'].includes(m.kind) && (
                       <section
                         aria-label="Available model files"
-                        className="mt-5 border-t border-neutral-800 pt-4"
+                        className="mt-3 border-t border-neutral-800 pt-3"
                       >
                         <h3 className="mb-2 text-[10px] uppercase tracking-wide text-neutral-400">
                           Available GGUF files

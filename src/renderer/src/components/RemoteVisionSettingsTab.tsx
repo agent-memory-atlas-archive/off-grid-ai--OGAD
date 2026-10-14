@@ -20,7 +20,6 @@ import { Switch } from '@offgrid/operator-ui/operator/animate/switch'
 import { LiveStatus } from '@offgrid/operator-ui/operator/presence'
 import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
 import { ListRow } from '@offgrid/operator-ui/operator/list-row'
-import { Section } from '@offgrid/operator-ui/operator/experience'
 import { PencilSimple, Plus, Trash } from '@phosphor-icons/react'
 import { Button } from './ui/button'
 import { IconTip } from './IconTip'
@@ -168,7 +167,8 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
       .filter(
         (model) =>
           model.kind === 'text' &&
-          !model.outputModalities?.includes('decisions') && !isGrounderModel(model.id) &&
+          !model.outputModalities?.includes('decisions') &&
+          !isGrounderModel(model.id) &&
           (!query || `${model.name} ${model.id}`.toLowerCase().includes(query))
       )
       .slice(0, 75)
@@ -351,28 +351,27 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
         summary={serversSummary}
         defaultOpen
       >
-        <Section
-          className="mb-3"
-          label="Saved servers"
-          description="Save model servers once, then switch between them when you need one."
-          actions={
-            <IconTip label="Add server">
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="outline"
-                aria-label="Add server"
-                onClick={addServer}
-                className="border-neutral-700 text-neutral-300 hover:border-neutral-600 hover:text-white"
-              >
-                <Plus />
-              </Button>
-            </IconTip>
-          }
-        >
-          {settings.servers.length > 0 ? (
-            <div className="divide-y divide-neutral-900">
-              <AnimatePresence initial={false}>
+        {/* The section header already names the group; one hint line carries the add action. */}
+        <div className="flex items-center justify-between gap-3 py-1">
+          <p className="min-w-0 text-[11.5px] leading-snug text-neutral-500">
+            Save model servers once, then switch between them when you need one.
+          </p>
+          <IconTip label="Add server">
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="outline"
+              aria-label="Add server"
+              onClick={addServer}
+              className="shrink-0 border-neutral-700 text-neutral-300 hover:border-neutral-600 hover:text-white"
+            >
+              <Plus />
+            </Button>
+          </IconTip>
+        </div>
+        {settings.servers.length > 0 ? (
+          <div className="divide-y divide-neutral-900">
+            <AnimatePresence initial={false}>
               {settings.servers.map((server) => (
                 <motion.div
                   key={server.id}
@@ -427,21 +426,21 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
                   />
                 </motion.div>
               ))}
-              </AnimatePresence>
-            </div>
-          ) : (
-            <p className="text-[10px] text-neutral-600">No saved servers.</p>
-          )}
-        </Section>
+            </AnimatePresence>
+          </div>
+        ) : (
+          <p className="pb-1 text-[10px] text-neutral-600">No saved servers.</p>
+        )}
       </SettingsSection>
 
       <SettingsSection id="remote.server" title="Server" summary={serverSummary} defaultOpen>
         <div
           role="group"
           aria-label="Remote server details"
-          className="grid grid-cols-1 gap-x-3 lg:grid-cols-2 [&>div]:mb-2"
+          className="grid grid-cols-1 gap-x-3 lg:grid-cols-2"
         >
           <Row
+            inline
             label="Use remote server"
             controlId="remote-server-enabled"
             hint="Off uses models on this device."
@@ -526,8 +525,9 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
                 />
               </Row>
               {providerNeedsScreenDisclosure(remoteVisionProviderForEndpoint(form.endpoint)) ? (
-                <div className="lg:col-span-2 [&>div]:mb-0">
+                <div className="lg:col-span-2">
                   <Row
+                    inline
                     label="Allow screen images"
                     controlId="remote-server-screen-frames"
                     hint={
@@ -620,10 +620,11 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
           <div
             role="group"
             aria-label="Other remote models"
-            className="grid grid-cols-1 gap-x-3 lg:grid-cols-2 [&>div]:mb-2"
+            className="grid grid-cols-1 gap-x-3 lg:grid-cols-2"
           >
             {(['grounding', 'decision'] as const).map((role) => (
               <Row
+                inline
                 key={role}
                 label={role === 'grounding' ? 'Grounding specialist' : 'Decision model'}
                 controlId={`remote-server-${role}-model`}
@@ -640,7 +641,9 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
                       .filter((model) => {
                         if (model.kind !== 'text') return false
                         const decision = model.outputModalities?.includes('decisions') === true
-                        return role === 'decision' ? decision : !decision && isGrounderModel(model.id)
+                        return role === 'decision'
+                          ? decision
+                          : !decision && isGrounderModel(model.id)
                       })
                       .map((model) => ({ value: model.id, label: model.name }))
                   ]}
@@ -656,6 +659,7 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
             ))}
             {(['image', 'transcription', 'voice'] as const).map((kind) => (
               <Row
+                inline
                 key={kind}
                 label={kind === 'image' ? 'Image' : kind === 'voice' ? 'Voice' : 'Transcription'}
                 controlId={`remote-server-${kind}-model`}

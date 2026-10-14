@@ -52,7 +52,7 @@ export function EngineUpdatesSection(): React.ReactElement | null {
   const installed = Object.entries(status.installed)
 
   return (
-    <div className="mt-4 border-t border-neutral-800 pt-4">
+    <div className="mt-3 border-t border-neutral-800 pt-3">
       <SettingRow
         title="Keep engines up to date"
         description="Installs newer GPU engines in the background so new models work without waiting for an app update."

@@ -67,7 +67,7 @@ function PreviousVersionsPanel({
   onSelect
 }: PreviousVersionsPanelProps): React.ReactElement {
   return (
-    <Section className="mt-6" label="Signed releases for this device">
+    <Section className="mt-3" label="Signed releases for this device">
       {loading ? (
         <div className="space-y-2 px-3 py-3" aria-busy="true">
           <p className="sr-only">Loading...</p>
@@ -346,7 +346,7 @@ export function SoftwareUpdateSection(): React.ReactElement {
           <Switch aria-label="Nightly builds" checked={beta} onCheckedChange={toggleBeta} />
         </SettingRow>
       </div>
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+      <div className="mt-2 flex flex-wrap items-center gap-2">
         <IconTip label={checking ? 'Checking...' : 'Check for updates'}>
           <Button
             size="icon-xs"

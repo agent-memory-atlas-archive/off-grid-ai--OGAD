@@ -57,13 +57,11 @@ it('places each backend choice with its model settings and saves the selected de
   await user.click(screen.getByRole('menuitemradio', { name: 'Vulkan' }))
   await waitFor(() => expect(saved).toContainEqual(['image', 'vulkan']))
 
+  // A single backend row has no section of its own: it sits in the open section beside it.
   await user.click(screen.getByRole('button', { name: 'voice' }))
-  await user.click(screen.getByRole('button', { name: /^Processing/ }))
   expect(screen.getByRole('button', { name: 'Speech backend' })).toBeTruthy()
 
   await user.click(screen.getByRole('button', { name: 'transcription' }))
-  // Backends sit in each tab's closed Performance section: shown once asked for.
-  await user.click(screen.getByRole('button', { name: /^Performance/ }))
   expect(screen.getByRole('button', { name: 'Transcription backend' })).toBeTruthy()
 
   // The task models' backends sit with the task settings; Tools keeps search embeddings.
@@ -72,7 +70,6 @@ it('places each backend choice with its model settings and saves the selected de
   expect(screen.getByRole('button', { name: 'Grounding backend' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Decider backend' })).toBeTruthy()
   await user.click(screen.getByRole('button', { name: 'tools' }))
-  await user.click(screen.getByRole('button', { name: /^Search performance/ }))
   expect(screen.getByRole('button', { name: 'Search embeddings backend' })).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Grounding backend' })).toBeNull()
 

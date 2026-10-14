@@ -121,7 +121,7 @@ export function Settings({
       {/* Scrolling content below the fixed header */}
       <div className="relative flex-1 overflow-y-auto px-1 pt-2 pb-16">
         <motion.div
-          className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2 2xl:grid-cols-3"
+          className="grid grid-cols-1 items-start gap-2 lg:grid-cols-2 2xl:grid-cols-3"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
@@ -147,7 +147,7 @@ export function Settings({
               summary="Set up your local AI, manage storage, and see live component health."
               delay={0.13}
             >
-              <div className="space-y-12">
+              <div className="space-y-6">
                 <SetupPanel />
                 <StoragePanel />
                 {currentPlatform() === 'darwin' ? (

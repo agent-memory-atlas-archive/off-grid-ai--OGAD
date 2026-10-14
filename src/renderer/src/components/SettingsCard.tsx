@@ -107,7 +107,7 @@ export function SettingsCard({
             type="button"
             onClick={toggle}
             aria-expanded={open}
-            className="flex w-full items-center gap-3 p-6 text-left"
+            className="flex w-full items-center gap-3 px-4 py-3 text-left"
           >
             <div className="min-w-0 flex-1">
               {open && group ? (
@@ -115,8 +115,8 @@ export function SettingsCard({
                   <CaretLeft className="h-3 w-3" /> All settings
                 </span>
               ) : null}
-              <h3 className="text-base font-medium text-white">{title}</h3>
-              {!open && <p className="mt-1 text-sm text-neutral-500">{summary}</p>}
+              <h3 className="text-[13px] font-medium text-white">{title}</h3>
+              {!open && <p className="mt-0.5 text-[11.5px] text-neutral-500">{summary}</p>}
             </div>
             <CaretDown
               className={cn(
@@ -135,7 +135,7 @@ export function SettingsCard({
                 transition={{ duration: 0.28, ease: [0.25, 0.46, 0.45, 0.94] }}
                 className="overflow-hidden"
               >
-                <div className="px-6 pb-6">{children}</div>
+                <div className="px-4 pb-4">{children}</div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -169,7 +169,7 @@ export function ProPlaceholder({
           // position-only, matching SettingsCard: reflow smoothly without scale-distorting
           // the placeholder's text when sibling cards open/close.
           layout="position"
-          className="relative rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6"
+          className="relative rounded-2xl border border-neutral-800 bg-neutral-900/40 px-4 py-3"
           initial={{ opacity: 0, filter: 'blur(10px)' }}
           animate={{ opacity: 1, filter: 'blur(0px)' }}
           exit={{
@@ -181,16 +181,16 @@ export function ProPlaceholder({
           transition={{ duration: 0.6, delay }}
         >
           {variant === 'coming-soon' ? (
-            <Badge variant="outline" className="absolute right-4 top-4">
+            <Badge variant="outline" className="absolute right-3 top-3">
               <Clock weight="bold" className="h-3 w-3" /> Coming soon
             </Badge>
           ) : (
-            <Badge variant="success" className="absolute right-4 top-4">
+            <Badge variant="success" className="absolute right-3 top-3">
               <LockKey weight="bold" className="h-3 w-3" /> Pro
             </Badge>
           )}
-          <h3 className="mb-1 pr-28 text-base font-medium text-neutral-300">{title}</h3>
-          <p className="text-sm text-neutral-600">{description}</p>
+          <h3 className="mb-0.5 pr-28 text-[13px] font-medium text-neutral-300">{title}</h3>
+          <p className="text-[11.5px] text-neutral-600">{description}</p>
         </motion.div>
       )}
     </AnimatePresence>

@@ -17,6 +17,7 @@ import { Button } from '../ui/button'
 import { IconTip } from '../IconTip'
 import { deviceNoun } from '@renderer/lib/device'
 import { HealthPanel } from './HealthPanel'
+import { SettingsRow } from '../SettingsRow'
 import { formatTransferSpeed } from '@offgrid/sync'
 import { projectProgress } from '@offgrid/ui'
 import { formatStorageBytes } from './storage-format'
@@ -194,15 +195,15 @@ export function SetupPanel({ onConfigured, hideHealth }: SetupPanelProps): React
   else if (errored) progressTextClass = 'text-neutral-300'
 
   return (
-    <div className="space-y-12 font-mono">
-      <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-4">
+    <div className="space-y-6 font-mono">
+      <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-3">
         <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-neutral-800 bg-neutral-800/60">
-            <MagicWand className="h-5 w-5 text-green-500" />
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-neutral-800 bg-neutral-800/60">
+            <MagicWand className="h-4 w-4 text-green-500" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium text-white">Configure it for me</div>
-            <div className="text-xs text-neutral-500">
+            <div className="text-[11.5px] leading-snug text-neutral-500">
               Pick how much of your {deviceNoun()} to use. Off Grid AI Desktop shows each model
               before it downloads anything.
             </div>
@@ -221,13 +222,13 @@ export function SetupPanel({ onConfigured, hideHealth }: SetupPanelProps): React
           </button>
         </div>
 
-        <div className="mt-6 grid gap-x-8 gap-y-4 lg:grid-cols-2">
+        <div className="mt-3 grid gap-x-6 gap-y-2 lg:grid-cols-2">
           <div>
             <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-neutral-400">
               <DesktopTower className="h-4 w-4 text-green-500" />
               Local and remote
             </div>
-            <p className="mt-2 text-[11px] leading-5 text-neutral-500">
+            <p className="mt-1 text-[11.5px] leading-snug text-neutral-500">
               Installed models can handle Chat, images, transcription, voice, and Computer Use on
               this {deviceNoun()}. A saved model server is an optional Chat source.
             </p>
@@ -237,7 +238,7 @@ export function SetupPanel({ onConfigured, hideHealth }: SetupPanelProps): React
               <Devices className="h-4 w-4 text-green-500" />
               Control from Mobile
             </div>
-            <p className="mt-2 text-[11px] leading-5 text-neutral-500">
+            <p className="mt-1 text-[11.5px] leading-snug text-neutral-500">
               Pair Off Grid AI Mobile through Personal Mesh. Choose this Desktop by name to see and
               switch its active models. Server API keys stay on this Desktop.
             </p>
@@ -245,25 +246,24 @@ export function SetupPanel({ onConfigured, hideHealth }: SetupPanelProps): React
         </div>
 
         {/* Resource-use selector (Conservative / Balanced / Extreme) */}
-        <Section className="mt-8" label="Resource use">
-          <Segmented
-            label="Resource use"
-            size="sm"
-            value={mode}
-            onValueChange={(m) => {
-              void pickMode(m)
-            }}
-            options={MODES.map((m) => ({ id: m.id, label: m.label, disabled: savingMode }))}
-          />
-          <div className="mt-1.5 text-[11px] text-neutral-500">
-            {MODES.find((m) => m.id === mode)?.hint}
-          </div>
-        </Section>
+        <div className="mt-3">
+          <SettingsRow inline label="Resource use" hint={MODES.find((m) => m.id === mode)?.hint}>
+            <Segmented
+              label="Resource use"
+              size="sm"
+              value={mode}
+              onValueChange={(m) => {
+                void pickMode(m)
+              }}
+              options={MODES.map((m) => ({ id: m.id, label: m.label, disabled: savingMode }))}
+            />
+          </SettingsRow>
+        </div>
 
         {/* Exactly which models it will set up — the full baseline, no surprises */}
         {plan && (
           <Section
-            className="mt-8"
+            className="mt-5"
             label="Will set up"
             actions={
               <span className="text-[10px] text-neutral-500">
@@ -318,12 +318,12 @@ export function SetupPanel({ onConfigured, hideHealth }: SetupPanelProps): React
               })}
               </AnimatePresence>
             </ul>
-            <div className="mt-1.5 text-[11px] text-neutral-600">
+            <div className="mt-1.5 text-[11.5px] leading-snug text-neutral-500">
               Chat is ready first. Transcription, voice
               {plan.items.some((i) => i.kind === 'image') ? ', and image' : ''} finish in the
               background.
             </div>
-            <div className="mt-3 text-[11px] leading-relaxed text-neutral-500">
+            <div className="mt-1 text-[11.5px] leading-snug text-neutral-500">
               For solid reasoning and tool use,{' '}
               <span className="text-neutral-300">Gemma 4 E4B</span> is the recommended minimum (4B,
               ~6 GB - fine on a 16 GB {deviceNoun()}). Smaller 2B models are lighter and add vision,

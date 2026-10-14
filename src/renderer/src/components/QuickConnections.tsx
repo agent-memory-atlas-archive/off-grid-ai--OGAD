@@ -97,7 +97,7 @@ export function QuickConnections({
       <AnimatePresence>
         {manageUrl && (
           <SidePanel ariaLabel="Connected accounts" onClose={() => setManageUrl(null)}>
-            <header className="flex items-center justify-between border-b border-neutral-800 px-6 py-5">
+            <header className="flex items-center justify-between border-b border-neutral-800 px-6 py-3">
               <h2 className="text-lg">Connected accounts</h2>
               <Button
                 size="icon"
@@ -108,7 +108,7 @@ export function QuickConnections({
                 <X className="size-4" />
               </Button>
             </header>
-            <div className="space-y-3 px-6 py-5">
+            <div className="space-y-3 px-6 py-3">
               <div className="divide-y divide-neutral-800 overflow-hidden rounded-md border border-neutral-800">
                 <AnimatePresence initial={false}>
                   {connection.items
@@ -183,7 +183,7 @@ export function QuickConnections({
           </SidePanel>
         )}
       </AnimatePresence>
-      <div className="grid gap-8 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2">
         {Providers && (
           <section aria-label="Accounts and notes" className="min-w-0">
             <h3 className="connection-group-label">Accounts &amp; notes</h3>

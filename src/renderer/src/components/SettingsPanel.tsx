@@ -570,6 +570,58 @@ export function SettingsPanel({
     openActiveModelsPanel()
   }
 
+  const connectorGroups = groupConnectors(connectors)
+  // One connector: its name and URL, an On/Off switch that stays visible, Remove on hover.
+  const connectorRow = (c: Connector): React.JSX.Element => (
+    <motion.div
+      key={c.id}
+      layout
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+    >
+      <ListRow
+        title={c.name}
+        description={c.url ?? undefined}
+        // On/Off is state, so it stays visible; only Remove waits for hover.
+        meta={
+          <label className="flex cursor-pointer items-center gap-2">
+            <span
+              className={`text-[11px] transition-colors duration-300 ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
+            >
+              <TextMorph as="span">{c.enabled ? 'On' : 'Off'}</TextMorph>
+            </span>
+            <Switch
+              aria-label={`Enable ${c.name}`}
+              checked={Boolean(c.enabled)}
+              onCheckedChange={async () => {
+                await (window.api as Partial<typeof window.api>).mcpSetEnabled?.(c.id, !c.enabled)
+                refreshConnectors()
+              }}
+            />
+          </label>
+        }
+        actions={
+          <IconTip label="Remove">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Remove"
+              className="text-neutral-500 hover:text-red-400"
+              onClick={async () => {
+                await (window.api as Partial<typeof window.api>).mcpRemove?.(c.id)
+                refreshConnectors()
+              }}
+            >
+              <Trash />
+            </Button>
+          </IconTip>
+        }
+      />
+    </motion.div>
+  )
+
   const content = (
     <>
       {!embedded ? (
@@ -645,7 +697,7 @@ export function SettingsPanel({
               summary={`${activeModelName ?? 'No active model'} · context ${formatContextWindow(s.ctxSize) ?? 'checking'}`}
               defaultOpen
             >
-              <div className="mb-5" role="status">
+              <div className="mb-3" role="status">
                 <AnimatedGroup
                   preset="fade"
                   className="grid grid-cols-2 gap-px border border-neutral-800 bg-neutral-800 lg:grid-cols-4"
@@ -677,14 +729,15 @@ export function SettingsPanel({
                   ))}
                 </AnimatedGroup>
               </div>
-              <p className="mb-5 text-[11px] leading-5 text-neutral-500">
-                16K is recommended for capture and chat. Capture needs at least 8K; smaller windows
-                can save memory but leave captured frames waiting for analysis.
-              </p>
               {/* Order matters: the OUTER budget first, because each inner one is bounded by it.
                 thinking budget within max output within context window (rule in @offgrid/models). */}
               <BackendPreferencesSection modalities={['llm']} />
-              <Row label="Context window" controlId="context-window" hint={contextWindowHint(s)}>
+              <Row
+                inline
+                label="Context window"
+                controlId="context-window"
+                hint={`${contextWindowHint(s)} 16K is recommended for capture and chat.`}
+              >
                 <SettingsSelect
                   id="context-window"
                   label="Context window"
@@ -709,6 +762,7 @@ export function SettingsPanel({
                 />
               </Row>
               <Row
+                inline
                 label="Max output"
                 controlId="max-output"
                 hint={
@@ -731,6 +785,7 @@ export function SettingsPanel({
                 />
               </Row>
               <Row
+                inline
                 label="Thinking budget"
                 controlId="thinking-budget"
                 hint={
@@ -775,9 +830,9 @@ export function SettingsPanel({
                 />
               </Row>
               <Row
+                inline
                 label="Generation details"
                 controlId="generation-details-toggle"
-                value={showGenerationDetails ? 'Shown' : 'Hidden'}
                 hint="Show context use, speed, token count, time, and the tools sent with the request under each answer."
               >
                 <Switch
@@ -788,9 +843,9 @@ export function SettingsPanel({
                 />
               </Row>
               <Row
+                inline
                 label="Reply sound"
                 controlId="reply-sound-toggle"
-                value={replySound ? 'On' : 'Off'}
                 hint="A soft ding when an answer arrives, here and in God. The same setting in both."
               >
                 <Switch
@@ -900,6 +955,7 @@ export function SettingsPanel({
               }
             >
               <Row
+                inline
                 label="KV cache"
                 hint="Quantize the KV cache to cut memory and allow a larger context. q8_0 ≈ half, q4_0 ≈ quarter of f16. Auto-enables FlashAttention."
               >
@@ -914,9 +970,9 @@ export function SettingsPanel({
                 />
               </Row>
               <Row
+                inline
                 label="FlashAttention"
                 controlId="flash-attention-toggle"
-                value={(s.flashAttn ?? false) ? 'On' : 'Off'}
                 hint="Faster, lower memory. Required for a quantized KV cache."
               >
                 <Switch
@@ -928,6 +984,7 @@ export function SettingsPanel({
                 />
               </Row>
               <Row
+                inline
                 label="Speculative decoding"
                 controlId="speculative-decoding"
                 hint="N-gram needs no second model. MTP uses prediction heads in the main model or its matching installed MTP file. Draft and DFlash need a compatible installed draft GGUF."
@@ -948,7 +1005,7 @@ export function SettingsPanel({
                   controlId="speculative-draft-max"
                   hint="Maximum tokens proposed per step. More is not always faster. Auto uses two for MTP and the engine default for Draft and DFlash."
                 >
-                  <div id="speculative-draft-max" className="space-y-4">
+                  <div id="speculative-draft-max" className="flex items-center gap-3">
                     <SettingStepper
                       label="Draft token limit"
                       value={
@@ -1012,12 +1069,8 @@ export function SettingsPanel({
                   onCommit={(value) => set({ gpuLayers: value })}
                 />
               </Row>
-              <Row
-                label="CPU threads"
-                value={(s.threads ?? 0) === 0 ? 'Auto' : undefined}
-                hint="Auto lets llama.cpp choose."
-              >
-                <div className="space-y-4">
+              <Row label="CPU threads" hint="Auto lets llama.cpp choose.">
+                <div className="flex items-center gap-3">
                   <SettingStepper
                     label="CPU threads"
                     value={(s.threads ?? 0) > 0 ? s.threads! : manualThreads}
@@ -1037,7 +1090,7 @@ export function SettingsPanel({
                       checked={(s.threads ?? 0) === 0}
                       onCheckedChange={(auto) => set({ threads: auto ? 0 : manualThreads })}
                     />
-                    Choose automatically
+                    Auto
                   </label>
                 </div>
               </Row>
@@ -1085,9 +1138,10 @@ export function SettingsPanel({
               defaultOpen
             >
               <Row
+                inline
                 label="Current model"
                 controlId="transcription-model"
-                hint="The model used for the next recording."
+                hint={transcriptionInfo?.label ?? 'The model used for the next recording.'}
               >
                 <SettingsSelect
                   id="transcription-model"
@@ -1104,11 +1158,9 @@ export function SettingsPanel({
                     label: option.name
                   }))}
                 />
-                {transcriptionInfo ? (
-                  <p className="mt-1 text-[10px] text-neutral-600">{transcriptionInfo.label}</p>
-                ) : null}
               </Row>
               <Row
+                inline
                 label="Spoken language"
                 controlId="stt-language"
                 hint="Auto-detect is available for multilingual Whisper models. English-only models show English only."
@@ -1125,12 +1177,7 @@ export function SettingsPanel({
                   }))}
                 />
               </Row>
-            </SettingsSection>
-            <SettingsSection
-              id="transcription.performance"
-              title="Performance"
-              summary="Which processor runs transcription."
-            >
+              {/* One row needs no section of its own: the processor sits with the model it runs. */}
               <BackendPreferencesSection modalities={['stt']} />
             </SettingsSection>
           </>
@@ -1157,9 +1204,6 @@ export function SettingsPanel({
                 }}
               />
             </SettingRow>
-            <p className="mb-3 text-[11px] text-neutral-500">
-              Built-in tools the model can call when “Tools” is on in the composer.
-            </p>
             {tools.length === 0 ? (
               <p className="text-xs text-neutral-600">No tools.</p>
             ) : (
@@ -1291,43 +1335,45 @@ export function SettingsPanel({
                 })}
               </div>
             )}
-            <SettingsSection
-              id="tools.search"
-              title="Search performance"
-              summary="Which processor builds search embeddings."
-            >
+            {/* One row needs no section of its own. */}
+            <div className="mt-4">
               <BackendPreferencesSection modalities={['embeddings']} />
-            </SettingsSection>
+            </div>
           </>
         )}
 
         {tab === 'connectors' && (
           <>
-            <p className="mb-3 text-[11px] text-neutral-500">
+            <p className="mb-2 text-[11.5px] leading-snug text-neutral-500">
               Connect MCP servers — your reusable tool library (web search, fetch, etc.). Add an
               HTTP MCP endpoint:
             </p>
-            <div className="mb-4 flex flex-col gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 p-3">
+            <div className="mb-4 flex items-center gap-2">
               <Input
                 size="sm"
+                className="w-32 shrink-0"
                 value={newConn.name}
                 onChange={(e) => setNewConn({ ...newConn, name: e.target.value })}
                 placeholder="Name (e.g. Brave Search)"
               />
               <Input
                 size="sm"
+                className="min-w-0 flex-1"
                 value={newConn.url}
                 onChange={(e) => setNewConn({ ...newConn, url: e.target.value })}
                 placeholder="https://… (MCP HTTP URL)"
               />
-              <Button
-                size="sm"
-                onClick={addConnector}
-                disabled={!newConn.name.trim() || !newConn.url.trim()}
-                className="self-start"
-              >
-                Add connector
-              </Button>
+              <IconTip label="Add connector">
+                <Button
+                  size="icon-sm"
+                  variant="outline"
+                  aria-label="Add connector"
+                  onClick={addConnector}
+                  disabled={!newConn.name.trim() || !newConn.url.trim()}
+                >
+                  <Plus />
+                </Button>
+              </IconTip>
             </div>
             {connectors.length === 0 ? (
               <Empty className="px-0 py-6 md:py-6">
@@ -1339,76 +1385,36 @@ export function SettingsPanel({
                 </EmptyDescription>
               </Empty>
             ) : (
-              // By service: several accounts and servers of one service sit together.
+              // By service: several accounts and servers of one service sit together in a section;
+              // a service with one connector is just its row, in one thin list above them.
               <div className="flex flex-col">
-                {groupConnectors(connectors).map((group) => (
-                  <SettingsSection
-                    key={group.key}
-                    id={`connectors.${group.key}`}
-                    title={group.label}
-                    summary={`${group.connectors.length} connected · ${
-                      group.connectors.filter((c) => c.enabled).length
-                    } on`}
-                  >
-                    <div className="flex flex-col divide-y divide-neutral-900 pb-2">
-                      <AnimatePresence initial={false}>
-                        {group.connectors.map((c) => (
-                          <motion.div
-                            key={c.id}
-                            layout
-                            initial={{ opacity: 0, y: 6 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0 }}
-                            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-                          >
-                            <ListRow
-                              title={c.name}
-                              description={c.url ?? undefined}
-                              // On/Off is state, so it stays visible; only Remove waits for hover.
-                              meta={
-                                <label className="flex cursor-pointer items-center gap-2">
-                                  <span
-                                    className={`text-[11px] transition-colors duration-300 ${c.enabled ? 'text-green-500' : 'text-neutral-500'}`}
-                                  >
-                                    <TextMorph as="span">{c.enabled ? 'On' : 'Off'}</TextMorph>
-                                  </span>
-                                  <Switch
-                                    aria-label={`Enable ${c.name}`}
-                                    checked={Boolean(c.enabled)}
-                                    onCheckedChange={async () => {
-                                      await (
-                                        window.api as Partial<typeof window.api>
-                                      ).mcpSetEnabled?.(c.id, !c.enabled)
-                                      refreshConnectors()
-                                    }}
-                                  />
-                                </label>
-                              }
-                              actions={
-                                <IconTip label="Remove">
-                                  <Button
-                                    size="icon-xs"
-                                    variant="ghost"
-                                    aria-label="Remove"
-                                    className="text-neutral-500 hover:text-red-400"
-                                    onClick={async () => {
-                                      await (window.api as Partial<typeof window.api>).mcpRemove?.(
-                                        c.id
-                                      )
-                                      refreshConnectors()
-                                    }}
-                                  >
-                                    <Trash />
-                                  </Button>
-                                </IconTip>
-                              }
-                            />
-                          </motion.div>
-                        ))}
-                      </AnimatePresence>
-                    </div>
-                  </SettingsSection>
-                ))}
+                {connectorGroups.some((group) => group.connectors.length === 1) && (
+                  <div className="mb-2 flex flex-col divide-y divide-neutral-900 rounded-md border border-neutral-800 bg-neutral-950/40">
+                    <AnimatePresence initial={false}>
+                      {connectorGroups
+                        .filter((group) => group.connectors.length === 1)
+                        .flatMap((group) => group.connectors.map((c) => connectorRow(c)))}
+                    </AnimatePresence>
+                  </div>
+                )}
+                {connectorGroups
+                  .filter((group) => group.connectors.length > 1)
+                  .map((group) => (
+                    <SettingsSection
+                      key={group.key}
+                      id={`connectors.${group.key}`}
+                      title={group.label}
+                      summary={`${group.connectors.length} connected · ${
+                        group.connectors.filter((c) => c.enabled).length
+                      } on`}
+                    >
+                      <div className="flex flex-col divide-y divide-neutral-900 pb-2">
+                        <AnimatePresence initial={false}>
+                          {group.connectors.map((c) => connectorRow(c))}
+                        </AnimatePresence>
+                      </div>
+                    </SettingsSection>
+                  ))}
               </div>
             )}
           </>

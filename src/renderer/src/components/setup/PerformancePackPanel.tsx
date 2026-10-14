@@ -33,7 +33,7 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
     return pack.onChanged?.(setStatus)
   }, [])
 
-  if (!status) return showUnavailable ? <p role="status" className="text-sm text-neutral-500"><TextShimmer as="span">Checking GPU components...</TextShimmer></p> : null
+  if (!status) return showUnavailable ? <p role="status" className="text-xs text-neutral-500"><TextShimmer as="span">Checking GPU components...</TextShimmer></p> : null
   if (status.phase === 'not-needed' || status.phase === 'unavailable') {
     if (!showUnavailable) return null
     const message = currentPlatform() === 'darwin'
@@ -41,7 +41,7 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
       : status.phase === 'not-needed'
         ? 'No NVIDIA driver was found. The CUDA download is only for devices with an NVIDIA GPU.'
         : 'No optional GPU download is available in this build.'
-    return <p className="text-sm text-neutral-500">{message}</p>
+    return <p className="text-xs text-neutral-500">{message}</p>
   }
 
   const progress = projectProgress({
@@ -60,10 +60,10 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
   const action = downloading ? window.api.performancePack.pause : window.api.performancePack.start
 
   return (
-    <section className="rounded-md border border-neutral-800 bg-neutral-900/40 p-4 font-mono">
+    <section className="rounded-md border border-neutral-800 bg-neutral-900/40 p-3 font-mono">
       <div className="flex items-start gap-3">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-neutral-800 bg-neutral-800/60">
-          {installed ? <CheckCircle className="h-5 w-5 text-green-500" /> : <DownloadSimple className="h-5 w-5 text-green-500" />}
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-neutral-800 bg-neutral-800/60">
+          {installed ? <CheckCircle className="h-4 w-4 text-green-500" /> : <DownloadSimple className="h-4 w-4 text-green-500" />}
         </div>
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-medium text-white">Use your NVIDIA GPU</h3>
@@ -79,7 +79,7 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
           {status.error ? <p className="mt-2 text-xs text-red-400">{status.error}</p> : null}
         </div>
       </div>
-      <div className="mt-4 divide-y divide-neutral-900">
+      <div className="mt-2.5 divide-y divide-neutral-900">
         {GPU_COMPONENTS.map((component) => (
           <div key={component.name} className="flex items-center justify-between gap-3 py-2.5">
             <div className="min-w-0">
@@ -96,7 +96,7 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
         Voice replies and search use separate GPU settings.
       </p>
       {status.downloadedBytes > 0 && !installed ? (
-        <div className="mt-4">
+        <div className="mt-2.5">
           <div className="mb-1 flex justify-between text-[11px] text-neutral-400">
             <TextMorph as="span">{status.phase === 'paused' ? 'Paused' : 'Downloading'}</TextMorph>
             <span>{formatStorageBytes(status.downloadedBytes)} / {formatStorageBytes(status.bytes)}</span>
@@ -108,7 +108,7 @@ export function PerformancePackPanel({ onSkip, showUnavailable = false }: Perfor
           </Progress>
         </div>
       ) : null}
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
         {installed && status.restartRequired ? (
           <Button size="sm" onClick={() => void window.api.performancePack.restart()}>
             <ArrowClockwise className="h-4 w-4" /> Restart app

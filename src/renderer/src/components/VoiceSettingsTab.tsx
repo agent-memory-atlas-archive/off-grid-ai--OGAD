@@ -329,6 +329,38 @@ export function VoiceSettingsTab(): React.JSX.Element {
   ]
     .filter(Boolean)
     .join(' · ')
+  // Testing a voice acts on the Voice select, so the button sits beside it.
+  const testVoiceButton = (
+    <IconTip label={testVoiceLabel}>
+      <Button
+        type="button"
+        size="icon-sm"
+        aria-label={testVoiceLabel}
+        aria-busy={testState === 'generating' || undefined}
+        onClick={() => void testVoice()}
+        disabled={testState === 'generating' || testState === 'playing'}
+        className="bg-green-600 text-white hover:bg-green-500 disabled:opacity-40"
+      >
+        <GlyphSwap
+          glyphKey={testState === 'generating' || testState === 'playing' ? testState : 'idle'}
+        >
+          {testState === 'generating' ? (
+            <CircleNotch className="animate-spin" />
+          ) : testState === 'playing' ? (
+            <SpeakerHigh />
+          ) : (
+            <Play weight="fill" />
+          )}
+        </GlyphSwap>
+      </Button>
+    </IconTip>
+  )
+  const testVoiceError =
+    testState === 'error' ? (
+      <p className="pb-2 text-[11px] text-red-400">
+        Could not play this voice. Check your audio output and retry.
+      </p>
+    ) : null
   return (
     <>
       <SettingsSection
@@ -338,6 +370,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
         defaultOpen
       >
         <SettingsRow
+          inline
           label="Interface mode"
           hint={
             preferences.voiceMode
@@ -359,7 +392,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
         </SettingsRow>
 
         {!preferences.voiceMode ? (
-          <SettingsRow label="Text-to-speech" hint="Show playback on assistant messages.">
+          <SettingsRow inline label="Text-to-speech" hint="Show playback on assistant messages.">
             <PreferenceButtons
               label="Text-to-speech"
               options={[
@@ -372,7 +405,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
           </SettingsRow>
         ) : null}
 
-        <SettingsRow label="Voice turns" hint={turnDescription}>
+        <SettingsRow inline label="Voice turns" hint={turnDescription}>
           <PreferenceButtons
             label="Voice turns"
             options={TURN_ORDER.map((id) => ({ id, label: VOICE_TURN_LABELS[id].label }))}
@@ -383,6 +416,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
 
         {preferences.turnMode !== 'tap' ? (
           <SettingsRow
+            inline
             label={VOICE_DELAY_LABELS.silenceAfterSpeech.label}
             hint={VOICE_DELAY_LABELS.silenceAfterSpeech.description}
           >
@@ -402,6 +436,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
 
         {preferences.turnMode === 'handsfree' ? (
           <SettingsRow
+            inline
             label={VOICE_DELAY_LABELS.speakerDrain.label}
             hint={VOICE_DELAY_LABELS.speakerDrain.description}
           >
@@ -420,6 +455,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
       <SettingsSection id="voice.speech" title="Voice" summary={speechSummary} defaultOpen>
         {showLanguage && (
           <SettingsRow
+            inline
             label="Language"
             controlId="tts-language"
             hint={
@@ -444,11 +480,12 @@ export function VoiceSettingsTab(): React.JSX.Element {
 
         {miniMaxSpeech28 && !showLanguage && (
           <SettingsRow
+            inline
             label="Language"
-            value="Automatic"
             hint="MiniMax can speak 40 languages. It uses the language of the reply text; OpenRouter lists English-named speakers for this model."
           >
-            {null}
+            {/* Nothing to choose: the setting reads as its value, where a control would sit. */}
+            <span className="text-xs tabular-nums text-green-500">Automatic</span>
           </SettingsRow>
         )}
 
@@ -456,7 +493,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
           <div
             role="status"
             aria-live="polite"
-            className="mb-4 flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 px-3.5 py-2.5 text-xs text-neutral-400"
+            className="mb-2 flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 px-3.5 py-2.5 text-xs text-neutral-400"
           >
             <LoadingDots />
             <TextShimmer as="span">
@@ -467,7 +504,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
           <div
             role="status"
             aria-live="polite"
-            className="mb-4 flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 px-3.5 py-2.5 text-xs text-neutral-400"
+            className="mb-2 flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 px-3.5 py-2.5 text-xs text-neutral-400"
           >
             <LoadingDots />
             Downloading {runtimeVoiceLanguage({ id: voice })?.label ?? language} audio
@@ -489,7 +526,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
         ) : assetsState === 'error' ? (
           <div
             role="alert"
-            className="mb-4 flex items-center justify-between gap-3 text-xs text-red-400"
+            className="mb-2 flex items-center justify-between gap-3 text-xs text-red-400"
           >
             <span>{voiceLoadError}</span>
             <IconTip label="Retry">
@@ -506,7 +543,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
             </IconTip>
           </div>
         ) : (
-          <LiveStatus className="mb-4 text-xs text-neutral-500">
+          <LiveStatus className="mb-2 text-xs text-neutral-500">
             {remoteVoice && !voices.length
               ? 'Speaker choices are not available for this remote model.'
               : remoteVoice
@@ -517,6 +554,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
 
         {(!remoteVoice || voices.length > 0) && (
           <SettingsRow
+            inline
             label="Voice"
             controlId="tts-voice"
             hint={
@@ -536,6 +574,7 @@ export function VoiceSettingsTab(): React.JSX.Element {
                 label: label ?? kokoroVoiceLabel(id)
               }))}
             />
+            <span className="ml-2 flex shrink-0 items-center">{testVoiceButton}</span>
           </SettingsRow>
         )}
 
@@ -561,45 +600,12 @@ export function VoiceSettingsTab(): React.JSX.Element {
           </div>
         </SettingsRow>
 
-        <div className="flex items-center gap-2 pb-3">
-          <IconTip label={testVoiceLabel}>
-            <Button
-              type="button"
-              size="icon-sm"
-              aria-label={testVoiceLabel}
-              aria-busy={testState === 'generating' || undefined}
-              onClick={() => void testVoice()}
-              disabled={testState === 'generating' || testState === 'playing'}
-              className="bg-green-600 text-white hover:bg-green-500 disabled:opacity-40"
-            >
-              <GlyphSwap
-                glyphKey={
-                  testState === 'generating' || testState === 'playing' ? testState : 'idle'
-                }
-              >
-                {testState === 'generating' ? (
-                  <CircleNotch className="animate-spin" />
-                ) : testState === 'playing' ? (
-                  <SpeakerHigh />
-                ) : (
-                  <Play weight="fill" />
-                )}
-              </GlyphSwap>
-            </Button>
-          </IconTip>
-          {testState === 'error' ? (
-            <span className="text-[11px] text-red-400">
-              Could not play this voice. Check your audio output and retry.
-            </span>
-          ) : null}
-        </div>
-      </SettingsSection>
+        {/* With no speaker to pick, the test button keeps a line of its own. */}
+        {remoteVoice && !voices.length ? (
+          <div className="flex items-center gap-2 py-2">{testVoiceButton}</div>
+        ) : null}
+        {testVoiceError}
 
-      <SettingsSection
-        id="voice.processing"
-        title="Processing"
-        summary="The hardware that speaks replies on this device"
-      >
         <BackendPreferencesSection modalities={['tts']} />
       </SettingsSection>
     </>

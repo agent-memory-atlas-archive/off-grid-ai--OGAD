@@ -231,7 +231,7 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
           </Button>
         </div>
       </div>
-      <div className="flex-1 space-y-10 overflow-y-auto px-6 py-6">
+      <div className="flex-1 space-y-6 overflow-y-auto px-6 py-4">
         <AnimatePresence initial={false}>
           {selectionError && (
             <motion.div

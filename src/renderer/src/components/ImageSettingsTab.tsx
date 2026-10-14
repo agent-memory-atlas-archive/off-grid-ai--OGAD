@@ -10,6 +10,7 @@ import { resolveModelName } from '@renderer/lib/model-summary'
 import { SettingsSelect } from './SettingsSelect'
 import { BackendPreferencesSection } from './ProcessingControls'
 import { SettingsSection } from './SettingsSection'
+import { SettingsRow } from './SettingsRow'
 import {
   NumberField,
   NumberFieldDecrement,
@@ -150,11 +151,8 @@ export function ImageSettingsTab(): React.JSX.Element {
         summary={generationSummary}
         defaultOpen
       >
-        <div className="space-y-4 pb-3">
-          <div>
-            <span className="mb-1 block text-[11px] uppercase tracking-wide text-neutral-400">
-              Active image model
-            </span>
+        <div className="divide-y divide-neutral-900">
+          <SettingsRow label="Active image model" controlId="active-image-model" inline>
             <SettingsSelect
               id="active-image-model"
               label="Active image model"
@@ -162,11 +160,8 @@ export function ImageSettingsTab(): React.JSX.Element {
               onValueChange={chooseModel}
               options={models}
             />
-          </div>
-          <div>
-            <span className="mb-1 block text-[11px] uppercase tracking-wide text-neutral-400">
-              Size
-            </span>
+          </SettingsRow>
+          <SettingsRow label="Size" controlId="image-size" inline>
             <SettingsSelect
               id="image-size"
               label="Image size"
@@ -177,7 +172,7 @@ export function ImageSettingsTab(): React.JSX.Element {
                 label: `${size} × ${size}`
               }))}
             />
-          </div>
+          </SettingsRow>
         </div>
       </SettingsSection>
 

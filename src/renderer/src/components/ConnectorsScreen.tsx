@@ -749,7 +749,7 @@ export function ConnectorsScreen(): ReactElement {
                 {editing && (
                   <form
                     aria-label={`Edit ${detail.name}`}
-                    className="space-y-3 rounded-md border border-neutral-800 bg-neutral-900/40 p-4"
+                    className="space-y-3 rounded-md border border-neutral-800 bg-neutral-900/40 p-3"
                     onSubmit={(event) => {
                       event.preventDefault()
                       void saveEdit(detail)
@@ -879,7 +879,7 @@ export function ConnectorsScreen(): ReactElement {
                   <p className="text-[11px] leading-relaxed text-neutral-400">{syncMsg}</p>
                 )}
 
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                   {/* Synced data — the meat (wide) */}
                   <section className="lg:col-span-2">
                     <h3 className="mb-2 text-[11px] uppercase tracking-wide text-neutral-500">
@@ -936,10 +936,10 @@ export function ConnectorsScreen(): ReactElement {
             )
           }
           return (
-            <div className="mx-auto max-w-[1600px] space-y-10">
+            <div className="mx-auto max-w-[1600px] space-y-6">
               {/* Custom (advanced) form */}
               {adding && (
-                <div className="space-y-3 rounded-md border border-neutral-800 bg-neutral-900/40 p-4">
+                <div className="space-y-3 rounded-md border border-neutral-800 bg-neutral-900/40 p-3">
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -1011,7 +1011,7 @@ export function ConnectorsScreen(): ReactElement {
                         {entries.map((e) => (
                           <div
                             key={e.id}
-                            className={`flex flex-col gap-3 rounded-md border border-neutral-800 bg-neutral-900/40 p-4 ${!e.ready ? 'opacity-55' : ''}`}
+                            className={`flex flex-col gap-2 rounded-md border border-neutral-800 bg-neutral-900/40 p-3 ${!e.ready ? 'opacity-55' : ''}`}
                           >
                             <div className="flex items-start gap-3">
                               <Badge id={e.id} color={e.color} letter={e.letter} />
@@ -1035,11 +1035,8 @@ export function ConnectorsScreen(): ReactElement {
                                 }
                               />
                             )}
-                            {!e.ready ? (
-                              <div className="rounded-md border border-neutral-800 py-1.5 text-center text-xs text-neutral-600">
-                                Not enabled yet
-                              </div>
-                            ) : tokenFor?.id === e.id ? (
+                            {/* The "disabled" badge beside the name is the one indicator here. */}
+                            {!e.ready ? null : tokenFor?.id === e.id ? (
                               <div className="space-y-2">
                                 {(setupHintFor(e.id) || e.docsUrl) && (
                                   <p className="text-[11px] leading-relaxed text-neutral-500">
@@ -1093,7 +1090,7 @@ export function ConnectorsScreen(): ReactElement {
                       ))}
                     </div>
                   ) : items.length === 0 ? (
-                    <p className="py-8 text-sm text-neutral-600">
+                    <p className="py-5 text-xs text-neutral-600">
                       Nothing connected yet. Pick one above.
                     </p>
                   ) : (
