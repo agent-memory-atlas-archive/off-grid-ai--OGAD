@@ -1,3 +1,4 @@
+import { settingsChanged } from './settings-version'
 import { withStorageDownload } from './model-storage-guard'
 // Central model management — the single source of truth for catalog, install
 // listing, download (pull), delete, and activation. Used by BOTH the desktop IPC
@@ -835,6 +836,7 @@ async function downloadModelInner(
           await downloadMfluxModel(modelId, (pct: number) =>
             send({ percent: pct, status: 'downloading' })
           )
+          settingsChanged()
           send({ percent: 100, status: 'completed' })
           return { success: true }
         } catch (err) {
@@ -1008,7 +1010,8 @@ async function downloadModelInner(
         // If this download added the projector for the active chat model, turn its
         // vision on now (main-side, so it works even when no Models screen is open).
         await reconcileActiveModelProjector().catch(() => false)
-        send({ percent: 100, status: 'completed' })
+        settingsChanged()
+          send({ percent: 100, status: 'completed' })
         return { success: true }
       } catch (err) {
         // A capacity failure cannot resume until space is reclaimed. A file that failed byte or
@@ -1125,6 +1128,14 @@ function deleteTransferredModel(context: TransferredDeletionContext): DeleteMode
 
 /** Delete a model's files from disk. Clears it as active if it was selected. */
 export async function deleteModel(modelId: string): Promise<DeleteModelResult> {
+  try {
+    return await deleteModelFiles(modelId)
+  } finally {
+    settingsChanged()
+  }
+}
+
+async function deleteModelFiles(modelId: string): Promise<DeleteModelResult> {
   if (modelId.startsWith('external:')) return { success: false, error: 'External models are read only.' }
   const dir = llm.getModelsDir()
   // Imported local model: remove its files + registry entry, clear if active.
@@ -1303,6 +1314,7 @@ export async function setActiveModel(
 ): Promise<{ success: boolean; error?: string }> {
   const result = await setActiveLlamaModel(modelId, isChatLoadable, 'the chat LLM')
   if (result.success) setRemoteModelSelected('text', false)
+  settingsChanged()
   return result
 }
 
@@ -1365,6 +1377,7 @@ export async function reconcileActiveModelProjector(): Promise<boolean> {
     return false // already has one / no projector / not downloaded yet — leave as is
   }
   fs.writeFileSync(activeModelFile(), JSON.stringify({ ...cfg, mmproj: projector }, null, 2))
+  settingsChanged()
   llm.reloadModel()
   return true
 }
@@ -1931,6 +1944,7 @@ export async function importLocalModel(
   const list = getLocalModels().filter((m) => m.id !== id)
   list.push({ id, name: base, primary: fileName, kind: 'text', sizeBytes: total })
   saveLocalModels(list)
+  settingsChanged()
   send({ status: 'completed', percent: 100 })
   return { success: true, id }
 }
@@ -2050,6 +2064,18 @@ export async function getStorageInfo(): Promise<StorageInfo> {
 /** Delete every orphan file (unreferenced gguf/.part). Recomputes the orphan set so
  *  it can never touch a catalog model or the active selection. */
 export async function deleteOrphans(): Promise<{
+  success: boolean
+  count: number
+  freedBytes: number
+}> {
+  try {
+    return await deleteOrphanFiles()
+  } finally {
+    settingsChanged()
+  }
+}
+
+async function deleteOrphanFiles(): Promise<{
   success: boolean
   count: number
   freedBytes: number

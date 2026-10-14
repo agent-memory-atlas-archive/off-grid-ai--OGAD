@@ -2,6 +2,7 @@
 // active-model.json (it reloads llama-server); the other modalities - computer use,
 // image, speech (TTS), transcription (STT) - record the chosen model id here. Each
 // runtime reads its selection when work starts. One file: active-modalities.json.
+import { settingsChanged } from './settings-version'
 import fs from 'fs'
 import path from 'path'
 import { modelsDir } from './runtime-env'
@@ -41,6 +42,7 @@ export class ActiveModalityStore {
     try {
       fs.mkdirSync(path.dirname(this.storeFile()), { recursive: true })
       fs.writeFileSync(this.storeFile(), JSON.stringify(cur, null, 2))
+      settingsChanged()
     } catch (error) {
       console.error('[active-models] write failed', error)
     }

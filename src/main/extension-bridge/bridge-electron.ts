@@ -233,7 +233,8 @@ function features(): BridgeFeatures {
     connectors: pro && exts.some((e) => e.category !== 'tool'),
     vault: pro && hasHook(HOOKS.extensionVaultRequest),
     // Keep the live socket open only while tasks are set to use the default browser.
-    browserTasks: pro && getWebUseSettings().browserTarget === 'default_browser'
+    browserTasks: pro && getWebUseSettings().browserTarget === 'default_browser',
+    settingsWatch: true
   }
 }
 
