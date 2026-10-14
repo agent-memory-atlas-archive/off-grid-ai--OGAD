@@ -78,7 +78,7 @@
     "@offgrid/clipboard": "file:./packages/clipboard",
     "@offgrid/design": "file:./packages/design",
     "@offgrid/models": "file:../shared/packages/models",
-    "@offgrid/operator-ui": "github:wednesday-solutions/component-library-animations#48e4937d4fc53f8baf13556b3d76ad0bf9fd6f46",
+    "@offgrid/operator-ui": "github:wednesday-solutions/component-library-animations#537da8f9326085007ba0d26f1e1d590a389ae75a",
     "@offgrid/rag": "file:./packages/rag",
     "@offgrid/speech": "file:../shared/packages/speech",
     "@offgrid/sync": "file:../shared/packages/sync",
