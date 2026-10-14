@@ -44,9 +44,13 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
       .then((value) => {
         if (mounted) setSettings(value)
       })
-      .catch(() => {
+      .catch((reason: unknown) => {
         if (mounted)
-          setError('Could not read API keys. Unlock system key storage and reopen this page.')
+          setError(
+            reason instanceof Error && reason.message.includes('API key storage is locked')
+              ? 'API key storage is locked. Unlock system key storage and reopen this page.'
+              : 'Could not read API keys. Unlock system key storage and reopen this page.'
+          )
       })
     return () => {
       mounted = false
@@ -173,9 +177,9 @@ export function GatewayApiKeysSettings(): React.JSX.Element {
         </Button>
       </form>
       <FieldDescription>
-        Creating a key turns authentication on. Keys allow all model API operations. Local-only
-        settings still require a local connection. MCP and paired browser connections keep their
-        separate credentials.
+        Creating a key turns authentication on. Phones need the next Off Grid AI Mobile release to
+        send keys. Keys allow all model API operations. Local-only settings still require a local
+        connection. MCP and paired browser connections keep their separate credentials.
       </FieldDescription>
       {createdKey && (
         <section className="space-y-2 rounded-md border border-neutral-800 p-3">

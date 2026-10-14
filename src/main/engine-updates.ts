@@ -144,17 +144,21 @@ export function createEngineUpdater(deps: EngineUpdaterDeps): EngineUpdater {
       .filter((folder) => fs.existsSync(folder))
   }
 
-  async function fetchIndex(): Promise<EngineIndex> {
+  /** The published index, or null when the store publishes none for this platform (HTTP 404). */
+  async function fetchIndex(): Promise<EngineIndex | null> {
     const url = (deps.indexUrl ?? engineIndexUrl)(platform!)
-    const get = async (target: string): Promise<Buffer> => {
+    const get = async (target: string): Promise<Buffer | null> => {
       const response = await doFetch(target, {
         cache: 'no-store',
         signal: AbortSignal.timeout(INDEX_TIMEOUT_MS)
       })
+      if (response.status === 404) return null
       if (!response.ok) throw new Error(`The engine store returned HTTP ${response.status}.`)
       return Buffer.from(await response.arrayBuffer())
     }
     const [body, signature] = await Promise.all([get(url), get(`${url}.sig`)])
+    if (body === null) return null
+    if (signature === null) throw new Error('The engine store returned HTTP 404.')
     if (
       !verifyEngineIndexSignature(
         body,
@@ -309,7 +313,7 @@ export function createEngineUpdater(deps: EngineUpdaterDeps): EngineUpdater {
     publish()
     try {
       const index = await fetchIndex()
-      const pending = enginesToInstall(index, installedVersions(), deps.appVersion())
+      const pending = index ? enginesToInstall(index, installedVersions(), deps.appVersion()) : []
       if (pending.length) {
         downloadedBytes = 0
         totalBytes = pending

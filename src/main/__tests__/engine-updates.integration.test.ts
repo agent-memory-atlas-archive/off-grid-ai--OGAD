@@ -132,6 +132,16 @@ describe('engine updates', () => {
     expect(requested.some((url) => url.startsWith('/files/'))).toBe(false)
   })
 
+  it('reports up to date without an error when the store publishes no index for the platform', async () => {
+    const engines = updater()
+    const status = await engines.check()
+
+    expect(status.phase).toBe('up-to-date')
+    expect(status.error).toBeUndefined()
+    expect(status.installed).toEqual({})
+    expect(requested.some((url) => url.startsWith('/files/'))).toBe(false)
+  })
+
   it('keeps the current engine when the new one does not start', async () => {
     publish([{ version: 'b11551', server: engineScript('b11551') }])
     const engines = updater()

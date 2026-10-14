@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { tagLlmEntry, tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries, installedTextModelEntries, installedImageModelEntries } from '../models-list'
+import { tagLlmEntry, tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries, installedTextModelEntries, installedImageModelEntries, leadWithActiveChatModel, liveChatCapabilities } from '../models-list'
 
 describe('remote specialist discovery', () => {
   it('advertises installed grounding and decision models without exposing missing models or Chat twice', () => {
@@ -11,7 +11,7 @@ describe('remote specialist discovery', () => {
     ]
     expect(specialistModelEntries(catalog, ['ui-mate', 'kev', 'chat'], 1)).toEqual([
       { id: 'ui-mate', name: 'UI-Mate', kind: 'vision', object: 'model', owned_by: 'off-grid', created: 1, capabilities: ['vision'], architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] } },
-      { id: 'kev', name: 'Kev', kind: 'chat', object: 'model', owned_by: 'off-grid', created: 1, capabilities: [], architecture: { input_modalities: ['text'], output_modalities: ['decisions'] } }
+      { id: 'kev', name: 'Kev', kind: 'chat', object: 'model', owned_by: 'off-grid', created: 1, architecture: { input_modalities: ['text'], output_modalities: ['decisions'] } }
     ])
   })
 })
@@ -109,9 +109,61 @@ describe('downloaded chat inventory', () => {
       { id: 'remote', name: 'Remote', kind: 'text', remoteServerId: 'server' }
     ]
     expect(installedTextModelEntries(catalog, ['text', 'vision', 'kev', 'remote'], 1)).toEqual([
-      { id: 'text', name: 'Text', kind: 'chat', object: 'model', owned_by: 'off-grid', created: 1, capabilities: [] },
-      { id: 'vision', name: 'Vision', kind: 'vision', object: 'model', owned_by: 'off-grid', created: 1, capabilities: ['vision'] }
+      { id: 'text', name: 'Text', kind: 'chat', object: 'model', owned_by: 'off-grid', created: 1 },
+      { id: 'vision', name: 'Vision', kind: 'vision', object: 'model', owned_by: 'off-grid', created: 1 }
     ])
+  })
+
+  it('leaves local chat capabilities unknown so clients probe the model server for them', () => {
+    const entries = installedTextModelEntries(
+      [{ id: 'text', name: 'Text', kind: 'text' }, { id: 'vision', name: 'Vision', kind: 'vision' }],
+      ['text', 'vision'],
+      1
+    )
+    expect(entries.map((entry) => 'capabilities' in entry)).toEqual([false, false])
+  })
+})
+
+describe('saved chat model in the inventory', () => {
+  it('lists the saved chat model first, marks only it active, and gives every entry the served context', () => {
+    const entries = leadWithActiveChatModel([{ id: 'first' }, { id: 'saved' }, { id: 'third' }], 'saved', 8192)
+    expect(entries).toEqual([
+      { id: 'saved', active: true, context_length: 8192 },
+      { id: 'first', context_length: 8192 },
+      { id: 'third', context_length: 8192 }
+    ])
+  })
+
+  it('gives only the loaded model capabilities, and those are its live ones', () => {
+    const entries = leadWithActiveChatModel([{ id: 'saved' }, { id: 'loaded' }], 'saved', 8192, {
+      id: 'loaded',
+      capabilities: ['tools']
+    })
+    expect(entries.map((entry) => entry.capabilities)).toEqual([undefined, ['tools']])
+    expect('capabilities' in entries[0]!).toBe(false)
+  })
+
+  it('keeps the inventory order when no saved chat model is listed', () => {
+    expect(leadWithActiveChatModel([{ id: 'a' }, { id: 'b' }], null, 4096).map((entry) => entry.id)).toEqual(['a', 'b'])
+  })
+})
+
+describe('live chat capabilities', () => {
+  it('reads vision, tools and reasoning from the llama-server properties', () => {
+    expect(
+      liveChatCapabilities({
+        modalities: { vision: true },
+        chat_template_caps: { supports_tools: true },
+        chat_template: '{% if enable_thinking %}<think>{% endif %}'
+      })
+    ).toEqual(['vision', 'tools', 'reasoning'])
+    expect(
+      liveChatCapabilities({ modalities: { vision: false }, chat_template_caps: { supports_tools: false } })
+    ).toEqual([])
+  })
+
+  it('reports nothing known when the properties carry no capability data', () => {
+    expect(liveChatCapabilities({})).toBeNull()
   })
 })
 

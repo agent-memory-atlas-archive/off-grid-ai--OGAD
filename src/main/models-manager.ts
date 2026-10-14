@@ -763,6 +763,8 @@ async function downloadModelInner(
     return publishRefusal(modelId, 'unknown model', onProgress)
   }
   // A free-form repo resolves to the chat default; its files decide whether it is an image model.
+  // The registry is re-judged on every read, so it records the resolved kind, not this guess.
+  const resolvedKind = entry.kind
   if (!inCatalog) {
     entry = { ...entry, kind: downloadedModelKind(entry.kind, entry.files.map((file) => file.name)) }
   }
@@ -999,7 +1001,7 @@ async function downloadModelInner(
           recordDownloaded(dir, {
             id: modelId,
             name: entry.name,
-            kind: entry.kind,
+            kind: resolvedKind,
             files: entry.files.map((f) => f.name)
           })
         }

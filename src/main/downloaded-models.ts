@@ -16,6 +16,7 @@ import { modelsDir } from './runtime-env'
 import { modelPackageIdentity } from '@offgrid/sync'
 import { isProjectorFileName } from './models/catalog-logic'
 import { isImageModelFile } from './imagegen/model-filter'
+import { readGgufContextLength } from './models/gguf-metadata'
 
 /**
  * The role of a free-form download, judged from its files. A Hugging Face repo resolves to the
@@ -24,15 +25,27 @@ import { isImageModelFile } from './imagegen/model-filter'
  * which weights are image models by filename (isImageModelFile); a download whose primary weight
  * is one of those, and which ships no real mmproj projector, is an image model everywhere else
  * too. Any other declared role is kept.
+ *
+ * The filename families are broad (turbo, lightning, anything...), so when `roots` locate the
+ * weight on disk, a GGUF that declares a trained context length is a language model whatever its
+ * name says. This is a read-time judgement and is never written back to the registry.
  */
 export function downloadedModelKind<K extends string>(
   kind: K,
-  files: readonly string[]
+  files: readonly string[],
+  roots?: string[]
 ): K | 'image' {
   if (kind !== 'text' && kind !== 'vision') return kind
   if (files.some((name) => isProjectorFileName(name))) return kind
   const primary = files[0]
-  return primary && isImageModelFile(path.basename(primary)) ? 'image' : kind
+  if (!primary || !isImageModelFile(path.basename(primary))) return kind
+  if (
+    roots &&
+    /\.gguf$/i.test(primary) &&
+    readGgufContextLength(resolveModelReference(primary, roots), fs) !== null
+  )
+    return kind
+  return 'image'
 }
 
 export interface DownloadedModel {
@@ -97,15 +110,27 @@ export function reconcileDownloadedModelRegistry(
   catalog: readonly DownloadedRegistryCatalogEntry[]
 ): DownloadedModel[] {
   const current = readDownloaded(dir)
+  const roots = dir === modelsDir() ? modelReadDirectories() : [dir]
+  // Older builds recorded every free-form GGUF download as 'text', including image weights, and
+  // later builds wrote the filename guess back as 'image', which also caught chat models named
+  // e.g. "turbo". The role shown to Storage, the per-kind tabs and the chat model lists is judged
+  // here on every read and never persisted, so a wrong guess corrects itself. A free-form download
+  // (no catalog family or package identity) only ever had 'image' from that guess; catalog and
+  // transferred entries keep the role they were recorded with.
+  const readKind = (model: DownloadedModel): string => {
+    const guessed = !model.familyId && !model.packageIdentity && model.kind === 'image'
+    return downloadedModelKind(guessed ? 'text' : model.kind, model.files, roots)
+  }
+  const viewOf = new Map<DownloadedModel, DownloadedModel>()
+  const withReadKind = (model: DownloadedModel): DownloadedModel => {
+    const kind = readKind(model)
+    const view = kind === model.kind ? model : { ...model, kind }
+    viewOf.set(model, view)
+    return model
+  }
   let changed = false
   const migrated: DownloadedModel[] = []
-  for (const recorded of current) {
-    // Older builds recorded every free-form GGUF download as 'text', including image weights.
-    // Repair the stored role so Storage, the per-kind tabs and the chat model lists agree with
-    // the image runtime.
-    const kind = downloadedModelKind(recorded.kind, recorded.files)
-    const model = kind === recorded.kind ? recorded : { ...recorded, kind }
-    if (model !== recorded) changed = true
+  for (const model of current) {
     if (model.familyId || model.packageIdentity) {
       const family = model.familyId
         ? catalog.find((entry) => entry.id === model.familyId)
@@ -117,16 +142,15 @@ export function reconcileDownloadedModelRegistry(
         migrated.push({ ...model, kind: family.kind })
         changed = true
       } else {
-        migrated.push(model)
+        migrated.push(family?.kind ? model : withReadKind(model))
       }
       continue
     }
     const family = catalog.find((entry) => entry.id === model.id)
     if (!family) {
-      migrated.push(model)
+      migrated.push(withReadKind(model))
       continue
     }
-    const roots = dir === modelsDir() ? modelReadDirectories() : [dir]
     const expected = new Set(family.files.map((file) => resolveModelReference(file.name, roots)))
     if (
       expected.size === model.files.length &&
@@ -149,28 +173,26 @@ export function reconcileDownloadedModelRegistry(
       }
     })
     if (files.some((file) => file.sizeBytes <= 0)) {
-      migrated.push(model)
+      migrated.push(withReadKind(model))
       continue
     }
+    const kind = readKind(model)
     const packageIdentity = modelPackageIdentity({
       id: model.id,
       name: model.name,
-      kind: model.kind,
+      kind,
       source: 'downloaded',
       files: files as [(typeof files)[number], ...Array<(typeof files)[number]>],
-      engine: model.kind === 'text' || model.kind === 'vision' ? 'llama' : undefined
+      engine: kind === 'text' || kind === 'vision' ? 'llama' : undefined
     })
-    migrated.push({
-      ...model,
-      id: packageIdentity,
-      familyId: model.id,
-      packageIdentity
-    })
+    const migratedModel = { ...model, id: packageIdentity, familyId: model.id, packageIdentity }
+    migrated.push(migratedModel)
+    viewOf.set(migratedModel, kind === model.kind ? migratedModel : { ...migratedModel, kind })
     changed = true
   }
   const unique = [...new Map(migrated.map((model) => [model.id, model])).values()]
   if (changed || unique.length !== current.length) writeDownloaded(dir, unique)
-  return unique
+  return unique.map((model) => viewOf.get(model) ?? model)
 }
 
 /** Record a downloaded model (replacing any existing entry with the same id). */

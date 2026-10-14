@@ -44,9 +44,44 @@ const IMAGE_REPO = 'unsloth/Qwen-Image-2.1-Turbo-GGUF'
 const IMAGE_FILE = 'qwen-image-2.1-turbo-Q4_K_M.gguf'
 const TEXT_REPO = 'bartowski/Llama-3.2-3B-Instruct-GGUF'
 const TEXT_FILE = 'Llama-3.2-3B-Instruct-Q4_K_M.gguf'
+// A chat model whose name carries a word the image-family filename check also uses.
+const TURBO_CHAT_REPO = 'example/Llama-3.1-Turbo-8B-Instruct-GGUF'
+const TURBO_CHAT_FILE = 'Llama-3.1-Turbo-8B-Instruct-Q4_K_M.gguf'
 
 const ggufBytes = (): Uint8Array<ArrayBuffer> =>
   new Uint8Array(Buffer.concat([Buffer.from('GGUF', 'ascii'), Buffer.alloc(2_044, 7)]))
+
+/** A GGUF v3 header as llama.cpp writes it for a chat model: architecture and trained context. */
+function chatGgufBytes(): Uint8Array<ArrayBuffer> {
+  const str = (value: string): Buffer => {
+    const length = Buffer.alloc(8)
+    length.writeBigUInt64LE(BigInt(Buffer.byteLength(value)))
+    return Buffer.concat([length, Buffer.from(value, 'utf8')])
+  }
+  const u32 = (value: number): Buffer => {
+    const out = Buffer.alloc(4)
+    out.writeUInt32LE(value)
+    return out
+  }
+  const u64 = (value: number): Buffer => {
+    const out = Buffer.alloc(8)
+    out.writeBigUInt64LE(BigInt(value))
+    return out
+  }
+  const header = Buffer.concat([
+    Buffer.from('GGUF', 'ascii'),
+    u32(3),
+    u64(0),
+    u64(2),
+    str('general.architecture'),
+    u32(8),
+    str('llama'),
+    str('llama.context_length'),
+    u32(4),
+    u32(131_072)
+  ])
+  return new Uint8Array(Buffer.concat([header, Buffer.alloc(2_048 - header.length, 0)]))
+}
 
 /** Hugging Face as seen over HTTP: one repo listing, and the weight file it names. */
 function huggingFaceServes(repoId: string, fileName: string): void {
@@ -97,10 +132,11 @@ beforeAll(() => {
 afterEach(async () => {
   vi.unstubAllGlobals()
   // Each test starts from an empty models folder; the profile is this test's temp directory.
-  for (const id of [IMAGE_REPO, TEXT_REPO]) await manager.clearDownload(id)
+  for (const id of [IMAGE_REPO, TEXT_REPO, TURBO_CHAT_REPO]) await manager.clearDownload(id)
   for (const name of [
     IMAGE_FILE,
     TEXT_FILE,
+    TURBO_CHAT_FILE,
     'downloaded-models.json',
     'active-model.json',
     'active-modalities.json'
@@ -168,10 +204,63 @@ describe('a Hugging Face image model downloaded from search', () => {
     expect(storage?.kind).toBe('image')
     expect((await catalogModel(IMAGE_REPO))?.kind).toBe('image')
     expect(await chatModelIds()).not.toContain(IMAGE_REPO)
+    // The role is judged on read; the recorded entry is left as the user's data.
     const registry = JSON.parse(
       fs.readFileSync(path.join(modelsDir, 'downloaded-models.json'), 'utf8')
     ) as Array<{ id: string; kind: string }>
-    expect(registry.find((m) => m.id === IMAGE_REPO)?.kind).toBe('image')
+    expect(registry.find((m) => m.id === IMAGE_REPO)?.kind).toBe('text')
+  })
+
+  it('keeps a chat model named "turbo" a chat model, and records it as one', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input)
+        if (url.includes(`/api/models/${TURBO_CHAT_REPO}`)) {
+          return new Response(
+            JSON.stringify({ siblings: [{ rfilename: TURBO_CHAT_FILE, size: 2048 }] }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          )
+        }
+        if (url.endsWith(TURBO_CHAT_FILE)) {
+          return new Response(chatGgufBytes(), {
+            status: 200,
+            headers: { 'content-length': '2048' }
+          })
+        }
+        throw new Error(`Unexpected request: ${url}`)
+      })
+    )
+
+    expect(await manager.downloadModel(TURBO_CHAT_REPO)).toEqual({ success: true })
+
+    const storage = (await manager.getStorageInfo()).models.find((m) => m.id === TURBO_CHAT_REPO)
+    expect(storage?.kind).toBe('text')
+    expect(modelShowsOnTab((await catalogModel(TURBO_CHAT_REPO))!, 'image')).toBe(false)
+    expect(await chatModelIds()).toContain(TURBO_CHAT_REPO)
+    const registry = JSON.parse(
+      fs.readFileSync(path.join(modelsDir, 'downloaded-models.json'), 'utf8')
+    ) as Array<{ id: string; kind: string }>
+    expect(registry.find((m) => m.id === TURBO_CHAT_REPO)?.kind).toBe('text')
+  })
+
+  it('corrects a chat model an earlier build saved as an image model, without rewriting it', async () => {
+    // The registry shape the filename guess left behind on an affected install.
+    fs.writeFileSync(path.join(modelsDir, TURBO_CHAT_FILE), chatGgufBytes())
+    const recorded = JSON.stringify([
+      {
+        id: TURBO_CHAT_REPO,
+        name: 'Llama-3.1-Turbo-8B-Instruct-GGUF',
+        kind: 'image',
+        files: [TURBO_CHAT_FILE]
+      }
+    ])
+    fs.writeFileSync(path.join(modelsDir, 'downloaded-models.json'), recorded)
+
+    const storage = (await manager.getStorageInfo()).models.find((m) => m.id === TURBO_CHAT_REPO)
+    expect(storage?.kind).toBe('text')
+    expect(await chatModelIds()).toContain(TURBO_CHAT_REPO)
+    expect(fs.readFileSync(path.join(modelsDir, 'downloaded-models.json'), 'utf8')).toBe(recorded)
   })
 
   it('leaves a chat model downloaded from search as a chat model', async () => {
