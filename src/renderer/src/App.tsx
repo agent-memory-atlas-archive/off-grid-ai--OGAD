@@ -1275,7 +1275,9 @@ function AppContent(): React.JSX.Element {
               {/* Navigation (scrolls; Settings is pinned to the bottom) */}
               <div
                 className={cn(
-                  'mt-5 flex flex-1 flex-col overflow-y-auto overflow-x-hidden pr-0.5',
+                  // Side padding (offset by the negative margin) keeps the selected row's glow
+                  // inside this scroll area's clip instead of cut at the edges.
+                  'mt-5 -mx-4 flex flex-1 flex-col overflow-y-auto overflow-x-hidden px-4',
                   !sidebarOpen && 'sidebar-nav-scroll-collapsed'
                 )}
               >

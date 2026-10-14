@@ -84,7 +84,10 @@ export function SidebarNavigationMenu<Item extends { view: string; label: string
                 )}
               </button>
             </CollapsibleTrigger>
-            <CollapsibleContent className="offgrid-smooth-collapsible flex flex-col gap-1 overflow-hidden pb-1">
+            {/* The panel clips while its height animates. Inner padding, offset by an equal
+                negative margin, leaves room for the selected row's glow without moving rows; the
+                overlap above the heading passes clicks through to it. */}
+            <CollapsibleContent className="offgrid-smooth-collapsible pointer-events-none -mx-4 -mt-3 -mb-3 flex flex-col gap-1 overflow-hidden px-4 pt-3 pb-4 [&>*]:pointer-events-auto">
               {group.items.map(renderItem)}
             </CollapsibleContent>
           </Collapsible>
