@@ -52,13 +52,13 @@ describe('rendered Desktop setup model journey', () => {
     expect(screen.getByText(/Server API keys stay on this Desktop/)).toBeTruthy()
 
     failNextSave = true
-    await user.click(screen.getByRole('button', { name: 'Conservative' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Balanced' }).getAttribute('aria-pressed')).toBe('true'))
+    await user.click(screen.getByRole('radio', { name: 'Conservative' }))
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Balanced' }).getAttribute('aria-checked')).toBe('true'))
     expect(savedMode).toBe('balanced')
     expect(requestedPlanMode).toBe('balanced')
 
-    await user.click(screen.getByRole('button', { name: 'Conservative' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Conservative' }).getAttribute('aria-pressed')).toBe('true'))
+    await user.click(screen.getByRole('radio', { name: 'Conservative' }))
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Conservative' }).getAttribute('aria-checked')).toBe('true'))
     expect(savedMode).toBe('conservative')
     expect(requestedPlanMode).toBe('conservative')
   })

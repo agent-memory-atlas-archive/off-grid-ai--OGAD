@@ -33,7 +33,9 @@ interface ChatToolRowsProps {
   /** Whether the thinking row has content beyond a waiting indicator. */
   thinkingHasContent?: boolean
   /** The raw reasoning. When given, the timeline draws its own aligned thinking row from it
-   * instead of the host block, so the checkpoint, title and text share one edge. */
+   * instead of the host block, so the checkpoint, title and text share one edge. The row still
+   * appears only where the host gives a thinking block; a labelled or host-supplied block (e.g. an
+   * Enhanced prompt) leaves this undefined and keeps its own title. */
   thinkingText?: string
   /** Live status shown below, but outside, the ordered work timeline. */
   footer?: ReactNode
@@ -355,8 +357,18 @@ export function ChatToolRows({
   }
   const liveThinking = (): void => {
     if (thinkingText !== undefined) {
+      if (!thinking) return
       if (thinkingText.trim() || workIsLive) {
-        pushReasoning('thinking:live', thinkingText, workIsLive && !thinkingHasContent)
+        // "Thinking" while reasoning still streams, not only while it is waiting for its first words.
+        pushReasoning(
+          'thinking:live',
+          thinkingText,
+          workIsLive && (!thinkingHasContent || thinkingLive)
+        )
+      } else {
+        // No reasoning came back: the host block says so ("Thinking unavailable") instead of
+        // the turn silently dropping it.
+        pushThinking('thinking:live', thinking, false)
       }
       return
     }

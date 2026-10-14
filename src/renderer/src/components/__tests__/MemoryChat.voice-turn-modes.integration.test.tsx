@@ -4,7 +4,7 @@
  * Desktop chat voice turns through the production MemoryChat and shared speech endpoint.
  * Only the browser microphone/audio devices and Electron IPC are controlled boundaries.
  */
-import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatBoundary, installBoundary, renderChat } from './harness/chat-boundary'
@@ -155,6 +155,9 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
 
   afterEach(() => {
     cleanup()
+    // Run what is still queued on the fake clock before restoring it: dropping a queued frame leaves
+    // the library's animation loop waiting on it for the rest of the file.
+    if (vi.isFakeTimers()) vi.runOnlyPendingTimers()
     vi.useRealTimers()
     vi.unstubAllGlobals()
   })
@@ -256,7 +259,10 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     expect(await screen.findByRole('group', { name: 'Voice mode' })).toBeTruthy()
     // Auto by default, and changed right in the voice box: one picker, the same choice as
     // Settings > Voice, for Chat and God alike.
-    expect(screen.getByRole('button', { name: 'Voice turns: Auto' })).toBeTruthy()
+    const turns = screen.getByRole('group', { name: 'Voice turn mode' })
+    expect(within(turns).getByRole('button', { name: 'Auto' }).getAttribute('aria-pressed')).toBe(
+      'true'
+    )
     expect(screen.queryByRole('button', { name: 'Voice options' })).toBeNull()
 
     vi.useFakeTimers()
@@ -314,7 +320,9 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Voice settings' }))
     await screen.findByRole('button', { name: 'Hands-free' })
-    vi.useFakeTimers()
+    // The microphone meter and turn timers run on fake time; the library's status line animates on
+    // its own frame clock (a second motion copy), which keeps real time as it does in the app.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
     fireEvent.click(screen.getByRole('button', { name: 'Hands-free' }))
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     await flush()
@@ -324,7 +332,7 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     act(() => vi.advanceTimersByTime(200))
     microphoneLevel = 0.2
     act(() => vi.advanceTimersByTime(200))
-    expect(screen.getByText('Recording you now')).toBeTruthy()
+    await vi.waitFor(() => expect(screen.getByText('Recording you now')).toBeTruthy())
     microphoneLevel = 0.01
     act(() => vi.advanceTimersByTime(5_200))
     await flush()
@@ -349,7 +357,9 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     expect(getUserMedia).toHaveBeenCalledTimes(2)
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop voice recording' }))
-    expect(screen.getByText('Paused - click the microphone to resume')).toBeTruthy()
+    await vi.waitFor(() =>
+      expect(screen.getByText('Paused - click the microphone to resume')).toBeTruthy()
+    )
     act(() => vi.advanceTimersByTime(10_000))
     await flush()
     expect(getUserMedia).toHaveBeenCalledTimes(2)
@@ -376,13 +386,17 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
 
     boundary.resolve(0, 'You have a planning review at 10.')
     await flush()
-    await openCompletedWork(user)
-    const completedThought = await screen.findByRole('button', { name: /Thought process/i })
-    expect(screen.queryByText('Check the calendar before answering.')).toBeNull()
-    await user.click(completedThought)
+    // The settled work folds away with its reasoning; the Work control opens and closes it.
+    const completedWork = await screen.findByRole('button', { name: 'Work done' })
+    await waitFor(() =>
+      expect(screen.queryByText('Check the calendar before answering.')).toBeNull()
+    )
+    await user.click(completedWork)
     expect(await screen.findByText('Check the calendar before answering.')).toBeTruthy()
-    await user.click(completedThought)
-    expect(screen.queryByText('Check the calendar before answering.')).toBeNull()
+    await user.click(completedWork)
+    await waitFor(() =>
+      expect(screen.queryByText('Check the calendar before answering.')).toBeNull()
+    )
   })
 
   it('shows when a remote voice turn returns no readable thinking details', async () => {
@@ -427,10 +441,9 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     const user = userEvent.setup()
     renderChat({ conversationId: 'conversation-a' })
 
-    await openCompletedWork(user)
-    const thought = await screen.findByRole('button', { name: /Thought process/i })
+    await screen.findByRole('button', { name: 'Work done' })
     expect(screen.queryByText('Historical reasoning stays private.')).toBeNull()
-    await user.click(thought)
+    await openCompletedWork(user)
     expect(await screen.findByText('Historical reasoning stays private.')).toBeTruthy()
   })
 
@@ -460,7 +473,7 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     await waitFor(() => expect(boundary.calls).toHaveLength(1))
 
     expect(boundary.calls[0]?.query).toBe('Schedule the planning review')
-    expect(screen.getAllByRole('button', { name: 'Voice message actions' })).toHaveLength(1)
+    expect(await screen.findAllByRole('button', { name: 'Voice message actions' })).toHaveLength(1)
 
     boundary.resolve(0, 'The review is scheduled again.')
     expect(await screen.findByText('The review is scheduled again.')).toBeTruthy()
@@ -494,7 +507,9 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
     fireEvent.click(copy)
     await flush()
     expect(writeClipboardText).toHaveBeenCalledWith('Copy this voice reply.')
-    expect(screen.getByRole('status').textContent).toBe('Copied')
+    // The composer's voice box keeps its own status line; the announcement belongs to the note.
+    const copiedAction = screen.getByRole('button', { name: 'Copied' })
+    expect(within(copiedAction).getByRole('status').textContent).toBe('Copied')
 
     act(() => vi.advanceTimersByTime(1_500))
     expect(screen.getByRole('button', { name: 'Copy transcript' })).toBeTruthy()
@@ -524,7 +539,9 @@ describe('<MemoryChat/> Desktop voice turn modes', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Copy transcript' }))
     await waitFor(() => expect(browserWrite).toHaveBeenCalledWith('Keep this copy action.'))
-    expect(screen.getByRole('button', { name: 'Copy transcript' })).toBeTruthy()
-    expect(screen.queryByRole('status')).toBeNull()
+    const copyAction = screen.getByRole('button', { name: 'Copy transcript' })
+    expect(copyAction).toBeTruthy()
+    // The composer's voice box keeps its own status line; no announcement comes from the note.
+    expect(within(copyAction).queryByRole('status')).toBeNull()
   })
 })

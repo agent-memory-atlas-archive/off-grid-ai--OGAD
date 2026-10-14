@@ -5,9 +5,10 @@ import { Input } from '@offgrid/operator-ui/operator/coss/input'
 /**
  * Focus lands AFTER the dropdown returns focus to its trigger. Without the delay, Radix's
  * focus-return blurs the input immediately and its blur handler tears the field down before the
- * user can type.
+ * user can type. The menu now animates out (~200ms) and keeps trapping focus until it is gone,
+ * so the delay has to outlast that exit.
  */
-const FOCUS_DELAY_MS = 80
+const FOCUS_DELAY_MS = 300
 
 interface NewProjectNameFieldProps {
   /** Create the project with this name. Called on Enter and on blur, as it always has been. */

@@ -3,9 +3,11 @@
 // Product integration: the real shared Settings panel gives people a direct language
 // choice for both speech output and transcription. Only the Electron API boundary is fake.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SettingsPanel } from '../SettingsPanel'
+import { normalizeBackendPreferences } from '../../../../shared/backend-preferences'
+import type { BackendModality, BackendPreference } from '../../../../shared/backend-preferences'
 
 const saveSetting = vi.fn(async () => undefined)
 const setActiveModalModel = vi.fn<(kind: string, modelId: string | null) => Promise<void>>(
@@ -74,33 +76,68 @@ afterEach(() => {
   localStorage.clear()
 })
 
+/** A voice picker, once the voices have loaded and it can be opened. */
+async function enabledPicker(name: string): Promise<HTMLElement> {
+  const picker = await screen.findByRole('combobox', { name })
+  await waitFor(() => expect((picker as HTMLButtonElement).disabled).toBe(false))
+  return picker
+}
+
 describe('<SettingsPanel/> speech languages', () => {
   it('groups voice settings into sections, and a closed section says what is set inside', async () => {
+    let preferences = normalizeBackendPreferences({}, 'linux')
+    const savedBackends: Array<[BackendModality, BackendPreference]> = []
+    Object.assign((window as unknown as { api: Record<string, unknown> }).api, {
+      platform: 'linux',
+      backendPreferencesGet: async () => preferences,
+      backendPreferenceSet: async (modality: BackendModality, preference: BackendPreference) => {
+        savedBackends.push([modality, preference])
+        preferences = { ...preferences, [modality]: preference }
+        return preferences
+      },
+      runtimeBackends: async () => []
+    })
     render(<SettingsPanel onClose={() => {}} initialTab="voice" />)
 
-    expect(await screen.findByRole('button', { name: 'Voice selection' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /^Voice.*speaks at/ })).toBeTruthy()
+    expect(await screen.findByRole('combobox', { name: 'Voice selection' })).toBeTruthy()
+    const voiceSection = screen.getByRole('button', { name: /^Voice.*speaks at/ })
+    expect(voiceSection).toBeTruthy()
     expect(screen.getByRole('button', { name: /^Conversation/ })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /^Processing/ })).toBeTruthy()
     expect(screen.getByText('Chat · playback on · Auto turns')).toBeTruthy()
     expect(await screen.findByText('Heart · English (US) · speaks at 1.0x')).toBeTruthy()
-    expect(screen.getByRole('group', { name: 'Interface mode' })).toBeTruthy()
-    expect(screen.getByText('The hardware that speaks replies on this device')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Speech backend' })).toBeNull()
+    expect(screen.getByRole('radiogroup', { name: 'Interface mode' })).toBeTruthy()
+
+    // A single backend row has no section of its own: it sits in the open Voice section,
+    // reachable without opening anything else.
+    expect(screen.queryByRole('button', { name: /^Processing/ })).toBeNull()
+    const speechBackend = within(voiceSection.parentElement as HTMLElement).getByRole('combobox', {
+      name: 'Speech backend'
+    })
+    expect(speechBackend.textContent).toContain('Auto')
 
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: /^Processing/ }))
-    expect(screen.getByRole('button', { name: 'Speech backend' })).toBeTruthy()
+    await user.click(speechBackend)
+    expect(await screen.findByRole('option', { name: 'Auto' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'CUDA' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'WebGPU' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'CPU' })).toBeTruthy()
+    await user.click(screen.getByRole('option', { name: 'WebGPU' }))
+    await waitFor(() => expect(savedBackends).toEqual([['tts', 'webgpu']]))
+    await waitFor(() => expect(speechBackend.textContent).toContain('WebGPU'))
   })
 
   it('saves playback speed after the slider loses focus', async () => {
     render(<SettingsPanel onClose={() => {}} initialTab="voice" />)
 
     const speed = await screen.findByRole('slider', { name: 'Playback speed' })
-    fireEvent.change(speed, { target: { value: '1.5' } })
+    const user = userEvent.setup()
+    speed.focus()
+    // 1.0x -> 1.5x is five 0.1x steps with the arrow key.
+    await user.keyboard('{ArrowRight>5/}')
+    expect(speed.getAttribute('aria-valuetext')).toBe('1.5x')
     expect((saveSetting.mock.calls as unknown[][]).some(([key]) => key === 'ttsSpeed')).toBe(false)
 
-    fireEvent.blur(speed)
+    await user.tab()
     await waitFor(() => expect(saveSetting).toHaveBeenCalledWith('ttsSpeed', 1.5))
   })
 
@@ -116,8 +153,8 @@ describe('<SettingsPanel/> speech languages', () => {
     expect(
       await screen.findByText('Speaker choices are not available for this remote model.')
     ).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Voice selection' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Language selection' })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: 'Voice selection' })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: 'Language selection' })).toBeNull()
     expect(screen.queryByText('Sarah')).toBeNull()
   })
 
@@ -149,7 +186,7 @@ describe('<SettingsPanel/> speech languages', () => {
 
     render(<SettingsPanel onClose={vi.fn()} initialTab="voice" />)
 
-    const voice = await screen.findByRole('button', { name: 'Voice selection' })
+    const voice = await screen.findByRole('combobox', { name: 'Voice selection' })
     expect(voice.textContent).toContain('Heart')
     expect(screen.queryByText('[object Object]')).toBeNull()
   })
@@ -159,22 +196,25 @@ describe('<SettingsPanel/> speech languages', () => {
     expect(view.container.querySelector('select')).toBeNull()
 
     const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: 'Language selection' }))
-    await user.click(screen.getByRole('menuitemradio', { name: 'French' }))
+    await user.click(await enabledPicker('Language selection'))
+    await user.click(await screen.findByRole('option', { name: 'French' }))
 
     await waitFor(() => expect(saveSetting).toHaveBeenCalledWith('ttsVoice', 'ff_siwis'))
-    await user.click(screen.getByRole('button', { name: 'Voice selection' }))
-    expect(screen.getByRole('menuitemradio', { name: 'Siwis' })).toBeTruthy()
+    await user.click(screen.getByRole('combobox', { name: 'Voice selection' }))
+    expect(await screen.findByRole('option', { name: 'Siwis' })).toBeTruthy()
   })
 
   it('supports keyboard selection in the custom language menu', async () => {
     render(<SettingsPanel onClose={vi.fn()} initialTab="voice" />)
 
     const user = userEvent.setup()
-    const language = await screen.findByRole('button', { name: 'Language selection' })
+    const language = await screen.findByRole('combobox', { name: 'Language selection' })
     await waitFor(() => expect((language as HTMLButtonElement).disabled).toBe(false))
     language.focus()
-    await user.keyboard('{Enter}{ArrowDown}{ArrowDown}{Enter}')
+    await user.keyboard('{Enter}')
+    // The list opens before the arrows move through it, as a person sees it open.
+    await screen.findByRole('option', { name: 'French' })
+    await user.keyboard('{ArrowDown}{ArrowDown}{Enter}')
 
     await waitFor(() => expect(saveSetting).toHaveBeenCalledWith('ttsVoice', 'ff_siwis'))
     expect(language.textContent).toContain('French')
@@ -185,15 +225,17 @@ describe('<SettingsPanel/> speech languages', () => {
     render(<SettingsPanel onClose={onClose} initialTab="voice" />)
 
     const user = userEvent.setup()
-    const language = await screen.findByRole('button', { name: 'Language selection' })
+    const language = await enabledPicker('Language selection')
     await user.click(language)
-    expect(language.getAttribute('aria-expanded')).toBe('true')
+    await waitFor(() => expect(language.getAttribute('aria-expanded')).toBe('true'))
 
     await user.keyboard('{Escape}')
 
-    await waitFor(() => expect(screen.queryByRole('menuitemradio')).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('option')).toBeNull())
     expect(onClose).not.toHaveBeenCalled()
-    expect(document.activeElement).toBe(language)
+    // Focus goes back to the trigger once the list has finished closing.
+    await waitFor(() => expect(document.activeElement).toBe(language))
+    expect(onClose).not.toHaveBeenCalled()
   })
 
   it('closes the custom menu when the user clicks another setting', async () => {
@@ -201,12 +243,12 @@ describe('<SettingsPanel/> speech languages', () => {
     render(<SettingsPanel onClose={onClose} initialTab="voice" />)
 
     const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: 'Language selection' }))
-    expect(screen.getByRole('menuitemradio', { name: 'French' })).toBeTruthy()
+    await user.click(await enabledPicker('Language selection'))
+    expect(await screen.findByRole('option', { name: 'French' })).toBeTruthy()
 
     fireEvent.pointerDown(document.body)
 
-    await waitFor(() => expect(screen.queryByRole('menuitemradio')).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('option')).toBeNull())
     expect(onClose).not.toHaveBeenCalled()
   })
 
@@ -214,30 +256,30 @@ describe('<SettingsPanel/> speech languages', () => {
     render(<SettingsPanel onClose={vi.fn()} initialTab="voice" />)
 
     const user = userEvent.setup()
-    const voice = await screen.findByRole('button', { name: 'Voice selection' })
-    expect(voice.getAttribute('aria-haspopup')).toBe('menu')
+    const voice = await enabledPicker('Voice selection')
+    expect(voice.getAttribute('aria-haspopup')).toBe('listbox')
     expect(voice.getAttribute('aria-expanded')).toBe('false')
 
     await user.click(voice)
 
-    expect(voice.getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getByRole('menuitemradio', { name: 'Heart' }).getAttribute('aria-checked')).toBe(
-      'true'
-    )
+    await waitFor(() => expect(voice.getAttribute('aria-expanded')).toBe('true'))
+    expect(
+      (await screen.findByRole('option', { name: 'Heart' })).getAttribute('aria-selected')
+    ).toBe('true')
   })
 
   it('shows every voice and language exposed by the active runtime', async () => {
     render(<SettingsPanel onClose={vi.fn()} initialTab="voice" />)
 
     const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: 'Voice selection' }))
-    expect(screen.getByRole('menuitemradio', { name: 'Heart' })).toBeTruthy()
-    expect(screen.getByRole('menuitemradio', { name: 'Bella' })).toBeTruthy()
+    await user.click(await enabledPicker('Voice selection'))
+    expect(await screen.findByRole('option', { name: 'Heart' })).toBeTruthy()
+    expect(await screen.findByRole('option', { name: 'Bella' })).toBeTruthy()
     await user.keyboard('{Escape}')
-    await user.click(screen.getByRole('button', { name: 'Language selection' }))
-    await user.click(screen.getByRole('menuitemradio', { name: 'Irish' }))
+    await user.click(screen.getByRole('combobox', { name: 'Language selection' }))
+    await user.click(await screen.findByRole('option', { name: 'Irish' }))
     await waitFor(() => expect(saveSetting).toHaveBeenCalledWith('ttsVoice', 'future_voice'))
-    expect(screen.getByRole('button', { name: 'Language selection' }).textContent).toContain(
+    expect(screen.getByRole('combobox', { name: 'Language selection' }).textContent).toContain(
       'Irish'
     )
   })
@@ -263,10 +305,10 @@ describe('<SettingsPanel/> speech languages', () => {
 
     expect(await screen.findByText('Loading voices...')).toBeTruthy()
     expect(
-      (screen.getByRole('button', { name: 'Language selection' }) as HTMLButtonElement).disabled
+      (screen.getByRole('combobox', { name: 'Language selection' }) as HTMLButtonElement).disabled
     ).toBe(true)
     expect(
-      (screen.getByRole('button', { name: 'Voice selection' }) as HTMLButtonElement).disabled
+      (screen.getByRole('combobox', { name: 'Voice selection' }) as HTMLButtonElement).disabled
     ).toBe(true)
     finishLoading([
       { id: 'af_heart', label: 'Heart', language: 'en-US' },
@@ -279,16 +321,23 @@ describe('<SettingsPanel/> speech languages', () => {
       totalBytes: 100 * 1024 * 1024,
       bytesPerSecond: 2 * 1024 * 1024
     })
-    expect(await screen.findByText(/Downloading English \(US\) audio - 43%/)).toBeTruthy()
+    // The percentage rolls in its own number span, so read the status line as a whole.
+    expect(
+      await screen.findByText(
+        (_content, element) =>
+          element?.getAttribute('role') === 'status' &&
+          /Downloading English \(US\) audio - 43%/.test(element.textContent ?? '')
+      )
+    ).toBeTruthy()
     expect(screen.getByText(/45 MB \/ 105 MB/)).toBeTruthy()
     expect(screen.getByText(/2\.0 MB\/s/)).toBeTruthy()
     finishPreparing()
     expect(await screen.findByText('English (US) voice ready.')).toBeTruthy()
     expect(
-      (screen.getByRole('button', { name: 'Language selection' }) as HTMLButtonElement).disabled
+      (screen.getByRole('combobox', { name: 'Language selection' }) as HTMLButtonElement).disabled
     ).toBe(false)
     expect(
-      (screen.getByRole('button', { name: 'Voice selection' }) as HTMLButtonElement).disabled
+      (screen.getByRole('combobox', { name: 'Voice selection' }) as HTMLButtonElement).disabled
     ).toBe(false)
   })
 
@@ -335,8 +384,8 @@ describe('<SettingsPanel/> speech languages', () => {
 
     const user = userEvent.setup()
     expect(await screen.findByText('Whisper · Whisper Large v3')).toBeTruthy()
-    await user.click(screen.getByRole('button', { name: 'Spoken language' }))
-    await user.click(screen.getByRole('menuitemradio', { name: 'Korean' }))
+    await user.click(screen.getByRole('combobox', { name: 'Spoken language' }))
+    await user.click(await screen.findByRole('option', { name: 'Korean' }))
 
     await waitFor(() => expect(saveSetting).toHaveBeenCalledWith('sttLanguage', 'ko'))
   })
@@ -380,22 +429,24 @@ describe('<SettingsPanel/> speech languages', () => {
 
     const first = render(<SettingsPanel onClose={vi.fn()} initialTab="transcription" />)
     const user = userEvent.setup()
-    const model = await screen.findByRole('button', { name: 'Current transcription model' })
+    const model = await screen.findByRole('combobox', { name: 'Current transcription model' })
     expect(model.textContent).toContain('Whisper Large v3')
     await user.click(model)
-    expect(screen.queryByRole('menuitemradio', { name: 'Uninstalled model' })).toBeNull()
-    await user.click(screen.getByRole('menuitemradio', { name: 'Parakeet v2' }))
+    expect(screen.queryByRole('option', { name: 'Uninstalled model' })).toBeNull()
+    await user.click(await screen.findByRole('option', { name: 'Parakeet v2' }))
 
     await waitFor(() =>
       expect(setActiveModalModel).toHaveBeenCalledWith('transcription', 'parakeet-v2')
     )
     expect(model.textContent).toContain('Parakeet v2')
-    expect(screen.getByRole('button', { name: 'Spoken language' }).textContent).toContain('English')
+    expect(screen.getByRole('combobox', { name: 'Spoken language' }).textContent).toContain(
+      'English'
+    )
 
     first.unmount()
     render(<SettingsPanel onClose={vi.fn()} initialTab="transcription" />)
     expect(
-      (await screen.findByRole('button', { name: 'Current transcription model' })).textContent
+      (await screen.findByRole('combobox', { name: 'Current transcription model' })).textContent
     ).toContain('Parakeet v2')
     expect(setActiveModalModel).toHaveBeenCalledTimes(1)
   })
@@ -405,9 +456,9 @@ describe('<SettingsPanel/> speech languages', () => {
     render(<SettingsPanel onClose={vi.fn()} initialTab="transcription" />)
 
     const user = userEvent.setup()
-    const language = await screen.findByRole('button', { name: 'Spoken language' })
+    const language = await screen.findByRole('combobox', { name: 'Spoken language' })
     await user.click(language)
-    await user.click(screen.getByRole('menuitemradio', { name: 'Korean' }))
+    await user.click(await screen.findByRole('option', { name: 'Korean' }))
 
     await waitFor(() => expect(getTranscriptionInfo).toHaveBeenCalledTimes(2))
     expect(language.textContent).toContain('Auto-detect')

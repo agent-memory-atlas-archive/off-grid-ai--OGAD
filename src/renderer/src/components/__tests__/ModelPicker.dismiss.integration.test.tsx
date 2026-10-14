@@ -132,7 +132,9 @@ describe('<ModelPicker/> dismissal', () => {
 
     render(<ModelPicker onClose={() => {}} />)
 
-    const picker = await screen.findByRole('button', { name: 'Computer Use Grounding specialist' })
+    const picker = await screen.findByRole('combobox', {
+      name: 'Computer Use Grounding specialist'
+    })
     expect(picker.textContent).toContain('UI-Mate 9B')
     expect(picker.textContent).not.toContain('model-package-v1:')
   })
@@ -254,7 +256,8 @@ describe('<ModelPicker/> dismissal', () => {
     expect(document.activeElement).toBe(last)
 
     cleanup()
-    expect(document.activeElement).toBe(opener)
+    // The sheet hands focus back once its focus scope has unmounted, a tick after removal.
+    await waitFor(() => expect(document.activeElement).toBe(opener))
     opener.remove()
   })
 })

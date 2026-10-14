@@ -8,6 +8,7 @@ import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CATALOG, MODEL_KINDS, modelsByKind } from '@offgrid/models'
 import { withTaskRoles } from './harness/task-roles'
+import { wholeText } from './harness/whole-text'
 
 const computerUseModels = modelsByKind('computer_use')
 const uiMate = computerUseModels.find((model) => model.id === 'bartowski/tencent_UI-Mate-9B-GGUF')
@@ -71,9 +72,9 @@ describe('<ModelsScreen/> Computer Use catalog journey', () => {
       <ModelsScreen navigationSubroute="computer-use" onNavigateSubroute={onNavigateSubroute} />
     )
 
-    expect(
-      (await screen.findByRole('button', { name: 'Tasks' })).getAttribute('aria-current')
-    ).toBe('page')
+    expect((await screen.findByRole('radio', { name: 'Tasks' })).getAttribute('aria-checked')).toBe(
+      'true'
+    )
     for (const [label, subroute] of [
       ['Text', null],
       ['Image', 'image'],
@@ -82,7 +83,7 @@ describe('<ModelsScreen/> Computer Use catalog journey', () => {
       ['Transcription', 'transcription'],
       ['Storage', 'storage']
     ] as const) {
-      await user.click(screen.getByRole('button', { name: new RegExp(`^${label}`) }))
+      await user.click(screen.getByRole('radio', { name: new RegExp(`^${label}`) }))
       expect(onNavigateSubroute).toHaveBeenLastCalledWith(subroute)
     }
   })
@@ -91,7 +92,7 @@ describe('<ModelsScreen/> Computer Use catalog journey', () => {
     const user = userEvent.setup()
     render(<ModelsScreen />)
 
-    await user.click(await screen.findByRole('button', { name: 'Tasks' }))
+    await user.click(await screen.findByRole('radio', { name: 'Tasks' }))
 
     const installed = await screen.findByRole('list', {
       name: 'Grounding specialists on this device'
@@ -105,14 +106,16 @@ describe('<ModelsScreen/> Computer Use catalog journey', () => {
     expect(within(available).getByText('UI-Mate-27B')).toBeTruthy()
     expect(within(available).getByText('Holo3.1-4B')).toBeTruthy()
     expect(screen.queryByRole('list', { name: 'Grounding specialists coming soon' })).toBeNull()
-    expect(screen.getByText(`${computerUseModels.length} models`)).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'All sources' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Any size' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Sort: Recommended' })).toBeTruthy()
+    expect(await screen.findByText(wholeText(`${computerUseModels.length} models`))).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: 'All sources' })).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: 'Any size' })).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: 'Sort' }).textContent).toContain(
+      'Sort: Recommended'
+    )
 
-    await user.click(screen.getByRole('button', { name: 'Any size' }))
-    await user.click(screen.getByRole('button', { name: 'Tiny (<2B)' }))
-    expect(await screen.findByText('1 models')).toBeTruthy()
+    await user.click(screen.getByRole('combobox', { name: 'Any size' }))
+    await user.click(await screen.findByRole('option', { name: 'Tiny (<2B)' }))
+    expect(await screen.findByText(wholeText('1 models'))).toBeTruthy()
     expect(screen.getByText('Holo3.1-0.8B')).toBeTruthy()
     expect(screen.queryByText('UI-Mate-27B')).toBeNull()
 
@@ -123,7 +126,7 @@ describe('<ModelsScreen/> Computer Use catalog journey', () => {
     })
     expect(within(onDevice).getByText('UI-Mate-9B')).toBeTruthy()
     expect(screen.getByText('UI-TARS-1.5-7B')).toBeTruthy()
-    expect(screen.getByText(`${computerUseModels.length} models`)).toBeTruthy()
+    expect(await screen.findByText(wholeText(`${computerUseModels.length} models`))).toBeTruthy()
 
     const holoCard = screen.getByText('Holo3.1-0.8B').closest('[role="listitem"]')
     expect(holoCard).toBeTruthy()
@@ -149,7 +152,7 @@ describe('<ModelsScreen/> Computer Use catalog journey', () => {
     expect(screen.getByText('Qwen 3.8 9B Distill')).toBeTruthy()
     expect(screen.queryByText('GUI-Owl-1.5-8B-Instruct')).toBeNull()
 
-    await user.click(screen.getByRole('button', { name: 'Tasks' }))
+    await user.click(screen.getByRole('radio', { name: 'Tasks' }))
 
     expect(await screen.findByText('GUI-Owl-1.5-8B-Instruct')).toBeTruthy()
     expect(screen.queryByText('Qwen 3.8 4B Distill')).toBeNull()
@@ -159,7 +162,8 @@ describe('<ModelsScreen/> Computer Use catalog journey', () => {
   it('lists grounding specialists and decision models apart, each card saying its role', async () => {
     activeIds = [uiMate.id]
     // The desktop adds its decision models to the shared catalog; one stands in for them here.
-    const bridge = (globalThis as unknown as { window: { api: Record<string, unknown> } }).window.api
+    const bridge = (globalThis as unknown as { window: { api: Record<string, unknown> } }).window
+      .api
     const catalog = bridge.getModelCatalog
     bridge.getModelCatalog = async () => ({
       kinds: MODEL_KINDS,
@@ -176,7 +180,7 @@ describe('<ModelsScreen/> Computer Use catalog journey', () => {
     })
     const user = userEvent.setup()
     render(<ModelsScreen />)
-    await user.click(await screen.findByRole('button', { name: 'Tasks' }))
+    await user.click(await screen.findByRole('radio', { name: 'Tasks' }))
 
     const grounding = await screen.findByRole('region', { name: 'Grounding specialists' })
     const decision = screen.getByRole('region', { name: 'Decision models' })

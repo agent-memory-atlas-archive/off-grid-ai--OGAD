@@ -7,6 +7,7 @@ import {
 } from '@renderer/lib/image-params'
 import { announceImageSettingsChanged } from '@renderer/lib/image-settings-events'
 import { resolveModelName } from '@renderer/lib/model-summary'
+import { useRuntimeBackends } from '@renderer/hooks/useRuntimeBackends'
 import { SettingsSelect } from './SettingsSelect'
 import { BackendPreferencesSection } from './ProcessingControls'
 import { SettingsSection } from './SettingsSection'
@@ -27,6 +28,13 @@ type ImageSettings = {
   enhanceImagePrompts?: boolean
 }
 
+// The number field hands typed input over already clamped into range, so a partial "1" on the
+// way to "12" would arrive as 4 and be saved. Range-check the text that was actually typed.
+const typedText = (value: number | null, details: { reason: string; event: Event }): string =>
+  details.reason === 'input-change'
+    ? ((details.event.target as HTMLInputElement | null)?.value ?? '')
+    : String(value ?? '')
+
 const modelLabel = (model: string): string =>
   (resolveModelName([], model) ?? model).replace(/\.gguf$/i, '').replace(/-Q\d.*$/i, '')
 
@@ -38,6 +46,11 @@ export function ImageSettingsTab(): React.JSX.Element {
   const [negativePrompt, setNegativePrompt] = useState('')
   const [enhance, setEnhance] = useState(true)
   const settingsChangedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // On CUDA the image and chat models stay loaded together (runtime-manager), so they share
+  // GPU memory. Only a running engine's confirmed backend counts; nothing here probes the GPU.
+  const onCuda = useRuntimeBackends().some(
+    (runtime) => runtime.state === 'loaded' && /CUDA/i.test(runtime.backend ?? '')
+  )
 
   useEffect(
     () => () => {
@@ -152,7 +165,16 @@ export function ImageSettingsTab(): React.JSX.Element {
         defaultOpen
       >
         <div className="divide-y divide-neutral-900">
-          <SettingsRow label="Active image model" controlId="active-image-model" inline>
+          <SettingsRow
+            label="Active image model"
+            controlId="active-image-model"
+            inline
+            hint={
+              onCuda
+                ? 'Chat and image models stay loaded together on CUDA and share GPU memory. Generation may fail on smaller cards.'
+                : undefined
+            }
+          >
             <SettingsSelect
               id="active-image-model"
               label="Active image model"
@@ -188,9 +210,9 @@ export function ImageSettingsTab(): React.JSX.Element {
               min={4}
               max={50}
               defaultValue={effective.steps}
-              onValueChange={(value) => {
-                if (value != null) saveTypedOverride('steps', String(value), 4, 50)
-              }}
+              onValueChange={(value, details) =>
+                saveTypedOverride('steps', typedText(value, details), 4, 50)
+              }
               onValueCommitted={(value) =>
                 saveOverride('steps', Math.max(4, Math.min(50, value || 4)))
               }
@@ -213,9 +235,9 @@ export function ImageSettingsTab(): React.JSX.Element {
               max={20}
               step={0.5}
               defaultValue={effective.cfgScale}
-              onValueChange={(value) => {
-                if (value != null) saveTypedOverride('cfgScale', String(value), 0, 20)
-              }}
+              onValueChange={(value, details) =>
+                saveTypedOverride('cfgScale', typedText(value, details), 0, 20)
+              }
               onValueCommitted={(value) =>
                 saveOverride('cfgScale', Math.max(0, Math.min(20, value || 0)))
               }

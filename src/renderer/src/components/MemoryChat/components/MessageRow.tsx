@@ -281,7 +281,9 @@ function VoiceMessageRow({
           tools={message.toolCalls}
           thinking={thinking}
           thinkingHasContent={Boolean(message.reasoning?.trim())}
-        thinkingText={message.reasoning ?? ''}
+        thinkingText={
+          timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
+        }
           footer={
             workFooter ??
             (message.streaming && hasLiveStreamActivity(message) ? <LoadingDots /> : undefined)
@@ -333,7 +335,9 @@ function VoiceMessageRow({
           tools={message.toolCalls}
           thinking={thinking}
           thinkingHasContent={Boolean(message.reasoning?.trim())}
-        thinkingText={message.reasoning ?? ''}
+        thinkingText={
+          timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
+        }
           footer={
             workFooter ??
             (message.streaming && hasLiveStreamActivity(message) ? <LoadingDots /> : undefined)
@@ -561,12 +565,16 @@ function StandardMessageRow({
         tools={message.toolCalls}
         thinking={thinking}
         thinkingHasContent={Boolean(message.reasoning?.trim())}
-        thinkingText={message.reasoning ?? ''}
+        thinkingText={
+          timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
+        }
         footer={
           workFooter ??
           (message.streaming && hasLiveStreamActivity(message) ? (
             liveActivity ? (
-              message.toolCalls?.length ? (
+              // Only a labelled host thinking block still carries the activity line itself; the
+              // timeline's own thinking row does not, so the footer names it.
+              message.toolCalls?.length && message.reasoningLabel ? (
                 <LoadingDots size="small" />
               ) : (
                 <span className="inline-flex items-center gap-1 text-[11px] text-neutral-500">

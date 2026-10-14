@@ -11,6 +11,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { wholeText } from './harness/whole-text'
 
 const MODEL = {
   id: 'unsloth/Qwen3.5-9B-GGUF',
@@ -133,7 +134,7 @@ describe('<ModelsScreen/> — what a download looks like', () => {
     expect(retry).toBeTruthy()
 
     // And the card does NOT still claim to be working: no stuck percent, no Cancel.
-    expect(screen.queryByText(/\d+%/)).toBeNull()
+    expect(screen.queryByText(wholeText(/\d+%/))).toBeNull()
     expect(screen.queryByRole('button', { name: /cancel/i })).toBeNull()
     // One action, not two: the failed row replaces Download rather than stacking under it.
     expect(screen.queryByRole('button', { name: /^download$/i })).toBeNull()
@@ -173,7 +174,7 @@ describe('<ModelsScreen/> — what a download looks like', () => {
     await user.click(await screen.findByRole('button', { name: /^download$/i }))
 
     // BEFORE: it is genuinely downloading — progress on screen and a Cancel to press.
-    expect(await screen.findByText(/21%/)).toBeTruthy()
+    expect(await screen.findByText(wholeText(/21%/))).toBeTruthy()
     const cancel = screen.getByRole('button', { name: /cancel/i })
 
     await user.click(cancel)
@@ -182,7 +183,7 @@ describe('<ModelsScreen/> — what a download looks like', () => {
     expect(await screen.findByRole('button', { name: /^download$/i })).toBeTruthy()
     expect(screen.queryByText(/cancelled/i)).toBeNull()
     expect(screen.queryByRole('button', { name: /try again/i })).toBeNull()
-    expect(screen.queryByText(/21%/)).toBeNull()
+    expect(screen.queryByText(wholeText(/21%/))).toBeNull()
   })
 
   it('an in-flight download reads as one number, in human units, with the part it is fetching', async () => {
@@ -207,7 +208,7 @@ describe('<ModelsScreen/> — what a download looks like', () => {
     await user.click(await screen.findByRole('button', { name: /^download$/i }))
 
     // One percent for the whole download.
-    expect(await screen.findByText(/21%/)).toBeTruthy()
+    expect(await screen.findByText(wholeText(/21%/))).toBeTruthy()
     // Bytes at the scale the card above already uses — 6296.4 MB is a number you have to convert.
     //
     // The feed counts MEBIbytes, so 6296.4 is 6.6 GB, not 6.1. This line used to assert 6.1 because
@@ -249,34 +250,42 @@ describe('<ModelsScreen/> — what a download looks like', () => {
   it('shows progress at most every two seconds and never lets a stale tick replace failure', async () => {
     render(<ModelsScreen />)
     expect(await screen.findByText(MODEL.name)).toBeTruthy()
+    // The percent rolls to each new value, so the amount shown is read where assistive technology
+    // reads it: the card's progress bar.
+    const shown = (): string | null | undefined =>
+      screen
+        .queryByRole('progressbar', { name: `${MODEL.name} download progress` })
+        ?.getAttribute('aria-valuenow')
     vi.useFakeTimers()
     vi.setSystemTime(0)
     try {
       act(() => emit({ modelId: MODEL.id, status: 'downloading', percent: 10 }))
-      expect(screen.getByText('10%')).toBeTruthy()
+      expect(screen.getByText(wholeText('10%'))).toBeTruthy()
+      expect(shown()).toBe('10')
 
       act(() => {
         emit({ modelId: MODEL.id, status: 'downloading', percent: 20 })
         emit({ modelId: MODEL.id, status: 'downloading', percent: 30 })
       })
-      expect(screen.getByText('10%')).toBeTruthy()
-      expect(screen.queryByText('30%')).toBeNull()
+      expect(shown()).toBe('10')
 
       act(() => vi.advanceTimersByTime(1_999))
-      expect(screen.queryByText('30%')).toBeNull()
+      expect(shown()).toBe('10')
       act(() => vi.advanceTimersByTime(1))
-      expect(screen.getByText('30%')).toBeTruthy()
+      expect(shown()).toBe('30')
 
       act(() => {
         emit({ modelId: MODEL.id, status: 'downloading', percent: 40 })
         emit({ modelId: MODEL.id, status: 'failed', error: 'network connection lost' })
       })
       expect(screen.getByText('network connection lost')).toBeTruthy()
-      expect(screen.queryByText('40%')).toBeNull()
+      expect(shown()).toBeUndefined()
+      expect(screen.queryByText(wholeText('40%'))).toBeNull()
 
       act(() => vi.advanceTimersByTime(2_000))
       expect(screen.getByText('network connection lost')).toBeTruthy()
-      expect(screen.queryByText('40%')).toBeNull()
+      expect(shown()).toBeUndefined()
+      expect(screen.queryByText(wholeText('40%'))).toBeNull()
     } finally {
       vi.useRealTimers()
     }

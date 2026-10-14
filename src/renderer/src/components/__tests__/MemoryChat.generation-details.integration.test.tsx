@@ -92,7 +92,7 @@ describe('<MemoryChat/> generation details', () => {
     expect(await screen.findByRole('menuitem', { name: 'Copy' })).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: 'Regenerate' })).toBeTruthy()
     await user.click(screen.getByRole('menuitem', { name: 'Copy' }))
-    expect(screen.queryByRole('menuitem', { name: 'Regenerate' })).toBeNull()
+    await waitFor(() => expect(screen.queryByRole('menuitem', { name: 'Regenerate' })).toBeNull())
   })
 
   it('hides the numbers until the preference is on, even when the run reported them', async () => {

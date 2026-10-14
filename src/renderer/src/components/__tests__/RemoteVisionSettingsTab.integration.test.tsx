@@ -85,22 +85,26 @@ describe('<RemoteVisionSettingsTab/>', () => {
     await screen.findByText('Connected in 12 ms. 3 models found.')
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /^Other models/ }))
-    await user.click(screen.getByRole('button', { name: 'image model' }))
-    await user.click(screen.getByRole('menuitemradio', { name: 'Image Maker' }))
-    await user.click(screen.getByRole('button', { name: 'transcription model' }))
-    await user.click(screen.getByRole('menuitemradio', { name: 'Listener' }))
-    await user.click(screen.getByRole('button', { name: 'voice model' }))
-    await user.click(screen.getByRole('menuitemradio', { name: 'Speaker' }))
+    await user.click(screen.getByRole('combobox', { name: 'image model' }))
+    await user.click(await screen.findByRole('option', { name: 'Image Maker' }))
+    await user.click(screen.getByRole('combobox', { name: 'transcription model' }))
+    await user.click(await screen.findByRole('option', { name: 'Listener' }))
+    await user.click(screen.getByRole('combobox', { name: 'voice model' }))
+    await user.click(await screen.findByRole('option', { name: 'Speaker' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByText('Server saved and active.')
     cleanup()
     render(<RemoteVisionSettingsTab />)
     await screen.findByDisplayValue('Media provider')
-    expect(screen.getByRole('button', { name: 'image model' }).textContent).toContain('Image Maker')
-    expect(screen.getByRole('button', { name: 'transcription model' }).textContent).toContain(
-      'Listener'
-    )
-    expect(screen.getByRole('button', { name: 'voice model' }).textContent).toContain('Speaker')
+    expect(
+      (screen.getByRole('combobox', { name: 'image model' }) as HTMLInputElement).value
+    ).toContain('Image Maker')
+    expect(
+      (screen.getByRole('combobox', { name: 'transcription model' }) as HTMLInputElement).value
+    ).toContain('Listener')
+    expect(
+      (screen.getByRole('combobox', { name: 'voice model' }) as HTMLInputElement).value
+    ).toContain('Speaker')
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use remote server' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
@@ -250,11 +254,13 @@ describe('<RemoteVisionSettingsTab/>', () => {
     expect(screen.getByText('Models example · vision-model')).toBeTruthy()
     expect(screen.getByRole('button', { name: /^Other models/ })).toBeTruthy()
     expect(screen.getByText('Image: Image Maker · Transcription: none · Voice: none')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'image model' })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: 'image model' })).toBeNull()
 
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /^Other models/ }))
-    expect(screen.getByRole('button', { name: 'image model' }).textContent).toContain('Image Maker')
+    expect(
+      (screen.getByRole('combobox', { name: 'image model' }) as HTMLInputElement).value
+    ).toContain('Image Maker')
   })
 
   it('keeps local models active until the user enables a remote server', async () => {

@@ -146,7 +146,7 @@ describe('<ActionGateDock/>', () => {
     })
     await waitFor(() => screen.getByTestId('outcome-row'))
     expect(screen.getByText(/Done - verified/)).toBeTruthy()
-    fireEvent.click(screen.getByText('Undo'))
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
     await waitFor(() => expect(screen.getByText(/Undone/)).toBeTruthy())
     expect(undo).toHaveBeenCalled()
   })
@@ -155,7 +155,7 @@ describe('<ActionGateDock/>', () => {
     render(<ActionGateDock />)
     emitOutcome({ id: 'act_3', outcome: 'needs_help', undoable: false, record: {} })
     await waitFor(() => screen.getByTestId('outcome-row'))
-    expect(screen.queryByText('Undo')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
     expect(screen.getByText(/needs your attention/)).toBeTruthy()
   })
 
@@ -222,9 +222,9 @@ describe('<ActionGateDock/>', () => {
     render(<ActionGateDock />)
     emitOutcome({ id: 'act_5', outcome: 'done', undoable: true, record: { effectId: 'rt9' } })
     await waitFor(() => screen.getByTestId('outcome-row'))
-    fireEvent.click(screen.getByText('Undo'))
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
     await waitFor(() => expect(screen.getByText(/no reminder with id rt9/)).toBeTruthy())
-    expect(screen.queryByText('Undo')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
   })
 
   it('a poisoned outcome carries the honest error text', async () => {

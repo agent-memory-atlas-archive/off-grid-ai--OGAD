@@ -5,7 +5,7 @@
 // the full result in the conversation instead of opening a separate viewer.
 // Real MemoryChat through the chat-boundary harness; only the window.api seam is faked.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, screen, waitFor } from '@testing-library/react'
+import { cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatBoundary, installBoundary, renderChat, send } from './harness/chat-boundary'
 import { resetTaskSessionStoreForTests } from '@renderer/lib/task-session-store'
@@ -163,7 +163,8 @@ describe('<MemoryChat/> tool calls — persistent + inline', () => {
     expect(screen.getByTestId('chat-tool-timeline-1')).toBeTruthy()
     expect(screen.queryByTestId('chat-tool-timeline-2')).toBeNull()
 
-    expect(tool.textContent).toContain('1031 ms · complete')
+    // The step's time sits on its row; its state is the row's checkpoint and accessible name.
+    expect(tool.closest('[role="listitem"]')?.textContent).toContain('1031 ms')
     await user.click(tool)
     expect(await screen.findByText(LONG_RESULT)).toBeTruthy()
   })
@@ -200,7 +201,7 @@ describe('<MemoryChat/> tool calls — persistent + inline', () => {
     const answer = await screen.findByText('The answer is ready.')
     const timeline = screen.getByRole('list', { name: 'Thinking and tool calls' })
     expect(timeline.children).toHaveLength(5)
-    expect(screen.getAllByText('Thought process')).toHaveLength(3)
+    expect(within(timeline).getAllByText('Reasoning')).toHaveLength(3)
     expect(screen.getAllByRole('button', { name: 'Searched the web, complete' })).toHaveLength(2)
     expect(timeline.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
 
@@ -239,7 +240,7 @@ describe('<MemoryChat/> tool calls — persistent + inline', () => {
     await openCompletedWork()
     const timeline = await screen.findByRole('list', { name: 'Thinking and tool calls' })
     expect(timeline.children).toHaveLength(4)
-    expect(screen.getAllByText('Thought process')).toHaveLength(2)
+    expect(within(timeline).getAllByText('Reasoning')).toHaveLength(2)
     expect(screen.getByRole('button', { name: 'Searched the web, complete' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Read web page, complete' })).toBeTruthy()
     expect(screen.queryByTestId('chat-tool-timeline-3')).toBeNull()

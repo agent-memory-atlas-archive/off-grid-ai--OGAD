@@ -42,39 +42,39 @@ it('places each backend choice with its model settings and saves the selected de
   registerSlot(SLOTS.taskSettings, () => <p>Task settings</p>)
   render(<SettingsPanel embedded onClose={() => {}} />)
   const user = userEvent.setup()
-  const textBackend = screen.getByRole('button', { name: 'Chat and vision backend' })
+  const textBackend = screen.getByRole('combobox', { name: 'Chat and vision backend' })
   expect(textBackend).toBeTruthy()
   expect(
-    textBackend.compareDocumentPosition(screen.getByRole('button', { name: 'Context window' })) &
+    textBackend.compareDocumentPosition(screen.getByRole('combobox', { name: 'Context window' })) &
       Node.DOCUMENT_POSITION_FOLLOWING
   ).toBeTruthy()
-  expect(screen.queryByRole('button', { name: 'Images backend' })).toBeNull()
+  expect(screen.queryByRole('combobox', { name: 'Images backend' })).toBeNull()
 
-  await user.click(screen.getByRole('button', { name: 'image' }))
+  await user.click(screen.getByRole('radio', { name: 'image' }))
   await user.click(screen.getByRole('button', { name: /^Processing/ }))
-  const image = screen.getByRole('button', { name: 'Images backend' })
+  const image = screen.getByRole('combobox', { name: 'Images backend' })
   await user.click(image)
-  await user.click(screen.getByRole('menuitemradio', { name: 'Vulkan' }))
+  await user.click(await screen.findByRole('option', { name: 'Vulkan' }))
   await waitFor(() => expect(saved).toContainEqual(['image', 'vulkan']))
 
   // A single backend row has no section of its own: it sits in the open section beside it.
-  await user.click(screen.getByRole('button', { name: 'voice' }))
-  expect(screen.getByRole('button', { name: 'Speech backend' })).toBeTruthy()
+  await user.click(screen.getByRole('radio', { name: 'voice' }))
+  expect(screen.getByRole('combobox', { name: 'Speech backend' })).toBeTruthy()
 
-  await user.click(screen.getByRole('button', { name: 'transcription' }))
-  expect(screen.getByRole('button', { name: 'Transcription backend' })).toBeTruthy()
+  await user.click(screen.getByRole('radio', { name: 'transcription' }))
+  expect(screen.getByRole('combobox', { name: 'Transcription backend' })).toBeTruthy()
 
   // The task models' backends sit with the task settings; Tools keeps search embeddings.
-  await user.click(screen.getByRole('button', { name: 'tasks' }))
+  await user.click(screen.getByRole('radio', { name: 'tasks' }))
   await user.click(screen.getByRole('button', { name: /^Task model backends/ }))
-  expect(screen.getByRole('button', { name: 'Grounding backend' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Decider backend' })).toBeTruthy()
-  await user.click(screen.getByRole('button', { name: 'tools' }))
-  expect(screen.getByRole('button', { name: 'Search embeddings backend' })).toBeTruthy()
-  expect(screen.queryByRole('button', { name: 'Grounding backend' })).toBeNull()
+  expect(screen.getByRole('combobox', { name: 'Grounding backend' })).toBeTruthy()
+  expect(screen.getByRole('combobox', { name: 'Decider backend' })).toBeTruthy()
+  await user.click(screen.getByRole('radio', { name: 'tools' }))
+  expect(screen.getByRole('combobox', { name: 'Search embeddings backend' })).toBeTruthy()
+  expect(screen.queryByRole('combobox', { name: 'Grounding backend' })).toBeNull()
 
-  await user.click(screen.getByRole('button', { name: 'image' }))
+  await user.click(screen.getByRole('radio', { name: 'image' }))
   await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Images backend' }).textContent).toContain('Vulkan')
+    expect(screen.getByRole('combobox', { name: 'Images backend' }).textContent).toContain('Vulkan')
   )
 })
