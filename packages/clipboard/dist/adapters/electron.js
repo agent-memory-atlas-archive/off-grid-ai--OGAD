@@ -37,6 +37,8 @@ var fs = __toESM(require("fs"));
 var path = __toESM(require("path"));
 var import_child_process = require("child_process");
 var MAX_FILE_SIZE = 20 * 1024 * 1024;
+var FILE_REFERENCE_URL = /^file:\/\/\/\.file\/id=[\d.]+\/?$/;
+var PENDING = /* @__PURE__ */ Symbol("pending");
 var ElectronClipboardBridge = class {
   constructor(clipboard, nativeImage) {
     this.clipboard = clipboard;
@@ -44,10 +46,15 @@ var ElectronClipboardBridge = class {
   }
   clipboard;
   nativeImage;
+  // The poll reads the clipboard every 500 ms. Resolving a Finder reference spawns
+  // osascript, so it runs off the main thread once per URL and is reused afterwards.
+  reference = null;
+  resolving = null;
   read() {
     const formats = this.clipboard.availableFormats();
     if (formats.length === 0) return null;
     const extracted = this.extract(formats);
+    if (extracted === PENDING) return null;
     if (!extracted.rawData || extracted.rawData.length === 0) return null;
     return extracted;
   }
@@ -124,7 +131,8 @@ var ElectronClipboardBridge = class {
       if (text && (text.startsWith("/") || text.startsWith("file://"))) fileUrl = text;
     }
     if (!fileUrl || !(fileUrl.startsWith("/") || fileUrl.startsWith("file://"))) return null;
-    const resolved = resolveFileReferenceUrl(fileUrl);
+    const resolved = this.resolveReference(fileUrl);
+    if (resolved === PENDING) return PENDING;
     const filePath = resolved ? resolved : fileUrl.startsWith("file://") ? decodeURIComponent(fileUrl.replace("file://", "")) : fileUrl;
     try {
       const stats = fs.statSync(filePath);
@@ -146,28 +154,39 @@ var ElectronClipboardBridge = class {
     }
     return { contentType: "text", rawData: Buffer.from(fileUrl, "utf-8"), textContent: fileUrl };
   }
+  /** Resolved path for a Finder reference URL, PENDING while osascript runs, or null
+   *  for a normal URL. Only the current clipboard URL is cached. */
+  resolveReference(fileUrl) {
+    if (!FILE_REFERENCE_URL.test(fileUrl)) return null;
+    if (this.reference?.url === fileUrl) return this.reference.path;
+    if (this.resolving !== fileUrl) {
+      this.resolving = fileUrl;
+      void resolveFileReferenceUrl(fileUrl).then((resolved) => {
+        if (this.resolving !== fileUrl) return;
+        this.reference = { url: fileUrl, path: resolved };
+        this.resolving = null;
+      });
+    }
+    return PENDING;
+  }
 };
 function resolveFileReferenceUrl(fileUrl) {
-  if (!fileUrl.includes("/.file/id=")) return null;
-  try {
-    const script = `
-      use framework "Foundation"
-      set theURL to current application's NSURL's URLWithString:"${fileUrl}"
-      set resolvedURL to theURL's filePathURL()
-      if resolvedURL is not missing value then
-        return (resolvedURL's |path|()) as text
-      else
-        return ""
-      end if
-    `;
-    const result = (0, import_child_process.execSync)(`osascript -e '${script.replace(/'/g, `'"'"'`)}'`, {
-      encoding: "utf-8",
-      timeout: 5e3
-    }).trim();
-    if (result && result.startsWith("/")) return result;
-  } catch {
-  }
-  return null;
+  const script = `
+    use framework "Foundation"
+    set theURL to current application's NSURL's URLWithString:"${fileUrl}"
+    set resolvedURL to theURL's filePathURL()
+    if resolvedURL is not missing value then
+      return (resolvedURL's |path|()) as text
+    else
+      return ""
+    end if
+  `;
+  return new Promise((resolve) => {
+    (0, import_child_process.execFile)("osascript", ["-e", script], { encoding: "utf-8", timeout: 5e3 }, (err, stdout) => {
+      const result = err ? "" : stdout.trim();
+      resolve(result.startsWith("/") ? result : null);
+    });
+  });
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {

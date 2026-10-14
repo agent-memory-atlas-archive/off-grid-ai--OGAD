@@ -5,7 +5,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { execSync } from 'child_process'
+import { execFile } from 'child_process'
 import type { ClipboardBridge, ClipboardItem, ClipboardRead } from '../types'
 
 /** Minimal shape of Electron's nativeImage instances we use. */
@@ -34,16 +34,28 @@ export interface ElectronNativeImage {
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
 
+/** Finder file reference URL, e.g. file:///.file/id=6571367.12345678 */
+const FILE_REFERENCE_URL = /^file:\/\/\/\.file\/id=[\d.]+\/?$/
+
+/** Signals that a file reference URL is still resolving; the poll skips this tick. */
+const PENDING = Symbol('pending')
+
 export class ElectronClipboardBridge implements ClipboardBridge {
   constructor(
     private readonly clipboard: ElectronClipboard,
     private readonly nativeImage: ElectronNativeImage
   ) {}
 
+  // The poll reads the clipboard every 500 ms. Resolving a Finder reference spawns
+  // osascript, so it runs off the main thread once per URL and is reused afterwards.
+  private reference: { url: string; path: string | null } | null = null
+  private resolving: string | null = null
+
   read(): ClipboardRead | null {
     const formats = this.clipboard.availableFormats()
     if (formats.length === 0) return null
     const extracted = this.extract(formats)
+    if (extracted === PENDING) return null
     if (!extracted.rawData || extracted.rawData.length === 0) return null
     return extracted
   }
@@ -68,7 +80,7 @@ export class ElectronClipboardBridge implements ClipboardBridge {
     }
   }
 
-  private extract(formats: string[]): ClipboardRead {
+  private extract(formats: string[]): ClipboardRead | typeof PENDING {
     // Image first.
     if (formats.some((f) => f.includes('image'))) {
       const image = this.clipboard.readImage()
@@ -101,7 +113,7 @@ export class ElectronClipboardBridge implements ClipboardBridge {
     return { contentType: 'text', rawData: Buffer.from(''), textContent: null }
   }
 
-  private extractFile(): ClipboardRead | null {
+  private extractFile(): ClipboardRead | typeof PENDING | null {
     const macOSFileTypes = [
       'public.file-url',
       'NSFilenamesPboardType',
@@ -136,7 +148,8 @@ export class ElectronClipboardBridge implements ClipboardBridge {
 
     if (!fileUrl || !(fileUrl.startsWith('/') || fileUrl.startsWith('file://'))) return null
 
-    const resolved = resolveFileReferenceUrl(fileUrl)
+    const resolved = this.resolveReference(fileUrl)
+    if (resolved === PENDING) return PENDING
     const filePath = resolved
       ? resolved
       : fileUrl.startsWith('file://')
@@ -165,32 +178,44 @@ export class ElectronClipboardBridge implements ClipboardBridge {
 
     return { contentType: 'text', rawData: Buffer.from(fileUrl, 'utf-8'), textContent: fileUrl }
   }
+
+  /** Resolved path for a Finder reference URL, PENDING while osascript runs, or null
+   *  for a normal URL. Only the current clipboard URL is cached. */
+  private resolveReference(fileUrl: string): string | null | typeof PENDING {
+    if (!FILE_REFERENCE_URL.test(fileUrl)) return null
+    if (this.reference?.url === fileUrl) return this.reference.path
+    if (this.resolving !== fileUrl) {
+      this.resolving = fileUrl
+      void resolveFileReferenceUrl(fileUrl).then((resolved) => {
+        if (this.resolving !== fileUrl) return
+        this.reference = { url: fileUrl, path: resolved }
+        this.resolving = null
+      })
+    }
+    return PENDING
+  }
 }
 
 /**
  * Resolve macOS file reference URLs (file:///.file/id=...) that Finder uses,
- * via AppleScript / NSURL. Returns null for normal URLs. Ported from copyclip.
+ * via AppleScript / NSURL. Ported from copyclip; runs asynchronously so the
+ * main process never waits on osascript.
  */
-function resolveFileReferenceUrl(fileUrl: string): string | null {
-  if (!fileUrl.includes('/.file/id=')) return null
-  try {
-    const script = `
-      use framework "Foundation"
-      set theURL to current application's NSURL's URLWithString:"${fileUrl}"
-      set resolvedURL to theURL's filePathURL()
-      if resolvedURL is not missing value then
-        return (resolvedURL's |path|()) as text
-      else
-        return ""
-      end if
-    `
-    const result = execSync(`osascript -e '${script.replace(/'/g, "'\"'\"'")}'`, {
-      encoding: 'utf-8',
-      timeout: 5000
-    }).trim()
-    if (result && result.startsWith('/')) return result
-  } catch {
-    // ignore
-  }
-  return null
+function resolveFileReferenceUrl(fileUrl: string): Promise<string | null> {
+  const script = `
+    use framework "Foundation"
+    set theURL to current application's NSURL's URLWithString:"${fileUrl}"
+    set resolvedURL to theURL's filePathURL()
+    if resolvedURL is not missing value then
+      return (resolvedURL's |path|()) as text
+    else
+      return ""
+    end if
+  `
+  return new Promise((resolve) => {
+    execFile('osascript', ['-e', script], { encoding: 'utf-8', timeout: 5000 }, (err, stdout) => {
+      const result = err ? '' : stdout.trim()
+      resolve(result.startsWith('/') ? result : null)
+    })
+  })
 }
