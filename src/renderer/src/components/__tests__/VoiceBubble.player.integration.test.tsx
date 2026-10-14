@@ -81,6 +81,17 @@ describe('<VoiceBubble/> player', () => {
     expect(AudioOutput.played[0]!.currentTime).toBeCloseTo((41 / 65) * 12)
   })
 
+  it('gives emoji no time, because the voice does not read them aloud', async () => {
+    const user = userEvent.setup()
+    renderReply({
+      transcript: 'The build passed 🎉🎉🎉. Deploy went out at noon, and the logs look clean. 👍'
+    })
+
+    // Timing follows the spoken words only, so the emoji do not push "Deploy..." later.
+    await user.click(screen.getByRole('button', { name: 'Deploy went out at noon,' }))
+    expect(seekPosition()).toBe(Math.round((17 / 65) * 12))
+  })
+
   it('goes back to the start of the clip', async () => {
     const user = userEvent.setup()
     renderReply()

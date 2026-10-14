@@ -35,6 +35,7 @@ import {
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Button } from '@offgrid/operator-ui/operator/coss/button'
 import { Waveform } from '@offgrid/operator-ui/operator/elevenlabs/waveform'
+import { spokenText } from '@offgrid/speech'
 import {
   Transcription,
   TranscriptionSegment
@@ -140,7 +141,8 @@ function joinShortLead(phrases: string[], phrase: string): string[] {
  * ESTIMATED TIMINGS: neither the recorder nor the speech synthesizer gives us word timings, so
  * these are not aligned to the audio. The text is cut at punctuation and line breaks (short
  * lead-ins join the phrase after them, long runs are cut again), and each phrase takes the share
- * of the real duration that its character count takes of the whole text. That is close enough for the highlight to follow the voice and
+ * of the real duration that its SPOKEN character count takes of the whole text (emoji are not read
+ * aloud, so they take no time). That is close enough for the highlight to follow the voice and
  * for a click on a phrase to land near it, and no closer.
  */
 /** Cuts a line after a word ending in punctuation and before a word opening with a dash. */
@@ -167,11 +169,12 @@ function phraseSegments(text: string, duration: number): TimedSegment[] {
     .flatMap((line) => cutAtPunctuation(line.replace(/\s/g, ' ')))
     .reduce<string[]>((joined, phrase) => joinShortLead(joined, phrase), [])
     .flatMap((phrase) => splitLongPhrase(phrase))
-  const total = phrases.reduce((sum, phrase) => sum + phrase.length, 0) || 1
+  const spokenLength = (phrase: string): number => spokenText(phrase).length
+  const total = phrases.reduce((sum, phrase) => sum + spokenLength(phrase), 0) || 1
   let at = 0
   return phrases.map((phrase) => {
     const startSecond = (at / total) * duration
-    at += phrase.length
+    at += spokenLength(phrase)
     return { text: phrase, startSecond, endSecond: (at / total) * duration }
   })
 }
