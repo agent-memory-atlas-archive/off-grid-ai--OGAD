@@ -25,9 +25,7 @@ describe('<MemoryChat/> assistant preset runs', () => {
 
     await user.click(await screen.findByTestId('explore-preset-price-compare'))
     await screen.findByTestId('preset-intake-price-compare')
-    expect(screen.getByRole('button', { name: 'God' }).getAttribute('aria-pressed')).toBe(
-      'true'
-    )
+    expect(screen.getByRole('button', { name: 'God' }).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('starts Train My Feed as a God run with the approved bounds', async () => {
@@ -37,20 +35,28 @@ describe('<MemoryChat/> assistant preset runs', () => {
     renderChat({ presetId: 'train-my-feed' })
 
     await screen.findByTestId('preset-intake-train-my-feed')
-    expect(screen.getByRole('button', { name: 'God' }).getAttribute('aria-pressed')).toBe(
-      'true'
-    )
+    expect(screen.getByRole('button', { name: 'God' }).getAttribute('aria-pressed')).toBe('true')
     expect((screen.getByLabelText(/Social platform/) as HTMLSelectElement).value).toBe('Instagram')
     expect((screen.getByLabelText(/Learning goal/) as HTMLTextAreaElement).value).toBe(
       'Local and on-device AI models, multimodal LLMs, and private AI assistants serving as an AI chief of staff.'
     )
-    expect((screen.getByLabelText('Follow or subscribe') as HTMLInputElement).checked).toBe(false)
-    expect((screen.getByLabelText('Like useful content') as HTMLInputElement).checked).toBe(true)
-    expect((screen.getByLabelText('Bookmark useful posts') as HTMLInputElement).checked).toBe(true)
-    expect((screen.getByLabelText('Save videos for later') as HTMLInputElement).checked).toBe(true)
     expect(
-      (screen.getByLabelText('Mark irrelevant items Not interested') as HTMLInputElement).checked
-    ).toBe(true)
+      screen.getByRole('checkbox', { name: 'Follow or subscribe' }).getAttribute('aria-checked')
+    ).toBe('false')
+    expect(
+      screen.getByRole('checkbox', { name: 'Like useful content' }).getAttribute('aria-checked')
+    ).toBe('true')
+    expect(
+      screen.getByRole('checkbox', { name: 'Bookmark useful posts' }).getAttribute('aria-checked')
+    ).toBe('true')
+    expect(
+      screen.getByRole('checkbox', { name: 'Save videos for later' }).getAttribute('aria-checked')
+    ).toBe('true')
+    expect(
+      screen
+        .getByRole('checkbox', { name: 'Mark irrelevant items Not interested' })
+        .getAttribute('aria-checked')
+    ).toBe('true')
     expect((screen.getByLabelText(/Session length/) as HTMLSelectElement).value).toBe('30 minutes')
     expect((screen.getByLabelText(/Creator follow limit/) as HTMLSelectElement).value).toBe(
       'Do not follow creators'
@@ -68,19 +74,21 @@ describe('<MemoryChat/> assistant preset runs', () => {
     const start = screen.getByRole('button', { name: 'Start in chat' }) as HTMLButtonElement
     expect(start.disabled).toBe(false)
     await user.selectOptions(screen.getByLabelText(/Social platform/), 'YouTube')
-    expect((screen.getByLabelText('Search for topics') as HTMLInputElement).checked).toBe(true)
     expect(
-      (screen.getByLabelText('Watch or read relevant content') as HTMLInputElement).checked
-    ).toBe(true)
+      screen.getByRole('checkbox', { name: 'Search for topics' }).getAttribute('aria-checked')
+    ).toBe('true')
+    expect(
+      screen
+        .getByRole('checkbox', { name: 'Watch or read relevant content' })
+        .getAttribute('aria-checked')
+    ).toBe('true')
     await user.click(screen.getByLabelText('Follow or subscribe'))
     expect(start.disabled).toBe(false)
     await user.click(start)
 
     await waitFor(() => expect(boundary.api.createRagConversation).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(boundary.toolQueries).toHaveLength(1))
-    expect(screen.getByRole('button', { name: 'God' }).getAttribute('aria-pressed')).toBe(
-      'true'
-    )
+    expect(screen.getByRole('button', { name: 'God' }).getAttribute('aria-pressed')).toBe('true')
     expect(boundary.toolQueries[0]?.query).toContain('A: Local AI models')
     expect(boundary.toolQueries[0]?.query).toContain('A: 45 minutes')
     expect(boundary.toolQueries[0]?.query).toContain('A: YouTube')

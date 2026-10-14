@@ -10,6 +10,7 @@ import {
 } from '@phosphor-icons/react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Card } from '@offgrid/operator-ui/operator/coss/card'
+import { Checkbox } from '@offgrid/operator-ui/operator/animate/checkbox'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { LoadingDots } from '@/components/ui/loading-dots'
@@ -166,16 +167,15 @@ function IntakeField({
               key={option.value}
               className="flex cursor-pointer items-start gap-2 text-xs text-foreground"
             >
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={selected.has(option.value)}
-                onChange={(event) => {
+                onCheckedChange={(checked) => {
                   const next = new Set(selected)
-                  if (event.target.checked) next.add(option.value)
+                  if (checked) next.add(option.value)
                   else next.delete(option.value)
                   onChange([...next].join('; '))
                 }}
-                className="mt-0.5 accent-primary"
+                className="mt-0.5"
               />
               <span>{option.label}</span>
             </label>
