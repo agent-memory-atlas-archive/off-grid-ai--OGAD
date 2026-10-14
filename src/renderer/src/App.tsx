@@ -275,7 +275,7 @@ function ModelStatusDot({
     >
       <IconActivityHeartbeat className={cn('h-5 w-5 shrink-0', color)} />
       {open && (
-        <TextMorph as="span" className="flex-1 text-left text-xs">
+        <TextMorph as="span" className="flex-1 whitespace-nowrap text-left text-xs">
           {text}
         </TextMorph>
       )}
@@ -1214,7 +1214,12 @@ function AppContent(): React.JSX.Element {
               </div>
 
               {/* Back / forward — a distinct control (filled), available everywhere (⌘[ / ⌘]) */}
-              <div className={cn('mt-3 flex items-center gap-1', !sidebarOpen && 'justify-center')}>
+              <div
+                className={cn(
+                  'mt-3 flex h-9 shrink-0 items-center gap-1',
+                  !sidebarOpen && 'justify-center'
+                )}
+              >
                 {sidebarOpen && (
                   <SidebarPinButton pinned={sidebarPinned} onToggle={toggleSidebarPinned} />
                 )}

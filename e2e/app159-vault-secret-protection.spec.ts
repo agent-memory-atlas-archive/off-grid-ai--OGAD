@@ -43,6 +43,9 @@ async function closeApp(): Promise<void> {
   const running = app
   if (!running) return
   app = null
+  await running
+    .context()
+    .tracing.stop({ path: test.info().outputPath(`electron-${Date.now()}.zip`) })
   const child = running.process()
   // A signal exit has no exitCode. Require a prompt, clean exit from the close request.
   await Promise.all([
@@ -60,6 +63,7 @@ async function launchProfile(): Promise<void> {
       NODE_ENV: 'production'
     }
   })
+  await app.context().tracing.start({ screenshots: true, snapshots: true, sources: true })
   page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
   await completeOnboarding(page)
@@ -104,7 +108,10 @@ async function beginEntry(type: 'Login' | 'API Key' | 'Note'): Promise<void> {
   // Both the list toolbar and the empty pane offer the same New entry action.
   await page.getByRole('button', { name: 'New entry', exact: true }).first().click()
   await expect(page.getByText('New Entry', { exact: true })).toBeVisible()
-  await page.getByRole('combobox', { name: 'Kind', exact: true }).selectOption({ label: type })
+  await page
+    .getByRole('radiogroup', { name: 'Kind', exact: true })
+    .getByRole('radio', { name: type, exact: true })
+    .click()
 }
 
 async function addLogin(): Promise<void> {
@@ -175,6 +182,8 @@ test.describe('APP-159 vault secret protection', () => {
     if (app) {
       await app.evaluate(({ clipboard }) => clipboard.clear()).catch(() => {})
     }
+    const log = path.join(profileDir, 'logs/off-grid-ai-desktop.log')
+    if (fs.existsSync(log)) await test.info().attach('app.log', { path: log })
     await closeApp()
     if (path.basename(profileDir).startsWith('offgrid-app159-')) {
       fs.rmSync(profileDir, { recursive: true, force: true })
