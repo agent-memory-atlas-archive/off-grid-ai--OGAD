@@ -27,8 +27,8 @@ import { configureRuntime } from '../runtime-env'
 configureRuntime({ dataDir: TMP_DIR })
 const DB_PATH = path.join(TMP_DIR, 'memories.db')
 
-/** Another process holds the write lock for `holdMs`; resolves once it has the lock. */
-function holdWriteLock(holdMs: number): Promise<Promise<number>> {
+/** Another process holds the write lock for `holdMs`; resolves as soon as it has the lock. */
+function holdWriteLock(holdMs: number): Promise<{ exited: Promise<number> }> {
   const script = `
     const Database = require('better-sqlite3-multiple-ciphers')
     const db = new Database(process.argv[1])
@@ -45,7 +45,7 @@ function holdWriteLock(holdMs: number): Promise<Promise<number>> {
   const exited = new Promise<number>((resolve) => child.on('exit', (code) => resolve(code ?? 1)))
   return new Promise((resolve, reject) => {
     child.stdout.on('data', (chunk: Buffer) => {
-      if (chunk.toString().includes('locked')) resolve(exited)
+      if (chunk.toString().includes('locked')) resolve({ exited })
     })
     child.on('error', reject)
   })
@@ -66,7 +66,7 @@ afterAll(() => {
 
 describe('shared database connection', () => {
   it('waits for another connection to release its write lock instead of failing', async () => {
-    const exited = await holdWriteLock(400)
+    const { exited } = await holdWriteLock(400)
     expect(() => createRagConversation('after-lock', 'Written after the lock')).not.toThrow()
     expect(await exited).toBe(0)
     expect(getRagConversations().map((c) => c.id)).toContain('after-lock')

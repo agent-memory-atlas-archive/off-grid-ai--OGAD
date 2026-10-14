@@ -177,10 +177,6 @@ async function save(record: AIRequestRecord): Promise<void> {
  */
 export async function pruneAIRequestLogs(now = Date.now()): Promise<number> {
   const db = database()
-  lastRetentionAt = now
-  bytesSinceRetention = 0
-  rowsSinceRetention = 0
-  retentionRequested = false
   const removed = db.transaction(() => {
     // Deleting the oldest rows first cannot change the rank or running total of a newer row.
     const aged = db
@@ -199,6 +195,11 @@ export async function pruneAIRequestLogs(now = Date.now()): Promise<number> {
       .all(AI_LOG_POLICY.maxRecords, AI_LOG_POLICY.maxBytes) as { id: string }[]
     return [...aged, ...overLimit]
   })()
+  // Only a committed pass counts: a failed one stays due and is retried.
+  lastRetentionAt = now
+  bytesSinceRetention = 0
+  rowsSinceRetention = 0
+  retentionRequested = false
   for (const row of removed) {
     if (validId(row.id)) await fs.rm(path.join(root(), row.id), { recursive: true, force: true })
   }
