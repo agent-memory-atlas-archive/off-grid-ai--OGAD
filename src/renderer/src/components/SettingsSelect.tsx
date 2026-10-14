@@ -14,6 +14,10 @@ import {
   ComboboxPopup
 } from '@offgrid/operator-ui/operator/coss/combobox'
 
+// Portals are appended to body. Match SidePanel's top layer so a popup opened from
+// a panel paints after it and can receive pointer input instead of sitting behind it.
+const popupPortalProps = { style: { position: 'relative' as const, zIndex: 2147483647 } }
+
 export interface SettingsSelectOption<T extends string> {
   value: T
   label: string
@@ -62,7 +66,7 @@ export function SettingsSelect<T extends string>({
           placeholder={options.length === 0 ? placeholder : 'Search models'}
           triggerProps={{ 'aria-label': `Show ${label.toLowerCase()} options` }}
         />
-        <ComboboxPopup>
+        <ComboboxPopup portalProps={popupPortalProps}>
           <ComboboxEmpty>No matching models.</ComboboxEmpty>
           <ComboboxList>
             {(option: SettingsSelectOption<T>) => (
@@ -90,7 +94,7 @@ export function SettingsSelect<T extends string>({
           {() => selected?.label ?? (options.length === 0 ? placeholder : undefined) ?? value}
         </SelectValue>
       </SelectTrigger>
-      <SelectPopup>
+      <SelectPopup portalProps={popupPortalProps}>
         {options.map((option) => (
           <SelectItem key={option.value} value={option.value} disabled={option.disabled}>
             {option.label}
