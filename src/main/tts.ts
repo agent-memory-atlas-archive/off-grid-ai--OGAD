@@ -186,6 +186,7 @@ async function synthesizeInner(
     async (log) => {
       // Every voice, local or remote, speaks the same words: emoji are not read aloud.
       const spoken = spokenText(text || '')
+      if (!spoken) throw new Error('Nothing to speak.')
       const remote = options.local ? null : getActiveRemoteVisionServerForModality('voice')
       if (remote) {
         log.update({ model: remote.selectedModel, backend: 'Remote' })
@@ -206,7 +207,6 @@ async function synthesizeInner(
         model: selected ?? 'Kokoro',
         effectiveRequest: { text: input.slice(0, 2000), voice: chosenVoice }
       })
-      if (!input) throw new Error('Nothing to speak.')
       if (busy) throw new Error('Already generating speech. Please wait.')
 
       busy = true

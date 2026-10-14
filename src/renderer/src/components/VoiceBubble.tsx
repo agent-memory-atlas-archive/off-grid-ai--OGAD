@@ -816,9 +816,6 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
       // A changed voice must not resume or reuse the previous synthesized clip.
       audio?.pause()
       audioRef.current = null
-      const startAt = pendingStartRef.current
-      pendingStartRef.current = 0
-      setCurrentTime(startAt)
       setLoadedDuration(0)
       const cached = srcRef.current
       let src = audioUrl || (cached && cached.voice === voice ? cached.dataUrl : null)
@@ -828,6 +825,10 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
         srcRef.current = { dataUrl, voice }
         src = dataUrl
       }
+      // Read after synthesis: a seek made while the clip was being prepared still counts.
+      const startAt = pendingStartRef.current
+      pendingStartRef.current = 0
+      setCurrentTime(startAt)
       const audioEl = new Audio(src)
       audioRef.current = audioEl
       wire(audioEl)
