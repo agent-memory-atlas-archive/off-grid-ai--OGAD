@@ -65,7 +65,7 @@ export function TaskLineups(props: {
     <div className="space-y-5">
       {props.view.tasks.map((lineup) => (
         // The named region stays on a plain section; the library Section owns label and arrival.
-        <section key={lineup.task} aria-label={<span className="whitespace-nowrap">{lineup.taskLabel}</span>}>
+        <section key={lineup.task} aria-label={lineup.taskLabel}>
           <Section
             label={<span className="whitespace-nowrap">{lineup.taskLabel}</span>}
             actions={
