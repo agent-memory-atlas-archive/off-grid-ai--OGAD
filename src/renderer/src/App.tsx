@@ -387,6 +387,7 @@ function AppContent(): React.JSX.Element {
   // God (Pro) mounts through slots: its screen, an always-on root, and its nav item's dot.
   const GodScreen = proReady && isPro ? getSlot(SLOTS.godScreen) : undefined
   const GodRoot = proReady && isPro ? getSlot(SLOTS.godRoot) : undefined
+  const AppRoot = proReady && isPro ? getSlot(SLOTS.appRoot) : undefined
   const GodBadge = proReady && isPro ? getSlot(SLOTS.godBadge) : undefined
   const openGod = useCallback((): void => navigateTo('explore'), [navigateTo])
   const [sidebarHovered, setSidebarHovered] = useState(false)
@@ -1482,6 +1483,7 @@ function AppContent(): React.JSX.Element {
       </AnimatePresence>
       {TaskFloatingView ? <TaskFloatingView /> : null}
       {GodRoot ? <GodRoot isOpen={viewMode === 'explore'} open={openGod} /> : null}
+      {AppRoot ? <AppRoot /> : null}
     </div>
   )
 }
