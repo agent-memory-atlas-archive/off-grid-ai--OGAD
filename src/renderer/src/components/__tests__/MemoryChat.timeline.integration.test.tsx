@@ -639,8 +639,9 @@ describe('<MemoryChat/> ordered tool turn', () => {
         'Heart',
         'Michael'
       ])
-      await user.click(await screen.findByRole('option', { name: 'Michael' }))
-      process.stdout.write('DBG ' + voiceSelect.textContent + ' exp=' + voiceSelect.getAttribute('aria-expanded') + ' opts=' + screen.queryAllByRole('option').length + '\n')
+      // Picked from the keyboard: jsdom gives every element a zero-size box at (0, 0), so the
+      // chat's resize handles claim every pointer press and a mouse pick never reaches the option.
+      await user.keyboard('{ArrowDown}{Enter}')
       await waitFor(() => expect(boundary.status().voice).toBe('am_michael'))
       await user.click(screen.getByRole('button', { name: 'Close' }))
       await user.click(replyPlayback)

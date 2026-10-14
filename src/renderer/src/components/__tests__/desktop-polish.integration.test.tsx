@@ -9,6 +9,17 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Modal, ModalBody, ModalContent, ModalTrigger } from '../ui/animated-modal'
 
+// The catalog count is an animated number beside the word "models", so the visible phrase
+// spans two elements. Match the element that reads exactly that phrase.
+const modelCount =
+  (count: number) =>
+  (_content: string, element: Element | null): boolean =>
+    element?.tagName === 'SPAN' && element.textContent === `${count} models`
+// The number springs from its previous value to the new one with the library's real
+// AnimatedNumber, which can take longer than Testing Library's 1s default to settle.
+const findModelCount = (count: number): Promise<HTMLElement> =>
+  screen.findByText(modelCount(count), undefined, { timeout: 5_000 })
+
 let ModelsScreen: typeof import('../ModelsScreen').ModelsScreen
 
 const MODELS = Array.from({ length: 120 }, (_, index) => ({
@@ -87,11 +98,11 @@ describe('desktop collection and transient-layer integration', () => {
     const user = userEvent.setup()
     render(<ModelsScreen />)
 
-    expect(await screen.findByText('120 models')).not.toBeNull()
+    expect(await findModelCount(120)).not.toBeNull()
     expect(await screen.findByRole('button', { name: 'Seeded Model 120' })).not.toBeNull()
 
-    await user.click(screen.getByRole('button', { name: 'Coding' }))
-    expect(await screen.findByText('84 models')).not.toBeNull()
+    await user.click(screen.getByRole('radio', { name: 'Coding' }))
+    expect(await findModelCount(84)).not.toBeNull()
     expect(screen.queryByRole('button', { name: 'Seeded Model 001' })).toBeNull()
 
     await user.click(screen.getByRole('button', { name: 'Seeded Model 120' }))
@@ -103,7 +114,7 @@ describe('desktop collection and transient-layer integration', () => {
     const user = userEvent.setup()
     render(<ModelsScreen />)
 
-    await user.click(await screen.findByRole('button', { name: 'Coding' }))
+    await user.click(await screen.findByRole('radio', { name: 'Coding' }))
     await user.click(await screen.findByRole('button', { name: 'Seeded Model 120' }))
     expect(await screen.findByRole('heading', { name: 'Seeded Model 120' })).not.toBeNull()
 
@@ -111,8 +122,8 @@ describe('desktop collection and transient-layer integration', () => {
     await waitFor(() => {
       expect(screen.queryByRole('heading', { name: 'Seeded Model 120' })).toBeNull()
     })
-    expect(await screen.findByText('84 models')).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Coding' })).not.toBeNull()
+    expect(await findModelCount(84)).not.toBeNull()
+    expect(screen.getByRole('radio', { name: 'Coding' })).not.toBeNull()
   })
 
   it('Escape closes only the top shared modal and restores focus without clearing state (#152)', async () => {

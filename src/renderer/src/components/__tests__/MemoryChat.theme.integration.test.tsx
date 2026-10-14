@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, screen } from '@testing-library/react'
+import { cleanup, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatBoundary, installBoundary, renderChat } from './harness/chat-boundary'
 
@@ -29,15 +29,20 @@ describe('<MemoryChat/> theme surfaces', () => {
       const composer = await screen.findByTestId('chat-composer')
       const hero = screen.getByTestId('chat-empty-hero')
       const preset = screen.getByTestId('explore-preset-train-my-feed')
+      // The composer's surface is the prompt input's group; presets are thin rows inside one
+      // list surface (the row's motion wrapper sits between them).
+      const composerSurface = within(composer).getAllByRole('group')[0]!
+      const presetSurface = preset.parentElement!.parentElement!
 
-      expect(composer.className).toContain('bg-card')
-      expect(composer.className).toContain('border-input')
-      expect(composer.className).not.toContain('bg-neutral-950')
+      expect(composerSurface.className).toContain('bg-card')
+      expect(composerSurface.className).toContain('border-input')
+      expect(composerSurface.className).not.toContain('bg-neutral-950')
       expect(composer.getAttribute('data-focus-surface')).toBe('chat-composer')
       expect(composer.parentElement?.className).toBe('w-full')
       expect(hero.className).toContain('bg-card')
-      expect(preset.className).toContain('bg-background')
-      expect(preset.className).toContain('border-border')
+      expect(presetSurface.className).toContain('bg-background')
+      expect(presetSurface.className).toContain('border-border')
+      expect(presetSurface.className).not.toContain('bg-neutral-950')
       expect(preset.className).not.toContain('bg-neutral-950')
     }
   )
