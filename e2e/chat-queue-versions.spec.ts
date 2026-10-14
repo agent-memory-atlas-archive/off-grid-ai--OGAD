@@ -134,7 +134,9 @@ test.describe('Desktop queue and saved response versions', () => {
     ).toBeVisible()
     await submit('Queue this first.')
     await submit('Queue this second.')
-    await expect(page.getByText('2 queued', { exact: true })).toBeVisible()
+    await expect(
+      page.getByTestId('chat-composer').getByText('2 queued', { exact: true })
+    ).toBeVisible()
     expect(
       audit()
         .filter((entry) => entry.event === 'request')
@@ -154,7 +156,9 @@ test.describe('Desktop queue and saved response versions', () => {
       await expect(page.getByText(text, { exact: true }).last()).toBeVisible()
     }
     await expect(page.getByText('UNEXPECTED UNINTERRUPTED TAIL.', { exact: false })).toHaveCount(0)
-    await expect(page.getByText('2 queued', { exact: true })).toBeHidden()
+    await expect(
+      page.getByTestId('chat-composer').getByText('2 queued', { exact: true })
+    ).toBeHidden()
     expect(
       audit()
         .filter((entry) => entry.event === 'request')
@@ -324,10 +328,14 @@ test.describe('Desktop queue and saved response versions', () => {
     ).toBeVisible()
     await submit('Queue this first.')
     await submit('Queue this second.')
-    await expect(page.getByText('2 queued', { exact: true })).toBeVisible()
+    await expect(
+      page.getByTestId('chat-composer').getByText('2 queued', { exact: true })
+    ).toBeVisible()
     await page.getByRole('button', { name: 'Stop generating', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeHidden()
-    await expect(page.getByText('2 queued', { exact: true })).toBeHidden()
+    await expect(
+      page.getByTestId('chat-composer').getByText('2 queued', { exact: true })
+    ).toBeHidden()
     await submit('Send this ahead of the queue.')
     await answer('The urgent reply is complete.')
     expect(
@@ -384,17 +392,23 @@ test.describe('Desktop queue and saved response versions', () => {
         page.getByText('The first reply is still running.', { exact: true }).last()
       ).toBeVisible()
       await submit('Queue this first.')
-      await expect(page.getByText('1 queued', { exact: true })).toBeVisible()
+      await expect(
+        page.getByTestId('chat-composer').getByText('1 queued', { exact: true })
+      ).toBeVisible()
       await page.getByRole('button', { name: 'Settings', exact: true }).first().click()
       await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
       await page.getByRole('button', { name: 'Chat', exact: true }).click()
       await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeVisible()
-      await expect(page.getByText('1 queued', { exact: true })).toBeVisible()
+      await expect(
+        page.getByTestId('chat-composer').getByText('1 queued', { exact: true })
+      ).toBeVisible()
       await submit('Queue this second.')
       await page.getByRole('button', { name: 'Settings', exact: true }).first().click()
       await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
       await page.getByRole('button', { name: 'Chat', exact: true }).click()
-      await expect(page.getByText('2 queued', { exact: true })).toBeVisible()
+      await expect(
+        page.getByTestId('chat-composer').getByText('2 queued', { exact: true })
+      ).toBeVisible()
       if (sendNow)
         await submit(
           'Send this ahead of the queue.',
@@ -438,7 +452,9 @@ test.describe('Desktop queue and saved response versions', () => {
     await page.getByRole('button', { name: 'Settings', exact: true }).first().click()
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
     await page.getByRole('button', { name: 'Chat', exact: true }).click()
-    await expect(page.getByText('1 queued', { exact: true })).toBeVisible()
+    await expect(
+      page.getByTestId('chat-composer').getByText('1 queued', { exact: true })
+    ).toBeVisible()
     await submit('Queue this second.')
     await page.getByRole('button', { name: 'Stop generating', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeHidden()
