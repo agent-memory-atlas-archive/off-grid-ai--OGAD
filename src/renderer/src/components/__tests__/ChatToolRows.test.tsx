@@ -38,18 +38,85 @@ async function openCompletedWork(): Promise<void> {
   await userEvent.click(screen.getByRole('button', { name: 'Work done' }))
 }
 
+describe('<ChatToolRows/> work disclosure', () => {
+  const completedTurn = (
+    <ChatToolRows
+      settled
+      thinking={<span>Thought process</span>}
+      thinkingText="Compare the two flight options first."
+      tools={[{ name: 'web_search', status: 'completed', result: 'Search results are ready.' }]}
+    />
+  )
+
+  it('starts folded as one button that names the finished work', () => {
+    render(completedTurn)
+
+    const trigger = screen.getByRole('button', { name: 'Work done' })
+    expect(screen.getAllByRole('button', { name: 'Work done' })).toHaveLength(1)
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('list', { name: 'Thinking and tool calls' })).toBeNull()
+    expect(screen.queryByText('Compare the two flight options first.')).toBeNull()
+  })
+
+  it('opens and folds the reasoning and steps on click', async () => {
+    const user = userEvent.setup()
+    render(completedTurn)
+    const trigger = screen.getByRole('button', { name: 'Work done' })
+
+    await user.click(trigger)
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByRole('list', { name: 'Thinking and tool calls' })).toBeTruthy()
+    expect(screen.getByText('Compare the two flight options first.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Searched the web, complete' })).toBeTruthy()
+
+    await user.click(trigger)
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    await waitFor(() =>
+      expect(screen.queryByText('Compare the two flight options first.')).toBeNull()
+    )
+  })
+
+  it('opens and folds from the keyboard with Enter and Space', async () => {
+    const user = userEvent.setup()
+    render(completedTurn)
+    const trigger = screen.getByRole('button', { name: 'Work done' })
+
+    await user.tab()
+    expect(document.activeElement).toBe(trigger)
+    await user.keyboard('{Enter}')
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText('Compare the two flight options first.')).toBeTruthy()
+
+    await user.keyboard(' ')
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    await waitFor(() =>
+      expect(screen.queryByText('Compare the two flight options first.')).toBeNull()
+    )
+  })
+
+  it('stays open while the work is live and names it as working', () => {
+    render(<ChatToolRows live tools={[{ name: 'web_search', status: 'running', result: '' }]} />)
+
+    const trigger = screen.getByRole('button', { name: 'Working' })
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Searched the web, running' })).toBeTruthy()
+  })
+})
+
 describe('<ChatToolRows/> work timeline', () => {
   it('waits for real timeline content before showing the gray marker', () => {
     const view = render(
-      <ChatToolRows live thinking={<span>Waiting for a response</span>} thinkingHasContent={false} />
+      <ChatToolRows
+        live
+        thinking={<span>Waiting for a response</span>}
+        thinkingHasContent={false}
+      />
     )
     const timeline = screen.getByRole('list', { name: 'Thinking and tool calls' })
     expect(timeline.querySelector('svg')).toBeNull()
     expect(timeline.querySelector('[data-checkpoint="done"]')).toBeNull()
 
-    view.rerender(
-      <ChatToolRows live thinking={<span>Thought process</span>} thinkingHasContent />
-    )
+    view.rerender(<ChatToolRows live thinking={<span>Thought process</span>} thinkingHasContent />)
     expect(timeline.querySelector('svg')).toBeTruthy()
     expect(timeline.querySelector('[data-checkpoint="done"]')).toBeTruthy()
   })
