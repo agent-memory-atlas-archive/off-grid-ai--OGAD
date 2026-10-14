@@ -33,6 +33,8 @@ export interface BridgeFeatures {
   readonly browserTasks?: boolean
   /** 0/absent: unavailable; 2: start/read/stop/control/guide with branchFrom. */
   readonly browserChat?: number
+  /** `settings.watch` is answered. Absent on older desktops, which refuse unknown methods. */
+  readonly settingsWatch?: boolean
 }
 
 export const BRIDGE_VERSION = 1
