@@ -107,10 +107,8 @@ test('window resize adds collection columns while filter context remains reachab
     )
     .toBe(3)
 
-  await collection.evaluate((element) => {
-    const scroller = element.parentElement
-    if (scroller) scroller.scrollTop = scroller.scrollHeight
-  })
+  await collection.hover()
+  await page.mouse.wheel(0, 10_000)
   await expect(page.getByPlaceholder('Search HuggingFace…')).toBeVisible()
 
   await page.setViewportSize({ width: 1800, height: 900 })
@@ -136,8 +134,9 @@ test('keyboard focus follows navigation, form, dialog, and primary-action order 
   // destination receives focus, which is what this test is about.
   const searchNavigation = page.getByRole('button', { name: /^Search( Pro)?$/ })
   const dayNavigation = page.getByRole('button', { name: /^Day( Pro)?$/ })
-  // The collapsed rail has no Pin button; keyboard focus entering it opens the rail, which then
-  // shows Pin above the first group.
+  await expectVisibleKeyboardFocus(sidebarPin, 'sidebar pin')
+  await page.keyboard.press('Tab')
+  // Clicking the logo opens the rail before keyboard traversal begins.
   await expectVisibleKeyboardFocus(
     navigation.getByRole('button', { name: 'Discover', exact: true }),
     'Discover group'
@@ -151,60 +150,85 @@ test('keyboard focus follows navigation, form, dialog, and primary-action order 
   // Continue through the rest of the real navigation and Models header. This keeps
   // Chromium in keyboard modality; a programmatic focus jump would not prove that
   // :focus-visible survives the user's actual traversal.
-  await tabUntilFocused(page.getByRole('button', { name: /^Storage\b/ }), 'Storage tab', 32)
+  const modelTypes = page.getByRole('radiogroup', { name: 'Model types' })
+  await tabUntilFocused(modelTypes.getByRole('radio', { checked: true }), 'model type', 32)
+  await page.keyboard.press('End')
+  await expectVisibleKeyboardFocus(
+    modelTypes.getByRole('radio', { name: 'Storage', exact: true }),
+    'Storage tab'
+  )
+  await page.keyboard.press('Home')
+  await expectVisibleKeyboardFocus(
+    modelTypes.getByRole('radio', { checked: true }),
+    'first model type'
+  )
   await page.keyboard.press('Tab')
   const modelSearch = page.getByPlaceholder('Search HuggingFace…')
   await expectVisibleKeyboardFocus(modelSearch, 'model search field')
 
-  for (const name of ['MTP downloads: Off', 'All sources', 'Any size', 'Sort: Recommended']) {
+  for (const name of ['MTP downloads: Off', 'All sources', 'Any size', 'Sort']) {
     await page.keyboard.press('Tab')
     await expectVisibleKeyboardFocus(
-      page.getByRole('button', { name, exact: true }),
+      page.getByRole(name === 'MTP downloads: Off' ? 'button' : 'combobox', { name, exact: true }),
       `${name} filter`
     )
   }
+  await page.keyboard.press('Tab')
+  const memory = page.getByRole('radiogroup', { name: 'Fits in memory' })
+  await expectVisibleKeyboardFocus(
+    memory.getByRole('radio', { name: 'Any', exact: true }),
+    'any memory size'
+  )
   for (const size of [2, 4, 6, 8, 16]) {
-    await page.keyboard.press('Tab')
+    await page.keyboard.press('ArrowRight')
     await expectVisibleKeyboardFocus(
-      page.getByRole('button', { name: `≤${size}GB`, exact: true }),
+      memory.getByRole('radio', { name: `≤${size}GB`, exact: true }),
       `${size}GB quick filter`
     )
   }
-  for (const useCase of [
-    'General',
-    'Coding',
-    'Writing',
-    'Legal',
-    'Vision',
-    'Lightweight',
-    'Challenger',
-    'Large'
-  ]) {
-    await page.keyboard.press('Tab')
+  await page.keyboard.press('Home')
+  await expect(memory.getByRole('radio', { name: 'Any', exact: true })).toBeChecked()
+  await page.keyboard.press('Tab')
+  await expectVisibleKeyboardFocus(
+    page.getByRole('radio', { name: 'Grid view', exact: true }),
+    'grid layout'
+  )
+  await page.keyboard.press('Tab')
+  const useCases = page.getByRole('radiogroup', { name: 'Use case', exact: true })
+  await expectVisibleKeyboardFocus(
+    useCases.getByRole('radio', { name: 'All', exact: true }),
+    'all use cases'
+  )
+  for (const useCase of ['General', 'Coding', 'Writing', 'Legal', 'Vision', 'Lightweight']) {
+    await page.keyboard.press('ArrowRight')
     await expectVisibleKeyboardFocus(
-      page.getByRole('button', { name: useCase, exact: true }),
+      useCases.getByRole('radio', { name: useCase, exact: true }),
       `${useCase} use-case filter`
     )
   }
+
+  await page.keyboard.press('Home')
+  await expect(useCases.getByRole('radio', { name: 'All', exact: true })).toBeChecked()
 
   const firstCard = page
     .getByRole('list', { name: 'Models available to download' })
     .getByRole('listitem')
     .filter({ has: page.getByRole('button', { name: 'Bonsai 2 27B', exact: true }) })
-  await page.keyboard.press('Tab')
-  await expectVisibleKeyboardFocus(
+  // Capability filters precede the cards in keyboard order.
+  await tabUntilFocused(
     firstCard.getByRole('button', { name: 'Bonsai 2 27B', exact: true }),
-    'model detail trigger'
-  )
-  await page.keyboard.press('Tab')
-  await expectVisibleKeyboardFocus(
-    firstCard.getByRole('button', { name: 'Details', exact: true }),
-    'model details action'
+    'model detail trigger',
+    24
   )
   await page.keyboard.press('Tab')
   await expectVisibleKeyboardFocus(
     firstCard.getByRole('button', { name: 'Download', exact: true }),
     'primary download action'
+  )
+  await page.keyboard.press('Tab')
+  await expectVisibleKeyboardFocus(
+    firstCard.getByRole('button', { name: 'Details', exact: true }),
+    'model details action'
   )
 
   // The production command palette is the app's real modal dialog. It must move
@@ -217,9 +241,14 @@ test('keyboard focus follows navigation, form, dialog, and primary-action order 
   // assertion failed against an element that was never there - the palette focuses its input correctly.
   // Anchored on the stable half of the string so a copy tweak to the tail does not break it again.
   const dialogSearch = dialog.getByPlaceholder(/^Search everything/)
-  await expectVisibleKeyboardFocus(dialogSearch, 'dialog search field', '-2px')
+  await expectVisibleKeyboardFocus(dialogSearch, 'dialog search field')
   await page.keyboard.press('Tab')
-  await expectVisibleKeyboardFocus(dialogSearch, 'dialog focus trap', '-2px')
+  await expectVisibleKeyboardFocus(
+    dialog.getByRole('listbox').locator('../..'),
+    'dialog results scroller'
+  )
+  await page.keyboard.press('Tab')
+  await expectVisibleKeyboardFocus(dialogSearch, 'dialog focus trap')
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
 })

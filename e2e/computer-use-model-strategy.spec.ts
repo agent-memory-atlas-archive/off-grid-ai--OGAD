@@ -122,9 +122,9 @@ async function close(): Promise<void> {
 async function selectStrategy(label: string): Promise<void> {
   await gotoSettings(page)
   await openSettingsSection(page, 'Computer use')
-  const strategy = page.getByRole('button', { name: 'Computer Use model strategy' })
+  const strategy = page.getByRole('combobox', { name: 'Computer Use model strategy' })
   await strategy.click()
-  await page.getByRole('menuitemradio', { name: label, exact: true }).click()
+  await page.getByRole('option', { name: label, exact: true }).click()
   await expect(strategy).toContainText(label)
 }
 
@@ -210,7 +210,11 @@ test('a Chat request runs the hybrid reasoner and specialist through one Compute
   })
   await page.getByRole('button', { name: 'Work done', exact: true }).click()
   // The chat turn ends when the task starts; the task's own finished entry is in Task history.
-  await expect(page.getByRole('button', { name: /^Computer Use done / }).first()).toBeVisible({
+  await expect(
+    page
+      .getByRole('complementary', { name: 'Task history' })
+      .getByRole('button', { name: /^Click the center of this test window done Computer Use/ })
+  ).toBeVisible({
     timeout: 120_000
   })
   expect(
@@ -251,7 +255,11 @@ for (const [strategy, counter] of [
     })
     await page.getByRole('button', { name: 'Work done', exact: true }).click()
     // The chat turn ends when the task starts; the task's own finished entry is in Task history.
-    await expect(page.getByRole('button', { name: /^Computer Use done / }).first()).toBeVisible({
+    await expect(
+      page
+        .getByRole('complementary', { name: 'Task history' })
+        .getByRole('button', { name: /^Click the center of this test window done Computer Use/ })
+    ).toBeVisible({
       timeout: 120_000
     })
     const state = JSON.parse(
