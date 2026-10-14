@@ -1367,6 +1367,7 @@ export async function reconcileActiveModelProjector(): Promise<boolean> {
         activeModelFile(),
         JSON.stringify({ id: transferred.id, primary, mmproj }, null, 2)
       )
+      settingsChanged()
       llm.reloadModel()
       return true
     }
