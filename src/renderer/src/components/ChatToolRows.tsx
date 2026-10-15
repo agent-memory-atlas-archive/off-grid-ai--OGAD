@@ -504,7 +504,7 @@ export function ChatToolRows({
       <Collapsible
         open={expanded}
         onOpenChange={setExpanded}
-        className="ml-1 w-full max-w-[85%]"
+        className="w-full max-w-[85%]"
         aria-busy={workIsLive || undefined}
       >
         <WorkTrigger state={workState} count={entries.length} />
