@@ -872,7 +872,27 @@ const offGridApi = {
     ipcRenderer.on('tts:voice-progress', listener)
     return unsubscribe('tts:voice-progress', listener)
   },
-  speak: (text: string, voice?: string) => ipcRenderer.invoke('tts:speak', text, voice),
+  /**
+   * Speak `text`; resolves with the whole clip. With `onPass`, each finished pass of a reply that
+   * is spoken in several arrives first, so playback can start before the whole clip is made.
+   */
+  speak: (
+    text: string,
+    voice?: string,
+    onPass?: (pass: { index: number; count: number; dataUrl: string }) => void
+  ): Promise<{ dataUrl: string }> => {
+    if (!onPass) return ipcRenderer.invoke('tts:speak', text, voice)
+    const key = `speak-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const listener = (
+      _event: unknown,
+      pass: { key: string; index: number; count: number; dataUrl: string }
+    ): void => {
+      if (pass.key === key) onPass({ index: pass.index, count: pass.count, dataUrl: pass.dataUrl })
+    }
+    ipcRenderer.on('tts:speech-pass', listener)
+    const stop = unsubscribe('tts:speech-pass', listener)
+    return ipcRenderer.invoke('tts:speak', text, voice, key).finally(stop)
+  },
   saveVoiceRecording: (audio: Uint8Array, extension: string): Promise<string> =>
     ipcRenderer.invoke('voice:save-recording', audio, extension),
 

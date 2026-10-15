@@ -46,7 +46,9 @@ export function setupTtsIpc(): void {
     return { ready: true }
   })
 
-  ipcMain.handle('tts:speak', async (event, text: string, voice?: string) => {
+  // `passKey`: the renderer wants each finished pass of a long reply as it is ready
+  // ('tts:speech-pass'), so it can start playing before the whole clip is made.
+  ipcMain.handle('tts:speak', async (event, text: string, voice?: string, passKey?: string) => {
     const { synthesize } = await import('./tts')
     const { getActiveRemoteVisionServerForModality } = await import('./vision/remote-vision-server')
     const remote = getActiveRemoteVisionServerForModality('voice')
@@ -58,6 +60,13 @@ export function setupTtsIpc(): void {
         /* synthesize owns the default voice when settings are unavailable */
       }
     }
-    return synthesize(text, chosenVoice, progressSender(event))
+    return synthesize(text, chosenVoice, progressSender(event), {
+      onPass: passKey
+        ? (pass) => {
+            if (!event.sender.isDestroyed())
+              event.sender.send('tts:speech-pass', { key: passKey, ...pass })
+          }
+        : undefined
+    })
   })
 }

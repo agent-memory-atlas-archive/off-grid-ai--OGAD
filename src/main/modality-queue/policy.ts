@@ -2,8 +2,8 @@
 // unit-tested in isolation from the async lock + model-eviction that wrap them.
 //
 // Tiers (lower number = higher priority):
-//   1 = live transcription (dictation), 2 = interactive foreground (chat, image,
-//   TTS, file STT), 3 = background rewind/replay vision (always yields).
+//   1 = live speech (dictation, and reading a reply aloud), 2 = interactive foreground
+//   (chat, image, file STT), 3 = background rewind/replay vision (always yields).
 //
 // Rules: one heavy (tier-2/3) job at a time; when the slot frees the highest-priority
 // waiter runs next (FIFO within a tier); tier 3 only starts when nothing in tier 1/2
@@ -41,12 +41,18 @@ export function canRun(
   return !heavyRunning || cfg.tier1CoexistsWithTier2
 }
 
+/**
+ * `backgroundHeld`: foreground work just finished and its follow-up (a reply read aloud, the
+ * next message) is probably on its way, so tier 3 does not start yet. A tier-3 job cannot be
+ * stopped once it runs, and one that slips in first competes with that follow-up for the GPU.
+ */
 export function selectNext(
   running: readonly QueueJob[],
   waiting: readonly QueueJob[],
-  cfg: PolicyConfig = DEFAULT_POLICY
+  cfg: PolicyConfig = DEFAULT_POLICY,
+  backgroundHeld = false
 ): QueueJob | null {
-  const foregroundPending = waiting.some((j) => j.tier === 1 || j.tier === 2)
+  const foregroundPending = backgroundHeld || waiting.some((j) => j.tier === 1 || j.tier === 2)
   const ordered = [...waiting].sort(byPriority)
   for (const job of ordered) {
     if (job.tier === 3 && foregroundPending) continue

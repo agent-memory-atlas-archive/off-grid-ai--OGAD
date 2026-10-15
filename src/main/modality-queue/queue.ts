@@ -57,6 +57,16 @@ export const CAPTURE_JOB: QueueRequest = Object.freeze({
   evicts: ['image']
 })
 
+/** Reading a reply aloud. Tier 1 like dictation: it starts at once beside whatever runs, and no
+ *  background pass starts while it runs or waits, so the voice is not competing for the GPU. */
+export const SPEECH_JOB: QueueRequest = Object.freeze({ tier: 1, label: 'speech' })
+
+/** How long background passes wait after foreground work ends: long enough for a voice reply's
+ *  speech request to arrive (the renderer asks for it once the chat turn's last token lands).
+ *  Measured 2026-10-15: without it, a capture pass queued behind the chat started the instant the
+ *  turn ended, and the reply's speech then took 40-83 s instead of ~2.5 s. */
+export const FOREGROUND_GRACE_MS = 3000
+
 /** A tier-3 background job with a descriptive label (same tier + eviction policy as
  *  CAPTURE_JOB). Use for the many background LLM passes so they all share ONE
  *  priority + eviction policy instead of each spelling out an inline literal. */
@@ -92,6 +102,15 @@ export class ModalityQueue {
   private changeCbs = new Set<(s: QueueState) => void>()
 
   private cfg: PolicyConfig = { ...DEFAULT_POLICY }
+  /** Background passes stay waiting until this time (see FOREGROUND_GRACE_MS). */
+  private backgroundHeldUntil = 0
+  private graceTimer: ReturnType<typeof setTimeout> | null = null
+  private readonly foregroundGraceMs: number
+
+  /** `foregroundGraceMs`: how long tier 3 waits after a tier-1/2 job ends. 0 = no wait. */
+  constructor(options: { foregroundGraceMs?: number } = {}) {
+    this.foregroundGraceMs = options.foregroundGraceMs ?? 0
+  }
   // Tracks whether the current async context is already executing inside a running
   // job, so a nested run() (sub-work of that job) runs INLINE instead of deadlocking.
   private readonly jobContext = new AsyncLocalStorage<true>()
@@ -179,6 +198,7 @@ export class ModalityQueue {
     } finally {
       const entry = this.running.get(job.id)
       this.running.delete(job.id)
+      if (job.tier !== 3) this.holdBackground()
       // Re-warm what this job evicted. Each engine's warm() is mode-aware: a
       // 'resident' engine reloads now; an 'on-demand' engine just clears its
       // eviction block and stays down until its own next use.
@@ -196,6 +216,20 @@ export class ModalityQueue {
     }
   }
 
+  /** Keep tier 3 waiting for the grace period, then look at the waiters again. */
+  private holdBackground(): void {
+    if (this.foregroundGraceMs <= 0) return
+    this.backgroundHeldUntil = Date.now() + this.foregroundGraceMs
+    if (this.graceTimer) clearTimeout(this.graceTimer)
+    this.graceTimer = setTimeout(() => {
+      // The latest hold owns this timer (an earlier one was cleared), so the hold ends here.
+      this.graceTimer = null
+      this.backgroundHeldUntil = 0
+      this.pump()
+    }, this.foregroundGraceMs)
+    this.graceTimer.unref()
+  }
+
   /** Move any admissible waiter into the running set (evicting first). Called
    *  whenever the running set changes. */
   private pump(): void {
@@ -204,7 +238,8 @@ export class ModalityQueue {
     for (;;) {
       const runningArr = [...this.running.values()].map((e) => e.job)
       const waitingArr = this.waiting.map((w) => w.job)
-      const next = selectNext(runningArr, waitingArr, this.cfg)
+      const backgroundHeld = Date.now() < this.backgroundHeldUntil
+      const next = selectNext(runningArr, waitingArr, this.cfg, backgroundHeld)
       if (!next) return
 
       const idx = this.waiting.findIndex((w) => w.job.id === next.id)
@@ -255,4 +290,4 @@ export class ModalityQueue {
 }
 
 /** The one process-wide queue. Engines register into it; callers wrap heavy work. */
-export const modalityQueue = new ModalityQueue()
+export const modalityQueue = new ModalityQueue({ foregroundGraceMs: FOREGROUND_GRACE_MS })

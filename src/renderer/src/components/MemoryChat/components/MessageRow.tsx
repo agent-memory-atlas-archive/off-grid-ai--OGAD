@@ -314,7 +314,7 @@ function VoiceMessageRow({
                 const settings = await window.api.getSettings()
                 return typeof settings.ttsVoice === 'string' ? settings.ttsVoice : undefined
               }}
-              synthesize={(text, voice) => window.api.speak(text, voice)}
+              synthesize={(text, voice, onPass) => window.api.speak(text, voice, onPass)}
               onPlaybackStateChange={reportPlayback}
               copied={copied}
               onCopy={(text) => onCopy(text, message.id)}
@@ -366,7 +366,7 @@ function VoiceMessageRow({
                   const settings = await window.api.getSettings()
                   return typeof settings.ttsVoice === 'string' ? settings.ttsVoice : undefined
                 }}
-                synthesize={(text, voice) => window.api.speak(text, voice)}
+                synthesize={(text, voice, onPass) => window.api.speak(text, voice, onPass)}
                 onPlaybackStateChange={reportPlayback}
                 copied={copied}
                 onCopy={(text) => onCopy(text, message.id)}

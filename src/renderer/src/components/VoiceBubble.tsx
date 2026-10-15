@@ -42,6 +42,7 @@ import {
 } from '@offgrid/operator-ui/operator/elements/transcription'
 import { AutoHeight } from '@offgrid/operator-ui/operator/presence'
 import { claimVoicePlayback, onVoicePlaybackClaim } from '@renderer/lib/voice-playback-bus'
+import { PassPlayback, type PlayableClip } from '@renderer/lib/pass-playback'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 
 /** Envelope resolution: enough points that 2px bars across a chat column do not look blocky. */
@@ -278,6 +279,14 @@ async function decodeFileWaveform(url: string, points: number): Promise<number[]
   } catch {
     return []
   }
+}
+
+/** What the listener reads when a voice note or a reply cannot be played. */
+function playbackFailure(error: unknown, recording: boolean): string {
+  if (recording) return 'Voice note could not be played. Check your audio output, then try again.'
+  return error instanceof Error && error.message.trim()
+    ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
+    : 'Speech could not be generated. Try again.'
 }
 
 /** A compact ghost icon action with its tooltip. */
@@ -633,7 +642,12 @@ interface VoiceBubbleProps {
   transcript: string
   isUser?: boolean
   /** Synthesize text → playable dataUrl on-device (assistant replies). */
-  synthesize: (text: string, voice?: string) => Promise<{ dataUrl: string }>
+  synthesize: (
+    text: string,
+    voice?: string,
+    /** A long reply's passes as they are ready, so playback starts before the whole clip. */
+    onPass?: (pass: { index: number; count: number; dataUrl: string }) => void
+  ) => Promise<{ dataUrl: string }>
   /** Read the selected voice before playing a synthesized reply. */
   readVoice?: () => Promise<string | undefined>
   /** Play once automatically when ready (a just-finished assistant reply). */
@@ -669,7 +683,7 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
   onCopy,
   onRetry
 }) => {
-  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioRef = useRef<PlayableClip | null>(null)
   const srcRef = useRef<{ dataUrl: string; voice?: string } | null>(null)
   /** Where the next fresh clip starts, when the listener sought while no clip was playing. */
   const pendingStartRef = useRef(0)
@@ -781,7 +795,7 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
   }, [status, currentTime])
 
   const wire = useCallback(
-    (audio: HTMLAudioElement) => {
+    (audio: PlayableClip) => {
       audio.playbackRate = speed
       audio.ontimeupdate = () => setCurrentTime(audio.currentTime)
       audio.onloadedmetadata = () => {
@@ -826,35 +840,43 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
       audioRef.current = null
       setLoadedDuration(0)
       const cached = srcRef.current
-      let src = audioUrl || (cached && cached.voice === voice ? cached.dataUrl : null)
-      if (!src) {
-        const { dataUrl } = await synthesize(transcript, voice)
-        if (!dataUrl) throw new Error('no audio')
-        srcRef.current = { dataUrl, voice }
-        src = dataUrl
-      }
-      // Read after synthesis: a seek made while the clip was being prepared still counts.
+      const src = audioUrl || (cached && cached.voice === voice ? cached.dataUrl : null)
+      // A clip on hand plays as it is. A reply still to be made plays pass by pass as it arrives,
+      // so the voice starts after its first sentence instead of after the whole reply.
+      const playback = src ? null : new PassPlayback()
+      const clip: PlayableClip = playback ?? new Audio(src!)
+      audioRef.current = clip
+      wire(clip)
+      const made = playback
+        ? synthesize(transcript, voice, (pass) => playback.addPass(pass.index, pass.dataUrl)).then(
+            ({ dataUrl }) => {
+              if (!dataUrl) throw new Error('no audio')
+              srcRef.current = { dataUrl, voice }
+              playback.setFull(dataUrl)
+            }
+          )
+        : null
+      // A seek made while the clip was being prepared still counts.
       const startAt = pendingStartRef.current
       setCurrentTime(startAt)
-      const audioEl = new Audio(src)
-      audioRef.current = audioEl
-      wire(audioEl)
-      // Before metadata loads this is the element's default start position.
-      if (startAt > 0) audioEl.currentTime = startAt
+      if (startAt > 0) clip.currentTime = startAt
       claimVoicePlayback(messageId)
-      await audioEl.play()
+      const playing = clip.play()
+      // The first audio, or the synthesis failing before any audio exists.
+      await (made ? Promise.race([playing, made.then(() => playing)]) : playing)
       if (pendingStartRef.current === startAt) pendingStartRef.current = 0
       setStatus('playing')
+      // The rest of the reply can still fail after its first sentence started playing.
+      made?.catch((e: unknown) => {
+        if (audioRef.current !== clip) return
+        clip.pause()
+        setStatus('idle')
+        setPlaybackError(playbackFailure(e, false))
+      })
     } catch (e) {
       console.error('[voice] playback failed', e)
       setStatus('idle')
-      setPlaybackError(
-        audioUrl
-          ? 'Voice note could not be played. Check your audio output, then try again.'
-          : e instanceof Error && e.message.trim()
-            ? e.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
-            : 'Speech could not be generated. Try again.'
-      )
+      setPlaybackError(playbackFailure(e, Boolean(audioUrl)))
     }
   }, [status, isUser, audioUrl, readVoice, transcript, synthesize, wire, messageId])
 
