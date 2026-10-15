@@ -508,7 +508,8 @@ export function ChatToolRows({
         aria-busy={workIsLive || undefined}
       >
         <WorkTrigger state={workState} count={entries.length} />
-        <CollapsibleContent className="offgrid-smooth-collapsible overflow-hidden">
+        {/* The clip box reaches 12px left of the content, so a checkpoint's glow is not cut off. */}
+        <CollapsibleContent className="offgrid-smooth-collapsible -ml-3 overflow-hidden pl-3">
           <div className="[&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pb-1 [&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pt-2.5 [&>[data-slot=collapsible]>[data-slot=collapsible-trigger]]:hidden">
             <ToolTimeline
               entries={entries}
