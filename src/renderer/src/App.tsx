@@ -816,6 +816,9 @@ function AppContent(): React.JSX.Element {
         },
         openReplay: (timestamp) => {
           navigateTo('replay', () => setReplayTarget(timestamp))
+        },
+        openLink: (url) => {
+          window.open(url, '_blank', 'noopener')
         }
       })
     },

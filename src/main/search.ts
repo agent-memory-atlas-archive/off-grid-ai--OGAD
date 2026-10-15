@@ -143,13 +143,33 @@ export async function searchStatus(): Promise<{ vectors: number; pending: number
 }
 
 /** Data sources available to filter by (surfaces seen, busiest first, + meetings). */
+/** Bulk mail synced from a connected account (newsletters, promotions): searchable, but never counted
+ *  or featured, as the ambient rules have it. Screens of videos or feeds you watched stay. */
+const SYNCED_BULK_MAIL = `(COALESCE(o.category, '') = 'consumption' AND o.source_key IS NOT NULL)`
+
+/** Distinct moments, as the result list shows them: one per app and summary, not one per capture. */
+const DISTINCT_MOMENTS = 'COUNT(DISTINCT lower(trim(o.summary)))'
+
+/** Totals are a full pass over every observation; the rail asks for them on every visit. */
+const SOURCE_TOTALS_TTL_MS = 60_000
+let sourceTotals: { at: number; rows: { source: string; count: number }[] } | null = null
+
 export function searchSources(): { source: string; count: number }[] {
+  const now = Date.now()
+  if (sourceTotals && now - sourceTotals.at < SOURCE_TOTALS_TTL_MS) return sourceTotals.rows
+  const rows = countSources()
+  sourceTotals = { at: now, rows }
+  return rows
+}
+
+function countSources(): { source: string; count: number }[] {
   ensureRagStoreSchema()
   const db = getDB()
   const rows = db
     .prepare(
-      `SELECT surface AS source, COUNT(*) AS count FROM observations
-        WHERE surface IS NOT NULL AND surface != '' GROUP BY surface ORDER BY count DESC LIMIT 20`
+      `SELECT o.surface AS source, ${DISTINCT_MOMENTS} AS count FROM observations o
+        WHERE o.surface IS NOT NULL AND o.surface != '' AND NOT ${SYNCED_BULK_MAIL}
+        GROUP BY o.surface ORDER BY count DESC LIMIT 20`
     )
     .all() as { source: string; count: number }[]
   const mtg = db.prepare('SELECT COUNT(*) AS c FROM meetings').get() as { c: number }
@@ -176,9 +196,10 @@ export function searchFacets(query: string): { source: string; count: number }[]
     out.push(
       ...(db
         .prepare(
-          `SELECT COALESCE(o.surface,'') AS source, COUNT(*) AS count
+          `SELECT COALESCE(o.surface,'') AS source, ${DISTINCT_MOMENTS} AS count
              FROM observation_fts f JOIN observations o ON o.id = f.rowid
             WHERE observation_fts MATCH ? AND o.surface IS NOT NULL AND o.surface != ''
+              AND NOT ${SYNCED_BULK_MAIL}
             GROUP BY o.surface ORDER BY count DESC`
         )
         .all(m) as { source: string; count: number }[])
@@ -331,6 +352,44 @@ function likeMeetingHits(query: string, limit: number): RawHit[] {
     .all(...args, limit) as RawHit[]
 }
 
+/** One moment, once. Capture records the same screen again and again while it stays put, each
+ *  with the same summary; a result list showed dozens of identical cards. Keeps the first (best
+ *  ranked or newest) of each app and summary. */
+function collapseRepeats(results: SearchResult[]): SearchResult[] {
+  const seen = new Set<string>()
+  return results.filter((result) => {
+    if (result.kind !== 'screen') return true
+    const identity = `${result.surface.toLowerCase()}\u0000${result.snippet.trim().toLowerCase()}`
+    if (seen.has(identity)) return false
+    seen.add(identity)
+    return true
+  })
+}
+
+/** Observations made from a connected account (synced mail and chat) are messages, not screens:
+ *  they have no screenshot, and calling them SCREEN with an empty picture misled. */
+function markSyncedMessages(results: SearchResult[]): void {
+  const ids = results.filter((r) => r.key.startsWith('obs:')).map((r) => r.refId)
+  if (!ids.length) return
+  const synced = new Set(
+    (
+      getDB()
+        .prepare(
+          `SELECT DISTINCT of.observation_id AS id FROM observation_frames of
+             JOIN frames f ON f.id = of.frame_id
+            WHERE f.source = 'connector' AND of.observation_id IN (${ids.map(() => '?').join(',')})`
+        )
+        .all(...ids) as { id: number }[]
+    ).map((row) => row.id)
+  )
+  for (const result of results) {
+    if (result.key.startsWith('obs:') && synced.has(result.refId)) {
+      result.kind = 'message'
+      result.imagePath = null
+    }
+  }
+}
+
 /** The newest things in the index, for an empty query: captured moments, recorded meetings and
  *  your chats, newest first, within the chosen sources. Search opens on this feed. */
 function recentHits(limit: number, sources?: string[]): RawHit[] {
@@ -343,6 +402,7 @@ function recentHits(limit: number, sources?: string[]): RawHit[] {
               o.summary AS snippet, COALESCE(o.surface,'') AS surface, o.url AS url, ${epochMsSql('o.ts')} AS ts
          FROM observations o
         WHERE o.summary IS NOT NULL AND o.summary != ''
+          AND NOT ${SYNCED_BULK_MAIL}
           ${wanted ? `AND lower(o.surface) IN (${wanted.map(() => '?').join(',')})` : ''}
         ORDER BY o.ts DESC LIMIT ?`
     )
@@ -549,16 +609,19 @@ export async function universalSearch(
   const limit = opts.limit ?? 30
   if (!q) {
     // No words yet: the newest of everything, so Search never opens on an empty page.
-    const recent = rankResults(Array.from(fuseHits([recentHits(limit, opts.sources)]).values()), {
+    const recent = rankResults(Array.from(fuseHits([recentHits(limit * 4, opts.sources)]).values()), {
       query: '',
       sources: opts.sources,
       kinds: opts.kinds,
       excludeChatId: opts.excludeChatId,
       sort: 'recency'
     })
-    for (const r of recent)
-      r.imagePath = thumbFor({ key: r.key, kind: r.kind, refId: r.refId } as RawHit)
-    return recent
+    const page = collapseRepeats(recent).slice(0, limit)
+    markSyncedMessages(page)
+    for (const r of page)
+      if (r.kind !== 'message')
+        r.imagePath = thumbFor({ key: r.key, kind: r.kind, refId: r.refId } as RawHit)
+    return page
   }
   // When filtering by source, cast a wider net per source so enough survive the filter.
   const perSource = opts.sources?.length ? 80 : Math.min(40, limit + 10)
@@ -592,17 +655,20 @@ export async function universalSearch(
     sort: opts.sort
   })
   opts.signal?.throwIfAborted()
-  for (const r of ordered)
-    r.imagePath = thumbFor({ key: r.key, kind: r.kind, refId: r.refId } as RawHit)
+  const distinct = collapseRepeats(ordered)
+  markSyncedMessages(distinct.slice(0, limit * 2))
+  for (const r of distinct)
+    if (r.kind !== 'message')
+      r.imagePath = thumbFor({ key: r.key, kind: r.kind, refId: r.refId } as RawHit)
 
-  if (!opts.collapseScreenMoments) return ordered.slice(0, limit)
+  if (!opts.collapseScreenMoments) return distinct.slice(0, limit)
 
   // One captured moment is indexed twice: its raw OCR frame and its distilled
   // observation. Replay shows moments, not index records, so collapse both forms
   // after ranking and thumbnail resolution. General search keeps both records.
   const seenMoments = new Set<string>()
   const moments: SearchResult[] = []
-  for (const result of ordered) {
+  for (const result of distinct) {
     const identity =
       result.kind === 'screen'
         ? result.imagePath || `${String(result.ts)}:${result.surface}`

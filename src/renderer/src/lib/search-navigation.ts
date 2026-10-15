@@ -6,6 +6,8 @@ export interface SearchNavigationPorts {
   openMeeting(meetingId: number | null): void
   openChat(target: { conversationId?: string; projectId?: string } | null): void
   openReplay(timestamp: number): void
+  /** A synced email or chat opens where it lives (its link), when it has one. */
+  openLink?(url: string): void
 }
 
 /** Translate the universal-search contract into renderer navigation commands.
@@ -36,6 +38,10 @@ export function navigateSearchHit(
   }
   if (hit.kind === 'doc') {
     ports.openChat(hit.url ? { projectId: hit.url } : null)
+    return
+  }
+  if (hit.kind === 'message' && hit.url && ports.openLink) {
+    ports.openLink(hit.url)
     return
   }
   ports.openReplay(hit.ts || now)
