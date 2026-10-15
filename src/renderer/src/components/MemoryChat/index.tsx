@@ -118,6 +118,7 @@ import {
   type QueueEdit
 } from '@offgrid/operator-ui/operator/workflows/queue'
 import { AttachmentList } from '@offgrid/operator-ui/operator/workflows/attachments'
+import { attachedDocumentBlock } from '@offgrid/models'
 import { AutoHeight } from '@offgrid/operator-ui/operator/presence'
 import {
   PromptInput,
@@ -1660,7 +1661,7 @@ export function MemoryChat({
       typed || (atts.length ? `(${atts.length} attachment${atts.length > 1 ? 's' : ''})` : '')
     const attBlock = atts
       .filter((a) => a.text)
-      .map((a) => `--- attached ${a.kind}: ${a.name} ---\n${a.text}`)
+      .map((a) => attachedDocumentBlock(a.kind, a.name, a.text as string))
       .join('\n\n')
     // Actual image files go to the multimodal model (not just their captions).
     const imagePaths = atts.filter((a) => a.kind === 'image' && a.path).map((a) => a.path as string)

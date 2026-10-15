@@ -29,6 +29,7 @@ import {
   conversationSummaryRequest,
   conversationSummaryTurn,
   elideStaleToolResults,
+  fitAttachedDocuments,
   normalizeConversationSummary,
   normalizeMaxToolCalls,
   repeatedToolCallDecision,
@@ -932,6 +933,27 @@ export async function toolChat(
   ]
   // Tokens counted by script: characters / 4 lets a Japanese or Chinese chat overflow first.
   const compactAtTokens = Math.floor(ctx * 0.8)
+  // Compaction only shrinks earlier turns; a long attached document can outgrow the window on its
+  // own, which ended the turn in "Context is full." right after compacting. The document is cut
+  // to excerpts that fit what the system prompt, tools and a share of the history leave, and the
+  // model is told it is reading excerpts. Earlier turns still compact below if they need to.
+  const historyTokens = toolPromptTokens(messages.slice(1, -1))
+  const turnBudget = Math.max(
+    Math.floor(ctx * 0.25),
+    compactAtTokens -
+      toolPromptTokens([messages[0]], tools) -
+      Math.min(historyTokens, Math.floor(ctx * 0.2))
+  )
+  const turn = messages[messages.length - 1]
+  const fitTurnText = (text: string): string => fitAttachedDocuments(text, turnBudget).text
+  if (typeof turn.content === 'string') turn.content = fitTurnText(turn.content)
+  else if (Array.isArray(turn.content)) {
+    turn.content = turn.content.map((part: { type?: string; text?: unknown }) =>
+      part.type === 'text' && typeof part.text === 'string'
+        ? { ...part, text: fitTurnText(part.text) }
+        : part
+    )
+  }
   // One model call folds every earlier turn into a structured summary that stands in for them
   // from now on. If it fails, the oldest turns fall back to short excerpts as before.
   const summary =
