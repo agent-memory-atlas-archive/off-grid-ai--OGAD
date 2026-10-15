@@ -70,7 +70,8 @@ const server = http.createServer((request, response) => {
                   .join('\n')
         }))
     })
-    if (prompt === 'Keep the saved answer after failure.' && attempt === 2) {
+    // The resend fails, and so does the one retry the chat fallback makes for an unavailable model.
+    if (prompt === 'Keep the saved answer after failure.' && (attempt === 2 || attempt === 3)) {
       response.writeHead(503, { 'Content-Type': 'application/json' })
       response.end(JSON.stringify({ error: { message: 'Synthetic model unavailable.' } }))
       return
