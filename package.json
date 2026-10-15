@@ -78,7 +78,7 @@
     "@offgrid/clipboard": "file:./packages/clipboard",
     "@offgrid/design": "file:./packages/design",
     "@offgrid/models": "file:../shared/packages/models",
-    "@offgrid/operator-ui": "github:off-grid-ai/ui-library#35a6245b905b1411879249c90a60394465823c7e",
+    "@offgrid/operator-ui": "github:off-grid-ai/ui-library#7f7d37e2b1c112417091ec15c4a45954925eb8c3",
     "@offgrid/rag": "file:./packages/rag",
     "@offgrid/speech": "file:../shared/packages/speech",
     "@offgrid/sync": "file:../shared/packages/sync",

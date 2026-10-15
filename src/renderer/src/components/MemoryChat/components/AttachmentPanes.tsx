@@ -1,27 +1,17 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { FilePreview, type FilePreviewState } from '@offgrid/operator-ui/operator/media/file-preview'
 import pdfWorkerUrl from '@offgrid/operator-ui/pdf.worker.min.mjs?url'
 import { captureUrlForPath } from '../../../../../shared/ogcapture-url'
 import { useMediaUrl, type MediaUrlState } from '@renderer/lib/media-url'
-import { ArrowsIn } from '@phosphor-icons/react'
-import { Button } from '@offgrid/operator-ui/operator/coss/button'
-import { IconTip } from '../../IconTip'
 
 const ease = [0.16, 1, 0.3, 1] as const
 const PDF_OPTIONS = { useSystemFonts: true }
-/** The viewer's toolbar row above the page, left out of the height a fitted page may use. */
-const PDF_TOOLBAR_HEIGHT = 44
-
-/** The loaded document, as the viewer's onLoadSuccess hands it over (pdf.js PDFDocumentProxy). */
-interface PdfDocument {
-  getPage: (n: number) => Promise<{ getViewport: (o: { scale: number }) => { width: number; height: number } }>
-}
 
 // CodeMirror's default light theme wins over the operator theme inside FilePreview; keep the
 // editor on the panel surface (the same dressing the preview's file chapter uses).
 const PREVIEW_SURFACE =
-  'relative overflow-hidden rounded-xl [&_.cm-activeLine]:bg-transparent! [&_.cm-activeLineGutter]:bg-transparent! [&_.cm-content]:py-3! [&_.cm-editor]:rounded-xl [&_.cm-editor]:bg-foreground/[0.03]! [&_.cm-editor]:text-[12.5px] [&_.cm-gutters]:border-border/40! [&_.cm-gutters]:bg-transparent! [&_.cm-gutters]:text-muted-foreground/60!'
+  'overflow-hidden rounded-xl [&_.cm-activeLine]:bg-transparent! [&_.cm-activeLineGutter]:bg-transparent! [&_.cm-content]:py-3! [&_.cm-editor]:rounded-xl [&_.cm-editor]:bg-foreground/[0.03]! [&_.cm-editor]:text-[12.5px] [&_.cm-gutters]:border-border/40! [&_.cm-gutters]:bg-transparent! [&_.cm-gutters]:text-muted-foreground/60!'
 
 export interface AttachmentViewerContent {
   title: string
@@ -52,14 +42,7 @@ function previewFor(
   content: AttachmentViewerContent,
   src: string,
   pdfMedia: MediaUrlState,
-  pdf: {
-    page: number
-    setPage: (page: number) => void
-    scale: number
-    setScale: (s: number) => void
-    width: number | undefined
-    onLoadSuccess: (pdf: PdfDocument) => void
-  }
+  pdf: { page: number; setPage: (page: number) => void; scale: number; setScale: (s: number) => void }
 ): FilePreviewState {
   const missing = (what: string): FilePreviewState => ({
     kind: 'unavailable',
@@ -87,9 +70,6 @@ function previewFor(
         onPageChange: pdf.setPage,
         scale: pdf.scale,
         onScaleChange: pdf.setScale,
-        // The page is drawn to fit the panel; zoom scales from there.
-        ...(pdf.width ? { width: pdf.width } : {}),
-        onLoadSuccess: pdf.onLoadSuccess,
         options: PDF_OPTIONS
       }
     }
@@ -110,50 +90,7 @@ function AttachmentPreviewComponent({
   const pdfMedia = useMediaUrl(
     content.renderer === 'document' && !framedDocument ? content.path : null
   )
-  // Fit to screen, the default: the whole page at the largest size that fits the panel's width and
-  // height, from the page's own shape. The viewer otherwise draws every page 520px wide.
-  const surfaceRef = useRef<HTMLDivElement>(null)
-  const [room, setRoom] = useState<{ width: number; height: number }>()
-  const [pdfDocument, setPdfDocument] = useState<PdfDocument>()
-  const [aspect, setAspect] = useState<number>()
-  useEffect(() => {
-    const area = surfaceRef.current?.parentElement
-    if (!area) return
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry) setRoom({ width: entry.contentRect.width, height: entry.contentRect.height })
-    })
-    observer.observe(area)
-    return () => observer.disconnect()
-  }, [])
-  useEffect(() => {
-    let live = true
-    void pdfDocument
-      ?.getPage(page)
-      .then((pdfPage) => {
-        const viewport = pdfPage.getViewport({ scale: 1 })
-        if (live) setAspect(viewport.width / viewport.height)
-      })
-      .catch(() => undefined)
-    return () => {
-      live = false
-    }
-  }, [pdfDocument, page])
-  const fitWidth = room
-    ? Math.max(
-        240,
-        Math.floor(
-          aspect ? Math.min(room.width, (room.height - PDF_TOOLBAR_HEIGHT) * aspect) : room.width
-        )
-      )
-    : undefined
-  const preview = previewFor(content, src, pdfMedia, {
-    page,
-    setPage,
-    scale,
-    setScale,
-    width: fitWidth,
-    onLoadSuccess: setPdfDocument
-  })
+  const preview = previewFor(content, src, pdfMedia, { page, setPage, scale, setScale })
 
   return (
     <AnimatePresence mode="popLayout" initial={false}>
@@ -163,8 +100,10 @@ function AttachmentPreviewComponent({
         animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
         exit={{ opacity: 0, y: -4, filter: 'blur(6px)' }}
         transition={{ duration: 0.4, ease }}
-        ref={surfaceRef}
-        className={framedDocument ? 'h-full' : PREVIEW_SURFACE}
+        // A PDF fills the panel's height; the viewer fits each page to it.
+        className={
+          framedDocument ? 'h-full' : preview.kind === 'pdf' ? `h-full ${PREVIEW_SURFACE}` : PREVIEW_SURFACE
+        }
       >
         {framedDocument ? (
           src ? (
@@ -178,26 +117,7 @@ function AttachmentPreviewComponent({
             />
           )
         ) : (
-          <>
-            <FilePreview preview={preview} />
-            {preview.kind === 'pdf' ? (
-              // Sits at the end of the viewer's own toolbar row.
-              <div className="absolute right-0 top-0">
-                <IconTip label="Fit to screen">
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label="Fit to screen"
-                    disabled={scale === 1}
-                    onClick={() => setScale(1)}
-                  >
-                    <ArrowsIn />
-                  </Button>
-                </IconTip>
-              </div>
-            ) : null}
-          </>
+          <FilePreview preview={preview} />
         )}
       </motion.div>
     </AnimatePresence>
