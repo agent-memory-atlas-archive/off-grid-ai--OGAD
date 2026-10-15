@@ -67,9 +67,9 @@ describe('frame text index', () => {
 
     // The backfill works newest first, a batch at a time, until none are left. The first batch is
     // the mail frame (skipped) and the newest older frame.
-    expect(indexFrameTextBatch(2)).toBe(true)
+    expect(indexFrameTextBatch(2, 10_000)).toBe(true)
     expect(found('hephaestus')).toEqual([old[4]])
-    while (indexFrameTextBatch(2)) {
+    while (indexFrameTextBatch(2, 10_000)) {
       /* the rest */
     }
     expect(frameTextIndexBackfilling()).toBe(false)
