@@ -2,8 +2,11 @@ import crypto from 'node:crypto'
 import type Database from 'better-sqlite3-multiple-ciphers'
 import type { BackupDataPort } from '@offgrid/sync/portable'
 import { CORE_SYNC_ENTITIES, emitSyncMutation } from '../sync-mutation'
+import { DOCUMENT_SCHEMA_VERSION } from '@offgrid/rag/documents'
+import { ensureAttachedDocumentSchema } from '../documents/sqlite-store'
 import {
   validateDesktopBackupData,
+  type DesktopBackupAttachedDocument,
   type DesktopBackupConversation,
   type DesktopBackupData,
   type DesktopBackupDocument,
@@ -115,10 +118,12 @@ export class DesktopBackupDataPort implements BackupDataPort<
   async collectProject(projectId: string): Promise<DesktopBackupData | null> {
     const project = this.project(projectId, true)
     if (!project) return null
+    const conversations = this.conversations(projectId)
     return {
       surface: 'offgrid-desktop',
       projects: [project],
-      conversations: this.conversations(projectId)
+      conversations,
+      attachedDocuments: this.attachedDocuments(conversations)
     }
   }
 
@@ -129,7 +134,8 @@ export class DesktopBackupDataPort implements BackupDataPort<
     return {
       surface: 'offgrid-desktop',
       projects: project ? [project] : [],
-      conversations: [conversation]
+      conversations: [conversation],
+      attachedDocuments: this.attachedDocuments([conversation])
     }
   }
 
@@ -266,6 +272,7 @@ export class DesktopBackupDataPort implements BackupDataPort<
     })
     applyTransaction()
 
+    this.restoreAttachedDocuments(data.attachedDocuments ?? [])
     for (const projectId of addedProjects) {
       emitSyncMutation({ entity: CORE_SYNC_ENTITIES.project, entityId: projectId, kind: 'put' })
     }
@@ -292,10 +299,12 @@ export class DesktopBackupDataPort implements BackupDataPort<
     const projects = (
       this.db.prepare('SELECT * FROM projects ORDER BY updated_at DESC').all() as ProjectRow[]
     ).map((row) => this.mapProject(row, true))
+    const conversations = this.conversations()
     return {
       surface: 'offgrid-desktop',
       projects,
-      conversations: this.conversations()
+      conversations,
+      attachedDocuments: this.attachedDocuments(conversations)
     }
   }
 
@@ -396,6 +405,64 @@ export class DesktopBackupDataPort implements BackupDataPort<
         })
       )
     }
+  }
+
+  /**
+   * The page text of documents the exported messages attach. Vectors and passages are not kept:
+   * the next chat turn re-indexes from the text.
+   */
+  private attachedDocuments(conversations: DesktopBackupConversation[]): DesktopBackupAttachedDocument[] {
+    const ids = new Set<string>()
+    for (const conversation of conversations) {
+      for (const message of conversation.messages) {
+        const attachments = (message.context as { attachments?: unknown } | null | undefined)?.attachments
+        if (!Array.isArray(attachments)) continue
+        for (const attachment of attachments) {
+          const id = (attachment as { documentId?: unknown } | null)?.documentId
+          if (typeof id === 'string' && id) ids.add(id)
+        }
+      }
+    }
+    if (!ids.size) return []
+    try {
+      const documentRow = this.db.prepare('SELECT id, name, kind FROM attached_documents WHERE id = ?')
+      const pageRows = this.db.prepare(
+        'SELECT page, label, text FROM attached_document_pages WHERE document_id = ? ORDER BY page'
+      )
+      return [...ids].flatMap((id) => {
+        const row = documentRow.get(id) as { id: string; name: string; kind: string } | undefined
+        if (!row) return []
+        const pages = (pageRows.all(id) as { page: number; label: string | null; text: string }[]).map(
+          (page) => ({ page: page.page, ...(page.label ? { label: page.label } : {}), text: page.text })
+        )
+        return [{ id: row.id, name: row.name, kind: row.kind, pages }]
+      })
+    } catch {
+      // No document has been attached on this device yet: the tables do not exist.
+      return []
+    }
+  }
+
+  private restoreAttachedDocuments(documents: DesktopBackupAttachedDocument[]): void {
+    if (!documents.length) return
+    ensureAttachedDocumentSchema(this.db)
+    const exists = this.db.prepare('SELECT 1 FROM attached_documents WHERE id = ?')
+    const insertDocument = this.db.prepare(
+      `INSERT INTO attached_documents (id, name, kind, state, page_count, chunk_count, embedded_count,
+         unreadable_pages, embedder, schema_version, created_at, last_used_at)
+       VALUES (?, ?, ?, 'indexing', ?, 0, 0, 0, 'none', ?, ?, ?)`
+    )
+    const insertPage = this.db.prepare(
+      'INSERT OR REPLACE INTO attached_document_pages (document_id, page, label, text, needs_ocr) VALUES (?, ?, ?, ?, 0)'
+    )
+    const now = Date.now()
+    this.db.transaction(() => {
+      for (const document of documents) {
+        if (exists.get(document.id)) continue
+        insertDocument.run(document.id, document.name, document.kind, document.pages.length, DOCUMENT_SCHEMA_VERSION, now, now)
+        for (const page of document.pages) insertPage.run(document.id, page.page, page.label ?? null, page.text)
+      }
+    })()
   }
 
   private documentExists(projectId: string, document: DesktopBackupDocument): boolean {

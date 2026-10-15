@@ -17,6 +17,8 @@ afterSign: scripts/notarize-mac.mjs
 asarUnpack:
   - 'node_modules/@img/sharp-libvips-linux-x64/lib/*.so*'
   - 'node_modules/**/onnxruntime-node/bin/**/*'
+  # ONNX Runtime opens model files by path; it cannot read them inside app.asar.
+  - 'node_modules/@gutenye/ocr-models/assets/**/*'
 directories:
   buildResources: build
 files:

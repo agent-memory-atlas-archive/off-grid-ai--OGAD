@@ -85,6 +85,7 @@ export function activityLabel(activity?: {
   kind: string
   counts?: Record<string, number>
   name?: string
+  label?: string
 }): string {
   if (!activity) return ''
   if (activity.kind === 'planning') return 'Planning next action…'
@@ -93,6 +94,7 @@ export function activityLabel(activity?: {
   if (activity.kind === 'running_tool') return runningToolLabel(activity.name)
   if (activity.kind === 'reading')
     return `Reading the page${(activity.counts?.urls ?? 0) > 1 ? 's' : ''}…`
+  if (activity.kind === 'documents') return activity.label || 'Reading documents…'
   if (activity.kind === 'searching') return 'Searching your memory…'
   if (activity.kind === 'memory') {
     const counts = activity.counts || {}

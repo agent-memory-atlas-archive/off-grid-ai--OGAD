@@ -113,6 +113,39 @@ interface SessionEntityRecord {
 
 type ArtifactKind = import('../../shared/ipc-contracts').ArtifactKindContract
 
+type ProcessedUpload = {
+  name: string
+  kind: 'text' | 'pdf' | 'docx' | 'image' | 'audio' | 'video'
+  text: string
+  path?: string
+  /** Content hash: the document's identity in the conversation's document index. */
+  documentId?: string
+  pages?: number
+}
+
+type DocumentProgressEvent = {
+  id: string
+  name: string
+  phase: 'reading' | 'ocr' | 'indexing' | 'ready' | 'failed'
+  done: number
+  total: number
+  pageCount: number
+  error?: string
+}
+
+type ChatDocumentRow = {
+  id: string
+  name: string
+  kind: string
+  path: string | null
+  pageCount: number
+  state: 'reading' | 'indexing' | 'ready' | 'failed'
+  unreadablePages: number
+  error: string | null
+  excluded: boolean
+  progress: DocumentProgressEvent | null
+}
+
 interface RendererAPIOverrides {
   // Open-core bridge
   isPro?: boolean
@@ -406,15 +439,13 @@ interface RendererAPIOverrides {
     }[]
   >
   deleteArtifact: (id: string) => Promise<boolean>
-  processFile: (
-    bytes: ArrayBuffer,
-    name: string
-  ) => Promise<{
-    name: string
-    kind: 'text' | 'pdf' | 'docx' | 'image' | 'audio' | 'video'
-    text: string
-    path?: string
-  }>
+  processFile: (bytes: ArrayBuffer, name: string) => Promise<ProcessedUpload>
+  processFilePath: (filePath: string, name: string) => Promise<ProcessedUpload>
+  documents: {
+    list: (conversationId: string) => Promise<ChatDocumentRow[]>
+    setExcluded: (conversationId: string, documentId: string, excluded: boolean) => Promise<boolean>
+    onProgress: (callback: (progress: DocumentProgressEvent) => void) => () => void
+  }
 
   // Skills
   listSkills: () => Promise<{ name: string; description: string }[]>

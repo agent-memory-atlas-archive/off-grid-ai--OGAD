@@ -134,6 +134,8 @@ export default defineConfig({
         input: {
           index: resolve('src/main/index.ts'),
           'embeddings-worker': resolve('src/main/embeddings-worker.ts'),
+          'documents-extract-worker': resolve('src/main/documents/extract-worker.ts'),
+          'documents-ocr-worker': resolve('src/main/documents/ocr-worker.ts'),
           'tts-onnx-worker': resolve('src/main/tts-onnx-worker.ts')
         }
       }

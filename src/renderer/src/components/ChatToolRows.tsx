@@ -72,6 +72,55 @@ type ToolEntryState = Extract<ToolTraceEntry, { kind: 'tool' }>['state']
  * step's name. Work waiting on the person stays a collapsible step (a breathing ring) so its row
  * keeps its accessible name and its task.
  */
+function pageSpan(pages: readonly number[]): string {
+  if (!pages.length) return ''
+  const first = pages[0]!
+  const last = pages[pages.length - 1]!
+  return first === last ? `p. ${first}` : `pp. ${first}–${last}`
+}
+
+/** One step for the documents an answer read: a thin row per document, pages it read. */
+function documentsEntry(
+  entry: Extract<AssistantTimelineEntry, { kind: 'documents' }>
+): ToolTraceEntry {
+  return {
+    id: 'documents',
+    kind: 'tool',
+    name: entry.label,
+    ariaLabel: entry.label,
+    state: 'success',
+    description: entry.documents.map((document) => document.name).join(', '),
+    summary: 'complete',
+    result: (
+      <ul className="divide-y divide-border/60 text-sm">
+        {entry.documents.map((document) => (
+          <li key={document.name} className="flex flex-wrap items-baseline gap-x-2 py-1.5">
+            <span className="min-w-0 truncate text-foreground">{document.name}</span>
+            <span className="text-xs text-muted-foreground">
+              {document.whole
+                ? 'read in full'
+                : `${document.passages} passage${document.passages === 1 ? '' : 's'}${
+                    document.pages.length ? ` · ${pageSpan(document.pages)}` : ''
+                  }`}
+            </span>
+            {document.readPages !== undefined ? (
+              <span className="text-xs text-muted-foreground/70">
+                {document.readPages ? `pages 1–${document.readPages} read so far` : 'still reading'}
+              </span>
+            ) : null}
+            {document.unreadablePages ? (
+              <span className="text-xs text-muted-foreground/70">
+                {document.unreadablePages} scanned page{document.unreadablePages === 1 ? '' : 's'}{' '}
+                not read yet
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    )
+  }
+}
+
 const ENTRY_STATE: Record<WorkStatus, ToolEntryState> = {
   running: 'running',
   complete: 'success',
@@ -428,6 +477,10 @@ export function ChatToolRows({
     if (entry.kind === 'thinking') {
       const streaming = thinkingLive && orderIndex === ordered.length - 1
       pushReasoning(`thinking:${orderIndex}`, entry.text, streaming)
+      return
+    }
+    if (entry.kind === 'documents') {
+      entries.push(documentsEntry(entry))
       return
     }
     const projectedTool = projected[entry.toolIndex - toolOffset]

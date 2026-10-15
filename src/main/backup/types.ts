@@ -43,10 +43,20 @@ export interface DesktopBackupConversation {
   messages: DesktopBackupMessage[]
 }
 
+/** The text of a document attached to a chat, so a restore can answer from all of it. */
+export interface DesktopBackupAttachedDocument {
+  id: string
+  name: string
+  kind: string
+  pages: { page: number; label?: string; text: string }[]
+}
+
 export interface DesktopBackupData {
   surface: 'offgrid-desktop'
   projects: DesktopBackupProject[]
   conversations: DesktopBackupConversation[]
+  /** Optional: backups made before documents were indexed per chat have none. */
+  attachedDocuments?: DesktopBackupAttachedDocument[]
 }
 
 export interface DesktopRestoreSummary {
@@ -126,6 +136,23 @@ function isConversation(value: unknown): value is DesktopBackupConversation {
   )
 }
 
+function isAttachedDocument(value: unknown): value is DesktopBackupAttachedDocument {
+  return (
+    isRecord(value) &&
+    isString(value.id) &&
+    isString(value.name) &&
+    isString(value.kind) &&
+    Array.isArray(value.pages) &&
+    value.pages.every(
+      (page) =>
+        isRecord(page) &&
+        Number.isInteger(page.page) &&
+        isString(page.text) &&
+        (page.label === undefined || isString(page.label))
+    )
+  )
+}
+
 export function validateDesktopBackupData(value: unknown): DesktopBackupData {
   if (
     !isRecord(value) ||
@@ -133,7 +160,10 @@ export function validateDesktopBackupData(value: unknown): DesktopBackupData {
     !Array.isArray(value.projects) ||
     !value.projects.every(isProject) ||
     !Array.isArray(value.conversations) ||
-    !value.conversations.every(isConversation)
+    !value.conversations.every(isConversation) ||
+    (value.attachedDocuments !== undefined &&
+      (!Array.isArray(value.attachedDocuments) ||
+        !value.attachedDocuments.every(isAttachedDocument)))
   ) {
     throw new BundleError('This backup does not contain valid Off Grid AI Desktop data.')
   }

@@ -1,7 +1,7 @@
 import type { RuntimeBackend } from '../shared/runtime-backends'
 import type { PerformancePackStatus } from '../shared/performance-pack'
 import type { EngineUpdateStatus } from '../shared/engine-updates'
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
   CACHE_CLEANUP_CHANNEL,
   type ArtifactKindContract,
@@ -706,6 +706,14 @@ const offGridApi = {
       thinking?: boolean
       context?: string
       rules?: readonly string[]
+      /** Documents attached to this message; earlier ones are read from the conversation. */
+      documents?: {
+        documentId?: string
+        name: string
+        kind: string
+        text?: string
+        path?: string
+      }[]
     }
   ) => ipcRenderer.invoke('tools:chat', query, history, opts),
 
@@ -765,6 +773,39 @@ const offGridApi = {
   // --- File attachments → text ---
   processFile: (bytes: ArrayBuffer, name: string) =>
     ipcRenderer.invoke('files:process', bytes, name),
+  /** The file's location on disk when it came from a pick or a drop; '' for in-memory blobs. */
+  filePath: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
+  },
+  /** Read a picked or dropped file where it is, so a large document never crosses IPC as bytes. */
+  processFilePath: (filePath: string, name: string) =>
+    ipcRenderer.invoke('files:process-path', filePath, name),
+
+  // --- Documents in a chat ---
+  documents: {
+    list: (conversationId: string) => ipcRenderer.invoke('documents:list', conversationId),
+    setExcluded: (conversationId: string, documentId: string, excluded: boolean) =>
+      ipcRenderer.invoke('documents:set-excluded', conversationId, documentId, excluded),
+    onProgress: (
+      callback: (progress: {
+        id: string
+        name: string
+        phase: 'reading' | 'ocr' | 'indexing' | 'ready' | 'failed'
+        done: number
+        total: number
+        pageCount: number
+        error?: string
+      }) => void
+    ) => {
+      const sub = (_: unknown, progress: Parameters<typeof callback>[0]): void => callback(progress)
+      ipcRenderer.on('documents:progress', sub)
+      return unsubscribe('documents:progress', sub)
+    }
+  },
   fileDataUrl: (path: string) => ipcRenderer.invoke('files:data-url', path),
 
   // --- Skills ---

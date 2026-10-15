@@ -1,3 +1,4 @@
+import { totalmem } from 'os'
 import { settingsChanged } from './settings-version'
 import { budgetChange, speculativePatch, speculativeOptions } from '../shared/text-settings-rules'
 import type { RuntimeBackend } from '../shared/runtime-backends'
@@ -639,7 +640,8 @@ export class LLMService {
           ? this.mtpModelPath()
           : undefined,
       imageMinTokens: this.imageMinTokensForModel(),
-      reportModelPlacement: true
+      reportModelPlacement: true,
+      totalRamBytes: totalmem()
     })
   }
 
@@ -982,6 +984,11 @@ export class LLMService {
   restoreSelectedModel(): void {
     this.runtimeModelOverride = null
     this.reloadModel()
+  }
+
+  /** A reply is being generated right now (background work can wait for the cores). */
+  isGenerating(): boolean {
+    return this.activeGenerations > 0
   }
 
   private async beginGeneration(): Promise<void> {

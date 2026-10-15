@@ -8,6 +8,8 @@ export type SearchKind =
   | 'fact'
   | 'chat'
   | 'doc'
+  /** A passage of a document attached to the chat (key: attachment:<documentId>:<page>:<position>). */
+  | 'attachment'
 
 export type SearchSort = 'relevance' | 'recency' | 'match'
 

@@ -4,7 +4,7 @@
 // without mounting the chat.
 
 import { completeChatStreamTool, startChatStreamTool, type ChatStreamTool } from '@offgrid/sync'
-import type { AssistantTimelineEntry } from './message-persistence'
+import { readTimelineDocuments, type AssistantTimelineEntry } from './message-persistence'
 
 export interface StreamEvent {
   type: 'content' | 'reasoning' | 'step' | 'tool_result' | 'done'
@@ -26,6 +26,12 @@ export interface StreamedMessage {
 }
 
 /** Preserve stream order across separate model rounds without storing every token as an entry. */
+function isDocumentsStep(
+  step: unknown
+): step is { kind: 'documents'; label?: string; documents?: unknown } {
+  return !!step && typeof step === 'object' && (step as { kind?: unknown }).kind === 'documents'
+}
+
 export function appendTimelineEvent(
   previous: readonly AssistantTimelineEntry[] | undefined,
   event: StreamEvent
@@ -37,6 +43,16 @@ export function appendTimelineEvent(
       entries[entries.length - 1] = { ...last, text: last.text + event.text }
     else entries.push({ kind: 'thinking', text: event.text })
     return entries
+  }
+  if (event.type === 'step' && isDocumentsStep(event.step)) {
+    const documents = readTimelineDocuments(event.step.documents)
+    if (!documents.length) return previous ? [...previous] : undefined
+    const entries = (previous ?? []).filter((entry) => entry.kind !== 'documents')
+    // Documents are read before the model starts, so their row leads the timeline.
+    return [
+      { kind: 'documents', label: event.step.label ?? 'Read documents', documents },
+      ...entries
+    ]
   }
   if (event.type === 'step' && runningToolName(event.step)) {
     const entries = [...(previous ?? [])]

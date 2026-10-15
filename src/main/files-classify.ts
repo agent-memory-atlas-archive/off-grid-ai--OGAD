@@ -40,3 +40,57 @@ export function uploadPickerExtensions(): string[] {
 export function sanitizeUploadName(name: string): string {
   return name.replace(/[^\w.-]+/g, '_')
 }
+
+/** Formats we cannot read yet. Read as text, their bytes would reach the model as garbage. */
+export const BINARY_EXT = [
+  'xlsx',
+  'xls',
+  'xlsm',
+  'pptx',
+  'ppt',
+  'key',
+  'numbers',
+  'pages',
+  'odt',
+  'ods',
+  'odp',
+  'doc',
+  'zip',
+  'rar',
+  '7z',
+  'tar',
+  'gz',
+  'tgz',
+  'bz2',
+  'xz',
+  'dmg',
+  'iso',
+  'exe',
+  'msi',
+  'dll',
+  'so',
+  'dylib',
+  'bin',
+  'apk',
+  'ipa',
+  'jar',
+  'class',
+  'sqlite',
+  'db',
+  'psd',
+  'ai',
+  'sketch',
+  'fig',
+  'epub',
+  'mobi',
+  'woff',
+  'woff2',
+  'ttf',
+  'otf',
+  'wasm'
+]
+
+/** A known binary format by name alone (no file read). */
+export function isBinaryUploadName(name: string): boolean {
+  return BINARY_EXT.includes(path.extname(name).slice(1).toLowerCase())
+}

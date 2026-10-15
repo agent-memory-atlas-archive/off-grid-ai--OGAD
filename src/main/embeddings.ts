@@ -5,7 +5,15 @@ import { existsSync } from 'fs'
 import { Worker } from 'worker_threads'
 import { chosenModelsDir, modelsDir } from './runtime-env'
 import { modelReadDirectories } from './model-paths'
-import { embedText, embeddingDevice, disposeEmbeddingModel } from './embeddings-core'
+import {
+  DOCUMENT_EMBEDDER,
+  DOCUMENT_RERANKER,
+  disposeEmbeddingModel,
+  embedText,
+  embedTexts,
+  embeddingDevice,
+  rerankPassages
+} from './embeddings-core'
 import { getResidencyMode } from './runtime-residency'
 import { recordAIRequest, type AIRequestHandle } from './ai-request-log'
 import type { EmbeddingRequest, EmbeddingResponse } from './embeddings-worker'
@@ -39,7 +47,11 @@ class EmbeddingService {
   private nextId = 1
   private readonly waiting = new Map<
     number,
-    { resolve: (v: number[]) => void; reject: (e: Error) => void; log: AIRequestHandle }
+    {
+      resolve: (response: EmbeddingResponse) => void
+      reject: (e: Error) => void
+      log: AIRequestHandle
+    }
   >()
   /** Settles once every request scheduled so far has finished; shutdown waits on it. */
   private queue: Promise<unknown> = Promise.resolve()
@@ -102,7 +114,7 @@ class EmbeddingService {
         })
       }
       if (response.error) pending.reject(new Error(response.error))
-      else pending.resolve(response.vector ?? [])
+      else pending.resolve(response)
     })
     // A dead worker must not strand callers, and the next request should get a fresh one.
     const fail = (error: Error): void => {
@@ -197,27 +209,9 @@ class EmbeddingService {
               getBackendPreference('embeddings'),
               modelReadDirectories()
             )
-          return new Promise<number[]>((resolve, reject) => {
-            const worker = this.spawn(entry)
-            const id = this.nextId++
-            this.waiting.set(id, { resolve, reject, log })
-            worker.postMessage({ id, text } as EmbeddingRequest)
-          })
+          return this.post({ id: this.nextId++, text }, entry, log).then((r) => r.vector ?? [])
         }
-        const runWithResidency = async (): Promise<number[]> => {
-          try {
-            return await run()
-          } finally {
-            if (getResidencyMode('embeddings') === 'on-demand') {
-              const worker = this.worker
-              this.worker = null
-              if (worker) await worker.terminate()
-              else await disposeEmbeddingModel()
-              this.reportedDevice = null
-            }
-          }
-        }
-        const vector = await this.schedule(runWithResidency, interactive)
+        const vector = await this.schedule(() => this.withResidency(run), interactive)
         log.update({
           backend: this.reportedDevice ?? embeddingDevice() ?? 'Unknown',
           metrics: { dimensions: vector.length }
@@ -225,6 +219,133 @@ class EmbeddingService {
         return vector
       }
     )
+  }
+
+  private post(
+    request: EmbeddingRequest,
+    entry: string,
+    log: AIRequestHandle
+  ): Promise<EmbeddingResponse> {
+    return new Promise<EmbeddingResponse>((resolve, reject) => {
+      const worker = this.spawn(entry)
+      this.waiting.set(request.id, { resolve, reject, log })
+      worker.postMessage(request)
+    })
+  }
+
+  /** Long jobs (a document ingest) hold the model loaded between their requests. */
+  private holds = 0
+
+  /** Keep the worker and models loaded until the returned release is called, even on demand. */
+  hold(): () => void {
+    this.holds++
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.holds--
+      if (!this.holds && getResidencyMode('embeddings') === 'on-demand' && !this.running) {
+        void this.schedule(() => this.withResidency(async () => undefined), false)
+      }
+    }
+  }
+
+  private async withResidency<T>(run: () => Promise<T>): Promise<T> {
+    try {
+      return await run()
+    } finally {
+      if (getResidencyMode('embeddings') === 'on-demand' && !this.holds) {
+        const worker = this.worker
+        this.worker = null
+        if (worker) await worker.terminate()
+        else await disposeEmbeddingModel()
+        this.reportedDevice = null
+      }
+    }
+  }
+
+  /**
+   * Vectors for passages of documents attached to chat, with the multilingual document model.
+   * Background work unless `interactive` (a question is waiting on a query vector).
+   */
+  async embedDocumentTexts(
+    texts: string[],
+    opts: { interactive?: boolean } = {}
+  ): Promise<number[][]> {
+    if (!texts.length) return []
+    return withStorageDownload(() =>
+      this.runModel(
+        texts.length === 1
+          ? { text: texts[0], model: DOCUMENT_EMBEDDER }
+          : { passages: texts.length, characters: texts.reduce((sum, t) => sum + t.length, 0) },
+        (entry, log) =>
+          entry
+            ? this.post(
+                { id: this.nextId++, text: '', texts, model: DOCUMENT_EMBEDDER },
+                entry,
+                log
+              ).then((r) => r.vectors ?? [])
+            : embedTexts(
+                texts,
+                DOCUMENT_EMBEDDER,
+                modelsDir(),
+                getBackendPreference('embeddings'),
+                modelReadDirectories()
+              ),
+        opts.interactive === true,
+        DOCUMENT_EMBEDDER,
+        texts.length === 1 ? 'Document question embedding' : 'Document indexing'
+      )
+    )
+  }
+
+  /** Cross-encoder relevance of each passage to the query, same order. Someone is waiting on it. */
+  async rerank(query: string, passages: string[]): Promise<number[]> {
+    if (!passages.length) return []
+    return withStorageDownload(() =>
+      this.runModel(
+        { query, passages: passages.length },
+        (entry, log) =>
+          entry
+            ? this.post(
+                { id: this.nextId++, text: '', texts: passages, rerankQuery: query },
+                entry,
+                log
+              ).then((r) => r.scores ?? [])
+            : rerankPassages(
+                query,
+                passages,
+                modelsDir(),
+                getBackendPreference('embeddings'),
+                modelReadDirectories()
+              ),
+        true,
+        DOCUMENT_RERANKER,
+        'Document reranking'
+      )
+    )
+  }
+
+  private async runModel<T>(
+    request: Record<string, unknown>,
+    run: (entry: string | null, log: AIRequestHandle) => Promise<T>,
+    interactive: boolean,
+    model: string,
+    source: string
+  ): Promise<T> {
+    if (this.shuttingDown) throw new Error('Embedding runtime is shutting down.')
+    return recordAIRequest({ modality: 'embedding', source, model, request }, async (log) => {
+      const result = await this.schedule(
+        () =>
+          this.withResidency(() => {
+            if (this.shuttingDown) throw new Error('Embedding runtime is shutting down.')
+            return run(builtWorkerEntry(), log)
+          }),
+        interactive
+      )
+      log.update({ backend: this.reportedDevice ?? embeddingDevice() ?? 'Unknown' })
+      return result
+    })
   }
 }
 

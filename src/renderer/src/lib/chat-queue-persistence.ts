@@ -55,6 +55,8 @@ export interface QueueAttachmentLoader {
     kind: Attachment['kind']
     text: string
     path?: string
+    documentId?: string
+    pages?: number
   }>
 }
 export async function reloadQueueAttachments(
@@ -76,7 +78,14 @@ export async function reloadQueueAttachments(
                   if (!data || !loader.processFile) throw new Error('Attachment missing')
                   const bytes = await (await fetch(data)).arrayBuffer()
                   const loaded = await loader.processFile(bytes, att.name)
-                  return { ...att, kind: loaded.kind, text: loaded.text, status: 'ready' }
+                  return {
+                    ...att,
+                    kind: loaded.kind,
+                    text: loaded.text,
+                    ...(loaded.documentId ? { documentId: loaded.documentId } : {}),
+                    ...(loaded.pages ? { pages: loaded.pages } : {}),
+                    status: 'ready'
+                  }
                 } catch {
                   return {
                     ...att,
