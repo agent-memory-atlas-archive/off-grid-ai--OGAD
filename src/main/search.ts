@@ -330,6 +330,48 @@ function likeMeetingHits(query: string, limit: number): RawHit[] {
     .all(...args, limit) as RawHit[]
 }
 
+/** The newest things in the index, for an empty query: captured moments, recorded meetings and
+ *  your chats, newest first, within the chosen sources. Search opens on this feed. */
+function recentHits(limit: number, sources?: string[]): RawHit[] {
+  const db = getDB()
+  const wanted = sources?.length ? sources.map((source) => source.toLowerCase()) : null
+  const want = (source: string): boolean => !wanted || wanted.includes(source.toLowerCase())
+  const observations = db
+    .prepare(
+      `SELECT 'obs:'||o.id AS key, 'screen' AS kind, o.id AS refId, COALESCE(o.surface,'Screen') AS title,
+              o.summary AS snippet, COALESCE(o.surface,'') AS surface, o.url AS url, ${epochMsSql('o.ts')} AS ts
+         FROM observations o
+        WHERE o.summary IS NOT NULL AND o.summary != ''
+          ${wanted ? `AND lower(o.surface) IN (${wanted.map(() => '?').join(',')})` : ''}
+        ORDER BY o.ts DESC LIMIT ?`
+    )
+    .all(...(wanted ?? []), limit) as RawHit[]
+  const meetings = want('Meeting')
+    ? (db
+        .prepare(
+          `SELECT 'mtg:'||id AS key, 'meeting' AS kind, id AS refId, COALESCE(title,'Meeting') AS title,
+                  substr(COALESCE(summary, transcript, ''),1,300) AS snippet, 'Meeting' AS surface,
+                  NULL AS url, COALESCE(started_at,0) AS ts
+             FROM meetings ORDER BY started_at DESC LIMIT ?`
+        )
+        .all(limit) as RawHit[])
+    : []
+  const chats = want('Chat')
+    ? (db
+        .prepare(
+          `SELECT 'chat:'||rc.id AS key, 'chat' AS kind, 0 AS refId, COALESCE(rc.title,'Chat') AS title,
+                  COALESCE((SELECT substr(rm.content,1,300) FROM rag_messages rm
+                             WHERE rm.conversation_id = rc.id ORDER BY rm.rowid DESC LIMIT 1),'') AS snippet,
+                  'Chat' AS surface, rc.id AS url, ${epochMsSql('rc.updated_at')} AS ts
+             FROM rag_conversations rc ORDER BY rc.updated_at DESC LIMIT ?`
+        )
+        .all(limit) as RawHit[])
+    : []
+  return [...observations, ...meetings, ...chats]
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+    .slice(0, limit)
+}
+
 // Frames have no FTS index; match raw OCR text on all tokens (AND), newest first.
 function likeFrameHits(query: string, limit: number): RawHit[] {
   const terms = queryTerms(query, 6)
@@ -425,7 +467,8 @@ export async function searchSemanticSources(vector: number[], limit: number): Pr
 }
 
 async function semanticHits(query: string, limit: number): Promise<RawHit[]> {
-  const vector = await embeddings.generateEmbedding(query)
+  // Someone is waiting on this one: it goes ahead of queued background indexing.
+  const vector = await embeddings.generateEmbedding(query, { interactive: true })
   return searchSemanticSources(vector, limit)
 }
 
@@ -471,8 +514,20 @@ export async function universalSearch(
 ): Promise<SearchResult[]> {
   ensureRagStoreSchema()
   const q = query.trim()
-  if (!q) return []
   const limit = opts.limit ?? 30
+  if (!q) {
+    // No words yet: the newest of everything, so Search never opens on an empty page.
+    const recent = rankResults(Array.from(fuseHits([recentHits(limit, opts.sources)]).values()), {
+      query: '',
+      sources: opts.sources,
+      kinds: opts.kinds,
+      excludeChatId: opts.excludeChatId,
+      sort: 'recency'
+    })
+    for (const r of recent)
+      r.imagePath = thumbFor({ key: r.key, kind: r.kind, refId: r.refId } as RawHit)
+    return recent
+  }
   // When filtering by source, cast a wider net per source so enough survive the filter.
   const perSource = opts.sources?.length ? 80 : Math.min(40, limit + 10)
 
