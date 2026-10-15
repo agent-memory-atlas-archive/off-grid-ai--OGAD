@@ -4750,6 +4750,9 @@ export function MemoryChat({
                             >
                               <AttachmentList
                                 attachments={attachments.map(toProcessingAttachment)}
+                                // One compact row of pills, so a few files do not push the
+                                // composer up the screen.
+                                layout="chips"
                                 onRemove={removeAttachment}
                                 onOpen={(id) => {
                                   const a = attachments.find((attachment) => attachment.id === id)
