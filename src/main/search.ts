@@ -4,6 +4,7 @@
 // observation/frame/transcript backlog (using the in-app MiniLM model) so the
 // semantic half actually covers your captured life. All local, all offline.
 import { getDB } from './database'
+import { frameTextIndexBackfilling } from './frame-text-index'
 import { embeddings } from './embeddings'
 import { ensureRagStoreSchema } from './rag/store'
 import { addChunks, searchVectors, vectorCount, type VecChunk } from './vectors'
@@ -272,8 +273,8 @@ function keywordHits(query: string, perSource: number): RawHit[][] {
     ),
     // Recorded meeting transcripts (no FTS table) — LIKE over title/summary/transcript.
     likeMeetingHits(query, perSource),
-    // Raw frame OCR via LIKE — catches exact on-screen words dropped from the summary.
-    likeFrameHits(query, perSource),
+    // Every word on screen, from the frame text index (raw OCR the summaries dropped).
+    frameHits(query, perSource),
     // Your own chat conversations (title + message content), one hit per chat.
     likeChatHits(query, perSource),
     // Project knowledge-base documents (chunked file content).
@@ -372,22 +373,53 @@ function recentHits(limit: number, sources?: string[]): RawHit[] {
     .slice(0, limit)
 }
 
-// Frames have no FTS index; match raw OCR text on all tokens (AND), newest first.
+/** Frames whose on-screen text matches, from the frame text index. While older frames are still
+ *  being indexed (or before the index exists), recent frames are also matched word for word. */
+function frameHits(query: string, limit: number): RawHit[] {
+  const db = getDB()
+  const indexed = !!db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'frame_fts'")
+    .get()
+  const match = ftsExpr(query)
+  const hits: RawHit[] =
+    indexed && match
+      ? (db
+          .prepare(
+            `SELECT 'frame:'||f.id AS key, 'screen' AS kind, f.id AS refId, COALESCE(f.surface,'Screen') AS title,
+                    substr(f.text,1,300) AS snippet, COALESCE(f.surface,'') AS surface, f.url AS url,
+                    ${epochMsSql('f.ts')} AS ts
+               FROM frame_fts x JOIN frames f ON f.id = x.rowid
+              WHERE frame_fts MATCH ? ORDER BY bm25(frame_fts) LIMIT ?`
+          )
+          .all(match, limit) as RawHit[])
+      : []
+  if (indexed && !frameTextIndexBackfilling()) return hits
+  const seen = new Set(hits.map((hit) => hit.key))
+  return [...hits, ...likeFrameHits(query, limit).filter((hit) => !seen.has(hit.key))]
+}
+
+// Raw OCR text on all tokens (AND), newest first.
 function likeFrameHits(query: string, limit: number): RawHit[] {
   const terms = queryTerms(query, 6)
   if (!terms.length) return []
   const { where, args } = likeMatch(LIKE_COLUMNS.frame, terms)
+  // Only while the frame text index is incomplete. Scanning all raw OCR (hundreds of MB) took
+  // seconds on the main thread, so this reads recent frames only, through the ts index.
+  const since = new Date(Date.now() - RAW_FRAME_TEXT_DAYS * 86_400_000).toISOString().slice(0, 10)
   return getDB()
     .prepare(
       `SELECT 'frame:'||id AS key, 'screen' AS kind, id AS refId, COALESCE(surface,'Screen') AS title,
               substr(text,1,300) AS snippet, COALESCE(surface,'') AS surface, url AS url,
               ${epochMsSql('ts')} AS ts
          FROM frames
-        WHERE text IS NOT NULL AND COALESCE(source, '') != 'connector' AND ${where}
+        WHERE ts >= ? AND text IS NOT NULL AND COALESCE(source, '') != 'connector' AND ${where}
         ORDER BY ts DESC LIMIT ?`
     )
-    .all(...args, limit) as RawHit[]
+    .all(since, ...args, limit) as RawHit[]
 }
+
+/** How far back search reads raw on-screen text word for word. */
+const RAW_FRAME_TEXT_DAYS = 30
 
 /** Ranking penalty for bulk mail (newsletters, promos): still searchable, never on top of the
  *  user's real conversations just because it is recent. */
