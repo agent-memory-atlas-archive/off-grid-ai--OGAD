@@ -41,7 +41,10 @@ function operatorUiAliases(): { find: RegExp; replacement: string }[] {
     }
     if (!source) continue // e.g. pdf.worker.min.mjs stays on the installed package
     const name = `@offgrid/operator-ui${subpath.slice(1)}`
-    aliases.push({ find: new RegExp(`^${name.replace(/[/.]/g, '\\$&')}$`), replacement: source })
+    aliases.push({
+      find: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`),
+      replacement: source
+    })
   }
   return aliases
 }
@@ -182,7 +185,14 @@ export default defineConfig({
       // Linked library source imports these from its own node_modules: one copy each (two Reacts
       // break hooks; two motions break shared animation context).
       dedupe: operatorUiRoot
-        ? ['react', 'react-dom', 'motion', 'radix-ui', '@phosphor-icons/react', 'react-resizable-panels']
+        ? [
+            'react',
+            'react-dom',
+            'motion',
+            'radix-ui',
+            '@phosphor-icons/react',
+            'react-resizable-panels'
+          ]
         : undefined
     },
     server: operatorUiRoot ? { fs: { allow: [resolve('.'), operatorUiRoot] } } : undefined,
