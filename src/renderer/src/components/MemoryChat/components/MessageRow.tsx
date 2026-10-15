@@ -8,6 +8,7 @@ import { captureUrlForPath } from '../../../../../shared/ogcapture-url'
 import { ChatThinkingBlock } from '../../ChatThinkingBlock'
 import { ChatToolRows } from '../../ChatToolRows'
 import { VoiceBubble } from '../../VoiceBubble'
+import { LoadingDots } from '../../ui/loading-dots'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { parseArtifact } from '../../ArtifactCanvas'
 import type {
@@ -284,7 +285,10 @@ function VoiceMessageRow({
           thinkingText={
             timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
           }
-          footer={workFooter}
+          footer={
+            workFooter ??
+            (message.streaming && hasLiveStreamActivity(message) ? <LoadingDots /> : undefined)
+          }
           timeline={message.timeline}
           thinkingLive={Boolean(message.streaming && !message.content)}
           memorySources={memorySources}
@@ -335,7 +339,10 @@ function VoiceMessageRow({
           thinkingText={
             timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
           }
-          footer={workFooter}
+          footer={
+            workFooter ??
+            (message.streaming && hasLiveStreamActivity(message) ? <LoadingDots /> : undefined)
+          }
           timeline={message.timeline}
           thinkingLive={Boolean(message.streaming && !message.content)}
           memorySources={memorySources}
@@ -345,8 +352,9 @@ function VoiceMessageRow({
           stopped={message.turnStatus === 'cancelled'}
           failed={message.turnStatus === 'failed'}
         />
-        {/* No empty player while the reply is still being written: the work chip says the turn is
-            busy, and the card arrives with its words. Cards already on screen do not animate. */}
+        {/* No empty player while the reply is still being written: the dots under the work say a
+            reply is coming (one loader, not a second one inside the card), and the card arrives
+            with its words. Cards already on screen do not animate. */}
         <AnimatePresence initial={false}>
           {message.streaming ? null : (
             <motion.div
@@ -575,15 +583,21 @@ function StandardMessageRow({
         }
         footer={
           workFooter ??
-          // The work chip is the turn's one busy signal. The footer only adds words: the live
-          // activity, unless a labelled host thinking block already carries that line itself.
-          (message.streaming &&
-          hasLiveStreamActivity(message) &&
-          liveActivity &&
-          !(message.toolCalls?.length && message.reasoningLabel) ? (
-            <TextShimmer as="span" className="text-[11px]">
-              {liveActivity}
-            </TextShimmer>
+          (message.streaming && hasLiveStreamActivity(message) ? (
+            liveActivity ? (
+              // Only a labelled host thinking block still carries the activity line itself; the
+              // timeline's own thinking row does not, so the footer names it.
+              message.toolCalls?.length && message.reasoningLabel ? (
+                <LoadingDots size="small" />
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] text-neutral-500">
+                  <TextShimmer as="span">{liveActivity}</TextShimmer>
+                  <LoadingDots size="small" />
+                </span>
+              )
+            ) : (
+              <LoadingDots />
+            )
           ) : undefined)
         }
         timeline={message.timeline}

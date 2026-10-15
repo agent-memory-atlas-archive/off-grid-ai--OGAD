@@ -562,8 +562,10 @@ export function ChatToolRows({
       >
         <WorkTrigger state={workState} count={entries.length} />
         {/* The clip box reaches 12px left of the content, so a checkpoint's glow is not cut off. */}
-        <CollapsibleContent className="offgrid-smooth-collapsible -ml-3 overflow-hidden pl-3">
-          <div className="[&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pb-1 [&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pt-2.5 [&>[data-slot=collapsible]>[data-slot=collapsible-trigger]]:hidden">
+        <CollapsibleContent className="offgrid-smooth-collapsible -ml-3 overflow-clip! pl-3">
+          {/* Spacing and the sticky open-step header live with the other motion rules
+              (main.css, .offgrid-work-steps). */}
+          <div className="offgrid-work-steps [&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pb-1 [&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pt-2.5 [&>[data-slot=collapsible]>[data-slot=collapsible-trigger]]:hidden">
             <ToolTimeline
               entries={entries}
               state={workState}

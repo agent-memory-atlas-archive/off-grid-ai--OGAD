@@ -629,6 +629,52 @@ code {
     animation: none;
   }
 }
+
+/* Work steps (ChatToolRows). Rows sit 8px apart, the timeline's own gap: the Dice item's default
+   32px bottom padding stacked on top of it and left a ~40px hole between checkpoints. */
+.offgrid-work-steps [data-slot='timeline-item'] {
+  padding-bottom: 0;
+}
+
+/* An open step's header stays at the top of the chat while its result scrolls under it. Sticky
+   needs every box between it and the chat's scroller to clip without becoming a scroll container,
+   so the step card and the timeline's panel clip with overflow: clip (important: the library's
+   collapsible rules are unlayered or inline). The work collapsible above them does the same in
+   ChatToolRows. */
+.offgrid-work-steps div.overflow-hidden:has(button[aria-expanded]),
+.offgrid-work-steps [data-slot='collapsible-content']:has(button[aria-expanded]) {
+  overflow: clip !important;
+}
+
+.offgrid-work-steps [data-slot='timeline-item'] button[aria-expanded='true'] {
+  position: sticky;
+  /* A slight margin above the pinned card. */
+  top: 8px;
+  z-index: 10;
+  /* The card's own colour, so the result scrolls under the header, not through it. */
+  background: var(--color-background);
+}
+
+/* The card keeps its own rounded top while its header is pinned: as it scrolls past the pinned
+   line (8px below the top of the chat) the part above that line is trimmed away along a shape that
+   follows the card's own corners, so its curves stay where the header is. The trim sits 2px outside
+   the card's edge (radius + 2px), so it never cuts through the card's own border. Progress is the
+   share of the card that has passed the line. */
+.offgrid-work-steps div.overflow-hidden:has(> button[aria-expanded='true']) {
+  animation: offgrid-step-card-top linear both;
+  /* The trim runs 2px outside the card, so its line is 10px down to meet the header at 8px. */
+  animation-timeline: view(block 10px 0px);
+  animation-range: exit-crossing;
+}
+
+@keyframes offgrid-step-card-top {
+  from {
+    clip-path: inset(-2px round calc(var(--radius-xl) + 2px));
+  }
+  to {
+    clip-path: inset(calc(100% - 2px) -2px -2px round calc(var(--radius-xl) + 2px));
+  }
+}
 [data-slot='dialog-overlay'][data-state='open'] {
   animation: og-overlay-in 160ms ease-out;
 }
