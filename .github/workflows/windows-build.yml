@@ -182,23 +182,33 @@ jobs:
         # optional dependency, so without access npm skips it and core still installs; Pro needs it.
         shell: bash
         env:
-          UI_TOKEN: ${{ secrets.OPERATOR_UI_TOKEN || secrets.CI_CROSS_REPO_TOKEN }}
+          UI_TOKEN_PRIMARY: ${{ secrets.OPERATOR_UI_TOKEN }}
+          UI_TOKEN_FALLBACK: ${{ secrets.CI_CROSS_REPO_TOKEN }}
         run: |
-          # A pasted secret can carry a newline or spaces, which break token authentication.
-          UI_TOKEN="$(printf '%s' "$UI_TOKEN" | tr -d '[:space:]')"
+          # The library moved to off-grid-ai/ui-library. Use the first token that can read it (a pasted
+          # secret can carry a newline or spaces, which break token authentication).
+          UI_TOKEN=""
+          for candidate in "$UI_TOKEN_PRIMARY" "$UI_TOKEN_FALLBACK"; do
+            candidate="$(printf '%s' "$candidate" | tr -d '[:space:]')"
+            [ -z "$candidate" ] && continue
+            if git ls-remote --exit-code "https://x-access-token:${candidate}@github.com/off-grid-ai/ui-library.git" HEAD >/dev/null 2>&1; then
+              UI_TOKEN="$candidate"
+              break
+            fi
+          done
           if [ -n "$UI_TOKEN" ]; then
-            git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
+            git config --global url."https://x-access-token:${UI_TOKEN}@github.com/off-grid-ai/ui-library".insteadOf "ssh://git@github.com/off-grid-ai/ui-library"
             # actions/checkout saves this repo's own GitHub login as a header for all of github.com,
-            # and it overrides the token above. Clear it for wednesday-solutions only (the most specific
+            # and it overrides the token above. Clear it for the library only (the most specific
             # address wins), so everything else keeps the checkout login.
             if git rev-parse --git-dir >/dev/null 2>&1; then
-              git config --local http.https://github.com/wednesday-solutions/.extraheader ""
+              git config --local http.https://github.com/off-grid-ai/ui-library.git.extraheader ""
             fi
           fi
           # Check access before installation so authentication failures are clear.
-          if ! git ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/component-library-animations.git" HEAD >/dev/null 2>&1; then
-            status="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${UI_TOKEN}" https://api.github.com/repos/wednesday-solutions/component-library-animations)"
-            echo "::error::CI cannot read wednesday-solutions/component-library-animations (GitHub answered ${status}: 401 bad token, 403 org policy or IP allow list, 404 no access to the repo). Pro will not build without it."
+          if ! git ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/off-grid-ai/ui-library.git" HEAD >/dev/null 2>&1; then
+            status="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${UI_TOKEN}" https://api.github.com/repos/off-grid-ai/ui-library)"
+            echo "::error::CI cannot read off-grid-ai/ui-library (GitHub answered ${status}: 401 bad token, 403 org policy or IP allow list, 404 no access to the repo). Pro will not build without it."
           fi
       - name: Install dependencies
         run: npm ci
@@ -352,23 +362,33 @@ jobs:
         # optional dependency, so without access npm skips it and core still installs; Pro needs it.
         shell: bash
         env:
-          UI_TOKEN: ${{ secrets.OPERATOR_UI_TOKEN || secrets.CI_CROSS_REPO_TOKEN }}
+          UI_TOKEN_PRIMARY: ${{ secrets.OPERATOR_UI_TOKEN }}
+          UI_TOKEN_FALLBACK: ${{ secrets.CI_CROSS_REPO_TOKEN }}
         run: |
-          # A pasted secret can carry a newline or spaces, which break token authentication.
-          UI_TOKEN="$(printf '%s' "$UI_TOKEN" | tr -d '[:space:]')"
+          # The library moved to off-grid-ai/ui-library. Use the first token that can read it (a pasted
+          # secret can carry a newline or spaces, which break token authentication).
+          UI_TOKEN=""
+          for candidate in "$UI_TOKEN_PRIMARY" "$UI_TOKEN_FALLBACK"; do
+            candidate="$(printf '%s' "$candidate" | tr -d '[:space:]')"
+            [ -z "$candidate" ] && continue
+            if git ls-remote --exit-code "https://x-access-token:${candidate}@github.com/off-grid-ai/ui-library.git" HEAD >/dev/null 2>&1; then
+              UI_TOKEN="$candidate"
+              break
+            fi
+          done
           if [ -n "$UI_TOKEN" ]; then
-            git config --global url."https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/".insteadOf "ssh://git@github.com/wednesday-solutions/"
+            git config --global url."https://x-access-token:${UI_TOKEN}@github.com/off-grid-ai/ui-library".insteadOf "ssh://git@github.com/off-grid-ai/ui-library"
             # actions/checkout saves this repo's own GitHub login as a header for all of github.com,
-            # and it overrides the token above. Clear it for wednesday-solutions only (the most specific
+            # and it overrides the token above. Clear it for the library only (the most specific
             # address wins), so everything else keeps the checkout login.
             if git rev-parse --git-dir >/dev/null 2>&1; then
-              git config --local http.https://github.com/wednesday-solutions/.extraheader ""
+              git config --local http.https://github.com/off-grid-ai/ui-library.git.extraheader ""
             fi
           fi
           # Check access before installation so authentication failures are clear.
-          if ! git ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/wednesday-solutions/component-library-animations.git" HEAD >/dev/null 2>&1; then
-            status="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${UI_TOKEN}" https://api.github.com/repos/wednesday-solutions/component-library-animations)"
-            echo "::error::CI cannot read wednesday-solutions/component-library-animations (GitHub answered ${status}: 401 bad token, 403 org policy or IP allow list, 404 no access to the repo). Pro will not build without it."
+          if ! git ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/off-grid-ai/ui-library.git" HEAD >/dev/null 2>&1; then
+            status="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${UI_TOKEN}" https://api.github.com/repos/off-grid-ai/ui-library)"
+            echo "::error::CI cannot read off-grid-ai/ui-library (GitHub answered ${status}: 401 bad token, 403 org policy or IP allow list, 404 no access to the repo). Pro will not build without it."
           fi
       - name: Install dependencies
         run: npm ci
