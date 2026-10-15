@@ -1,10 +1,11 @@
 /**
  * High-leverage integration coverage for the complete project-memory lifecycle.
  *
- * This drives the same IPC handlers as the renderer through real file extraction,
- * chunking, SQLite persistence, scoped retrieval, prompt assembly, deletion, and
- * profile reopen. Only process boundaries are controlled: Electron registration,
- * the MiniLM/LanceDB runtimes, and llama-server tokens over a real loopback socket.
+ * This drives the same IPC handlers as the renderer through real file reading, the
+ * document engine, SQLite persistence, the project search tool, prompt assembly,
+ * deletion, and profile reopen. Only process boundaries are controlled: Electron
+ * registration, the MiniLM/LanceDB runtimes, and llama-server tokens over a real
+ * loopback socket.
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -39,7 +40,7 @@ vi.mock('electron', () => ({
     handle: (channel: string, handler: IpcHandler) => handlers.set(channel, handler),
     on: () => undefined
   },
-  BrowserWindow: { fromWebContents: () => undefined },
+  BrowserWindow: { fromWebContents: () => undefined, getAllWindows: () => [] },
   clipboard: { readText: () => '', writeText: () => undefined },
   systemPreferences: {
     isTrustedAccessibilityClient: () => true,
@@ -55,9 +56,14 @@ vi.mock('electron', () => ({
   }
 }))
 
+// The feature-extraction pipeline's contract: one text gives a [1, 384] tensor, a batch gives
+// [n, 384]; `data` is the flat buffer and `tolist()` the rows.
 vi.mock('@huggingface/transformers', () => ({
   env: {},
-  pipeline: async () => async () => ({ data: new Float32Array(384).fill(0.01) })
+  pipeline: async () => async (input: string | string[]) => {
+    const rows = (Array.isArray(input) ? input : [input]).map(() => new Array(384).fill(0.01))
+    return { data: Float32Array.from(rows.flat()), dims: [rows.length, 384], tolist: () => rows }
+  }
 }))
 
 vi.mock('@lancedb/lancedb', () => ({
@@ -91,7 +97,33 @@ async function bootApplicationModules(): Promise<void> {
   service.paused = false
   setupIPC()
   setupRagIPC()
+  await createCaptureTables()
 }
+
+/**
+ * Captured-memory search (universalSearch) also reads the screen-capture tables, which Pro creates
+ * in the running app. They are created empty here, as rag-empty-memory does, so the search runs
+ * every one of its production queries.
+ */
+async function createCaptureTablesNow(): Promise<void> {
+  const { getDB } = await import('../database')
+  getDB().exec(`
+    CREATE TABLE IF NOT EXISTS observations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, summary TEXT NOT NULL, surface TEXT, url TEXT,
+      category TEXT NOT NULL DEFAULT 'work', ts DATETIME DEFAULT CURRENT_TIMESTAMP, source_key TEXT
+    );
+    CREATE VIRTUAL TABLE IF NOT EXISTS observation_fts USING fts5(summary, content='observations', content_rowid='id');
+    CREATE TABLE IF NOT EXISTS frames (id INTEGER PRIMARY KEY AUTOINCREMENT, image_path TEXT, text TEXT, surface TEXT, url TEXT, ts DATETIME, source TEXT);
+    CREATE TABLE IF NOT EXISTS observation_frames (observation_id INTEGER, frame_id INTEGER);
+    CREATE TABLE IF NOT EXISTS meetings (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, summary TEXT, transcript TEXT, started_at INTEGER);
+  `)
+  try {
+    getDB().exec('ALTER TABLE entities ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0')
+  } catch {
+    /* already present */
+  }
+}
+const createCaptureTables = createCaptureTablesNow
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return (await handler(channel)(event, ...args)) as T
@@ -99,6 +131,48 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 
 function lastModelPrompt(): string {
   return JSON.stringify(fake.requests.at(-1)?.messages ?? [])
+}
+
+interface ProjectAnswer {
+  answer: string
+  unified: Array<{ kind: string; surface: string; snippet: string }>
+}
+
+/**
+ * A project chat turn through the handler the renderer uses. The model looks the project up with
+ * search_knowledge_base (its documents, its other chats and, when the project includes it, captured
+ * memory), then answers.
+ */
+async function askProject(
+  projectId: string,
+  conversationId: string,
+  question: string,
+  reply: string
+): Promise<ProjectAnswer> {
+  fake.enqueue(
+    { toolCalls: [{ name: 'search_knowledge_base', args: { query: 'Cedar' } }] },
+    { content: reply }
+  )
+  return invoke<ProjectAnswer>('tools:chat', question, [], { projectId, conversationId })
+}
+
+const projectFiles = (answer: ProjectAnswer): string[] => [
+  ...new Set(answer.unified.filter(({ kind }) => kind === 'attachment').map(({ surface }) => surface))
+]
+const usedMemory = (answer: ProjectAnswer): boolean =>
+  answer.unified.some(({ kind }) => kind === 'memory')
+
+/** The knowledge-base list once every file has been read and indexed. */
+async function settled(projectId: string): Promise<Array<{ id: number; name: string; enabled: boolean }>> {
+  let rows: Array<{ id: number; name: string; enabled: boolean; state?: string }> = []
+  await vi.waitFor(
+    async () => {
+      rows = await invoke('projects:list-documents', projectId)
+      expect(rows.every(({ state }) => state === 'ready')).toBe(true)
+    },
+    { timeout: 10_000, interval: 50 }
+  )
+  return rows
 }
 
 beforeAll(async () => {
@@ -154,28 +228,19 @@ describe('memory -> RAG -> scoped chat lifecycle', () => {
     await invoke('rag:add-message', siblingConversation, 'user', siblingContext)
     await invoke('rag:add-message', otherConversation, 'user', otherChatContext)
 
-    fake.enqueue({ content: 'Cedar context is grounded.' })
-    const initial = await invoke<{
-      answer: string
-      context: { sources: Array<{ name: string }>; projectChats: number }
-    }>(
-      'rag:chat',
-      'What is the Cedar release status?',
-      'All',
-      [],
+    await settled(selectedProjectId)
+    await settled(otherProjectId)
+
+    const initial = await askProject(
       selectedProjectId,
       currentConversation,
-      false,
-      'cedar-initial',
-      false,
-      []
+      'What is the Cedar release status?',
+      'Cedar context is grounded.'
     )
 
     expect(initial.answer).toBe('Cedar context is grounded.')
-    expect(initial.context.sources.map((source) => source.name)).toEqual(
-      expect.arrayContaining(['selected-plan.md', 'Captured memory'])
-    )
-    expect(initial.context.projectChats).toBe(1)
+    expect(projectFiles(initial)).toEqual(['selected-plan.md'])
+    expect(usedMemory(initial)).toBe(true)
     expect(lastModelPrompt()).toContain(oldDocumentFact)
     expect(lastModelPrompt()).toContain(capturedMemory)
     expect(lastModelPrompt()).toContain(siblingContext)
@@ -184,25 +249,14 @@ describe('memory -> RAG -> scoped chat lifecycle', () => {
     expect(lastModelPrompt()).not.toContain(otherChatContext)
 
     await invoke('projects:update', selectedProjectId, { includeMemory: false })
-    fake.enqueue({ content: 'Captured memory is disabled for this project.' })
-    const withoutMemory = await invoke<{
-      context: { sources: Array<{ name: string }>; projectChats: number }
-    }>(
-      'rag:chat',
-      'What is the Cedar release status?',
-      'All',
-      [],
+    const withoutMemory = await askProject(
       selectedProjectId,
       currentConversation,
-      false,
-      'cedar-memory-disabled',
-      false,
-      []
+      'What is the Cedar release status?',
+      'Captured memory is disabled for this project.'
     )
-    expect(withoutMemory.context.sources.map((source) => source.name)).toContain('selected-plan.md')
-    expect(withoutMemory.context.sources.map((source) => source.name)).not.toContain(
-      'Captured memory'
-    )
+    expect(projectFiles(withoutMemory)).toContain('selected-plan.md')
+    expect(usedMemory(withoutMemory)).toBe(false)
     expect(lastModelPrompt()).toContain(oldDocumentFact)
     expect(lastModelPrompt()).not.toContain(capturedMemory)
     expect(lastModelPrompt()).toContain(siblingContext)
@@ -218,19 +272,13 @@ describe('memory -> RAG -> scoped chat lifecycle', () => {
     boundary.selectedPaths = [selectedDocument]
     expect(await invoke('projects:add-documents', selectedProjectId)).toEqual({ added: 1 })
     await invoke('projects:update', selectedProjectId, { includeMemory: true })
+    await settled(selectedProjectId)
 
-    fake.enqueue({ content: 'The reindexed Cedar plan is active.' })
-    await invoke(
-      'rag:chat',
-      'What is the Cedar release status now?',
-      'All',
-      [],
+    await askProject(
       selectedProjectId,
       currentConversation,
-      false,
-      'cedar-reindexed',
-      false,
-      []
+      'What is the Cedar release status now?',
+      'The reindexed Cedar plan is active.'
     )
     expect(lastModelPrompt()).toContain(newDocumentFact)
     expect(lastModelPrompt()).not.toContain(oldDocumentFact)
@@ -256,31 +304,21 @@ describe('memory -> RAG -> scoped chat lifecycle', () => {
     expect(
       reopenedDb.prepare('SELECT COUNT(*) AS count FROM memories WHERE id = ?').get(memory.id)
     ).toEqual({ count: 0 })
+    // The replaced file's text left the document index: nothing holds it any more.
     expect(
       reopenedDb
-        .prepare('SELECT COUNT(*) AS count FROM rag_chunks WHERE content = ?')
+        .prepare('SELECT COUNT(*) AS count FROM attached_document_pages WHERE text = ?')
         .get(oldDocumentFact)
     ).toEqual({ count: 0 })
 
-    fake.enqueue({ content: 'The reopened Cedar project is still grounded.' })
-    const reopened = await invoke<{
-      answer: string
-      context: { sources: Array<{ name: string }>; projectChats: number }
-    }>(
-      'rag:chat',
-      'Confirm the Cedar status after restart.',
-      'All',
-      [],
+    const reopened = await askProject(
       selectedProjectId,
       currentConversation,
-      false,
-      'cedar-reopened',
-      false,
-      []
+      'Confirm the Cedar status after restart.',
+      'The reopened Cedar project is still grounded.'
     )
     expect(reopened.answer).toBe('The reopened Cedar project is still grounded.')
-    expect(reopened.context.sources.map((source) => source.name)).toEqual(['selected-plan.md'])
-    expect(reopened.context.projectChats).toBe(1)
+    expect(projectFiles(reopened)).toEqual(['selected-plan.md'])
     expect(lastModelPrompt()).toContain(newDocumentFact)
     expect(lastModelPrompt()).toContain(siblingContext)
     expect(lastModelPrompt()).not.toContain(oldDocumentFact)

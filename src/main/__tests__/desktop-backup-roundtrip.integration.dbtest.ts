@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { DesktopBackupArchive } from '../backup/archive'
 import { DesktopBackupDataPort } from '../backup/data-port'
 import { DesktopBackupFileMapper } from '../backup/file-mapper'
+import { ensureAttachedDocumentSchema } from '../documents/sqlite-store'
 import { registerDesktopBackupIPC, type BackupIpcBoundary } from '../backup/ipc'
 import type { DesktopBackupDelivery, DesktopBackupEngine } from '../backup'
 import { BACKUP_EXPORT_ALL_CHANNEL, BACKUP_IMPORT_CHANNEL } from '../../shared/backup-contracts'
@@ -42,14 +43,9 @@ function database(root: string): Database.Database {
       size INTEGER NOT NULL DEFAULT 0,
       kind TEXT NOT NULL DEFAULT 'text',
       enabled INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE rag_chunks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      doc_id INTEGER NOT NULL,
-      content TEXT NOT NULL,
-      position INTEGER NOT NULL,
-      embedding TEXT
+      created_at TEXT NOT NULL,
+      sync_id TEXT,
+      document_id TEXT
     );
     CREATE TABLE rag_conversations (
       id TEXT PRIMARY KEY,
@@ -98,23 +94,19 @@ class BackupIpcHarness implements BackupIpcBoundary {
   }
 }
 
-/**
- * A fixed vector for restored chunks, so this journey does not depend on whether MiniLM happens to be loadable
- * on the machine running it. With the real embedder this asserted `embedding: null` locally (no model, so the
- * restore's documented fallback kept the null) and a 384-float vector in CI (model present) - the same test
- * describing two different outcomes. What the journey is about is that the vector REACHES the row.
- */
-const FIXED_EMBEDDING = [0.11, 0.22, 0.33]
-
 function engine(db: Database.Database, root: string, sink: PathSink): DesktopBackupEngine {
   return new BackupEngine(
-    new DesktopBackupDataPort(db, async () => FIXED_EMBEDDING),
+    new DesktopBackupDataPort(db),
     new DesktopBackupFileMapper(),
     new DesktopBackupArchive({ tempDir: root, userDataDir: root }),
     sink,
     () => '2026-07-27T12:00:00.000Z'
   )
 }
+
+/** The knowledge-base file's id in the document index, and the text the index read from it. */
+const DOCUMENT_ID = 'a'.repeat(64)
+const DOCUMENT_TEXT = 'The launch stays local.'
 
 function seedSource(db: Database.Database, root: string): void {
   const upload = path.join(root, 'uploads', 'launch-notes.txt')
@@ -135,24 +127,31 @@ function seedSource(db: Database.Database, root: string): void {
     '2026-07-20T10:00:00.000Z',
     '2026-07-21T10:00:00.000Z'
   )
-  const document = db
-    .prepare(
-      `INSERT INTO rag_documents
-        (project_id, name, path, size, kind, enabled, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      'project-aurora',
-      'Launch notes',
-      upload,
-      fs.statSync(upload).size,
-      'text',
-      1,
-      '2026-07-20T11:00:00.000Z'
-    )
   db.prepare(
-    'INSERT INTO rag_chunks (doc_id, content, position, embedding) VALUES (?, ?, ?, ?)'
-  ).run(Number(document.lastInsertRowid), 'The launch stays local.', 0, '[0.1,0.2]')
+    `INSERT INTO rag_documents
+      (sync_id, project_id, name, path, size, kind, enabled, document_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    'sync-launch-notes',
+    'project-aurora',
+    'Launch notes',
+    upload,
+    fs.statSync(upload).size,
+    'text',
+    1,
+    DOCUMENT_ID,
+    '2026-07-20T11:00:00.000Z'
+  )
+  // What the document engine keeps for the file: its pages, read once.
+  ensureAttachedDocumentSchema(db)
+  db.prepare(
+    `INSERT INTO attached_documents (id, name, kind, state, page_count, chunk_count, embedded_count,
+       unreadable_pages, embedder, schema_version, created_at, last_used_at)
+     VALUES (?, 'Launch notes', 'text', 'ready', 1, 1, 1, 0, 'Xenova/all-MiniLM-L6-v2', 1, 0, 0)`
+  ).run(DOCUMENT_ID)
+  db.prepare(
+    'INSERT INTO attached_document_pages (document_id, page, label, text, needs_ocr) VALUES (?, 1, ?, ?, 0)'
+  ).run(DOCUMENT_ID, 'part 1', DOCUMENT_TEXT)
   db.prepare(
     `INSERT INTO rag_conversations (id, title, project_id, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?)`
@@ -183,7 +182,7 @@ afterEach(() => {
 })
 
 describe('desktop portable Backup & Restore', () => {
-  it('exports and additively restores chats, projects, knowledge files and chunks', async () => {
+  it('exports and additively restores chats, projects, knowledge files and their text', async () => {
     const sourceRoot = tempRoot('source')
     const targetRoot = tempRoot('target')
     const sourceDb = database(sourceRoot)
@@ -203,22 +202,22 @@ describe('desktop portable Backup & Restore', () => {
     })
 
     const restoredDocument = targetDb
-      .prepare('SELECT path, enabled FROM rag_documents WHERE project_id = ?')
-      .get('project-aurora') as { path: string; enabled: number }
+      .prepare('SELECT path, enabled, document_id FROM rag_documents WHERE project_id = ?')
+      .get('project-aurora') as { path: string; enabled: number; document_id: string }
     expect(restoredDocument.path).toContain(path.join('restored-backups', 'files', 'documents'))
     expect(fs.readFileSync(restoredDocument.path, 'utf8')).toBe('OFFGRID_BACKUP_FILE_EVIDENCE')
     expect(restoredDocument.enabled).toBe(1)
-    // This asserted `embedding: null`, and so encoded the bug: retrieval requires a non-null embedding
-    // ("WHERE d.enabled = 1 AND c.embedding IS NOT NULL") and nothing ever re-embedded a restored chunk - so the
-    // document this same test asserts is ENABLED, two lines up, could never inform an answer.
-    //
-    // The embedder is injected (FIXED_EMBEDDING) rather than real, because with the real one this journey
-    // described two different outcomes: null on a machine where MiniLM cannot load, and a 384-float vector in
-    // CI where it can. What the journey is about is that the vector REACHES the row.
-    expect(targetDb.prepare('SELECT content, embedding FROM rag_chunks').get()).toEqual({
-      content: 'The launch stays local.',
-      embedding: JSON.stringify(FIXED_EMBEDDING)
-    })
+    // The file's text travels as pages under the same document id, so the next project chat indexes
+    // and answers from it without the original file being read again.
+    expect(restoredDocument.document_id).toBe(DOCUMENT_ID)
+    expect(
+      targetDb
+        .prepare('SELECT page, label, text FROM attached_document_pages WHERE document_id = ?')
+        .all(DOCUMENT_ID)
+    ).toEqual([{ page: 1, label: 'part 1', text: DOCUMENT_TEXT }])
+    expect(
+      targetDb.prepare('SELECT name, kind FROM attached_documents WHERE id = ?').get(DOCUMENT_ID)
+    ).toEqual({ name: 'Launch notes', kind: 'text' })
     expect(targetDb.prepare('SELECT content, context FROM rag_messages').get()).toEqual({
       content: 'Keep this conversation.',
       context: JSON.stringify({ scope: 'project-aurora' })
@@ -252,7 +251,8 @@ describe('desktop portable Backup & Restore', () => {
     expect(delivery.path).toMatch(/offgrid-backup-2026-07-27T12-00-00-000Z\.zip$/)
 
     db.exec(`
-      DELETE FROM rag_chunks;
+      DELETE FROM attached_document_pages;
+      DELETE FROM attached_documents;
       DELETE FROM rag_documents;
       DELETE FROM rag_messages;
       DELETE FROM rag_conversations;
@@ -268,6 +268,9 @@ describe('desktop portable Backup & Restore', () => {
     expect(db.prepare('SELECT name FROM projects').get()).toEqual({ name: 'Aurora' })
     expect(db.prepare('SELECT title FROM rag_conversations').get()).toEqual({
       title: 'Launch plan'
+    })
+    expect(db.prepare('SELECT text FROM attached_document_pages').get()).toEqual({
+      text: DOCUMENT_TEXT
     })
   })
 })

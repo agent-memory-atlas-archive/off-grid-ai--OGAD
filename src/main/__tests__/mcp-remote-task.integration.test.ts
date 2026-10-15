@@ -6,7 +6,6 @@ vi.mock('../llm', () => ({ llm: { chat: vi.fn() } }))
 vi.mock('../imagegen', () => ({ generateImage: vi.fn(), imageGenStatus: () => ({ ready: false }) }))
 vi.mock('../tts', () => ({ synthesize: vi.fn() }))
 vi.mock('../embeddings', () => ({ embeddings: { generateEmbedding: vi.fn() } }))
-vi.mock('../rag/extractors', () => ({ desktopExtraction: {} }))
 
 const { buildMcpServer } = await import('../mcp-server')
 const { authorizeActionRequest, registerActiveActionCredentials } = await import('../mcp-auth')

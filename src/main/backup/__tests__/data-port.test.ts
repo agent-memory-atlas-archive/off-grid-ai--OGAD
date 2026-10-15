@@ -1,7 +1,9 @@
+import crypto from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type Database from 'better-sqlite3-multiple-ciphers'
 import { DesktopBackupDataPort } from '../data-port'
+import { ensureAttachedDocumentSchema } from '../../documents/sqlite-store'
 import type { DesktopBackupData } from '../types'
 import { registerHook, unregisterHook, HOOKS } from '../../bootstrap/hookRegistry'
 
@@ -42,14 +44,8 @@ const SCHEMA = `
     size INTEGER NOT NULL DEFAULT 0,
     kind TEXT NOT NULL DEFAULT 'text',
     enabled INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-  CREATE TABLE rag_chunks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    doc_id INTEGER NOT NULL,
-    content TEXT NOT NULL,
-    position INTEGER NOT NULL,
-    embedding TEXT
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    document_id TEXT
   );
   CREATE TABLE rag_conversations (
     id TEXT PRIMARY KEY,
@@ -110,9 +106,7 @@ const mutations: { entity: string; kind: string }[] = []
 const recordMutation = (mutation: { entity: string; kind: string }): void => {
   mutations.push({ entity: mutation.entity, kind: mutation.kind })
 }
-// Only model inference is controlled. The port still embeds every archived chunk,
-// stores its vector in real SQLite, and dispatches the real committed-write hook.
-const embed = async (_text: string): Promise<number[]> => Array(384).fill(0.25)
+const sha256 = (text: string): string => crypto.createHash('sha256').update(text, 'utf8').digest('hex')
 
 describe('taking a backup out of the database, and putting one back', () => {
   let db: Database.Database
@@ -122,7 +116,7 @@ describe('taking a backup out of the database, and putting one back', () => {
     mutations.length = 0
     registerHook(HOOKS.syncRecordLocalMutation, recordMutation)
     db = realDatabase()
-    port = new DesktopBackupDataPort(db, embed)
+    port = new DesktopBackupDataPort(db)
   })
 
   afterEach(() => {
@@ -137,23 +131,37 @@ describe('taking a backup out of the database, and putting one back', () => {
     ).run(id, name, updatedAt)
   }
 
-  const insertDocument = (projectId: string, name: string): number => {
+  const insertDocument = (projectId: string, name: string, documentId: string | null = null): number => {
     const info = db
       .prepare(
-        `INSERT INTO rag_documents (sync_id, project_id, name, path, size, kind, enabled, created_at)
-         VALUES (?, ?, ?, ?, ?, 'pdf', 1, '2026-01-01 09:00:00')`
+        `INSERT INTO rag_documents (sync_id, project_id, name, path, size, kind, enabled, created_at, document_id)
+         VALUES (?, ?, ?, ?, ?, 'pdf', 1, '2026-01-01 09:00:00', ?)`
       )
-      .run(`sync-${name}`, projectId, name, `/docs/${name}`, 42)
+      .run(`sync-${name}`, projectId, name, `/docs/${name}`, 42, documentId)
     return Number(info.lastInsertRowid)
   }
 
-  const insertChunk = (docId: number, content: string, position: number): void => {
-    db.prepare('INSERT INTO rag_chunks (doc_id, content, position) VALUES (?, ?, ?)').run(
-      docId,
-      content,
-      position
+  /** The pages the document engine read from a file, kept under its document id. */
+  const insertIndexedText = (documentId: string, name: string, pages: string[]): void => {
+    ensureAttachedDocumentSchema(db)
+    db.prepare(
+      `INSERT INTO attached_documents (id, name, kind, state, page_count, chunk_count, embedded_count,
+         unreadable_pages, embedder, schema_version, created_at, last_used_at)
+       VALUES (?, ?, 'pdf', 'ready', ?, 0, 0, 0, 'none', 1, 0, 0)`
+    ).run(documentId, name, pages.length)
+    pages.forEach((text, i) =>
+      db
+        .prepare(
+          'INSERT INTO attached_document_pages (document_id, page, label, text, needs_ocr) VALUES (?, ?, NULL, ?, 0)'
+        )
+        .run(documentId, i + 1, text)
     )
   }
+
+  const pagesOf = (documentId: string): unknown[] =>
+    db
+      .prepare('SELECT page, text FROM attached_document_pages WHERE document_id = ? ORDER BY page')
+      .all(documentId)
 
   const insertConversation = (
     id: string,
@@ -179,11 +187,10 @@ describe('taking a backup out of the database, and putting one back', () => {
   }
 
   describe('exporting everything', () => {
-    it('carries every project with its documents and chunks, and every conversation with its messages', async () => {
+    it('carries every project with its documents and their text, and every conversation with its messages', async () => {
       insertProject('p1')
-      const docId = insertDocument('p1', 'Contract.pdf')
-      insertChunk(docId, 'second half', 1)
-      insertChunk(docId, 'first half', 0)
+      insertDocument('p1', 'Contract.pdf', 'doc-contract')
+      insertIndexedText('doc-contract', 'Contract.pdf', ['first page', 'second page'])
       insertConversation('c1', 'p1')
       insertMessage('c1', 'user', 'what does it say?')
       insertMessage('c1', 'assistant', 'it says hello')
@@ -200,18 +207,28 @@ describe('taking a backup out of the database, and putting one back', () => {
         icon: 'icon.png',
         includeMemory: true
       })
-      expect(data.projects[0]!.documents[0]).toMatchObject({
+      expect(data.projects[0]!.documents[0]).toEqual({
         name: 'Contract.pdf',
         path: '/docs/Contract.pdf',
         size: 42,
         kind: 'pdf',
-        enabled: true
+        enabled: true,
+        createdAt: '2026-01-01 09:00:00',
+        chunks: [],
+        documentId: 'doc-contract'
       })
-      // Chunks in position order, not insertion order: a document reassembled out of order is a document
-      // whose text is scrambled, and the rows can come back in any order without an ORDER BY.
-      expect(data.projects[0]!.documents[0]!.chunks).toEqual([
-        { content: 'first half', position: 0 },
-        { content: 'second half', position: 1 }
+      // The file's text travels as the pages the document engine read, in page order, so a restore
+      // answers from it without the original file.
+      expect(data.attachedDocuments).toEqual([
+        {
+          id: 'doc-contract',
+          name: 'Contract.pdf',
+          kind: 'pdf',
+          pages: [
+            { page: 1, text: 'first page' },
+            { page: 2, text: 'second page' }
+          ]
+        }
       ])
       expect(data.conversations[0]!.messages.map(({ role, content }) => [role, content])).toEqual([
         ['user', 'what does it say?'],
@@ -222,7 +239,12 @@ describe('taking a backup out of the database, and putting one back', () => {
     it('exports an empty database as an empty backup rather than failing', async () => {
       const data = await port.collectAll()
 
-      expect(data).toEqual({ surface: 'offgrid-desktop', projects: [], conversations: [] })
+      expect(data).toEqual({
+        surface: 'offgrid-desktop',
+        projects: [],
+        conversations: [],
+        attachedDocuments: []
+      })
     })
 
     it('parses a message context back into an object, and drops one that is not JSON', async () => {
@@ -355,7 +377,7 @@ describe('taking a backup out of the database, and putting one back', () => {
       ...overrides
     })
 
-    it('writes the projects, documents, chunks, conversations and messages, and says what it did', async () => {
+    it('writes the projects, documents, conversations and messages, and says what it did', async () => {
       const summary = await port.apply(bundle())
 
       expect(summary).toEqual({
@@ -367,7 +389,9 @@ describe('taking a backup out of the database, and putting one back', () => {
       expect(db.prepare('SELECT name FROM projects WHERE id = ?').get('p1')).toMatchObject({
         name: 'Restored Project'
       })
-      expect(db.prepare('SELECT content FROM rag_chunks').all()).toEqual([{ content: 'the text' }])
+      expect(db.prepare('SELECT name, path FROM rag_documents').all()).toEqual([
+        { name: 'Contract.pdf', path: '/restored/Contract.pdf' }
+      ])
       expect(db.prepare('SELECT role, content FROM rag_messages ORDER BY id').all()).toEqual([
         { role: 'user', content: 'hello' },
         { role: 'assistant', content: 'hi' }
@@ -444,52 +468,96 @@ describe('taking a backup out of the database, and putting one back', () => {
       expect(contents).toEqual(['first question', 'the missing answer'])
     })
 
-    it('embeds restored chunks, so a restored document can actually answer', async () => {
-      // A deterministic stand-in for MiniLM: the real one is a model file, and what matters here is that the
-      // vector REACHES the row - retrieval requires a non-null embedding
-      // ("WHERE d.enabled = 1 AND c.embedding IS NOT NULL" in rag/store.ts).
-      const embedding = [0.1, 0.2, 0.3]
-      const embedded = new DesktopBackupDataPort(db, async () => embedding)
+    it('restores an older archive-s chunks as one text document, in position order, under the hash of that text', async () => {
+      const summary = await port.apply(
+        bundle({
+          projects: [
+            {
+              ...bundle().projects[0]!,
+              documents: [
+                {
+                  ...bundle().projects[0]!.documents[0]!,
+                  chunks: [
+                    { content: 'second part', position: 1 },
+                    { content: 'first part', position: 0 }
+                  ]
+                }
+              ]
+            }
+          ]
+        })
+      )
 
-      await embedded.apply(bundle())
-
-      const chunk = db
-        .prepare(
-          `SELECT c.embedding AS embedding FROM rag_chunks c
-             JOIN rag_documents d ON d.id = c.doc_id
-            WHERE d.path = ?`
-        )
-        .get('/restored/Contract.pdf') as { embedding: string | null } | undefined
-      // Restored chunks used to land NULL and nothing ever re-embedded them - the background backfill covers
-      // observations, frames and transcripts, never rag_chunks - so the document sat in its project looking
-      // enabled and could never inform an answer.
-      expect(chunk?.embedding).toBe(JSON.stringify(embedding))
+      // Archives from before the document index kept knowledge-base text as chunks and no vectors. The
+      // text comes back as a document the engine indexes on the next project chat; out of order, it
+      // would be scrambled.
+      expect(summary.documentsAdded).toBe(1)
+      const text = 'first part\n\nsecond part'
+      expect(db.prepare('SELECT document_id FROM rag_documents').get()).toEqual({
+        document_id: sha256(text)
+      })
+      expect(db.prepare('SELECT name, kind, state FROM attached_documents').all()).toEqual([
+        { name: 'Contract.pdf', kind: 'text', state: 'indexing' }
+      ])
+      expect(pagesOf(sha256(text))).toEqual([{ page: 1, text }])
     })
 
-    it('still restores the document when no embedder is available', async () => {
-      const noModel = new DesktopBackupDataPort(db, async () => {
-        throw new Error('the embedding model is not loaded')
-      })
+    it('restores a newer archive-s knowledge-base file with its document id and pages', async () => {
+      const summary = await port.apply(
+        bundle({
+          projects: [
+            {
+              ...bundle().projects[0]!,
+              documents: [
+                { ...bundle().projects[0]!.documents[0]!, chunks: [], documentId: 'doc-contract' }
+              ]
+            }
+          ],
+          attachedDocuments: [
+            {
+              id: 'doc-contract',
+              name: 'Contract.pdf',
+              kind: 'pdf',
+              pages: [
+                { page: 1, text: 'the parties' },
+                { page: 2, label: 'Annex', text: 'the annex' }
+              ]
+            }
+          ]
+        })
+      )
 
-      const summary = await noModel.apply(bundle())
-
-      // A model that cannot load is not a reason to lose the restore. The document lands exactly as it did
-      // before embedding-on-restore existed, which is worse than being searchable and far better than failing.
       expect(summary.documentsAdded).toBe(1)
-      const chunk = db
-        .prepare(
-          `SELECT c.embedding AS embedding FROM rag_chunks c
-             JOIN rag_documents d ON d.id = c.doc_id
-            WHERE d.path = ?`
-        )
-        .get('/restored/Contract.pdf') as { embedding: string | null } | undefined
-      expect(chunk?.embedding).toBeNull()
+      expect(db.prepare('SELECT document_id FROM rag_documents').get()).toEqual({
+        document_id: 'doc-contract'
+      })
+      expect(
+        db
+          .prepare('SELECT page, label, text FROM attached_document_pages ORDER BY page')
+          .all()
+      ).toEqual([
+        { page: 1, label: null, text: 'the parties' },
+        { page: 2, label: 'Annex', text: 'the annex' }
+      ])
+    })
+
+    it('keeps the pages a document already has when an archive carries the same document', async () => {
+      insertIndexedText('doc-contract', 'Contract.pdf', ['the copy on this Mac'])
+
+      await port.apply(
+        bundle({
+          attachedDocuments: [
+            { id: 'doc-contract', name: 'Contract.pdf', kind: 'pdf', pages: [{ page: 1, text: 'archived' }] }
+          ]
+        })
+      )
+
+      expect(pagesOf('doc-contract')).toEqual([{ page: 1, text: 'the copy on this Mac' }])
     })
 
     it('does not add a document it already holds', async () => {
       insertProject('p1', 'Existing')
-      const existing = insertDocument('p1', 'Contract.pdf')
-      insertChunk(existing, 'the text', 0)
+      insertDocument('p1', 'Contract.pdf')
       const before = db.prepare('SELECT COUNT(*) AS n FROM rag_documents').get() as { n: number }
 
       const summary = await port.apply(
@@ -578,14 +646,14 @@ describe('taking a backup out of the database, and putting one back', () => {
 
     it('survives the full round trip: export, restore into an empty database, export again', async () => {
       insertProject('p1')
-      const docId = insertDocument('p1', 'Contract.pdf')
-      insertChunk(docId, 'the text', 0)
+      insertDocument('p1', 'Contract.pdf', 'doc-contract')
+      insertIndexedText('doc-contract', 'Contract.pdf', ['the text'])
       insertConversation('c1', 'p1')
       insertMessage('c1', 'user', 'hello')
       const exported = await port.collectAll()
 
       const restoredDb = realDatabase()
-      await new DesktopBackupDataPort(restoredDb, embed).apply(exported)
+      await new DesktopBackupDataPort(restoredDb).apply(exported)
       const reExported = await new DesktopBackupDataPort(restoredDb).collectAll()
 
       // The strongest statement available: what came out went back in and came out the same. Timestamps

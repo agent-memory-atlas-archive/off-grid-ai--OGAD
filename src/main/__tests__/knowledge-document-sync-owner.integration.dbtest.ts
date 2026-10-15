@@ -7,6 +7,7 @@ const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-knowledge-sync-ow
 
 vi.mock('electron', () => ({
   app: { getPath: () => TMP_DIR, isPackaged: false, getAppPath: () => process.cwd() },
+  BrowserWindow: { getAllWindows: () => [] },
   safeStorage: {
     isEncryptionAvailable: () => false,
     encryptString: (value: string) => Buffer.from(value),
@@ -17,16 +18,22 @@ vi.mock('electron', () => ({
 import { getDB } from '../database'
 import { HOOKS, registerHook } from '../bootstrap/hookRegistry'
 import {
-  createDesktopRagService,
+  knowledgeBase,
   deleteProject,
   ensureRagStoreSchema,
   listProjects,
   createProject
 } from '../rag'
+import { documentTurns } from '../documents'
+import { configureRuntime } from '../runtime-env'
 import type {
   KnowledgeDocumentMutation,
   KnowledgeDocumentSnapshot
 } from '../sync-knowledge-document'
+
+// The embedding model folder is pinned to a missing one: indexing skips vectors (the product's own
+// "folder unavailable" path) and search runs on the real keyword index, with no download.
+configureRuntime({ dataDir: TMP_DIR, modelsDir: path.join(TMP_DIR, 'model-folder-not-connected') })
 
 const PROJECT_ID = '22222222-2222-4222-8222-222222222222'
 const REMOTE_SYNC_ID = '33333333-3333-4333-8333-333333333333'
@@ -70,60 +77,55 @@ describe('desktop knowledge-document sync owner', () => {
     registerHook(HOOKS.syncKnowledgeDocumentMutation, (mutation: KnowledgeDocumentMutation) => {
       mutations.push(mutation)
     })
-    const service = createDesktopRagService({
-      embeddings: {
-        dimension: 1,
-        async embed() {
-          return [1]
-        }
-      }
-    })
+    const service = knowledgeBase
 
     const localPath = path.join(TMP_DIR, 'local-notes.txt')
     fs.writeFileSync(localPath, 'Local field notes contain enough text to produce one RAG chunk.')
-    const indexed = await service.indexDocument({
+    const indexed = await service.addFile({
       projectId: PROJECT_ID,
       path: localPath,
       fileName: 'local-notes.txt',
       size: fs.statSync(localPath).size
     })
-    const local = (await service.listDocuments(PROJECT_ID)).find(
-      (document) => document.id === indexed.docId
-    )
+    const local = service.listDocuments(PROJECT_ID).find((document) => document.id === indexed.id)
     expect(local?.syncId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
     )
+    // Sync sends the copy the knowledge base keeps, which holds the same bytes as the picked file.
     expect(mutations).toEqual([
       {
         kind: 'indexed',
         document: expect.objectContaining({
           syncId: local?.syncId,
           projectId: PROJECT_ID,
-          filePath: localPath,
+          filePath: local?.path,
           enabled: true
         })
       }
     ])
+    expect(fs.readFileSync(local!.path, 'utf8')).toBe(fs.readFileSync(localPath, 'utf8'))
 
     const shortPath = path.join(TMP_DIR, 'op.txt')
     fs.writeFileSync(shortPath, 'op\n')
-    const short = await service.indexDocument({
+    await service.addFile({
       projectId: PROJECT_ID,
       path: shortPath,
       fileName: 'op.txt',
       size: fs.statSync(shortPath).size
     })
-    expect(short.chunkCount).toBe(1)
-    expect(
-      db.prepare('SELECT content, position FROM rag_chunks WHERE doc_id = ?').all(short.docId)
-    ).toEqual([{ content: 'op', position: 0 }])
-    expect(await service.searchProject(PROJECT_ID, 'op')).toEqual(
-      expect.objectContaining({
-        chunks: expect.arrayContaining([expect.objectContaining({ content: 'op' })])
+    // Even a two-letter file is a passage every chat in the project reads.
+    await vi.waitFor(async () => {
+      const turn = await documentTurns.prepare({
+        projectId: PROJECT_ID,
+        current: [],
+        question: 'What is in op.txt?',
+        previousQuestions: [],
+        budget: { ctx: 8192, replyReserve: 1024, systemTokens: 200, requiredToolTokens: 0, historyTokens: 0, questionTokens: 20 }
       })
-    )
+      expect(`${turn?.stable}${turn?.turn}`).toMatch(/<document name="op\.txt"[^>]*>\n<source id="S\d+" (page="1"|at="part 1")>\nop\n<\/source>/)
+    })
 
-    await service.toggleDocument(indexed.docId, false)
+    await service.toggleDocument(indexed.id, false)
     expect(mutations.at(-1)).toEqual({
       kind: 'enabled',
       syncId: local?.syncId,
@@ -145,17 +147,17 @@ describe('desktop knowledge-document sync owner', () => {
     const remoteId = await service.indexSyncedDocument(remote)
     await service.setSyncedDocumentEnabled(REMOTE_SYNC_ID, false)
     expect(mutations).toHaveLength(mutationCount)
-    expect(await service.getDocumentBySyncId(REMOTE_SYNC_ID)).toMatchObject({
+    expect(service.getDocumentBySyncId(REMOTE_SYNC_ID)).toMatchObject({
       id: remoteId,
       syncId: REMOTE_SYNC_ID,
       enabled: false
     })
 
     await service.deleteSyncedDocument(REMOTE_SYNC_ID)
-    expect(await service.getDocumentBySyncId(REMOTE_SYNC_ID)).toBeUndefined()
+    expect(service.getDocumentBySyncId(REMOTE_SYNC_ID)).toBeUndefined()
     expect(mutations).toHaveLength(mutationCount)
 
-    await service.deleteDocument(indexed.docId)
+    await service.deleteDocument(indexed.id)
     expect(mutations.at(-1)).toEqual({ kind: 'deleted', syncId: local?.syncId })
 
     const projectDocumentPath = path.join(TMP_DIR, 'project-owned.txt')
@@ -163,19 +165,19 @@ describe('desktop knowledge-document sync owner', () => {
       projectDocumentPath,
       'Deleting the project should publish this document tombstone after commit.'
     )
-    const projectDocument = await service.indexDocument({
+    const projectDocument = await service.addFile({
       projectId: PROJECT_ID,
       path: projectDocumentPath,
       fileName: 'project-owned.txt',
       size: fs.statSync(projectDocumentPath).size
     })
-    const projectDocumentSyncId = (await service.listDocuments(PROJECT_ID)).find(
-      (document) => document.id === projectDocument.docId
-    )?.syncId
+    const projectDocumentSyncId = service
+      .listDocuments(PROJECT_ID)
+      .find((document) => document.id === projectDocument.id)?.syncId
 
     deleteProject(PROJECT_ID)
 
-    expect(await service.getDocumentBySyncId(projectDocumentSyncId!)).toBeUndefined()
+    expect(service.getDocumentBySyncId(projectDocumentSyncId!)).toBeUndefined()
     expect(mutations.at(-1)).toEqual({
       kind: 'deleted',
       syncId: projectDocumentSyncId
