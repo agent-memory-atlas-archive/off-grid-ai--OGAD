@@ -8,7 +8,7 @@ import { captureUrlForPath } from '../../../../../shared/ogcapture-url'
 import { ChatThinkingBlock } from '../../ChatThinkingBlock'
 import { ChatToolRows } from '../../ChatToolRows'
 import { VoiceBubble } from '../../VoiceBubble'
-import { LoadingDots } from '../../ui/loading-dots'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { parseArtifact } from '../../ArtifactCanvas'
 import type {
   ChatMessage,
@@ -166,6 +166,7 @@ function VoiceMessageRow({
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null)
   const [openFooterDetail, setOpenFooterDetail] = useState<'tools' | 'generation' | null>(null)
   const alignment = message.role === 'user' ? 'items-end' : 'items-start'
+  const reduceMotion = useReducedMotion()
   const audioUrl = recordedClipUrl(message)
   const reportPlayback = useCallback(
     (active: boolean) => onPlaybackStateChange(message.id, active),
@@ -280,13 +281,10 @@ function VoiceMessageRow({
           tools={message.toolCalls}
           thinking={thinking}
           thinkingHasContent={Boolean(message.reasoning?.trim())}
-        thinkingText={
-          timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
-        }
-          footer={
-            workFooter ??
-            (message.streaming && hasLiveStreamActivity(message) ? <LoadingDots /> : undefined)
+          thinkingText={
+            timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
           }
+          footer={workFooter}
           timeline={message.timeline}
           thinkingLive={Boolean(message.streaming && !message.content)}
           memorySources={memorySources}
@@ -334,13 +332,10 @@ function VoiceMessageRow({
           tools={message.toolCalls}
           thinking={thinking}
           thinkingHasContent={Boolean(message.reasoning?.trim())}
-        thinkingText={
-          timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
-        }
-          footer={
-            workFooter ??
-            (message.streaming && hasLiveStreamActivity(message) ? <LoadingDots /> : undefined)
+          thinkingText={
+            timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
           }
+          footer={workFooter}
           timeline={message.timeline}
           thinkingLive={Boolean(message.streaming && !message.content)}
           memorySources={memorySources}
@@ -350,23 +345,36 @@ function VoiceMessageRow({
           stopped={message.turnStatus === 'cancelled'}
           failed={message.turnStatus === 'failed'}
         />
-        <VoiceBubble
-          messageId={message.id}
-          transcript={messageToSpeakable(selectedMessageContent(message))}
-          isLoading={Boolean(message.streaming)}
-          autoPlay={autoPlay}
-          showTranscriptInitially={showTranscriptInitially}
-          defaultSpeed={playbackSpeed}
-          readVoice={async () => {
-            const settings = await window.api.getSettings()
-            return typeof settings.ttsVoice === 'string' ? settings.ttsVoice : undefined
-          }}
-          synthesize={(text, voice) => window.api.speak(text, voice)}
-          onPlaybackStateChange={reportPlayback}
-          copied={copied}
-          onCopy={(text) => onCopy(text, message.id)}
-          onRetry={() => onRegenerate(message.id)}
-        />
+        {/* No empty player while the reply is still being written: the work chip says the turn is
+            busy, and the card arrives with its words. Cards already on screen do not animate. */}
+        <AnimatePresence initial={false}>
+          {message.streaming ? null : (
+            <motion.div
+              key="voice"
+              className="flex w-full flex-col"
+              initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+              transition={{ duration: reduceMotion ? 0.15 : 0.4, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <VoiceBubble
+                messageId={message.id}
+                transcript={messageToSpeakable(selectedMessageContent(message))}
+                autoPlay={autoPlay}
+                showTranscriptInitially={showTranscriptInitially}
+                defaultSpeed={playbackSpeed}
+                readVoice={async () => {
+                  const settings = await window.api.getSettings()
+                  return typeof settings.ttsVoice === 'string' ? settings.ttsVoice : undefined
+                }}
+                synthesize={(text, voice) => window.api.speak(text, voice)}
+                onPlaybackStateChange={reportPlayback}
+                copied={copied}
+                onCopy={(text) => onCopy(text, message.id)}
+                onRetry={() => onRegenerate(message.id)}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </>
     )
   }
@@ -567,21 +575,15 @@ function StandardMessageRow({
         }
         footer={
           workFooter ??
-          (message.streaming && hasLiveStreamActivity(message) ? (
-            liveActivity ? (
-              // Only a labelled host thinking block still carries the activity line itself; the
-              // timeline's own thinking row does not, so the footer names it.
-              message.toolCalls?.length && message.reasoningLabel ? (
-                <LoadingDots size="small" />
-              ) : (
-                <span className="inline-flex items-center gap-1 text-[11px] text-neutral-500">
-                  <TextShimmer as="span">{liveActivity}</TextShimmer>
-                  <LoadingDots size="small" />
-                </span>
-              )
-            ) : (
-              <LoadingDots />
-            )
+          // The work chip is the turn's one busy signal. The footer only adds words: the live
+          // activity, unless a labelled host thinking block already carries that line itself.
+          (message.streaming &&
+          hasLiveStreamActivity(message) &&
+          liveActivity &&
+          !(message.toolCalls?.length && message.reasoningLabel) ? (
+            <TextShimmer as="span" className="text-[11px]">
+              {liveActivity}
+            </TextShimmer>
           ) : undefined)
         }
         timeline={message.timeline}

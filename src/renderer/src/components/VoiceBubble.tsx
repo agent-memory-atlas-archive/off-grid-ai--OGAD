@@ -4,9 +4,9 @@
  * Built to the approved chat-media reference (the TonePlayer in the component library's chat
  * media workshop): a large round play button with a spring glyph swap, a seek slider holding two
  * stacked waveforms (unplayed dimmed, played clipped to the playhead and glowing in the brand
- * green), a glowing playhead and a hover position line, a mono `current / total` readout and a
- * back-to-start button. Below it, a "Follow along" transcript whose phrases light up with the
- * playhead and seek when clicked.
+ * green), a glowing playhead and a hover position line, a mono `current / total` readout, then
+ * speed, captions, copy and regenerate - all on one row. Below it, a "Follow along" transcript
+ * whose phrases light up with the playhead and seek when clicked.
  *
  *  - User voice notes carry a recorded clip (`audioUrl`) → we decode its REAL envelope and play
  *    the file directly.
@@ -23,9 +23,9 @@ import React, {
   useSyncExternalStore
 } from 'react'
 import {
-  ArrowCounterClockwise,
   ArrowsClockwise,
   Check,
+  CircleNotch,
   Copy,
   Pause,
   Play,
@@ -42,7 +42,6 @@ import {
 } from '@offgrid/operator-ui/operator/elements/transcription'
 import { AutoHeight } from '@offgrid/operator-ui/operator/presence'
 import { claimVoicePlayback, onVoicePlaybackClaim } from '@renderer/lib/voice-playback-bus'
-import { LoadingDots } from './ui/loading-dots'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 
 /** Envelope resolution: enough points that 2px bars across a chat column do not look blocky. */
@@ -345,11 +344,9 @@ type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'paused'
 /** The large round filled play/pause button, its glyph swapping on a spring. */
 function PlayButton({
   status,
-  disabled,
   onClick
 }: {
   status: PlaybackStatus
-  disabled: boolean
   onClick: () => void
 }): React.JSX.Element {
   return (
@@ -359,8 +356,13 @@ function PlayButton({
           type="button"
           size="icon-lg"
           onClick={onClick}
-          disabled={disabled}
-          aria-label={status === 'playing' ? 'Pause voice note' : 'Play voice note'}
+          aria-label={
+            status === 'loading'
+              ? 'Preparing voice note'
+              : status === 'playing'
+                ? 'Pause voice note'
+                : 'Play voice note'
+          }
           aria-pressed={status === 'playing'}
           aria-busy={status === 'loading' || undefined}
           className={`shrink-0 rounded-full ${pressable}`}
@@ -369,7 +371,12 @@ function PlayButton({
             swapKey={status === 'loading' ? 'loading' : status === 'playing' ? 'pause' : 'play'}
           >
             {status === 'loading' ? (
-              <LoadingDots size="small" />
+              <CircleNotch
+                size={18}
+                weight="bold"
+                className="motion-safe:animate-spin"
+                aria-hidden="true"
+              />
             ) : status === 'playing' ? (
               <Pause size={18} weight="fill" aria-hidden="true" />
             ) : (
@@ -378,7 +385,9 @@ function PlayButton({
           </GlyphSwap>
         </Button>
       </TooltipTrigger>
-      <TooltipContent>{status === 'playing' ? 'Pause' : 'Play'}</TooltipContent>
+      <TooltipContent>
+        {status === 'loading' ? 'Preparing voice' : status === 'playing' ? 'Pause' : 'Play'}
+      </TooltipContent>
     </Tooltip>
   )
 }
@@ -508,7 +517,7 @@ function FollowAlong({
           animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
           exit={reduceMotion ? { opacity: 0 } : { opacity: 0, filter: 'blur(4px)' }}
           transition={{ duration: reduceMotion ? 0.15 : 0.4, ease }}
-          className="space-y-2 border-t border-border/50 pt-3"
+          className="mt-3 space-y-2 border-t border-border/50 pt-3"
         >
           <p className="font-mono text-[10px] tracking-[0.22em] text-muted-foreground uppercase">
             Follow along
@@ -556,7 +565,7 @@ function VoiceActions({
   onRetry?: () => void
 }): React.JSX.Element {
   return (
-    <div className="-my-1 flex items-center justify-end gap-0.5">
+    <div className="flex shrink-0 items-center gap-0.5">
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
@@ -623,8 +632,6 @@ interface VoiceBubbleProps {
   durationSeconds?: number
   transcript: string
   isUser?: boolean
-  /** Assistant reply still generating — shows pulsing dots, no playback. */
-  isLoading?: boolean
   /** Synthesize text → playable dataUrl on-device (assistant replies). */
   synthesize: (text: string, voice?: string) => Promise<{ dataUrl: string }>
   /** Read the selected voice before playing a synthesized reply. */
@@ -651,7 +658,6 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
   durationSeconds,
   transcript,
   isUser = false,
-  isLoading = false,
   synthesize,
   readVoice,
   autoPlay = false,
@@ -690,8 +696,8 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
   const playbackActive = status === 'loading' || status === 'playing'
 
   useEffect(() => {
-    if (showTranscriptInitially && transcript && !isLoading) setShowTranscript(true)
-  }, [isLoading, showTranscriptInitially, transcript])
+    if (showTranscriptInitially && transcript) setShowTranscript(true)
+  }, [showTranscriptInitially, transcript])
 
   // Telling the audio element about a new preference IS updating an external system, which is what
   // an effect is for. Resetting the chip is not - see `appliedDefaultSpeed`.
@@ -884,20 +890,19 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
   // Auto-play once a freshly-finished assistant reply is ready.
   const autoPlayedRef = useRef(false)
   useEffect(() => {
-    if (autoPlay && !autoPlayedRef.current && !isLoading && status === 'idle') {
+    if (autoPlay && !autoPlayedRef.current && status === 'idle') {
       autoPlayedRef.current = true
       void handlePlayPause()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoPlay, isLoading])
+  }, [autoPlay])
 
   // Before playback starts nothing is on the clock, so the transcript reads as one even text.
   const transcriptTime = status === 'idle' && currentTime === 0 ? totalDuration : currentTime
-  const waveformLoading = isLoading && !isUser
 
   const surface = embedded
-    ? 'flex w-full flex-col gap-3'
-    : `flex w-[88%] max-w-[34rem] flex-col gap-3 rounded-2xl border p-4 ${
+    ? 'flex w-full flex-col'
+    : `flex w-[88%] max-w-[34rem] flex-col rounded-2xl border px-4 py-3 ${
         isUser
           ? 'self-end border-primary/25 bg-primary/[0.06]'
           : 'self-start border-border/60 bg-card'
@@ -907,56 +912,39 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
     // Its own provider: voice notes also render outside the app shell's provider.
     <TooltipProvider delayDuration={300}>
       <div className={`@container ${surface}`}>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-3">
-          <PlayButton status={status} disabled={isLoading} onClick={() => void handlePlayPause()} />
+        {/* One row: play, waveform, time, then the actions. Narrow cards drop the waveform below. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          {/* A second press while the clip is being prepared would start a second synthesis. */}
+          <PlayButton
+            status={status}
+            onClick={() => {
+              if (status !== 'loading') void handlePlayPause()
+            }}
+          />
 
-          {waveformLoading ? (
-            <div
-              className="order-last flex min-w-0 basis-full items-center @sm:order-none @sm:basis-0 @sm:flex-1"
-              style={{ height: WAVEFORM_HEIGHT }}
-            >
-              <LoadingDots className="mx-1" />
-            </div>
-          ) : (
-            <SeekWaveform
-              bars={bars}
-              progress={progress}
-              totalDuration={totalDuration}
-              seekTo={seekTo}
-            />
-          )}
+          <SeekWaveform
+            bars={bars}
+            progress={progress}
+            totalDuration={totalDuration}
+            seekTo={seekTo}
+          />
 
           <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums @sm:ml-0">
-            {isLoading ? (
-              '—'
-            ) : (
-              <>
-                <span className="text-foreground">{formatDuration(currentTime)}</span>
-                <span className="mx-1 text-muted-foreground/50">/</span>
-                {formatDuration(totalDuration)}
-              </>
-            )}
+            <span className="text-foreground">{formatDuration(currentTime)}</span>
+            <span className="mx-1 text-muted-foreground/50">/</span>
+            {formatDuration(totalDuration)}
           </span>
-          <BubbleAction
-            label="Back to start"
-            disabled={isLoading || currentTime === 0}
-            onClick={() => seekSeconds(0)}
-          >
-            <ArrowCounterClockwise size={16} aria-hidden="true" />
-          </BubbleAction>
+          <VoiceActions
+            speed={speed}
+            onCycleSpeed={cycleSpeed}
+            transcriptShown={showTranscript}
+            onToggleTranscript={transcript ? () => setShowTranscript((shown) => !shown) : undefined}
+            copied={copied}
+            onCopy={onCopy ? () => onCopy(transcript) : undefined}
+            retryLabel={isUser ? 'Resend' : 'Regenerate'}
+            onRetry={onRetry}
+          />
         </div>
-
-        {/* Secondary actions: compact ghost icons under the row, so the row itself matches the reference. */}
-        <VoiceActions
-          speed={speed}
-          onCycleSpeed={cycleSpeed}
-          transcriptShown={showTranscript}
-          onToggleTranscript={transcript ? () => setShowTranscript((shown) => !shown) : undefined}
-          copied={copied}
-          onCopy={!isLoading && onCopy ? () => onCopy(transcript) : undefined}
-          retryLabel={isUser ? 'Resend' : 'Regenerate'}
-          onRetry={!isLoading ? onRetry : undefined}
-        />
 
         <AutoHeight>
           <FollowAlong

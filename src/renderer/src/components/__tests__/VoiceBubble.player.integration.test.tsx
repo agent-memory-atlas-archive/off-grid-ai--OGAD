@@ -92,26 +92,6 @@ describe('<VoiceBubble/> player', () => {
     expect(seekPosition()).toBe(Math.round((17 / 65) * 12))
   })
 
-  it('goes back to the start of the clip', async () => {
-    const user = userEvent.setup()
-    renderReply()
-
-    const backToStart = screen.getByRole('button', { name: 'Back to start' }) as HTMLButtonElement
-    expect(backToStart.disabled).toBe(true)
-
-    await user.click(screen.getByRole('button', { name: 'Play voice note' }))
-    await waitFor(() => expect(AudioOutput.played).toHaveLength(1))
-    screen.getByRole('slider', { name: 'Seek voice note' }).focus()
-    await user.keyboard('{End}')
-    expect(AudioOutput.played[0]!.currentTime).toBe(12)
-    expect(backToStart.disabled).toBe(false)
-
-    await user.click(backToStart)
-    expect(AudioOutput.played[0]!.currentTime).toBe(0)
-    expect(seekPosition()).toBe(0)
-    expect(backToStart.disabled).toBe(true)
-  })
-
   it('hides and shows the follow-along transcript with the captions toggle', async () => {
     const user = userEvent.setup()
     renderReply()
