@@ -59,6 +59,7 @@ import { SettingsSelect } from './SettingsSelect'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 import { Checkbox } from '@offgrid/operator-ui/operator/animate/checkbox'
 import { CopyButton } from './ui/CopyButton'
+import { AudioPlayback, AudioPlayerProvider } from './AudioPlayback'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -255,7 +256,9 @@ function Attachment({
             className="max-h-96 max-w-full rounded-md object-contain"
           />
         ) : (
-          <audio src={url} controls preload="metadata" className="w-full" />
+          <AudioPlayerProvider>
+            <AudioPlayback id={asset.id} src={url} />
+          </AudioPlayerProvider>
         ))}
     </div>
   )
