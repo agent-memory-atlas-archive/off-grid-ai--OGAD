@@ -46,7 +46,7 @@ function MessageAttachmentsComponent({
   onOpenImage: (image: OpenImage) => void
 }>): React.JSX.Element {
   return (
-    <div className="@container mb-2 flex w-full flex-wrap gap-1.5">
+    <div className="mb-2 flex flex-wrap gap-1.5">
       {attachments.map((attachment, index) => {
         if (attachment.kind === 'image' && attachment.path) {
           const source = captureUrlForPath(attachment.path)
@@ -56,17 +56,9 @@ function MessageAttachmentsComponent({
               src={source}
               path={attachment.path}
               alt={attachment.name || 'Shared image'}
-              fill
-              // Full width, never taller than it is wide, and CROPPED - the way WhatsApp does it.
-              //
-              // Capped by height alone, a portrait photo stood narrow in a bubble as wide as the
-              // prompt, with a band of empty grey beside it. Filling the width is what removes that
-              // band; `100cqw` is the row's own width, so the ceiling follows the bubble at any
-              // window size and an extreme portrait cannot tower. `cover` is what stops the band
-              // coming back as letterboxing - a contained portrait just moves the grey to both
-              // sides of a square. It crops from the bottom, and the whole picture is one click
-              // away, which is where anyone who wants to READ a screenshot goes.
-              className="max-h-[100cqw] w-full cursor-zoom-in rounded-md border border-neutral-800 object-cover object-top transition-opacity hover:opacity-90"
+              // Thumbnails in a row, the way a chat shows shared screenshots: a few files stay one
+              // line high, and the whole picture is one click away.
+              className="size-24 cursor-zoom-in rounded-md border border-neutral-800 object-cover object-top transition-opacity hover:opacity-90"
               onOpen={onOpenImage}
             />
           )

@@ -595,7 +595,7 @@ function StandardMessageRow({
       />
       <Message
         from={message.role === 'user' ? 'user' : 'assistant'}
-        className={`gap-0 ${message.role === 'user' ? 'items-end' : 'items-start'} ${message.image || message.attachments?.length || state.editingId === message.id ? 'w-full max-w-2xl' : 'w-fit max-w-[85%]'}`}
+        className={`gap-0 ${message.role === 'user' ? 'items-end' : 'items-start'} ${message.image || state.editingId === message.id ? 'w-full max-w-2xl' : 'w-fit max-w-[85%]'}`}
       >
         <MessageBubble message={message} state={state} actions={actions} navigation={navigation} />
         {message.role === 'user' ? (
