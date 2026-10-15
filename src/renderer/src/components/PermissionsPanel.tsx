@@ -85,7 +85,15 @@ function PermissionRow({
           </AnimatePresence>
           <StatePill
             tone={tone}
-            label={checking ? 'Checking' : granted ? 'Granted' : 'Permission needed'}
+            label={
+              checking
+                ? 'Checking'
+                : granted
+                  ? 'Granted'
+                  : pending
+                    ? 'Relaunch needed'
+                    : 'Permission needed'
+            }
           />
         </div>
       </SettingRow>
@@ -120,19 +128,10 @@ export function PermissionsPanel({
           title="Screen Recording"
           description={
             screenRecordingRestartRequired
-              ? 'Relaunch once to apply the access selected in System Settings.'
+              ? 'Turned it on in System Settings? Relaunch to apply it.'
               : 'Capture screen frames for Replay and local vision analysis.'
           }
-          instructions={
-            screenRecordingRestartRequired
-              ? 'If the toggle is on, relaunch once. If it is off, review System Settings first.'
-              : undefined
-          }
-          actionLabel={
-            screenRecordingRestartRequired
-              ? 'Relaunch Off Grid AI Desktop'
-              : 'Enable Screen Recording'
-          }
+          actionLabel={screenRecordingRestartRequired ? 'Relaunch' : 'Enable Screen Recording'}
           actionAriaLabel={
             screenRecordingRestartRequired
               ? 'Relaunch Off Grid AI Desktop for Screen Recording'
