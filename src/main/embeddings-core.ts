@@ -64,7 +64,11 @@ function prepareModel(id: string, modelsDir: string, readDirectories: string[]):
   return cached
 }
 
-/** Vectors for several texts, one by one: batching pads to the longest text and runs slower on CPU. */
+/**
+ * Vectors for several texts in one forward pass. Document passages are close in length, so padding
+ * costs little: measured 81 ms a passage batched against 186 ms one by one (MiniLM fp32 on CPU,
+ * 1,000-character passages, app under load), with the same vectors (max difference 1.5e-7).
+ */
 export async function embedTexts(
   texts: string[],
   modelsDir: string,
@@ -72,8 +76,16 @@ export async function embedTexts(
   readDirectories = modelReadDirectories()
 ): Promise<number[][]> {
   const out: number[][] = []
-  for (const text of texts)
-    out.push(await embedText(text, modelsDir, undefined, backendPreference, readDirectories))
+  let rest = texts
+  // The first text loads the model.
+  if (!pipe && rest.length) {
+    out.push(await embedText(rest[0]!, modelsDir, undefined, backendPreference, readDirectories))
+    rest = rest.slice(1)
+  }
+  if (rest.length) {
+    const output = await pipe!(rest, { pooling: 'mean', normalize: true })
+    out.push(...(output.tolist() as number[][]))
+  }
   return out
 }
 
@@ -98,7 +110,7 @@ export async function rerankPassages(
             dtype: 'q8',
             ...options
           }),
-        onnxDeviceCandidates(process.platform, backendPreference)
+        embeddingDevices(backendPreference)
       ).then(({ runtime }) => runtime)
     ]).then(([tokenizer, model]) => ({ tokenizer, model }))
     rerankerLoading.catch(() => {
@@ -122,6 +134,18 @@ export async function rerankPassages(
   return scores
 }
 
+/**
+ * Devices for the MiniLM embedder and the reranker. On macOS, CoreML ran MiniLM at about 450 ms a
+ * passage against 50 ms on the CPU (measured 2026-10-15, app under load), so CPU is used unless the
+ * user chose a backend.
+ */
+function embeddingDevices(backendPreference: BackendPreference): ReturnType<typeof onnxDeviceCandidates> {
+  const devices = onnxDeviceCandidates(process.platform, backendPreference)
+  return backendPreference === 'auto' && process.platform === 'darwin'
+    ? devices.filter((device) => device !== 'coreml')
+    : devices
+}
+
 export async function embedText(
   text: string,
   modelsDir: string,
@@ -143,7 +167,7 @@ export async function embedText(
           device,
           ...(cached ? { local_files_only: true, ...(fp32 ? {} : { dtype: 'q8' as const }) } : {})
         }),
-      onnxDeviceCandidates(process.platform, backendPreference)
+      embeddingDevices(backendPreference)
     )
       .then(({ runtime, device, fallbackReason }) => {
         onReady?.(device, fallbackReason)

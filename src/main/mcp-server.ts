@@ -19,7 +19,7 @@ import { llm } from './llm'
 import { generateImage, imageGenStatus } from './imagegen'
 import * as tts from './tts'
 import { embeddings } from './embeddings'
-import { desktopExtraction } from './rag/extractors'
+import { mediaText } from './media-text'
 import { parseDataUrl } from './mcp-parse-data-url'
 import { runTool, getToolExtensions } from './tools'
 import { NATIVE_TOOL_SPECS } from './tools/nativeActionToolExtension-logic'
@@ -202,11 +202,9 @@ export function buildMcpServer(
       }
     },
     async ({ audio }) => {
-      if (!desktopExtraction.transcribeAudio)
-        throw new Error('Transcription runtime not available.')
       const p = await materialize(audio, 'wav')
       try {
-        const text = (await desktopExtraction.transcribeAudio(p)).trim()
+        const text = (await mediaText.transcribeAudio(p)).trim()
         return TEXT(text)
       } finally {
         if (p.includes('offgrid-mcp-')) fs.promises.unlink(p).catch(() => {})

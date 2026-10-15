@@ -33,6 +33,12 @@ import type { TaskGuideInput } from '../shared/task-guidance'
 import type { RemoteVisionServerUpdate } from '../shared/remote-vision-server'
 import type { StartupSnapshot } from '../shared/startup-contract'
 import type { ProjectDeleteOutcome } from '../shared/project-delete-outcome'
+import {
+  PROJECT_DOCUMENT_TRANSFER_DISMISS,
+  PROJECT_DOCUMENT_TRANSFER_EVENT,
+  PROJECT_DOCUMENT_TRANSFERS_SNAPSHOT,
+  type ProjectDocumentTransfer
+} from '../shared/project-document-transfer'
 import type { TaskRunSnapshot } from '../main/tasks/task-history-store'
 
 console.log('PRELOAD SCRIPT LOADED')
@@ -973,6 +979,19 @@ const offGridApi = {
     const subscription = (_event: unknown, data: { projectId: string }): void => callback(data)
     ipcRenderer.on('projects:documents-changed', subscription)
     return unsubscribe('projects:documents-changed', subscription)
+  },
+  // A knowledge-base file moving to or from a paired device. Only sync (pro) publishes these.
+  listProjectDocumentTransfers: (projectId: string) =>
+    ipcRenderer.invoke(PROJECT_DOCUMENT_TRANSFERS_SNAPSHOT, projectId) as Promise<
+      ProjectDocumentTransfer[]
+    >,
+  dismissProjectDocumentTransfer: (key: string) =>
+    ipcRenderer.invoke(PROJECT_DOCUMENT_TRANSFER_DISMISS, key) as Promise<void>,
+  onProjectDocumentTransfer: (callback: (transfer: ProjectDocumentTransfer) => void) => {
+    const subscription = (_event: unknown, transfer: ProjectDocumentTransfer): void =>
+      callback(transfer)
+    ipcRenderer.on(PROJECT_DOCUMENT_TRANSFER_EVENT, subscription)
+    return unsubscribe(PROJECT_DOCUMENT_TRANSFER_EVENT, subscription)
   },
 
   // --- CRM: entity records (Entity -> App -> frames) + resolution/corrections ---

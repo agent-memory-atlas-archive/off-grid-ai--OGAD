@@ -12,7 +12,10 @@ export interface DesktopBackupDocument {
   kind: string
   enabled: boolean
   createdAt: string
+  /** Older archives only: knowledge-base text as chunks. Newer ones carry it in attachedDocuments. */
   chunks: DesktopBackupChunk[]
+  /** The file's id in the document index; its pages are in the archive's attachedDocuments. */
+  documentId?: string
 }
 
 export interface DesktopBackupProject {

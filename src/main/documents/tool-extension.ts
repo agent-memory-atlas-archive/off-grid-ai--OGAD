@@ -1,10 +1,13 @@
 // Document tools for models that use tools (Jan's retrieve + get_chunks, LibreChat's file_search):
 // the answer's own passages come first; these let the model look further — another part of a
-// book, or exact pages. Offered only on turns whose conversation has documents (toolChat adds the
-// schemas), so other turns do not pay for them.
+// book, or exact pages. Offered only on turns that have documents (toolChat adds the schemas), so
+// other turns do not pay for them. They see the same documents as the turn: the project's
+// knowledge base and the chat's attachments.
 
-import type { ToolExtension } from '../tools'
+import { describeTurnStatus } from '@offgrid/rag/documents'
+import type { ToolContext, ToolExtension } from '../tools'
 import { documentStore, documentTurns } from '.'
+import { foundPassageSource } from './chat-turn'
 
 const SEARCH = 'search_documents'
 const READ = 'read_pages'
@@ -17,7 +20,7 @@ export const documentToolSchemas = [
     function: {
       name: SEARCH,
       description:
-        'Search the documents attached to this chat for passages about something. Returns passages with their page numbers.',
+        'Search the documents of this chat (attachments and the project knowledge base) for passages about something. Cite passages by their [S#] tag.',
       parameters: {
         type: 'object',
         properties: {
@@ -35,7 +38,7 @@ export const documentToolSchemas = [
     type: 'function',
     function: {
       name: READ,
-      description: 'Read specific pages of a document attached to this chat, e.g. pages 40 to 42.',
+      description: 'Read specific pages of a document in this chat, e.g. pages 40 to 42.',
       parameters: {
         type: 'object',
         properties: {
@@ -53,6 +56,37 @@ function where(label: string | undefined, page: number): string {
   return label ?? `p. ${page}`
 }
 
+/** The documents this tool call may see. */
+function scopeOf(context: ToolContext | undefined): { conversationId?: string; projectId?: string } {
+  return {
+    ...(context?.conversationId ? { conversationId: context.conversationId } : {}),
+    ...(context?.projectId ? { projectId: context.projectId } : {})
+  }
+}
+
+/**
+ * Search the documents in scope and return passages tagged with the `[S#]` numbers they get in
+ * this turn's sources (also used by search_knowledge_base).
+ */
+export async function searchDocumentsForTool(
+  context: ToolContext | undefined,
+  query: string,
+  documentName?: string
+): Promise<string> {
+  let next = 1
+  const result = await documentTurns.searchForTool(
+    scopeOf(context),
+    query,
+    (passage) => context?.citeDocumentPassage?.(foundPassageSource(passage)) ?? next++,
+    {
+      ...(documentName ? { documentName } : {}),
+      onStatus: (status) =>
+        context?.onActivity?.({ kind: 'documents', label: describeTurnStatus(status) })
+    }
+  )
+  return result.text.slice(0, MAX_CHARS)
+}
+
 export const documentToolExtension: ToolExtension = {
   id: 'attached-documents',
   category: 'tool',
@@ -61,31 +95,20 @@ export const documentToolExtension: ToolExtension = {
   canHandle: (name) => name === SEARCH || name === READ,
   isReadOnlyTool: () => true,
   async execute(name, args, context) {
-    const conversationId = context?.conversationId
     if (name === SEARCH) {
       const query = typeof args.query === 'string' ? args.query.trim() : ''
       if (!query) return 'Give a query to search for.'
-      const passages = await documentTurns.searchPassages(conversationId, query, {
-        limit: 6,
-        ...(typeof args.document === 'string' && args.document.trim()
-          ? { documentName: args.document.trim() }
-          : {})
-      })
-      if (!passages.length) return `Nothing in the attached documents matches "${query}".`
-      return passages
-        .map(
-          (passage) => `(${passage.name}, ${where(passage.label, passage.page)})\n${passage.text}`
-        )
-        .join('\n\n---\n\n')
-        .slice(0, MAX_CHARS)
+      const documentName =
+        typeof args.document === 'string' && args.document.trim() ? args.document.trim() : undefined
+      return searchDocumentsForTool(context, query, documentName)
     }
     const wanted = typeof args.document === 'string' ? args.document.trim().toLowerCase() : ''
     const from = Math.max(1, Math.floor(Number(args.from) || 1))
     const to = Math.min(from + 5, Math.max(from, Math.floor(Number(args.to) || from)))
-    const sources = await documentTurns.documentsFor(conversationId, [])
+    const sources = await documentTurns.documentsFor(scopeOf(context), [])
     const source =
       sources.find((candidate) => candidate.name.toLowerCase().includes(wanted)) ?? sources[0]
-    if (!source) return 'No documents are attached to this chat.'
+    if (!source) return 'This chat has no documents.'
     const pages = (await documentStore.readPages(source.id)).filter(
       (page) => page.page >= from && page.page <= to
     )
@@ -100,5 +123,5 @@ export const documentToolExtension: ToolExtension = {
       .slice(0, MAX_CHARS)
   },
   systemHint: () =>
-    'search_documents and read_pages look further into the documents attached to this chat when the passages given are not enough.'
+    'search_documents and read_pages look further into this chat\'s documents when the passages given are not enough.'
 }

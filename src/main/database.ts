@@ -395,6 +395,12 @@ export function getDB(): Database.Database {
   db.exec(
     'CREATE INDEX IF NOT EXISTS idx_rag_messages_conversation ON rag_messages(conversation_id, created_at DESC, id DESC)'
   )
+  // Only the user messages that carry attachments: the chat's document list and document cache
+  // cleanup read these (documents/conversation-documents.ts) without scanning every message.
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_rag_messages_attachments ON rag_messages(conversation_id, created_at, id)
+     WHERE role = 'user' AND context LIKE '%"attachments"%'`
+  )
 
   /**
    * FTS backfill, versioned so it happens once per profile instead of once per launch.

@@ -21,7 +21,7 @@ import { saveSkill } from './skills'
 import { addConnector, listConnectors } from './mcp'
 import { llm } from './llm'
 import { generateImage, listImageModels } from './imagegen'
-import { ragService } from './rag/index'
+import { knowledgeBase } from './rag/index'
 import {
   getTaskExecutionDevice,
   getTaskRun,
@@ -147,10 +147,12 @@ async function seedKnowledge(): Promise<void> {
     try {
       f.write()
       const p = path.join(dir, f.name)
-      await ragService.indexDocument(
-        { projectId: PROJECT_ID, path: p, fileName: f.name, size: fs.statSync(p).size },
-        () => {}
-      )
+      await knowledgeBase.addFile({
+        projectId: PROJECT_ID,
+        path: p,
+        fileName: f.name,
+        size: fs.statSync(p).size
+      })
       console.log('[seed] indexed', f.name)
     } catch (e) {
       console.error('[seed] index failed', f.name, e)
@@ -229,9 +231,9 @@ export async function seedDemo(live = false): Promise<void> {
   }
   const rolloutPdf = path.join(app.getAppPath(), 'resources', 'demo', 'Acme_rollout_v3.pdf')
   if (fs.existsSync(rolloutPdf)) {
-    const documents = await ragService.listDocuments(acmeProjectId)
+    const documents = knowledgeBase.listDocuments(acmeProjectId)
     if (!documents.some((document) => document.name === 'Acme_rollout_v3.pdf')) {
-      await ragService.indexDocument({
+      await knowledgeBase.addFile({
         projectId: acmeProjectId,
         path: rolloutPdf,
         fileName: 'Acme_rollout_v3.pdf',

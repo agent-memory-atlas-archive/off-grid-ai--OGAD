@@ -3,12 +3,10 @@
 // the extraction worker, and in-process when there is no built worker (running from source).
 
 import fs from 'node:fs'
-import type { DocumentPage } from '@offgrid/rag/documents'
+import { textParts, type DocumentPage } from '@offgrid/rag/documents'
 
 /** Pages are sent to the host in groups of this size as they are read. */
 const PAGE_BATCH = 50
-/** Text without pages (Word, plain text, transcripts) is cut into parts of about this size. */
-const PART_CHARS = 4_000
 
 export class ExtractionError extends Error {
   constructor(
@@ -83,32 +81,6 @@ export async function extractPdfPages(
   } finally {
     await document.destroy()
   }
-}
-
-/** Text without pages, cut at paragraph boundaries into labelled parts. */
-export function textParts(text: string): DocumentPage[] {
-  const parts: DocumentPage[] = []
-  let current = ''
-  const push = (): void => {
-    if (!current.trim()) return
-    const n = parts.length + 1
-    parts.push({ page: n, label: `part ${n}`, text: current.trim() })
-    current = ''
-  }
-  for (const paragraph of text.replace(/\r\n?/g, '\n').split(/\n\s*\n/)) {
-    if (current && current.length + paragraph.length > PART_CHARS) push()
-    if (paragraph.length > PART_CHARS * 2) {
-      // A single huge paragraph (minified JSON, one-line exports) is cut into fixed parts.
-      for (let i = 0; i < paragraph.length; i += PART_CHARS) {
-        current = paragraph.slice(i, i + PART_CHARS)
-        push()
-      }
-      continue
-    }
-    current = current ? `${current}\n\n${paragraph}` : paragraph
-  }
-  push()
-  return parts
 }
 
 export async function readTextFile(filePath: string): Promise<string> {

@@ -1,11 +1,13 @@
-// The chat turn's view of attached documents: runs the shared turn service with this machine's
+// The chat turn's view of its documents (the project's knowledge base and the chat's attachments): runs the shared turn service with this machine's
 // measured reading speed, reports progress in the work timeline, and turns the passages the model
 // may cite into the turn's sources (`[S#]` → the Sources panel and citation pills).
 
-import type {
-  DocumentBudgetInput,
-  DocumentSource,
-  DocumentTurnSummary
+import {
+  describeTurnStatus,
+  type DocumentBudgetInput,
+  type DocumentSource,
+  type DocumentTurnSummary,
+  type FoundPassage
 } from '@offgrid/rag/documents'
 import type { SearchResult } from '../../shared/search-contract'
 import { attachmentSource } from './conversation-documents'
@@ -42,8 +44,37 @@ function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`
 }
 
+/** A passage as a turn source: the same key whether the turn or a search tool cited it. */
+export function passageSource(passage: {
+  documentId: string
+  name: string
+  page: number
+  label?: string
+  position: number
+  snippet: string
+}): SearchResult {
+  return {
+    key: `attachment:${passage.documentId}:${passage.page}:${passage.position}`,
+    kind: 'attachment',
+    refId: passage.page,
+    title: `${passage.name} · ${passage.label ?? `p. ${passage.page}`}`,
+    snippet: passage.snippet,
+    surface: passage.name,
+    url: null,
+    ts: 0,
+    imagePath: null,
+    score: 0
+  }
+}
+
+export function foundPassageSource(passage: FoundPassage): SearchResult {
+  return passageSource({ ...passage, snippet: passage.text.slice(0, 280) })
+}
+
 export async function prepareTurnDocuments(input: {
   conversationId?: string
+  /** The project of a chat that is not saved yet; a saved one is looked up from the conversation. */
+  projectId?: string
   current: TurnDocumentRef[]
   question: string
   history: { role: string; content: string }[]
@@ -55,13 +86,18 @@ export async function prepareTurnDocuments(input: {
     const source = await attachmentSource(ref)
     if (source) current.push(source)
   }
-  const sources = await documentTurns.documentsFor(input.conversationId, current)
+  const scope = {
+    ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+    ...(input.projectId ? { projectId: input.projectId } : {})
+  }
+  const sources = await documentTurns.documentsFor(scope, current)
   if (!sources.length) return null
-  input.onActivity?.({ kind: 'documents', label: `Reading ${plural(sources.length, 'document')}…` })
   const { getActiveRemoteVisionServer } = await import('../vision/remote-vision-server')
   const result = await documentTurns.prepare({
-    ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+    ...scope,
     current,
+    onStatus: (status) =>
+      input.onActivity?.({ kind: 'documents', label: describeTurnStatus(status) }),
     question: input.question,
     previousQuestions: input.history
       .filter((turn) => turn.role === 'user')
@@ -89,17 +125,6 @@ export async function prepareTurnDocuments(input: {
     stable: result.stable,
     turn: result.turn,
     documents: result.documents,
-    sources: result.sources.map((source) => ({
-      key: `attachment:${source.documentId}:${source.page}:${source.position}`,
-      kind: 'attachment',
-      refId: source.page,
-      title: `${source.name} · ${source.label ?? `p. ${source.page}`}`,
-      snippet: source.snippet,
-      surface: source.name,
-      url: null,
-      ts: 0,
-      imagePath: null,
-      score: 0
-    }))
+    sources: result.sources.map(passageSource)
   }
 }

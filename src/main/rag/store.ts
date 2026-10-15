@@ -1,15 +1,12 @@
-// Desktop VectorStore for @offgrid/rag, backed by the existing better-sqlite3
-// `memories.db`. Adds project/document/chunk/embedding/thread tables and a
-// getChunkCandidates that UNIONS a project's uploaded-document chunks with the
-// app's captured memories — so a project's knowledge base spans both uploaded
-// files and what Off Grid AI has seen (the KB-sources decision).
+// Projects and their knowledge-base files in `memories.db`. A file row records which project holds
+// it, whether it is used in answers and how it syncs; its text is read, indexed and searched by the
+// document engine (documents/*) under `document_id`, the SHA-256 of its content.
 
 import { getDB } from '../database'
 import { deleteArtifactsForProject } from '../artifacts'
 import { CORE_SYNC_ENTITIES, emitSyncMutation } from '../sync-mutation'
 import { emitKnowledgeDocumentMutation } from '../sync-knowledge-document'
 import { randomUUID } from 'crypto'
-import type { VectorStore, ChunkCandidate } from '@offgrid/rag'
 import type { MediaKind, Project, RagDocument } from '@offgrid/rag'
 
 let migrated = false
@@ -42,15 +39,9 @@ export function ensureRagStoreSchema(): void {
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-    CREATE TABLE IF NOT EXISTS rag_chunks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      doc_id INTEGER NOT NULL,
-      content TEXT NOT NULL,
-      position INTEGER NOT NULL,
-      embedding TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_rag_chunks_doc ON rag_chunks(doc_id);
     CREATE INDEX IF NOT EXISTS idx_rag_documents_project ON rag_documents(project_id);
+    -- Knowledge-base text now lives in the document index; the old chunk and vector table goes.
+    DROP TABLE IF EXISTS rag_chunks;
   `)
   const projectColumns = db.prepare("SELECT name FROM pragma_table_info('projects')").all() as {
     name: string
@@ -66,6 +57,13 @@ export function ensureRagStoreSchema(): void {
   if (!columns.some(({ name }) => name === 'sync_id')) {
     getDB().exec('ALTER TABLE rag_documents ADD COLUMN sync_id TEXT')
   }
+  if (!columns.some(({ name }) => name === 'document_id')) {
+    getDB().exec('ALTER TABLE rag_documents ADD COLUMN document_id TEXT')
+  }
+  // Knowledge-base search joins the document index on this; cache cleanup lists it.
+  getDB().exec(
+    'CREATE INDEX IF NOT EXISTS idx_rag_documents_document ON rag_documents(document_id)'
+  )
   const legacy = getDB()
     .prepare("SELECT id FROM rag_documents WHERE sync_id IS NULL OR sync_id = ''")
     .all() as Array<{ id: number }>
@@ -79,117 +77,6 @@ export function ensureRagStoreSchema(): void {
   migrated = true
 }
 
-function parseEmbedding(s: string | null): number[] {
-  if (!s) return []
-  try {
-    const v = JSON.parse(s)
-    return Array.isArray(v) ? v : []
-  } catch {
-    return []
-  }
-}
-
-// --- Parsed document-embedding cache ---------------------------------------
-// Chat turns rank every embedded chunk of a project's enabled documents. Parsing those JSON
-// vectors on every turn dominated retrieval, so parsed vectors are cached per document, keyed
-// by chunk id, in an LRU bounded by an estimate of their heap size. The candidate query still
-// runs every turn (without the embedding column), so name, content, position, the enabled flag,
-// project membership and row order always come from SQLite; only the parsed vector is reused.
-//
-// Every write to rag_chunks, from this file or any other writer on this connection (backup
-// restore, Delete all my data), fires a TEMP trigger that records the affected doc_id. The next
-// read evicts those documents before using the cache, so insert, re-embed, delete and project
-// deletion can never serve a stale vector.
-const EMBEDDING_CACHE_MAX_BYTES = 64 * 1024 * 1024
-type DocEmbeddings = { vectors: Map<number, number[]>; bytes: number }
-const embeddingCache = new Map<number, DocEmbeddings>()
-let embeddingCacheBytes = 0
-let embeddingCacheDb: object | undefined
-
-function evictDocEmbeddings(docId: number): void {
-  const entry = embeddingCache.get(docId)
-  if (!entry) return
-  embeddingCache.delete(docId)
-  embeddingCacheBytes -= entry.bytes
-}
-
-function clearEmbeddingCache(): void {
-  embeddingCache.clear()
-  embeddingCacheBytes = 0
-}
-
-/** Install this connection's change triggers and apply pending evictions. False: bypass cache. */
-function syncEmbeddingCache(): boolean {
-  const db = getDB()
-  try {
-    if (embeddingCacheDb !== db) {
-      clearEmbeddingCache()
-      db.exec(`
-        CREATE TEMP TABLE IF NOT EXISTS rag_embedding_dirty (doc_id INTEGER PRIMARY KEY);
-        CREATE TEMP TRIGGER IF NOT EXISTS rag_embedding_dirty_insert AFTER INSERT ON main.rag_chunks
-        BEGIN INSERT OR IGNORE INTO rag_embedding_dirty (doc_id) VALUES (NEW.doc_id); END;
-        CREATE TEMP TRIGGER IF NOT EXISTS rag_embedding_dirty_delete AFTER DELETE ON main.rag_chunks
-        BEGIN INSERT OR IGNORE INTO rag_embedding_dirty (doc_id) VALUES (OLD.doc_id); END;
-        CREATE TEMP TRIGGER IF NOT EXISTS rag_embedding_dirty_update AFTER UPDATE ON main.rag_chunks
-        BEGIN
-          INSERT OR IGNORE INTO rag_embedding_dirty (doc_id) VALUES (OLD.doc_id);
-          INSERT OR IGNORE INTO rag_embedding_dirty (doc_id) VALUES (NEW.doc_id);
-        END;
-        DELETE FROM temp.rag_embedding_dirty;
-      `)
-      embeddingCacheDb = db
-      return true
-    }
-    const dirty = db.prepare('DELETE FROM temp.rag_embedding_dirty RETURNING doc_id').all() as {
-      doc_id: number
-    }[]
-    for (const { doc_id } of dirty) evictDocEmbeddings(doc_id)
-    return true
-  } catch {
-    embeddingCacheDb = undefined
-    clearEmbeddingCache()
-    return false
-  }
-}
-
-function loadDocEmbeddings(docId: number): DocEmbeddings {
-  const rows = getDB()
-    .prepare('SELECT id, embedding FROM rag_chunks WHERE doc_id = ? AND embedding IS NOT NULL')
-    .all(docId) as { id: number; embedding: string }[]
-  const vectors = new Map<number, number[]>()
-  let bytes = 64
-  for (const row of rows) {
-    // Frozen: a shared cached vector must not be mutated by a caller.
-    const vector = Object.freeze(parseEmbedding(row.embedding)) as number[]
-    vectors.set(row.id, vector)
-    // V8 stores a numeric array as 8-byte doubles plus fixed overhead per array and map entry.
-    bytes += vector.length * 8 + 64
-  }
-  return { vectors, bytes }
-}
-
-function cachedDocEmbeddings(docId: number): DocEmbeddings {
-  const hit = embeddingCache.get(docId)
-  if (hit) {
-    // Refresh recency.
-    embeddingCache.delete(docId)
-    embeddingCache.set(docId, hit)
-    return hit
-  }
-  const entry = loadDocEmbeddings(docId)
-  if (entry.bytes <= EMBEDDING_CACHE_MAX_BYTES) {
-    embeddingCache.set(docId, entry)
-    embeddingCacheBytes += entry.bytes
-    for (const [oldest, old] of embeddingCache) {
-      if (embeddingCacheBytes <= EMBEDDING_CACHE_MAX_BYTES) break
-      embeddingCache.delete(oldest)
-      embeddingCacheBytes -= old.bytes
-    }
-  }
-  return entry
-}
-
-/** Current cache footprint, for tests and diagnostics. */
 /** Whether a project folds captured memories into its KB (default on). */
 export function projectIncludesMemory(projectId: string): boolean {
   ensureRagStoreSchema()
@@ -199,189 +86,78 @@ export function projectIncludesMemory(projectId: string): boolean {
   return row ? row.include_memory === 1 : true
 }
 
-export const desktopVectorStore: VectorStore = {
-  async addDocument(doc) {
-    ensureRagStoreSchema()
-    const info = getDB()
-      .prepare(
-        `INSERT INTO rag_documents
-           (sync_id, project_id, name, path, size, kind, enabled, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))`
-      )
-      .run(
-        doc.syncId ?? randomUUID(),
-        doc.projectId,
-        doc.name,
-        doc.path,
-        doc.size,
-        doc.kind,
-        doc.enabled === false ? 0 : 1,
-        doc.createdAt ?? null
-      )
-    return Number(info.lastInsertRowid)
-  },
-
-  async addChunks(docId, chunks, embeddings) {
-    ensureRagStoreSchema()
-    const db = getDB()
-    const insert = db.prepare(
-      'INSERT INTO rag_chunks (doc_id, content, position, embedding) VALUES (?, ?, ?, ?)'
+/** A new knowledge-base file row. Its text is indexed separately, by the document engine. */
+export function insertRagDocument(doc: {
+  projectId: string
+  name: string
+  path: string
+  size: number
+  kind: MediaKind
+  documentId?: string
+  syncId?: string
+  createdAt?: string
+  enabled?: boolean
+}): number {
+  ensureRagStoreSchema()
+  const info = getDB()
+    .prepare(
+      `INSERT INTO rag_documents
+         (sync_id, project_id, name, path, size, kind, enabled, document_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))`
     )
-    const tx = db.transaction(() => {
-      chunks.forEach((c, i) => {
-        const emb = embeddings[i] ? JSON.stringify(embeddings[i]) : null
-        insert.run(docId, c.content, c.position, emb)
-      })
-    })
-    tx()
-  },
-
-  async getChunkCandidates(projectId) {
-    ensureRagStoreSchema()
-    const db = getDB()
-    const out: ChunkCandidate[] = []
-
-    // 1) Uploaded-document chunks for enabled docs in this project.
-    if (syncEmbeddingCache()) {
-      const rows = db
-        .prepare(
-          `SELECT c.id AS chunkId, c.doc_id AS docId, d.name AS name, c.content AS content, c.position AS position
-           FROM rag_chunks c
-           JOIN rag_documents d ON d.id = c.doc_id
-           WHERE d.project_id = ? AND d.enabled = 1 AND c.embedding IS NOT NULL`
-        )
-        .all(projectId) as {
-        chunkId: number
-        docId: number
-        name: string
-        content: string
-        position: number
-      }[]
-      // A document is looked up once per turn even when it holds thousands of chunks.
-      const docs = new Map<number, { entry: DocEmbeddings; fresh: boolean }>()
-      for (const r of rows) {
-        let doc = docs.get(r.docId)
-        if (!doc) {
-          doc = { entry: cachedDocEmbeddings(r.docId), fresh: false }
-          docs.set(r.docId, doc)
-        }
-        // Defensive: a chunk the cached entry lacks reloads that document once this turn.
-        if (!doc.entry.vectors.has(r.chunkId) && !doc.fresh) {
-          evictDocEmbeddings(r.docId)
-          doc = { entry: cachedDocEmbeddings(r.docId), fresh: true }
-          docs.set(r.docId, doc)
-        }
-        const embedding = doc.entry.vectors.get(r.chunkId) ?? []
-        if (embedding.length)
-          out.push({
-            docId: r.docId,
-            name: r.name,
-            content: r.content,
-            position: r.position,
-            embedding
-          })
-      }
-    } else {
-      const rows = db
-        .prepare(
-          `SELECT c.doc_id AS docId, d.name AS name, c.content AS content, c.position AS position, c.embedding AS embedding
-           FROM rag_chunks c
-           JOIN rag_documents d ON d.id = c.doc_id
-           WHERE d.project_id = ? AND d.enabled = 1 AND c.embedding IS NOT NULL`
-        )
-        .all(projectId) as {
-        docId: number
-        name: string
-        content: string
-        position: number
-        embedding: string
-      }[]
-      for (const r of rows) {
-        const embedding = parseEmbedding(r.embedding)
-        if (embedding.length)
-          out.push({
-            docId: r.docId,
-            name: r.name,
-            content: r.content,
-            position: r.position,
-            embedding
-          })
-      }
-    }
-
-    // 2) Captured memories as an additional KB source (opt-out per project).
-    if (projectIncludesMemory(projectId)) {
-      const mems = db
-        .prepare(
-          `SELECT id, content, embedding FROM memories
-           WHERE embedding IS NOT NULL AND embedding != '[]' LIMIT 2000`
-        )
-        .all() as { id: number; content: string; embedding: string }[]
-      for (const m of mems) {
-        const embedding = parseEmbedding(m.embedding)
-        if (embedding.length)
-          out.push({
-            docId: -m.id,
-            name: 'Captured memory',
-            content: m.content,
-            position: 0,
-            embedding
-          })
-      }
-    }
-
-    return out
-  },
-
-  async listDocuments(projectId) {
-    ensureRagStoreSchema()
-    const rows = getDB()
-      .prepare(
-        `SELECT id, sync_id, project_id, name, path, size, kind, enabled, created_at
-         FROM rag_documents WHERE project_id = ? ORDER BY created_at DESC`
-      )
-      .all(projectId) as {
-      id: number
-      sync_id: string
-      project_id: string
-      name: string
-      path: string
-      size: number
-      kind: string
-      enabled: number
-      created_at: string
-    }[]
-    return rows.map(
-      (r): RagDocument => ({
-        id: r.id,
-        syncId: r.sync_id,
-        projectId: r.project_id,
-        name: r.name,
-        path: r.path,
-        size: r.size,
-        kind: r.kind as MediaKind,
-        enabled: r.enabled === 1,
-        createdAt: r.created_at
-      })
+    .run(
+      doc.syncId ?? randomUUID(),
+      doc.projectId,
+      doc.name,
+      doc.path,
+      doc.size,
+      doc.kind,
+      doc.enabled === false ? 0 : 1,
+      doc.documentId ?? null,
+      doc.createdAt ?? null
     )
-  },
+  return Number(info.lastInsertRowid)
+}
 
-  async setDocumentEnabled(docId, enabled) {
-    ensureRagStoreSchema()
+/** A file's text is in the document index: record its id, what it turned out to be, and the kept copy. */
+export function setRagDocumentIndexed(
+  docId: number,
+  indexed: { documentId: string; kind: MediaKind; path: string }
+): void {
+  ensureRagStoreSchema()
+  getDB()
+    .prepare('UPDATE rag_documents SET document_id = ?, kind = ?, path = ? WHERE id = ?')
+    .run(indexed.documentId, indexed.kind, indexed.path, docId)
+}
+
+export function setRagDocumentEnabled(docId: number, enabled: boolean): void {
+  ensureRagStoreSchema()
+  getDB()
+    .prepare('UPDATE rag_documents SET enabled = ? WHERE id = ?')
+    .run(enabled ? 1 : 0, docId)
+}
+
+export function deleteRagDocument(docId: number): void {
+  ensureRagStoreSchema()
+  getDB().prepare('DELETE FROM rag_documents WHERE id = ?').run(docId)
+}
+
+export function listRagDocuments(projectId: string): RagDocument[] {
+  ensureRagStoreSchema()
+  return (
     getDB()
-      .prepare('UPDATE rag_documents SET enabled = ? WHERE id = ?')
-      .run(enabled ? 1 : 0, docId)
-  },
+      .prepare(`${DOCUMENT_SELECT} WHERE project_id = ? ORDER BY created_at DESC`)
+      .all(projectId) as RagDocumentRow[]
+  ).map(mapDocument)
+}
 
-  async deleteDocument(docId) {
-    ensureRagStoreSchema()
-    const db = getDB()
-    const tx = db.transaction(() => {
-      db.prepare('DELETE FROM rag_chunks WHERE doc_id = ?').run(docId)
-      db.prepare('DELETE FROM rag_documents WHERE id = ?').run(docId)
-    })
-    tx()
-  }
+/** The project a conversation is filed in, if any. */
+export function projectOfConversation(conversationId: string): string | null {
+  ensureRagStoreSchema()
+  const row = getDB()
+    .prepare('SELECT project_id FROM rag_conversations WHERE id = ?')
+    .get(conversationId) as { project_id: string | null } | undefined
+  return row?.project_id ?? null
 }
 
 type RagDocumentRow = {
@@ -394,6 +170,7 @@ type RagDocumentRow = {
   kind: string
   enabled: number
   created_at: string
+  document_id: string | null
 }
 
 function mapDocument(row: RagDocumentRow): RagDocument {
@@ -406,12 +183,13 @@ function mapDocument(row: RagDocumentRow): RagDocument {
     size: row.size,
     kind: row.kind as MediaKind,
     enabled: row.enabled === 1,
-    createdAt: row.created_at
+    createdAt: row.created_at,
+    ...(row.document_id ? { documentId: row.document_id } : {})
   }
 }
 
 const DOCUMENT_SELECT =
-  'SELECT id, sync_id, project_id, name, path, size, kind, enabled, created_at FROM rag_documents'
+  'SELECT id, sync_id, project_id, name, path, size, kind, enabled, created_at, document_id FROM rag_documents'
 
 export function getRagDocument(docId: number): RagDocument | undefined {
   ensureRagStoreSchema()
@@ -538,12 +316,6 @@ export function deleteProject(id: string): void {
     .prepare('SELECT sync_id FROM rag_documents WHERE project_id = ?')
     .all(id) as Array<{ sync_id: string }>
   const tx = db.transaction(() => {
-    const docs = db.prepare('SELECT id FROM rag_documents WHERE project_id = ?').all(id) as {
-      id: number
-    }[]
-    for (const d of docs) {
-      db.prepare('DELETE FROM rag_chunks WHERE doc_id = ?').run(d.id)
-    }
     db.prepare('DELETE FROM rag_documents WHERE project_id = ?').run(id)
     // A project is a folder and knowledge scope, not the owner of chat history. Removing it moves
     // its conversations back to unfiled Chat while preserving every message.

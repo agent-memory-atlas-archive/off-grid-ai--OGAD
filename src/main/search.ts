@@ -7,6 +7,7 @@ import { getDB } from './database'
 import { frameTextIndexBackfilling } from './frame-text-index'
 import { embeddings } from './embeddings'
 import { ensureRagStoreSchema } from './rag/store'
+import { ftsQuery } from './documents/sqlite-store'
 import { addChunks, searchVectors, vectorCount, type VecChunk } from './vectors'
 import {
   applyBoosts,
@@ -214,13 +215,8 @@ export function searchFacets(query: string): { source: string; count: number }[]
       )
       .get(...chatM.args) as { c: number }
     if (chat.c) out.push({ source: 'Chat', count: chat.c })
-    const docM = likeMatch(LIKE_COLUMNS.doc, terms)
-    const kb = db
-      .prepare(
-        `SELECT COUNT(*) AS c FROM (SELECT d.id FROM rag_chunks c JOIN rag_documents d ON d.id=c.doc_id WHERE ${docM.where} GROUP BY d.id)`
-      )
-      .get(...docM.args) as { c: number }
-    if (kb.c) out.push({ source: 'Knowledge base', count: kb.c })
+    const kb = knowledgeBaseHits(q, 1000).length
+    if (kb) out.push({ source: 'Knowledge base', count: kb })
     const mtgM = likeMatch(LIKE_COLUMNS.meeting, terms)
     const mtg = db
       .prepare(`SELECT COUNT(*) AS c FROM meetings WHERE ${mtgM.where}`)
@@ -298,8 +294,8 @@ function keywordHits(query: string, perSource: number): RawHit[][] {
     frameHits(query, perSource),
     // Your own chat conversations (title + message content), one hit per chat.
     likeChatHits(query, perSource),
-    // Project knowledge-base documents (chunked file content).
-    likeDocHits(query, perSource)
+    // Project knowledge-base documents, from the document index.
+    knowledgeBaseHits(query, perSource)
   ]
 }
 
@@ -321,21 +317,31 @@ function likeChatHits(query: string, limit: number): RawHit[] {
     .all(...args, limit) as RawHit[]
 }
 
-// Knowledge-base documents (per project) — LIKE over chunk content, one hit per
-// document. The owning project_id is carried in `url` so the renderer can open it.
-function likeDocHits(query: string, limit: number): RawHit[] {
-  const terms = queryTerms(query, 6)
-  if (!terms.length) return []
-  const { where, args } = likeMatch(LIKE_COLUMNS.doc, terms)
-  return getDB()
-    .prepare(
-      `SELECT 'doc:'||d.id AS key, 'doc' AS kind, d.id AS refId, d.name AS title,
-              substr(c.content,1,300) AS snippet, 'Knowledge base' AS surface, d.project_id AS url,
-              ${epochMsSql('d.created_at')} AS ts
-         FROM rag_chunks c JOIN rag_documents d ON d.id = c.doc_id
-        WHERE ${where} GROUP BY d.id LIMIT ?`
-    )
-    .all(...args, limit) as RawHit[]
+// Knowledge-base documents (per project): the document index's keyword search (bm25), best
+// passage per file. The owning project_id is carried in `url` so the renderer can open it.
+function knowledgeBaseHits(query: string, limit: number): RawHit[] {
+  const match = ftsQuery(query)
+  if (!match) return []
+  let rows: RawHit[]
+  try {
+    rows = getDB()
+      .prepare(
+        `SELECT 'doc:'||d.id AS key, 'doc' AS kind, d.id AS refId, d.name AS title,
+                substr(c.text,1,300) AS snippet, 'Knowledge base' AS surface, d.project_id AS url,
+                ${epochMsSql('d.created_at')} AS ts
+           FROM (SELECT document_id, position, bm25(attached_document_fts) AS rank
+                   FROM attached_document_fts WHERE attached_document_fts MATCH ?
+                   ORDER BY rank LIMIT ?) f
+           JOIN rag_documents d ON d.document_id = f.document_id
+           JOIN attached_document_chunks c ON c.document_id = f.document_id AND c.position = f.position
+          ORDER BY f.rank`
+      )
+      .all(match, limit * 20) as RawHit[]
+  } catch {
+    return []
+  }
+  const seen = new Set<string>()
+  return rows.filter((row) => !seen.has(row.key) && !!seen.add(row.key)).slice(0, limit)
 }
 
 function likeMeetingHits(query: string, limit: number): RawHit[] {

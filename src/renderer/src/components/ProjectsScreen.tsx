@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback, type ReactNode } from 'react'
-import { AnimatePresence, motion } from 'motion/react'
+import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react'
+import { AnimatePresence, motion, useReducedMotion, type Transition } from 'motion/react'
 import {
   IconPlus,
   IconFolder,
@@ -13,11 +13,17 @@ import {
   IconDeviceFloppy,
   IconMessage,
   IconSettings,
-  IconLayoutGrid
+  IconLayoutGrid,
+  IconX
 } from '@tabler/icons-react'
 import { Card } from '@offgrid/operator-ui/operator/coss/card'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 import { TextEffect } from '@offgrid/operator-ui/operator/text-effect'
+import {
+  Progress,
+  ProgressIndicator,
+  ProgressTrack
+} from '@offgrid/operator-ui/operator/coss/progress'
 import { PageHeader } from '@offgrid/operator-ui/operator/experience'
 import {
   Empty,
@@ -36,6 +42,12 @@ import {
   PROJECT_DELETE_FALLBACK_REASON,
   type ProjectDeleteOutcome
 } from '../../../shared/project-delete-outcome'
+import {
+  projectDocumentTransferKey,
+  projectDocumentTransferLabel,
+  projectDocumentTransferPercent,
+  type ProjectDocumentTransfer
+} from '../../../shared/project-document-transfer'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (window as any).api
@@ -104,10 +116,19 @@ interface Project {
 }
 interface RagDoc {
   id: number
+  /** Identity across paired devices; transfers are matched to rows by it. */
+  syncId?: string
   name: string
   size: number
   kind: string
   enabled: boolean
+  /** Set once the document engine has the file; its state and counts come from that index. */
+  documentId?: string
+  state?: 'reading' | 'indexing' | 'ready' | 'failed'
+  pageCount?: number
+  chunkCount?: number
+  embeddedCount?: number
+  error?: string
 }
 interface RagConvo {
   id: string
@@ -589,24 +610,342 @@ function Field({
 
 // --- Knowledge base manager -------------------------------------------------
 
+/** A picked file before the document engine has it: being copied, hashed or transcribed. */
+interface PendingFile {
+  error?: string
+}
+
+/** Where a file stands in the document engine. */
+interface DocStatus {
+  phase: DocumentProgressEvent['phase']
+  done: number
+  total: number
+  error?: string
+}
+
+/** The live event speaks while the file works; the stored row speaks when nothing is streaming. */
+function docStatus(doc: RagDoc, live: DocumentProgressEvent | undefined): DocStatus | null {
+  if (live) return { phase: live.phase, done: live.done, total: live.total, error: live.error }
+  if (!doc.state) return null
+  if (doc.state === 'indexing') {
+    return { phase: 'indexing', done: doc.embeddedCount ?? 0, total: doc.chunkCount ?? 0 }
+  }
+  return { phase: doc.state, done: 0, total: 0, error: doc.error }
+}
+
+const isWorking = (status: DocStatus | null): status is DocStatus =>
+  !!status && status.phase !== 'ready' && status.phase !== 'failed'
+
+/** One bar for the whole file, so it never runs back to zero when a new phase starts. */
+const PHASE_SPAN: Partial<Record<DocStatus['phase'], [number, number]>> = {
+  reading: [0, 30],
+  ocr: [30, 50],
+  indexing: [50, 100]
+}
+
+function statusPercent(status: DocStatus): number {
+  const span = PHASE_SPAN[status.phase]
+  if (!span) return 100
+  const share = status.total ? Math.min(1, status.done / status.total) : 0
+  return Math.max(2, Math.round(span[0] + (span[1] - span[0]) * share))
+}
+
+function statusLabel(status: DocStatus): string {
+  const count = (n: number): string => n.toLocaleString()
+  if (status.phase === 'reading') {
+    return status.total ? `Reading ${Math.round((100 * status.done) / status.total)}%` : 'Reading…'
+  }
+  if (status.phase === 'ocr') {
+    return status.total ? `Scanning ${count(status.done)}/${count(status.total)}` : 'Scanning…'
+  }
+  if (status.phase === 'indexing') {
+    return status.total ? `Indexing ${count(status.done)} / ${count(status.total)}` : 'Indexing…'
+  }
+  return status.phase === 'failed' ? "Couldn't read" : ''
+}
+
+function readyMeta(doc: RagDoc, pageCount: number | undefined): string {
+  const pages =
+    pageCount && (doc.kind === 'pdf' || doc.kind === 'docx')
+      ? `${pageCount.toLocaleString()} ${pageCount === 1 ? 'page' : 'pages'}`
+      : ''
+  return [doc.kind, fmtSize(doc.size), pages].filter(Boolean).join('  ·  ')
+}
+
+/** Drop live events the stored rows have caught up with, and finished events for other files. */
+function pruneLive(
+  live: Record<string, DocumentProgressEvent>,
+  rows: RagDoc[]
+): Record<string, DocumentProgressEvent> {
+  const next: Record<string, DocumentProgressEvent> = {}
+  for (const [id, event] of Object.entries(live)) {
+    const row = rows.find((r) => r.documentId === id)
+    const settled = row
+      ? row.state === 'ready' || row.state === 'failed'
+      : event.phase === 'ready' || event.phase === 'failed'
+    if (!settled) next[id] = event
+  }
+  return next
+}
+
+const ROW_TRANSITION: Transition = { duration: 0.32, ease: [0.22, 1, 0.36, 1] }
+const NO_TRANSITION: Transition = { duration: 0 }
+
+function PendingRow({
+  name,
+  file,
+  onDismiss
+}: {
+  name: string
+  file: PendingFile
+  onDismiss: () => void
+}): React.JSX.Element {
+  return (
+    <div
+      className={`flex items-center gap-3 px-3 py-2 transition-colors ${file.error ? 'bg-red-500/5' : ''}`}
+    >
+      {file.error ? (
+        <IconFile className="h-4 w-4 shrink-0 text-red-500" />
+      ) : (
+        <IconLoader2 className="h-4 w-4 shrink-0 animate-spin text-green-500" />
+      )}
+      <div
+        className={`min-w-0 flex-1 truncate text-sm ${file.error ? 'text-red-400' : 'text-white'}`}
+      >
+        {name}
+      </div>
+      <div
+        className={`max-w-[50%] shrink-0 truncate text-[10px] uppercase tracking-wide tabular-nums ${file.error ? 'text-red-500' : 'text-neutral-500'}`}
+        title={file.error}
+      >
+        {file.error ?? 'Adding…'}
+      </div>
+      {file.error ? (
+        <IconTip label="Dismiss">
+          <button
+            onClick={onDismiss}
+            aria-label={`Dismiss ${name}`}
+            className="shrink-0 text-neutral-600 transition-colors hover:text-white"
+          >
+            <IconX className="h-4 w-4" />
+          </button>
+        </IconTip>
+      ) : null}
+    </div>
+  )
+}
+
+/** How long a received file's row waits for its document row before it gives way anyway. */
+const RECEIVED_ROW_GRACE_MS = 15_000
+
+/** The transfer a document row speaks for: one still moving first, then one that failed. */
+function rowTransfer(
+  transfers: ProjectDocumentTransfer[],
+  syncId: string | undefined
+): ProjectDocumentTransfer | undefined {
+  if (!syncId) return undefined
+  const own = transfers.filter((transfer) => transfer.syncId === syncId)
+  return own.find(({ status }) => status === 'active') ?? own.find(({ status }) => status === 'failed')
+}
+
+/** A file arriving from a paired device before this device has a row for it. */
+function TransferRow({
+  transfer,
+  transition,
+  onDismiss
+}: {
+  transfer: ProjectDocumentTransfer
+  transition: Transition
+  onDismiss: () => void
+}): React.JSX.Element {
+  const failed = transfer.status === 'failed'
+  return (
+    <div className={`px-3 py-2 transition-colors ${failed ? 'bg-red-500/5' : ''}`}>
+      <div className="flex items-center gap-3">
+        {failed ? (
+          <IconFile className="h-4 w-4 shrink-0 text-red-500" />
+        ) : (
+          <IconLoader2 className="h-4 w-4 shrink-0 animate-spin text-green-500" />
+        )}
+        <div
+          className={`min-w-0 flex-1 truncate text-sm ${failed ? 'text-red-400' : 'text-white'}`}
+        >
+          {transfer.fileName}
+        </div>
+        <div
+          className={`max-w-[50%] shrink-0 truncate text-[10px] uppercase tracking-wide tabular-nums transition-colors ${failed ? 'text-red-500' : 'text-neutral-500'}`}
+          title={failed ? transfer.error : undefined}
+        >
+          {projectDocumentTransferLabel(transfer)}
+        </div>
+        {failed ? (
+          <IconTip label="Dismiss">
+            <button
+              onClick={onDismiss}
+              aria-label={`Dismiss ${transfer.fileName}`}
+              className="shrink-0 text-neutral-600 transition-colors hover:text-white"
+            >
+              <IconX className="h-4 w-4" />
+            </button>
+          </IconTip>
+        ) : null}
+      </div>
+      <AnimatePresence initial={false}>
+        {failed ? null : (
+          <motion.div
+            key="progress"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={transition}
+            className="overflow-hidden"
+          >
+            <Progress
+              aria-label={`Receiving ${transfer.fileName}`}
+              value={projectDocumentTransferPercent(transfer)}
+              className="pt-1.5"
+            >
+              <ProgressTrack className="h-0.5 rounded-none bg-neutral-800">
+                <ProgressIndicator className="bg-green-500 duration-300 ease-out" />
+              </ProgressTrack>
+            </Progress>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+function DocRow({
+  doc,
+  live,
+  transfer,
+  transition,
+  onToggle,
+  onDelete
+}: {
+  doc: RagDoc
+  live: DocumentProgressEvent | undefined
+  /** A copy of this file moving to or from a paired device, said after the file's own state. */
+  transfer: ProjectDocumentTransfer | undefined
+  transition: Transition
+  onToggle: () => void
+  onDelete: () => void
+}): React.JSX.Element {
+  const Icon = KIND_ICON[doc.kind] ?? IconFile
+  const status = docStatus(doc, live)
+  const working = isWorking(status)
+  const failed = status?.phase === 'failed'
+  const ownState = working || failed
+  const syncFailed = !ownState && transfer?.status === 'failed'
+  const meta =
+    ownState
+      ? statusLabel(status)
+      : transfer
+        ? projectDocumentTransferLabel(transfer)
+        : readyMeta(doc, live?.pageCount || doc.pageCount)
+  const metaTitle = failed
+    ? status.error || "Couldn't read this file"
+    : syncFailed
+      ? transfer.error
+      : undefined
+  return (
+    <div className="px-3 py-2">
+      <div className="flex items-center gap-3">
+        <Icon
+          className={`h-4 w-4 shrink-0 transition-colors ${failed ? 'text-red-500' : 'text-neutral-500'}`}
+        />
+        <div className="min-w-0 flex-1 truncate text-sm text-white">{doc.name}</div>
+        <div
+          className={`max-w-[50%] shrink-0 truncate text-[10px] uppercase tracking-wide tabular-nums transition-colors ${failed || syncFailed ? 'text-red-500' : working || transfer ? 'text-neutral-500' : 'text-neutral-600'}`}
+          title={metaTitle}
+        >
+          {meta}
+        </div>
+        <button
+          onClick={onToggle}
+          aria-label={`${doc.enabled ? 'Disable' : 'Enable'} ${doc.name}`}
+          title={doc.enabled ? 'Enabled in retrieval' : 'Disabled'}
+          className={`h-4 w-7 shrink-0 rounded-full transition-colors ${doc.enabled ? 'bg-green-500' : 'bg-neutral-700'}`}
+        >
+          <span
+            className={`block h-3 w-3 rounded-full bg-white transition-transform ${doc.enabled ? 'translate-x-3.5' : 'translate-x-0.5'}`}
+          />
+        </button>
+        <button
+          onClick={onDelete}
+          aria-label={`Delete ${doc.name}`}
+          className="shrink-0 text-neutral-600 transition-colors hover:text-red-500"
+        >
+          <IconTrash className="h-4 w-4" />
+        </button>
+      </div>
+      <AnimatePresence initial={false}>
+        {working ? (
+          <motion.div
+            key="progress"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={transition}
+            className="overflow-hidden"
+          >
+            <Progress
+              aria-label={`Indexing ${doc.name}`}
+              value={statusPercent(status)}
+              className="pt-1.5"
+            >
+              <ProgressTrack className="h-0.5 rounded-none bg-neutral-800">
+                <ProgressIndicator className="bg-green-500 duration-300 ease-out" />
+              </ProgressTrack>
+            </Progress>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </div>
+  )
+}
+
 function KnowledgeBase({ projectId }: { projectId: string }): React.JSX.Element {
+  const reduceMotion = useReducedMotion()
   const [docs, setDocs] = useState<RagDoc[]>([])
-  const [status, setStatus] = useState<string | null>(null)
+  // Live engine progress, by documentId.
+  const [live, setLive] = useState<Record<string, DocumentProgressEvent>>({})
+  // Picked files the engine does not have yet, by name.
+  const [pending, setPending] = useState<Record<string, PendingFile>>({})
+  // Files moving to or from paired devices, by transfer key. Empty without sync (free build).
+  const [transfers, setTransfers] = useState<Record<string, ProjectDocumentTransfer>>({})
   const [busy, setBusy] = useState(false)
+  const refreshSeq = useRef(0)
 
   const refresh = useCallback(async () => {
-    setDocs((await api.listProjectDocuments?.(projectId)) ?? [])
+    // Progress events refresh often; only the newest answer may land.
+    const seq = ++refreshSeq.current
+    const rows: RagDoc[] = (await api.listProjectDocuments?.(projectId)) ?? []
+    if (seq !== refreshSeq.current) return
+    setDocs(rows)
+    setLive((cur) => pruneLive(cur, rows))
   }, [projectId])
 
   useEffect(() => {
     refresh()
-    const off = api.onProjectIndexProgress?.(
-      (d: { name: string; stage: string; error?: string }) => {
-        if (d.stage === 'error') setStatus(`${d.name}: ${d.error}`)
-        else if (d.stage === 'done') {
-          setStatus(`${d.name}: indexed`)
+    const offAdding = api.onProjectIndexProgress?.(
+      (d: {
+        projectId: string
+        name: string
+        stage: 'adding' | 'done' | 'error'
+        error?: string
+      }) => {
+        if (d.projectId !== projectId) return
+        if (d.stage === 'done') {
+          setPending(({ [d.name]: _added, ...rest }) => rest)
           refresh()
-        } else setStatus(`${d.name}: ${d.stage}…`)
+          return
+        }
+        setPending((cur) => ({
+          ...cur,
+          [d.name]: d.stage === 'error' ? { error: d.error || "Couldn't add this file" } : {}
+        }))
       }
     )
     const offChanged = api.onProjectDocumentsChanged?.(
@@ -614,21 +953,99 @@ function KnowledgeBase({ projectId }: { projectId: string }): React.JSX.Element 
         if (changedProjectId === projectId) refresh()
       }
     )
+    // A project switch must not carry the last project's transfers.
+    setTransfers({})
+    const snapshot = { current: true }
+    void (async () => {
+      let known: ProjectDocumentTransfer[] = []
+      try {
+        known = (await api.listProjectDocumentTransfers?.(projectId)) ?? []
+      } catch {
+        /* no sync on this build */
+      }
+      if (!snapshot.current || known.length === 0) return
+      // A live event that landed first is newer than the snapshot; keep it.
+      setTransfers((cur) => ({
+        ...Object.fromEntries(known.map((t) => [projectDocumentTransferKey(t), t])),
+        ...cur
+      }))
+    })()
+    const graceTimers = new Set<ReturnType<typeof setTimeout>>()
+    const offTransfer = api.onProjectDocumentTransfer?.((transfer: ProjectDocumentTransfer) => {
+      if (transfer.projectId !== projectId) return
+      const key = projectDocumentTransferKey(transfer)
+      const landed = transfer.status === 'completed' && transfer.direction === 'receive'
+      if (transfer.status === 'completed' || transfer.status === 'cancelled') {
+        // A received file keeps its row at 100% until its document row takes over.
+        setTransfers(({ [key]: _done, ...rest }) => (landed ? { ...rest, [key]: transfer } : rest))
+        if (landed) {
+          refresh()
+          const timer = setTimeout(() => {
+            graceTimers.delete(timer)
+            setTransfers((cur) => {
+              if (cur[key]?.status !== 'completed') return cur
+              const { [key]: _expired, ...rest } = cur
+              return rest
+            })
+          }, RECEIVED_ROW_GRACE_MS)
+          graceTimers.add(timer)
+        }
+        return
+      }
+      setTransfers((cur) => ({ ...cur, [key]: transfer }))
+    })
+    const offProgress = window.api.documents.onProgress((progress) => {
+      setLive((cur) => ({ ...cur, [progress.id]: progress }))
+      // The row's counts and page total are final now.
+      if (progress.phase === 'ready' || progress.phase === 'failed') refresh()
+    })
     return () => {
-      off?.()
+      snapshot.current = false
+      for (const timer of graceTimers) clearTimeout(timer)
+      offAdding?.()
       offChanged?.()
+      offTransfer?.()
+      offProgress()
     }
   }, [projectId, refresh])
 
+
   const add = async (): Promise<void> => {
     setBusy(true)
-    setStatus('Choose files…')
     try {
       await api.addProjectDocuments?.(projectId)
     } finally {
       setBusy(false)
       refresh()
     }
+  }
+
+  // A file the engine has shows its own row; until then its pending row stands in for it.
+  const engineNames = new Set(docs.filter((d) => d.documentId).map((d) => d.name))
+  const pendingRows = Object.entries(pending).filter(
+    ([name, file]) => file.error || !engineNames.has(name)
+  )
+  const docRows = docs.filter(
+    (d) => d.documentId || !pending[d.name] || Boolean(pending[d.name]?.error)
+  )
+  // An arriving file has its own row until this device lists it; then its document row speaks.
+  const transferList = Object.values(transfers)
+  const docSyncIds = new Set(docs.map((d) => d.syncId).filter(Boolean))
+  const arrivingRows = transferList.filter(
+    (t) => t.direction === 'receive' && !docSyncIds.has(t.syncId)
+  )
+  const dismissTransfer = (transfer: ProjectDocumentTransfer): void => {
+    const key = projectDocumentTransferKey(transfer)
+    setTransfers(({ [key]: _dismissed, ...rest }) => rest)
+    api.dismissProjectDocumentTransfer?.(key).catch(() => undefined)
+  }
+  const rowTransition = reduceMotion ? NO_TRANSITION : ROW_TRANSITION
+  const rowMotion = {
+    initial: { opacity: 0, height: 0 },
+    animate: { opacity: 1, height: 'auto' },
+    exit: { opacity: 0, height: 0 },
+    transition: rowTransition,
+    className: 'overflow-hidden'
   }
 
   return (
@@ -659,47 +1076,50 @@ function KnowledgeBase({ projectId }: { projectId: string }): React.JSX.Element 
         Documents (txt, md, PDF, DOCX), images, audio, or video. Audio is transcribed; video frames
         are read by the vision model.
       </p>
-      {status && <div className="mb-3 text-[11px] text-neutral-500">{status}</div>}
-
-      {docs.length === 0 && <p className="text-sm text-neutral-600">No documents yet.</p>}
+      {docRows.length === 0 && pendingRows.length === 0 && arrivingRows.length === 0 && (
+        <p className="text-sm text-neutral-600">No documents yet.</p>
+      )}
       <div className="divide-y divide-neutral-800 overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60 empty:hidden">
-        {docs.map((d) => {
-          const Icon = KIND_ICON[d.kind] ?? IconFile
-          return (
-            <div key={d.id} className="flex items-center gap-3 px-3 py-2">
-              <Icon className="h-4 w-4 shrink-0 text-neutral-500" />
-              <div className="min-w-0 flex-1 truncate text-sm text-white">{d.name}</div>
-              <div className="shrink-0 text-[10px] uppercase tracking-wide text-neutral-600">
-                {[d.kind, fmtSize(d.size)].filter(Boolean).join('  ·  ')}
-              </div>
-              <button
-                onClick={async () => {
+        <AnimatePresence initial={false}>
+          {pendingRows.map(([name, file]) => (
+            <motion.div key={`pending:${name}`} {...rowMotion}>
+              <PendingRow
+                name={name}
+                file={file}
+                onDismiss={() => setPending(({ [name]: _dismissed, ...rest }) => rest)}
+              />
+            </motion.div>
+          ))}
+          {arrivingRows.map((transfer) => (
+            <motion.div key={`transfer:${projectDocumentTransferKey(transfer)}`} {...rowMotion}>
+              <TransferRow
+                transfer={transfer}
+                transition={rowTransition}
+                onDismiss={() => dismissTransfer(transfer)}
+              />
+            </motion.div>
+          ))}
+          {docRows.map((d) => (
+            <motion.div key={d.id} {...rowMotion}>
+              <DocRow
+                doc={d}
+                live={d.documentId ? live[d.documentId] : undefined}
+                transfer={rowTransfer(transferList, d.syncId)}
+                transition={rowTransition}
+                onToggle={async () => {
                   await api.toggleProjectDocument?.(d.id, !d.enabled)
                   setDocs((cur) =>
                     cur.map((x) => (x.id === d.id ? { ...x, enabled: !x.enabled } : x))
                   )
                 }}
-                aria-label={`${d.enabled ? 'Disable' : 'Enable'} ${d.name}`}
-                title={d.enabled ? 'Enabled in retrieval' : 'Disabled'}
-                className={`h-4 w-7 shrink-0 rounded-full transition-colors ${d.enabled ? 'bg-green-500' : 'bg-neutral-700'}`}
-              >
-                <span
-                  className={`block h-3 w-3 rounded-full bg-white transition-transform ${d.enabled ? 'translate-x-3.5' : 'translate-x-0.5'}`}
-                />
-              </button>
-              <button
-                onClick={async () => {
+                onDelete={async () => {
                   await api.deleteProjectDocument?.(d.id)
                   setDocs((cur) => cur.filter((x) => x.id !== d.id))
                 }}
-                aria-label={`Delete ${d.name}`}
-                className="shrink-0 text-neutral-600 transition-colors hover:text-red-500"
-              >
-                <IconTrash className="h-4 w-4" />
-              </button>
-            </div>
-          )
-        })}
+              />
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
     </div>
   )

@@ -1,5 +1,5 @@
-// Composition root for documents attached to chat: the shared ingest and turn services
-// (@offgrid/rag/documents) wired to desktop's adapters. No rules live here.
+// Composition root for documents (chat attachments and project knowledge bases): the shared ingest
+// and turn services (@offgrid/rag/documents) wired to desktop's adapters. No rules live here.
 
 import { BrowserWindow } from 'electron'
 import { estimateTextTokens } from '@offgrid/models'
@@ -14,13 +14,23 @@ import { documentExtractor } from './extract'
 import { documentKeywordSearch, documentStore } from './sqlite-store'
 import { documentEmbedder, documentReranker } from './models'
 import { conversationDocuments, referencedDocumentIds } from './conversation-documents'
+import { knowledgeBaseDocumentIds, projectDocuments } from './project-documents'
 import { pageOcr, shutdownOcr } from './ocr'
 
-/** Background indexing waits while a reply is being generated, so it never slows an answer. */
+/** Foreground work (a chat reply, an image, speech) is running or waiting to run. */
+async function foregroundBusy(): Promise<boolean> {
+  const { modalityQueue } = await import('../modality-queue/queue')
+  const { running, queued } = modalityQueue.getState()
+  return [...running, ...queued].some((job) => job.tier < 3)
+}
+
+/**
+ * Background indexing waits while the user is waiting on something, so it never slows an answer.
+ * It does not wait for other background passes (ambient capture runs them almost constantly).
+ */
 const scheduler: Scheduler = {
   async yieldToForeground() {
-    const { llm } = await import('../llm')
-    while (llm.isGenerating()) await new Promise((resolve) => setTimeout(resolve, 400))
+    while (await foregroundBusy()) await new Promise((resolve) => setTimeout(resolve, 400))
   }
 }
 
@@ -55,6 +65,7 @@ export const documentTurns = new DocumentTurnService({
   ingest: documentIngest,
   store: documentStore,
   conversations: conversationDocuments,
+  projects: projectDocuments,
   keyword: documentKeywordSearch,
   embed: documentEmbedder,
   rerank: documentReranker,
@@ -70,19 +81,26 @@ export function startDocumentIngest(source: DocumentSource): void {
 /** Unused caches are deleted after this long. */
 const CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 
-/** Drop document caches no conversation references and that went unused for 30 days. */
+/** Documents a conversation or a knowledge base still uses. */
+async function documentsInUse(): Promise<Set<string>> {
+  const used = await referencedDocumentIds()
+  for (const id of await knowledgeBaseDocumentIds()) used.add(id)
+  return used
+}
+
+/** Drop document caches nothing references and that went unused for 30 days. */
 export async function collectDocumentGarbage(): Promise<void> {
   try {
-    await documentIngest.collectGarbage(await referencedDocumentIds(), CACHE_MAX_AGE_MS)
+    await documentIngest.collectGarbage(await documentsInUse(), CACHE_MAX_AGE_MS)
   } catch (error) {
     warn('Cleaning document caches failed', error)
   }
 }
 
-/** A conversation was deleted: drop documents that no other conversation uses, right away. */
+/** A conversation or knowledge-base file was deleted: drop documents nothing else uses, now. */
 export async function forgetUnreferencedDocuments(): Promise<void> {
   try {
-    await documentIngest.collectGarbage(await referencedDocumentIds(), 0)
+    await documentIngest.collectGarbage(await documentsInUse(), 0)
   } catch (error) {
     warn('Removing documents of a deleted chat failed', error)
   }

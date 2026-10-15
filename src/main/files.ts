@@ -1,18 +1,14 @@
-// Turn an uploaded/pasted file into text the chat can reason over. Routes by
-// extension to the existing on-device extractors: plain text/code/md is read
-// as-is, PDFs/DOCX are parsed, images are captioned by the vision model, audio
-// is transcribed by whisper, and video is sampled (~1 frame/sec) then each frame
-// captioned. Everything runs locally — nothing leaves the machine.
-//
-// Documents attached to chat (PDF, Word, text, transcripts) are kept by content hash and indexed in
-// the background (documents/index.ts): the attachment is ready as soon as the file is saved, and
-// any size can be attached. The text returned here is only a preview for the saved message.
+// Turn a file (a chat attachment or a knowledge-base file) into a document the chat can use.
+// PDF, Word and text files are kept by content hash and read page by page by the document engine
+// (documents/*); images are captioned by the vision model, audio is transcribed, and video is
+// sampled (~1 frame/sec) with each frame captioned, and that text is indexed the same way.
+// Everything runs locally. The text returned here is only a preview for the saved message.
 
 import path from 'path'
 import os from 'os'
 import fs from 'fs'
 import { app } from 'electron'
-import { desktopExtraction as ex } from './rag/extractors'
+import { mediaText } from './media-text'
 import {
   IMAGE_EXT,
   AUDIO_EXT,
@@ -114,10 +110,10 @@ async function ingestDocument(
   }
 }
 
-/** A transcript (audio, video) is a document too: indexed from its text. */
-async function ingestTranscript(
+/** A transcript (audio, video) or an image caption is a document too: indexed from its text. */
+export async function ingestTextDocument(
   name: string,
-  kind: 'audio' | 'video',
+  kind: 'audio' | 'video' | 'image',
   text: string
 ): Promise<ProcessedFile> {
   if (!text.trim()) return { name, kind, text }
@@ -178,8 +174,7 @@ async function processFileAt(
       throw new Error('Unsupported or damaged image data.')
     }
     if (options.captionImage) {
-      if (!ex.captionImage) throw new Error('Image reading is not available for this model.')
-      return { name, kind: 'image', text: await ex.captionImage(tmp) }
+      return { name, kind: 'image', text: await mediaText.captionImage(tmp) }
     }
     if (options.persistPreview === false) {
       return { name, kind: 'image', text: '' }
@@ -195,20 +190,18 @@ async function processFileAt(
     return { name, kind: 'image', text: '', path: dest }
   }
   if (AUDIO_EXT.includes(ext)) {
-    if (!ex.transcribeAudio) throw new Error('Transcription runtime not available.')
-    const text = await ex.transcribeAudio(tmp)
+    const text = await mediaText.transcribeAudio(tmp)
     return options.persistPreview === false
       ? { name, kind: 'audio', text }
-      : ingestTranscript(name, 'audio', text)
+      : ingestTextDocument(name, 'audio', text)
   }
   if (VIDEO_EXT.includes(ext)) {
-    if (!ex.sampleVideoFrames) throw new Error('Video sampling not available.')
     // ~1 frame/second, capped so a long clip doesn't run the vision model forever.
-    const frames = await ex.sampleVideoFrames(tmp, { everySeconds: 1, maxFrames: 12 })
+    const frames = await mediaText.sampleVideoFrames(tmp, { everySeconds: 1, maxFrames: 12 })
     const caps: string[] = []
     for (let i = 0; i < frames.length; i++) {
       try {
-        caps.push(`[~${i + 1}s] ${ex.captionImage ? await ex.captionImage(frames[i]!) : ''}`)
+        caps.push(`[~${i + 1}s] ${await mediaText.captionImage(frames[i]!)}`)
       } catch {
         /* skip a bad frame */
       }
@@ -216,21 +209,30 @@ async function processFileAt(
     const text = caps.join('\n')
     return options.persistPreview === false
       ? { name, kind: 'video', text }
-      : ingestTranscript(name, 'video', text)
+      : ingestTextDocument(name, 'video', text)
   }
   const kind: 'pdf' | 'docx' | 'text' = ext === 'pdf' ? 'pdf' : ext === 'docx' ? 'docx' : 'text'
   if (options.persistPreview === false) {
-    // Ephemeral (task guidance): the text itself is the result; nothing is kept or indexed.
+    // Ephemeral (task guidance): the text itself is the result; nothing is kept or indexed. Read by
+    // the document engine's extractor, stopping once there is enough text.
     let text = ''
     try {
-      if (kind === 'pdf') text = ex.extractPdf ? await ex.extractPdf(tmp, PREVIEW_CHARS) : ''
-      else if (kind === 'docx')
-        text = ex.extractDocx ? await ex.extractDocx(tmp, PREVIEW_CHARS) : ''
-      else text = await ex.readText(tmp)
+      const { documentExtractor } = await import('./documents/extract')
+      const enough = new AbortController()
+      await documentExtractor.extract(
+        { id: 'preview', name, kind, path: tmp },
+        {
+          signal: enough.signal,
+          onPages: (pages) => {
+            for (const page of pages) if (page.text.trim()) text += `${text ? '\n\n' : ''}${page.text.trim()}`
+            if (text.length >= PREVIEW_CHARS) enough.abort()
+          }
+        }
+      )
     } catch (e) {
-      console.warn('[files] extraction failed; attaching without text:', (e as Error).message)
+      if (!text) console.warn('[files] extraction failed; attaching without text:', (e as Error).message)
     }
-    return { name, kind, text }
+    return { name, kind, text: text.slice(0, PREVIEW_CHARS) }
   }
   // Chat attachment: keep the file by content and index it in the background. The PDF viewer opens
   // the kept copy; the document index reads every page of it, with no size cap.

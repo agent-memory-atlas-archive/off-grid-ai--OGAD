@@ -9,7 +9,7 @@ import { offgridGuideTool } from './tools/offgrid-guide-tool'
 import { llm } from './llm'
 import type { GenerationMetrics } from '../shared/generation-metrics'
 import type { ResponseCutoffContract } from '../shared/ipc-contracts'
-import { SEARCH_KB_TOOL, makeSearchKnowledgeBaseHandler, sanitizePromptExcerpt } from '@offgrid/rag'
+import { SEARCH_KB_TOOL, sanitizePromptExcerpt } from '@offgrid/rag'
 import { stripChatControlTokens } from '@offgrid/sync'
 import { isMemoryToolAllowed } from './tools/memory-scope'
 import { parseToolCallsFromText, stripQwenToolCallMarkup } from './tools/tool-call-parse'
@@ -93,8 +93,10 @@ export interface ToolContext {
   history?: ToolConversationTurn[]
   onActivity?: (activity: ToolActivity) => void
   /** The active project (if the chat is in one), so search_knowledge_base can query
-   *  that project's uploaded docs + captured memory. */
+   *  that project's documents, chats and (when the project includes it) captured memory. */
   projectId?: string
+  /** The `[S#]` number of a document passage in this turn's sources, adding it when new. */
+  citeDocumentPassage?: (source: UnifiedSource) => number
   /** Per-turn location result. Nearby task tools use this to fail closed when
    *  the device location request did not return usable coordinates. */
   currentLocation?: { latitude: number; longitude: number }
@@ -411,9 +413,10 @@ const TOOLS: ToolDef[] = [
       })
   },
   {
-    // Only OFFERED in a project chat (gated in schemas() by projectId). Lets the model
-    // pull from the current project's documents, captured memory, and sibling
-    // conversations on demand. Global search_memory stays outside this scope.
+    // Only OFFERED in a project chat (gated in schemas() by projectId). The project's documents
+    // are already in each turn (budgeted by the document engine); this looks up more passages,
+    // sibling conversations and, when the project includes it, captured memory.
+    // Global search_memory stays outside this scope.
     name: SEARCH_KB_TOOL.function.name,
     description:
       "Search the current project's knowledge base and conversations for information relevant to the user's question.",
@@ -423,11 +426,19 @@ const TOOLS: ToolDef[] = [
         return { text: 'No active project — the knowledge base needs an open project.' }
       }
       try {
-        const { ragService } = await import('./rag')
-        const handler = makeSearchKnowledgeBaseHandler(ragService)
         const query = String(a.query ?? '').trim()
+        if (!query) return { text: 'Give a query to search for.' }
+        const { searchDocumentsForTool } = await import('./documents/tool-extension')
+        const { projectIncludesMemory } = await import('./rag')
         const conversations = searchProjectConversations(ctx.projectId, query, ctx.conversationId)
-        const documents = await handler({ query }, ctx.projectId)
+        const documents = await searchDocumentsForTool(ctx, query)
+        const memory = projectIncludesMemory(ctx.projectId)
+          ? await searchMemoryToolResult(query, {
+              limit: 5,
+              excludeChatId: ctx.conversationId,
+              emptyText: 'No matching captured memory.'
+            })
+          : null
         const chats = conversations.length
           ? conversations
               .map(
@@ -436,7 +447,12 @@ const TOOLS: ToolDef[] = [
               )
               .join('\n\n')
           : 'No matching project conversations found.'
-        return { text: `Project documents:\n${documents}\n\nProject conversations:\n${chats}` }
+        return {
+          text: `Project documents:\n${documents}\n\nProject conversations:\n${chats}${
+            memory ? `\n\nCaptured memory:\n${memory.text}` : ''
+          }`,
+          ...(memory?.sources?.length ? { sources: memory.sources } : {})
+        }
       } catch (e) {
         return { text: 'Error searching the knowledge base: ' + (e as Error).message }
       }
@@ -901,7 +917,7 @@ export async function toolChat(
       ? ' Use search_memory when the user asks about their memories, past conversations, people, or captured activity. Do not invent personal facts or claim to have searched when you have not. Cite retrieved sources accurately.'
       : '') +
     (opts.projectId
-      ? ' In this project, use search_knowledge_base for relevant project documents and conversations. Do not invent project facts or use information from other projects. Cite retrieved sources accurately.'
+      ? ' This project\'s documents are already in your context. Use search_knowledge_base only when they do not hold the answer, or to find earlier conversations in this project. Do not invent project facts or use information from other projects.'
       : '') +
     (projectPrompt ? `\n\nProject instructions:\n${projectPrompt}` : '') +
     (opts.assistantOnly
@@ -953,6 +969,7 @@ export async function toolChat(
   const { prepareTurnDocuments } = await import('./documents/chat-turn')
   const attachedDocuments = await prepareTurnDocuments({
     conversationId: opts.conversationId,
+    ...(opts.projectId ? { projectId: opts.projectId } : {}),
     current: opts.documents ?? [],
     question: query,
     history,
@@ -968,11 +985,16 @@ export async function toolChat(
     onActivity: opts.onActivity
   })
   if (attachedDocuments) {
-    // A model that uses tools may look further into the documents (search, exact pages).
+    // A model that uses tools may look further into the documents (search, exact pages). In a
+    // project chat search_knowledge_base already searches the same documents.
     if (tools.length) {
       const { documentToolExtension, documentToolSchemas } =
         await import('./documents/tool-extension')
-      tools.push(...documentToolSchemas)
+      tools.push(
+        ...documentToolSchemas.filter(
+          (schema) => !opts.projectId || schema.function.name !== 'search_documents'
+        )
+      )
       exts.push(documentToolExtension)
       messages[0].content = `${messages[0].content}\n${documentToolExtension.systemHint?.() ?? ''}`
     }
@@ -1034,6 +1056,15 @@ export async function toolChat(
   // Document passages lead the sources, so `[S1]…[Sn]` in the prompt are the first n sources.
   const unified: UnifiedSource[] = [...documentSources]
   const unifiedKeys = new Set<string>(documentSources.map((source) => source.key))
+  // A document search tool cites passages by their place in these sources: a passage the turn
+  // already gave keeps its number, a new one is added now so its number is fixed.
+  toolContext.citeDocumentPassage = (source) => {
+    const known = unified.findIndex((existing) => existing.key === source.key)
+    if (known >= 0) return known + 1
+    unifiedKeys.add(source.key)
+    unified.push(source)
+    return unified.length
+  }
   // Deferred image generation: keep EVERY request in tool-call order. The renderer generates after
   // the turn so we never evict the LLM mid-loop, and one model round that asks for two pictures does
   // not silently replace the first request with the last.
@@ -1063,7 +1094,10 @@ export async function toolChat(
     return {
       ...result,
       // A citation that points at no source would lead nowhere in the Sources panel.
-      answer: documentSources.length ? checkCitations(answer, result.unified.length) : answer,
+      answer:
+        documentSources.length || result.unified.some((source) => source.kind === 'attachment')
+          ? checkCitations(answer, result.unified.length)
+          : answer,
       metrics: {
         ...result.metrics,
         contextWindowTokens: result.metrics?.contextWindowTokens ?? ctx,
