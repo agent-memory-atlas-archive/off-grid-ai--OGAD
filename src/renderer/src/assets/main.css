@@ -722,3 +722,10 @@ code {
     animation: og-overlay-in 160ms ease-out both;
   }
 }
+
+/* The alive layer glows every input wrapper on focus. An input group holds a square-cornered
+   control, so its glow drew a square outline inside the rounded group. Only the group glows. */
+[data-slot='input-group']
+  :is([data-slot='input-control'], [data-slot='textarea-control']):focus-within {
+  box-shadow: none;
+}
