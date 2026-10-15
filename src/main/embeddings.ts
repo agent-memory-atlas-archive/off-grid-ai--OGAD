@@ -281,13 +281,12 @@ class EmbeddingService {
         (entry, log) =>
           entry
             ? this.post(
-                { id: this.nextId++, text: '', texts, model: DOCUMENT_EMBEDDER },
+                { id: this.nextId++, text: '', texts },
                 entry,
                 log
               ).then((r) => r.vectors ?? [])
             : embedTexts(
                 texts,
-                DOCUMENT_EMBEDDER,
                 modelsDir(),
                 getBackendPreference('embeddings'),
                 modelReadDirectories()

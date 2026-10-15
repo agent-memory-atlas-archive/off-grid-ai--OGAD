@@ -32,7 +32,8 @@ async function selectedName(): Promise<string> {
 
 /** Retry a failed model round without re-running any tool call that already started. */
 export async function runChatWithFallback<T>(
-  run: () => Promise<T>,
+  /** `documentScale` < 1 on a retry after the prompt did not fit: send less document text. */
+  run: (attempt: { documentScale?: number }) => Promise<T>,
   options: {
     signal?: AbortSignal
     canRetry?: () => boolean
@@ -41,9 +42,10 @@ export async function runChatWithFallback<T>(
 ): Promise<{ result: T; modelName?: string }> {
   let failures = 0
   let modelName: string | undefined
+  let documentScale: number | undefined
   for (;;) {
     try {
-      const result = await run()
+      const result = await run(documentScale === undefined ? {} : { documentScale })
       return modelName ? { result, modelName } : { result }
     } catch (error) {
       if (options.signal?.aborted || options.canRetry?.() === false) throw error
@@ -56,6 +58,10 @@ export async function runChatWithFallback<T>(
       })
       if (step.action === 'fail') throw error
       if (step.action === 'retry-same') continue
+      if (step.action === 'retry-smaller') {
+        documentScale = step.scale
+        continue
+      }
       const models = await import('./models-manager')
       const failed = await selectedName()
       let activated = false

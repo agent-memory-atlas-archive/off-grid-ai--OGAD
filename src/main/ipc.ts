@@ -2204,8 +2204,8 @@ export function setupIPC(): void {
       // Non-stream fallback (no streamId): buffer, no live deltas (matches streamAnswer).
       if (!streamId) {
         return modalityQueue.run(CHAT_JOB, async () => {
-          const { result, modelName } = await runChatWithFallback(() =>
-            toolChat(query, history || [], opts || {})
+          const { result, modelName } = await runChatWithFallback((attempt) =>
+            toolChat(query, history || [], { ...(opts || {}), ...attempt })
           )
           return modelName ? { ...result, metrics: { ...result.metrics, modelName } } : result
         })
@@ -2220,9 +2220,10 @@ export function setupIPC(): void {
       try {
         const { result, modelName } = await modalityQueue.run(CHAT_JOB, () =>
           runChatWithFallback(
-            () =>
+            (attempt) =>
               toolChat(query, history || [], {
                 ...opts,
+                ...attempt,
                 thinking: opts.thinking,
                 signal: controller.signal,
                 onDelta: (text, kind) => {

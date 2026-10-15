@@ -38,24 +38,21 @@ export async function disposeEmbeddingModel(): Promise<void> {
   loading = null
   activeDevice = null
   await previous?.dispose()
-  const documentPipes = [...documentPipelines.values()]
-  documentPipelines.clear()
   const reranker = rerankerLoading
   rerankerLoading = null
-  for (const pending of documentPipes) await (await pending.catch(() => null))?.dispose()
   await (await reranker?.catch(() => null))?.model.dispose()
 }
 
 /**
- * Models for documents attached to chat, beside MiniLM (which memory search keeps using).
- * multilingual-e5-small reads English and Indian languages (MIRACL Hindi 55.2) where MiniLM is
- * English-only and truncates at 256 tokens; it is the multilingual option AnythingLLM ships.
- * ms-marco-MiniLM-L-6-v2 is the cross-encoder AnythingLLM's native reranker uses.
+ * Models for documents attached to chat. Passages are embedded with MiniLM, the model memory search
+ * already keeps loaded: measured ~15 ms a passage on CPU here, where multilingual-e5-small (q8) took
+ * ~1.7 s, which made a long book index for over an hour. Indian-language documents still match by
+ * keyword (FTS5 keeps their words whole). ms-marco-MiniLM-L-6-v2 is the cross-encoder AnythingLLM's
+ * native reranker uses.
  */
-export const DOCUMENT_EMBEDDER = 'Xenova/multilingual-e5-small'
+export const DOCUMENT_EMBEDDER = 'Xenova/all-MiniLM-L6-v2'
 export const DOCUMENT_RERANKER = 'Xenova/ms-marco-MiniLM-L-6-v2'
 
-const documentPipelines = new Map<string, Promise<FeatureExtractionPipeline>>()
 let rerankerLoading: Promise<{ tokenizer: PreTrainedTokenizer; model: PreTrainedModel }> | null =
   null
 
@@ -70,38 +67,13 @@ function prepareModel(id: string, modelsDir: string, readDirectories: string[]):
 /** Vectors for several texts, one by one: batching pads to the longest text and runs slower on CPU. */
 export async function embedTexts(
   texts: string[],
-  model: string,
   modelsDir: string,
   backendPreference: BackendPreference = 'auto',
   readDirectories = modelReadDirectories()
 ): Promise<number[][]> {
-  if (model !== DOCUMENT_EMBEDDER) {
-    const out: number[][] = []
-    for (const text of texts)
-      out.push(await embedText(text, modelsDir, undefined, backendPreference, readDirectories))
-    return out
-  }
-  let loadingPipe = documentPipelines.get(model)
-  if (!loadingPipe) {
-    const cached = prepareModel(model, modelsDir, readDirectories)
-    loadingPipe = loadWithOnnxFallback(
-      (device) =>
-        pipeline('feature-extraction', model, {
-          device,
-          dtype: 'q8',
-          ...(cached ? { local_files_only: true } : {})
-        }),
-      onnxDeviceCandidates(process.platform, backendPreference)
-    ).then(({ runtime }) => runtime)
-    loadingPipe.catch(() => documentPipelines.delete(model))
-    documentPipelines.set(model, loadingPipe)
-  }
-  const extractor = await loadingPipe
   const out: number[][] = []
-  for (const text of texts) {
-    const output = await extractor(text, { pooling: 'mean', normalize: true })
-    out.push(Array.from(output.data as Float32Array))
-  }
+  for (const text of texts)
+    out.push(await embedText(text, modelsDir, undefined, backendPreference, readDirectories))
   return out
 }
 

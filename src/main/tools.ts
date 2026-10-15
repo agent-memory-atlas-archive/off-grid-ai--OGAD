@@ -790,6 +790,8 @@ export async function toolChat(
     projectId?: string
     /** Documents attached to this message. Earlier ones are read from the conversation. */
     documents?: import('./documents/chat-turn').TurnDocumentRef[]
+    /** < 1 on a retry after the prompt did not fit the window: less document text. */
+    documentScale?: number
     /** Chat is in "All memory" scope — offers search_memory over everything. */
     allMemory?: boolean
     images?: string[]
@@ -960,7 +962,8 @@ export async function toolChat(
       systemTokens: toolPromptTokens([messages[0]]),
       requiredToolTokens: opts.assistantOnly ? Math.max(0, toolPromptTokens([], tools)) : 0,
       historyTokens,
-      questionTokens: toolPromptTokens([{ role: 'user', content: query }])
+      questionTokens: toolPromptTokens([{ role: 'user', content: query }]),
+      ...(opts.documentScale ? { scale: opts.documentScale } : {})
     },
     onActivity: opts.onActivity
   })

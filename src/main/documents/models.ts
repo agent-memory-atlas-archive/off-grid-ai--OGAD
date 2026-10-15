@@ -1,6 +1,5 @@
-// EmbedPort and RerankPort adapters over the shared embedding worker: multilingual-e5-small for
-// passages and questions (with the "passage: " / "query: " prefixes the model was trained on, as
-// AnythingLLM's native embedder does), and the ms-marco cross-encoder for reranking.
+// EmbedPort and RerankPort adapters over the shared embedding worker: MiniLM for passages and
+// questions (the model memory search keeps loaded), and the ms-marco cross-encoder for reranking.
 
 import type { EmbedPort, RerankPort } from '@offgrid/rag/documents'
 import { embeddings } from '../embeddings'
@@ -28,10 +27,10 @@ export const documentEmbedder: EmbedPort = {
   embedder: DOCUMENT_EMBEDDER,
   async embedPassages(texts) {
     holdDuringIngest()
-    return embeddings.embedDocumentTexts(texts.map((text) => `passage: ${text}`))
+    return embeddings.embedDocumentTexts(texts)
   },
   async embedQuery(text) {
-    const [vector] = await embeddings.embedDocumentTexts([`query: ${text}`], { interactive: true })
+    const [vector] = await embeddings.embedDocumentTexts([text], { interactive: true })
     return vector ?? []
   }
 }
