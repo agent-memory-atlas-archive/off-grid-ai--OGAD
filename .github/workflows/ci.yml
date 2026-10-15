@@ -536,7 +536,7 @@ jobs:
           mv _shared ../shared
           mv _executorch_speech ../executorch-speech
           npm --prefix ../shared ci
-          for package in models sync use automation speech ui; do
+          for package in models rag sync use automation speech ui; do
             npm --prefix "../shared/packages/$package" run build
           done
           npm ci
