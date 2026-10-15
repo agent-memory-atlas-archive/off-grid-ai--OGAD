@@ -435,6 +435,8 @@ const TOOLS: ToolDef[] = [
         const memory = projectIncludesMemory(ctx.projectId)
           ? await searchMemoryToolResult(query, {
               limit: 5,
+              // Captured memory only: other projects' files and chats stay out of this project.
+              kinds: ['screen', 'message', 'meeting', 'memory', 'entity', 'fact'],
               excludeChatId: ctx.conversationId,
               emptyText: 'No matching captured memory.'
             })
