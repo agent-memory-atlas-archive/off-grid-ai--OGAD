@@ -158,12 +158,13 @@ jobs:
           UI_TOKEN_FALLBACK: ${{ secrets.CI_CROSS_REPO_TOKEN }}
         run: |
           # The library moved to off-grid-ai/ui-library. Use the first token that can read it (a pasted
-          # secret can carry a newline or spaces, which break token authentication).
+          # secret can carry a newline or spaces, which break token authentication). The probes clear the
+          # checkout's GitHub login header for the library, or it would override the probed token.
           UI_TOKEN=""
           for candidate in "$UI_TOKEN_PRIMARY" "$UI_TOKEN_FALLBACK"; do
             candidate="$(printf '%s' "$candidate" | tr -d '[:space:]')"
             [ -z "$candidate" ] && continue
-            if git ls-remote --exit-code "https://x-access-token:${candidate}@github.com/off-grid-ai/ui-library.git" HEAD >/dev/null 2>&1; then
+            if git -c http.https://github.com/off-grid-ai/ui-library.git.extraheader= ls-remote --exit-code "https://x-access-token:${candidate}@github.com/off-grid-ai/ui-library.git" HEAD >/dev/null 2>&1; then
               UI_TOKEN="$candidate"
               break
             fi
@@ -178,7 +179,7 @@ jobs:
             fi
           fi
           # Check access before installation so authentication failures are clear.
-          if ! git ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/off-grid-ai/ui-library.git" HEAD >/dev/null 2>&1; then
+          if ! git -c http.https://github.com/off-grid-ai/ui-library.git.extraheader= ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/off-grid-ai/ui-library.git" HEAD >/dev/null 2>&1; then
             status="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${UI_TOKEN}" https://api.github.com/repos/off-grid-ai/ui-library)"
             echo "::error::CI cannot read off-grid-ai/ui-library (GitHub answered ${status}: 401 bad token, 403 org policy or IP allow list, 404 no access to the repo). Core and Pro will not build without it."
             exit 1
@@ -502,12 +503,13 @@ jobs:
           UI_TOKEN_FALLBACK: ${{ secrets.CI_CROSS_REPO_TOKEN }}
         run: |
           # The library moved to off-grid-ai/ui-library. Use the first token that can read it (a pasted
-          # secret can carry a newline or spaces, which break token authentication).
+          # secret can carry a newline or spaces, which break token authentication). The probes clear the
+          # checkout's GitHub login header for the library, or it would override the probed token.
           UI_TOKEN=""
           for candidate in "$UI_TOKEN_PRIMARY" "$UI_TOKEN_FALLBACK"; do
             candidate="$(printf '%s' "$candidate" | tr -d '[:space:]')"
             [ -z "$candidate" ] && continue
-            if git ls-remote --exit-code "https://x-access-token:${candidate}@github.com/off-grid-ai/ui-library.git" HEAD >/dev/null 2>&1; then
+            if git -c http.https://github.com/off-grid-ai/ui-library.git.extraheader= ls-remote --exit-code "https://x-access-token:${candidate}@github.com/off-grid-ai/ui-library.git" HEAD >/dev/null 2>&1; then
               UI_TOKEN="$candidate"
               break
             fi
@@ -522,7 +524,7 @@ jobs:
             fi
           fi
           # Check access before installation so authentication failures are clear.
-          if ! git ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/off-grid-ai/ui-library.git" HEAD >/dev/null 2>&1; then
+          if ! git -c http.https://github.com/off-grid-ai/ui-library.git.extraheader= ls-remote --exit-code "https://x-access-token:${UI_TOKEN}@github.com/off-grid-ai/ui-library.git" HEAD >/dev/null 2>&1; then
             status="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${UI_TOKEN}" https://api.github.com/repos/off-grid-ai/ui-library)"
             echo "::error::CI cannot read off-grid-ai/ui-library (GitHub answered ${status}: 401 bad token, 403 org policy or IP allow list, 404 no access to the repo). Core and Pro will not build without it."
             exit 1
