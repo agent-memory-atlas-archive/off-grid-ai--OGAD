@@ -4,10 +4,7 @@
 // or goes away is simply dropped from it. New and edited frames are indexed by triggers; frames
 // captured before the index existed are indexed in the background, newest first, in small batches.
 
-import { getDB, getSetting, saveSetting } from './database'
-
-/** The lowest frame id already indexed by the backfill; 0 once every older frame is indexed. */
-export const FRAME_TEXT_INDEX_CURSOR = 'search:frame-fts-cursor'
+import { getDB } from './database'
 
 /** The backfill runs on the main thread in short slices: an average frame carries ~6KB of OCR, and
  *  200-frame batches held the thread over half a second each, which made the whole app lag. Each
@@ -33,12 +30,41 @@ export function ensureFrameTextIndex(db: IndexDatabase): void {
          text, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2'
        )`
     )
-    // Everything below this id predates the index; the backfill works down from here.
+    // Everything below this id predates the index; the backfill works down from here. The
+    // cursor lives beside the index, so the index needs nothing but this database.
     const top = db.prepare('SELECT COALESCE(MAX(id), 0) + 1 AS id FROM frames').get() as {
       id: number
     }
-    saveSetting(FRAME_TEXT_INDEX_CURSOR, top.id)
+    db.exec(
+      `CREATE TABLE IF NOT EXISTS frame_fts_state (id INTEGER PRIMARY KEY CHECK (id = 1), cursor INTEGER NOT NULL);
+       INSERT OR REPLACE INTO frame_fts_state (id, cursor) VALUES (1, ${Math.floor(Number(top.id))});`
+    )
   }
+  // An index made before the cursor moved here kept it in app settings; carry it over once, or
+  // start again from the top (re-indexing a frame is safe).
+  const hasState = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'frame_fts_state'")
+    .get()
+  if (!hasState) {
+    let cursor: number | null = null
+    try {
+      const row = db
+        .prepare("SELECT value FROM app_settings WHERE key = 'search:frame-fts-cursor'")
+        .get() as { value: string } | undefined
+      if (row) cursor = Number(JSON.parse(row.value))
+    } catch {
+      /* no settings table here */
+    }
+    if (cursor === null || !Number.isFinite(cursor)) {
+      cursor = (db.prepare('SELECT COALESCE(MAX(id), 0) + 1 AS id FROM frames').get() as { id: number })
+        .id
+    }
+    db.exec(
+      `CREATE TABLE IF NOT EXISTS frame_fts_state (id INTEGER PRIMARY KEY CHECK (id = 1), cursor INTEGER NOT NULL);
+       INSERT OR REPLACE INTO frame_fts_state (id, cursor) VALUES (1, ${Math.floor(cursor)});`
+    )
+  }
+
   // Synced mail and chat frames stay out, as search already left them out.
   db.exec(`
     CREATE TRIGGER IF NOT EXISTS frames_fts_ai AFTER INSERT ON frames
@@ -57,9 +83,25 @@ export function ensureFrameTextIndex(db: IndexDatabase): void {
   `)
 }
 
+/** The lowest frame id the backfill has reached; 0 once every older frame is indexed. */
+function readCursor(): number {
+  try {
+    const row = getDB().prepare('SELECT cursor FROM frame_fts_state WHERE id = 1').get() as
+      | { cursor: number }
+      | undefined
+    return row?.cursor ?? 0
+  } catch {
+    return 0 // no index yet
+  }
+}
+
+function writeCursor(cursor: number): void {
+  getDB().prepare('UPDATE frame_fts_state SET cursor = ? WHERE id = 1').run(cursor)
+}
+
 /** True while frames captured before the index still wait to be indexed. */
 export function frameTextIndexBackfilling(): boolean {
-  return getSetting<number>(FRAME_TEXT_INDEX_CURSOR, 1) > 1
+  return readCursor() > 1
 }
 
 /** Index a slice of older frames, newest first: up to `batch` frames, stopping early once
@@ -68,14 +110,14 @@ export function indexFrameTextBatch(
   batch = BACKFILL_BATCH,
   budgetMs = SLICE_BUDGET_MS
 ): boolean {
-  const cursor = getSetting<number>(FRAME_TEXT_INDEX_CURSOR, 0)
+  const cursor = readCursor()
   if (cursor <= 1) return false
   const db = getDB()
   const rows = db
     .prepare('SELECT id, text, source FROM frames WHERE id < ? ORDER BY id DESC LIMIT ?')
     .all(cursor, batch) as { id: number; text: string | null; source: string | null }[]
   if (!rows.length) {
-    saveSetting(FRAME_TEXT_INDEX_CURSOR, 0)
+    writeCursor(0)
     return false
   }
   const drop = db.prepare('DELETE FROM frame_fts WHERE rowid = ?')
@@ -91,7 +133,7 @@ export function indexFrameTextBatch(
       if (Date.now() - started >= budgetMs) break
     }
   })()
-  saveSetting(FRAME_TEXT_INDEX_CURSOR, lowest)
+  writeCursor(lowest)
   return true
 }
 
