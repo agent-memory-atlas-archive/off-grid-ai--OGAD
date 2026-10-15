@@ -43,7 +43,7 @@ import {
   listImageModels,
   type ImageGenParams
 } from './imagegen'
-import { whisperModel } from './rag/extractors'
+import { whisperModel } from './media-text'
 import { getActiveModal } from './active-models'
 import { modalityForKind } from './active-models-logic'
 import { embeddings } from './embeddings'

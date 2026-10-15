@@ -3,6 +3,12 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import { Button } from '@renderer/components/ui/button'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from '@renderer/components/ui/tooltip'
 import { chatMarkdownComponents } from '../../chat-markdown-components'
 import { presetForSkillName } from '../../explore/presetCatalog'
 import type { ChatMessage, ContextNavigation, RagContext } from '../types'
@@ -79,6 +85,30 @@ function makeCiteComponents(
         )
       }
       const source = unified[Number.parseInt(match[1]!, 10) - 1]
+      if (source?.kind === 'attachment') {
+        // A document passage: the pill names the page; hovering shows the passage it cites.
+        const page = source.title.split(' · ').at(-1) ?? source.title
+        return (
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => openUnifiedContext(source, navigation)}
+                  aria-label={`Open ${source.surface}, ${page}`}
+                  className="mx-0.5 inline-flex items-center rounded-sm border border-green-500/40 bg-green-500/10 px-1 align-baseline text-[0.72em] font-semibold text-green-500 transition-colors hover:bg-green-500/20"
+                >
+                  {page}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs space-y-1 text-left">
+                <span className="block text-xs font-medium">{source.surface}</span>
+                <span className="line-clamp-5 block text-xs opacity-80">{source.snippet}</span>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )
+      }
       return (
         <button
           type="button"

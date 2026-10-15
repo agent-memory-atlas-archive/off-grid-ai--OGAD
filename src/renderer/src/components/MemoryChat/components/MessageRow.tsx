@@ -9,6 +9,7 @@ import { ChatThinkingBlock } from '../../ChatThinkingBlock'
 import { ChatToolRows } from '../../ChatToolRows'
 import { VoiceBubble } from '../../VoiceBubble'
 import { LoadingDots } from '../../ui/loading-dots'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { parseArtifact } from '../../ArtifactCanvas'
 import type {
   ChatMessage,
@@ -166,6 +167,7 @@ function VoiceMessageRow({
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null)
   const [openFooterDetail, setOpenFooterDetail] = useState<'tools' | 'generation' | null>(null)
   const alignment = message.role === 'user' ? 'items-end' : 'items-start'
+  const reduceMotion = useReducedMotion()
   const audioUrl = recordedClipUrl(message)
   const reportPlayback = useCallback(
     (active: boolean) => onPlaybackStateChange(message.id, active),
@@ -280,9 +282,9 @@ function VoiceMessageRow({
           tools={message.toolCalls}
           thinking={thinking}
           thinkingHasContent={Boolean(message.reasoning?.trim())}
-        thinkingText={
-          timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
-        }
+          thinkingText={
+            timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
+          }
           footer={
             workFooter ??
             (message.streaming && hasLiveStreamActivity(message) ? <LoadingDots /> : undefined)
@@ -316,7 +318,7 @@ function VoiceMessageRow({
                 const settings = await window.api.getSettings()
                 return typeof settings.ttsVoice === 'string' ? settings.ttsVoice : undefined
               }}
-              synthesize={(text, voice) => window.api.speak(text, voice)}
+              synthesize={(text, voice, onPass) => window.api.speak(text, voice, onPass)}
               onPlaybackStateChange={reportPlayback}
               copied={copied}
               onCopy={(text) => onCopy(text, message.id)}
@@ -334,9 +336,9 @@ function VoiceMessageRow({
           tools={message.toolCalls}
           thinking={thinking}
           thinkingHasContent={Boolean(message.reasoning?.trim())}
-        thinkingText={
-          timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
-        }
+          thinkingText={
+            timelineThinking || message.reasoningLabel ? undefined : (message.reasoning ?? '')
+          }
           footer={
             workFooter ??
             (message.streaming && hasLiveStreamActivity(message) ? <LoadingDots /> : undefined)
@@ -350,23 +352,37 @@ function VoiceMessageRow({
           stopped={message.turnStatus === 'cancelled'}
           failed={message.turnStatus === 'failed'}
         />
-        <VoiceBubble
-          messageId={message.id}
-          transcript={messageToSpeakable(selectedMessageContent(message))}
-          isLoading={Boolean(message.streaming)}
-          autoPlay={autoPlay}
-          showTranscriptInitially={showTranscriptInitially}
-          defaultSpeed={playbackSpeed}
-          readVoice={async () => {
-            const settings = await window.api.getSettings()
-            return typeof settings.ttsVoice === 'string' ? settings.ttsVoice : undefined
-          }}
-          synthesize={(text, voice) => window.api.speak(text, voice)}
-          onPlaybackStateChange={reportPlayback}
-          copied={copied}
-          onCopy={(text) => onCopy(text, message.id)}
-          onRetry={() => onRegenerate(message.id)}
-        />
+        {/* No empty player while the reply is still being written: the dots under the work say a
+            reply is coming (one loader, not a second one inside the card), and the card arrives
+            with its words. Cards already on screen do not animate. */}
+        <AnimatePresence initial={false}>
+          {message.streaming ? null : (
+            <motion.div
+              key="voice"
+              className="flex w-full flex-col"
+              initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+              transition={{ duration: reduceMotion ? 0.15 : 0.4, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <VoiceBubble
+                messageId={message.id}
+                transcript={messageToSpeakable(selectedMessageContent(message))}
+                autoPlay={autoPlay}
+                showTranscriptInitially={showTranscriptInitially}
+                defaultSpeed={playbackSpeed}
+                readVoice={async () => {
+                  const settings = await window.api.getSettings()
+                  return typeof settings.ttsVoice === 'string' ? settings.ttsVoice : undefined
+                }}
+                synthesize={(text, voice, onPass) => window.api.speak(text, voice, onPass)}
+                onPlaybackStateChange={reportPlayback}
+                copied={copied}
+                onCopy={(text) => onCopy(text, message.id)}
+                onRetry={() => onRegenerate(message.id)}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </>
     )
   }

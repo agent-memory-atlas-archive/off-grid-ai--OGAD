@@ -9,7 +9,7 @@ import { offgridGuideTool } from './tools/offgrid-guide-tool'
 import { llm } from './llm'
 import type { GenerationMetrics } from '../shared/generation-metrics'
 import type { ResponseCutoffContract } from '../shared/ipc-contracts'
-import { SEARCH_KB_TOOL, makeSearchKnowledgeBaseHandler, sanitizePromptExcerpt } from '@offgrid/rag'
+import { SEARCH_KB_TOOL, sanitizePromptExcerpt } from '@offgrid/rag'
 import { stripChatControlTokens } from '@offgrid/sync'
 import { isMemoryToolAllowed } from './tools/memory-scope'
 import { parseToolCallsFromText, stripQwenToolCallMarkup } from './tools/tool-call-parse'
@@ -29,7 +29,6 @@ import {
   conversationSummaryRequest,
   conversationSummaryTurn,
   elideStaleToolResults,
-  fitAttachedDocuments,
   normalizeConversationSummary,
   normalizeMaxToolCalls,
   repeatedToolCallDecision,
@@ -43,6 +42,8 @@ import {
   type ToolCallRecord
 } from '@offgrid/models'
 import { toolPromptChars, toolPromptTokens } from './tools/prompt-budget'
+import { checkCitations } from '@offgrid/rag/documents'
+import { noteDocumentPrefill } from './documents'
 import { buildPageBlock, buildPageFence, pageBudgetChars } from './tools/page-fence'
 import {
   isToolAllowedForOrigin,
@@ -92,8 +93,10 @@ export interface ToolContext {
   history?: ToolConversationTurn[]
   onActivity?: (activity: ToolActivity) => void
   /** The active project (if the chat is in one), so search_knowledge_base can query
-   *  that project's uploaded docs + captured memory. */
+   *  that project's documents, chats and (when the project includes it) captured memory. */
   projectId?: string
+  /** The `[S#]` number of a document passage in this turn's sources, adding it when new. */
+  citeDocumentPassage?: (source: UnifiedSource) => number
   /** Per-turn location result. Nearby task tools use this to fail closed when
    *  the device location request did not return usable coordinates. */
   currentLocation?: { latitude: number; longitude: number }
@@ -116,6 +119,8 @@ export type ToolActivity =
   | { kind: 'preparing_tool_calls'; label: 'Preparing actions…'; name?: string }
   /** `summary` stands in for every earlier turn; the app keeps it with the conversation. */
   | { kind: 'compacted'; label: 'Compacted'; summary?: string }
+  /** Reading the conversation's attached documents, then what was read. */
+  | import('./documents/chat-turn').DocumentsActivity
 
 // A tool's structured result. Most tools just return text (a bare string, which the
 // loop normalizes to { text }); a tool may ALSO emit side channels — `sources`
@@ -408,9 +413,10 @@ const TOOLS: ToolDef[] = [
       })
   },
   {
-    // Only OFFERED in a project chat (gated in schemas() by projectId). Lets the model
-    // pull from the current project's documents, captured memory, and sibling
-    // conversations on demand. Global search_memory stays outside this scope.
+    // Only OFFERED in a project chat (gated in schemas() by projectId). The project's documents
+    // are already in each turn (budgeted by the document engine); this looks up more passages,
+    // sibling conversations and, when the project includes it, captured memory.
+    // Global search_memory stays outside this scope.
     name: SEARCH_KB_TOOL.function.name,
     description:
       "Search the current project's knowledge base and conversations for information relevant to the user's question.",
@@ -420,11 +426,21 @@ const TOOLS: ToolDef[] = [
         return { text: 'No active project — the knowledge base needs an open project.' }
       }
       try {
-        const { ragService } = await import('./rag')
-        const handler = makeSearchKnowledgeBaseHandler(ragService)
         const query = String(a.query ?? '').trim()
+        if (!query) return { text: 'Give a query to search for.' }
+        const { searchDocumentsForTool } = await import('./documents/tool-extension')
+        const { projectIncludesMemory } = await import('./rag')
         const conversations = searchProjectConversations(ctx.projectId, query, ctx.conversationId)
-        const documents = await handler({ query }, ctx.projectId)
+        const documents = await searchDocumentsForTool(ctx, query)
+        const memory = projectIncludesMemory(ctx.projectId)
+          ? await searchMemoryToolResult(query, {
+              limit: 5,
+              // Captured memory only: other projects' files and chats stay out of this project.
+              kinds: ['screen', 'message', 'meeting', 'memory', 'entity', 'fact'],
+              excludeChatId: ctx.conversationId,
+              emptyText: 'No matching captured memory.'
+            })
+          : null
         const chats = conversations.length
           ? conversations
               .map(
@@ -433,7 +449,12 @@ const TOOLS: ToolDef[] = [
               )
               .join('\n\n')
           : 'No matching project conversations found.'
-        return { text: `Project documents:\n${documents}\n\nProject conversations:\n${chats}` }
+        return {
+          text: `Project documents:\n${documents}\n\nProject conversations:\n${chats}${
+            memory ? `\n\nCaptured memory:\n${memory.text}` : ''
+          }`,
+          ...(memory?.sources?.length ? { sources: memory.sources } : {})
+        }
       } catch (e) {
         return { text: 'Error searching the knowledge base: ' + (e as Error).message }
       }
@@ -785,6 +806,10 @@ export async function toolChat(
     conversationId?: string
     /** Active project — offers search_knowledge_base + scopes it to this project. */
     projectId?: string
+    /** Documents attached to this message. Earlier ones are read from the conversation. */
+    documents?: import('./documents/chat-turn').TurnDocumentRef[]
+    /** < 1 on a retry after the prompt did not fit the window: less document text. */
+    documentScale?: number
     /** Chat is in "All memory" scope — offers search_memory over everything. */
     allMemory?: boolean
     images?: string[]
@@ -894,7 +919,7 @@ export async function toolChat(
       ? ' Use search_memory when the user asks about their memories, past conversations, people, or captured activity. Do not invent personal facts or claim to have searched when you have not. Cite retrieved sources accurately.'
       : '') +
     (opts.projectId
-      ? ' In this project, use search_knowledge_base for relevant project documents and conversations. Do not invent project facts or use information from other projects. Cite retrieved sources accurately.'
+      ? ' This project\'s documents are already in your context. Use search_knowledge_base only when they do not hold the answer, or to find earlier conversations in this project. Do not invent project facts or use information from other projects.'
       : '') +
     (projectPrompt ? `\n\nProject instructions:\n${projectPrompt}` : '') +
     (opts.assistantOnly
@@ -933,35 +958,60 @@ export async function toolChat(
   ]
   // Tokens counted by script: characters / 4 lets a Japanese or Chinese chat overflow first.
   const compactAtTokens = Math.floor(ctx * 0.8)
-  // Compaction only shrinks earlier turns; a long attached document can outgrow the window on its
-  // own, which ended the turn in "Context is full." right after compacting. The document is cut
-  // to excerpts that fit what the system prompt, tools and a share of the history leave, and the
-  // model is told it is reading excerpts. Earlier turns still compact below if they need to.
-  // The room is what is left once the reply, the system prompt, the history (capped, it compacts)
-  // and the tools that must be sent are counted. In assistant mode every tool must fit, and with God
-  // or connectors on they can fill most of a small window; otherwise tools are trimmed to fit later.
+  // Documents attached anywhere in this conversation are rebuilt for every turn by the shared turn
+  // service (@offgrid/rag/documents): whole when they fit the time the model takes to read them,
+  // otherwise hybrid-ranked, reranked passages with every document given a share. They never ride
+  // in history, so they never trigger compaction and are never forgotten on the next question.
+  // The stable part (whole documents or document maps) follows the system prompt unchanged from
+  // turn to turn, so the model server reuses its cached prefix; this turn's passages sit beside
+  // the question.
   const historyTokens = toolPromptTokens(messages.slice(1, -1))
   const turnReplyReserve = Math.min(1024, Math.max(256, Math.floor(ctx * 0.1)))
-  const turnBudget = Math.max(
-    512,
-    Math.floor(
-      (ctx -
-        turnReplyReserve -
-        toolPromptTokens([messages[0]], opts.assistantOnly ? tools : undefined) -
-        Math.min(historyTokens, Math.floor(ctx * 0.2))) *
-        // JSON escaping and the per-message envelope cost a little more than the text estimate.
-        0.9
-    )
-  )
-  const turn = messages[messages.length - 1]
-  const fitTurnText = (text: string): string => fitAttachedDocuments(text, turnBudget).text
-  if (typeof turn.content === 'string') turn.content = fitTurnText(turn.content)
-  else if (Array.isArray(turn.content)) {
-    turn.content = turn.content.map((part: { type?: string; text?: unknown }) =>
-      part.type === 'text' && typeof part.text === 'string'
-        ? { ...part, text: fitTurnText(part.text) }
-        : part
-    )
+  let documentSources: UnifiedSource[] = []
+  const { prepareTurnDocuments } = await import('./documents/chat-turn')
+  const attachedDocuments = await prepareTurnDocuments({
+    conversationId: opts.conversationId,
+    ...(opts.projectId ? { projectId: opts.projectId } : {}),
+    current: opts.documents ?? [],
+    question: query,
+    history,
+    budget: {
+      ctx,
+      replyReserve: turnReplyReserve,
+      systemTokens: toolPromptTokens([messages[0]]),
+      requiredToolTokens: opts.assistantOnly ? Math.max(0, toolPromptTokens([], tools)) : 0,
+      historyTokens,
+      questionTokens: toolPromptTokens([{ role: 'user', content: query }]),
+      ...(opts.documentScale ? { scale: opts.documentScale } : {})
+    },
+    onActivity: opts.onActivity
+  })
+  if (attachedDocuments) {
+    // A model that uses tools may look further into the documents (search, exact pages). In a
+    // project chat search_knowledge_base already searches the same documents.
+    if (tools.length) {
+      const { documentToolExtension, documentToolSchemas } =
+        await import('./documents/tool-extension')
+      tools.push(
+        ...documentToolSchemas.filter(
+          (schema) => !opts.projectId || schema.function.name !== 'search_documents'
+        )
+      )
+      exts.push(documentToolExtension)
+      messages[0].content = `${messages[0].content}\n${documentToolExtension.systemHint?.() ?? ''}`
+    }
+    if (attachedDocuments.stable)
+      messages[0].content = `${messages[0].content}\n\n${attachedDocuments.stable}`
+    if (attachedDocuments.turn) {
+      const turn = messages[messages.length - 1]
+      if (typeof turn.content === 'string')
+        turn.content = `${attachedDocuments.turn}\n\n${turn.content}`
+      else if (Array.isArray(turn.content)) {
+        const textPart = turn.content.find((part: { type?: string }) => part.type === 'text')
+        if (textPart) textPart.text = `${attachedDocuments.turn}\n\n${textPart.text}`
+      }
+    }
+    documentSources = attachedDocuments.sources
   }
   // One model call folds every earlier turn into a structured summary that stands in for them
   // from now on. If it fails, the oldest turns fall back to short excerpts as before.
@@ -1005,8 +1055,18 @@ export async function toolChat(
   let retainedPromptTokens = Math.ceil(toolPromptChars(messages, tools) / 4)
   const offeredTools = new Set<string>()
   const toolCalls: ToolCall[] = []
-  const unified: UnifiedSource[] = []
-  const unifiedKeys = new Set<string>()
+  // Document passages lead the sources, so `[S1]…[Sn]` in the prompt are the first n sources.
+  const unified: UnifiedSource[] = [...documentSources]
+  const unifiedKeys = new Set<string>(documentSources.map((source) => source.key))
+  // A document search tool cites passages by their place in these sources: a passage the turn
+  // already gave keeps its number, a new one is added now so its number is fixed.
+  toolContext.citeDocumentPassage = (source) => {
+    const known = unified.findIndex((existing) => existing.key === source.key)
+    if (known >= 0) return known + 1
+    unifiedKeys.add(source.key)
+    unified.push(source)
+    return unified.length
+  }
   // Deferred image generation: keep EVERY request in tool-call order. The renderer generates after
   // the turn so we never evict the LLM mid-loop, and one model round that asks for two pictures does
   // not silently replace the first request with the last.
@@ -1031,9 +1091,15 @@ export async function toolChat(
     toolsOffered?: string[]
   } => {
     const finalImageRequest = imageRequests.at(-1)
+    noteDocumentPrefill(result.metrics)
+    const answer = [...toolRoundAnswers, result.answer].filter((text) => text.trim()).join('\n\n')
     return {
       ...result,
-      answer: [...toolRoundAnswers, result.answer].filter((text) => text.trim()).join('\n\n'),
+      // A citation that points at no source would lead nowhere in the Sources panel.
+      answer:
+        documentSources.length || result.unified.some((source) => source.kind === 'attachment')
+          ? checkCitations(answer, result.unified.length)
+          : answer,
       metrics: {
         ...result.metrics,
         contextWindowTokens: result.metrics?.contextWindowTokens ?? ctx,

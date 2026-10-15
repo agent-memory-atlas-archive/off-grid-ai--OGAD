@@ -47,7 +47,14 @@ export type RagContext = {
   image?: string
   imageMetadata?: ImageGenerationMetadata
   sources?: { name: string; position: number; score: number }[]
-  attachments?: { name: string; kind: string; text?: string; path?: string }[]
+  attachments?: {
+    name: string
+    kind: string
+    text?: string
+    path?: string
+    documentId?: string
+    pages?: number
+  }[]
   taskGuidance?: {
     taskId: string
     state: 'accepted' | 'applied'
@@ -116,8 +123,15 @@ export type ChatMessage = {
     projectId: string | null
   }
   streaming?: boolean
-  activity?: { kind: string; counts?: Record<string, number>; name?: string }
-  attachments?: { name: string; kind: string; text?: string; path?: string }[]
+  activity?: { kind: string; counts?: Record<string, number>; name?: string; label?: string }
+  attachments?: {
+    name: string
+    kind: string
+    text?: string
+    path?: string
+    documentId?: string
+    pages?: number
+  }[]
   variants?: ResponseVersion[]
   variantIndex?: number
   audioUrl?: string
@@ -148,9 +162,26 @@ export type Attachment = {
   preview?: string
   status: 'loading' | 'ready' | 'error'
   error?: string
+  /** Content hash: the document's identity in the conversation's document index. */
+  documentId?: string
+  pages?: number
+  /** Background reading/indexing of a document attachment (the attachment is usable meanwhile). */
+  progress?: {
+    phase: 'reading' | 'ocr' | 'indexing' | 'ready' | 'failed'
+    done: number
+    total: number
+    error?: string
+  }
 }
 
-export type StoredAttachment = { name: string; kind: string; text?: string; path?: string }
+export type StoredAttachment = {
+  name: string
+  kind: string
+  text?: string
+  path?: string
+  documentId?: string
+  pages?: number
+}
 export type Conversation = RagConversationContract
 export type ConversationListRow =
   | { kind: 'group'; key: string; label: string }
@@ -184,6 +215,8 @@ export type ContextNavigation = Readonly<{
   installedSkillNames?: readonly string[]
   onOpenInstalledSkill?: (name: string) => void
   onOpenSkillPreset?: (preset: DemoPreset) => void
+  /** Open an attached document at a page (a document citation). */
+  onOpenDocument?: (documentId: string, page: number) => void
 }>
 
 export type UnifiedContextItem = NonNullable<RagContext['unified']>[number]

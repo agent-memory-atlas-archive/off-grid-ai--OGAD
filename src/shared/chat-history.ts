@@ -38,14 +38,16 @@ function modelContent(turn: HistoryTurn): string {
         : undefined
     return versionContent(selected, turn.content)
   }
+  // Attached documents are not replayed here: main rebuilds them for every turn from the
+  // conversation (documents/chat-turn.ts). Replaying their full text made every follow-up overflow
+  // and compact the document away. The turn keeps only a note of what was attached.
   const attachments = turn.attachments ?? turn.context?.attachments ?? []
-  const text = attachments
-    .filter((attachment) => attachment.text && attachment.kind !== 'audio')
-    .map(
-      (attachment) => `--- attached ${attachment.kind}: ${attachment.name} ---\n${attachment.text}`
+  const names = attachments
+    .filter(
+      (attachment) => attachment.kind !== 'image' && (attachment.text || attachment.kind === 'pdf')
     )
-    .join('\n\n')
-  return text ? `${text}\n\n${turn.content}` : turn.content
+    .map((attachment) => attachment.name)
+  return names.length ? `[Attached: ${names.join(', ')}]\n${turn.content}` : turn.content
 }
 
 export const EARLIER_CHAT_EXCERPTS_PREFIX = 'Earlier chat excerpts'

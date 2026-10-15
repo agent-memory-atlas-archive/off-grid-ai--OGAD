@@ -86,6 +86,13 @@ function chatBoundary(
     onImageGenConversationUpdated: () => () => { },
     imageGenJobStatus: async () => ({ id: null, phase: 'idle' as const, conversationId: null, projectId: null, stage: null, enhancedPrompt: '', progress: null, outputPath: null, error: null, startedAt: null, finishedAt: null }),
     ...(options?.imageJob ? { imageGenJobStatus: async () => options.imageJob } : {}),
+    // Documents in a chat (preload `documents`): none attached.
+    documents: {
+      list: async (): Promise<unknown[]> => [],
+      setExcluded: async (): Promise<void> => undefined,
+      onProgress: (): (() => void) => () => undefined
+    },
+    filePath: (): string => '',
     onRagStream: (callback: (event: Event) => void) => {
       onStream = callback
       return () => {

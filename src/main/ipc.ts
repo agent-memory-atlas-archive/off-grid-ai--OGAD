@@ -84,7 +84,6 @@ import {
 import { engineUpdater } from './engine-updates-service'
 import { sampleProgressRate, type ProgressRateSample } from '@offgrid/ui'
 import { notifyRagConversationChanged } from './rag-conversation-events'
-import { parseRemoteVisionModelId, remoteVisionModelId } from '../shared/remote-vision-server'
 // import { llm } from './llm'; // Moved to dynamic import to support ESM
 
 // Incrementally update master memory with a new conversation summary
@@ -129,74 +128,9 @@ import {
   noteChatStreamToolStarted,
   takeChatStreamMessageId
 } from './chat-stream-state'
-import { ModelServerError } from './llm/http-post'
+import { runChatWithFallback } from './chat-fallback'
 
 const streamControllers = new Map<string, AbortController>()
-
-/** Retry a failed model round without re-running any tool call that already started. */
-async function runChatWithFallback<T>(
-  run: () => Promise<T>,
-  options: {
-    signal?: AbortSignal
-    canRetry?: () => boolean
-    onModelChanged?: (failed: string, next: string) => void
-  } = {}
-): Promise<{ result: T; modelName?: string }> {
-  let lastError: unknown
-  try {
-    return { result: await run() }
-  } catch (error) {
-    if (options.signal?.aborted || options.canRetry?.() === false) throw error
-    // Only a model that could not answer at all is worth replacing. A request that does not fit
-    // the window, or that the server refused, fails the same way on every model: switching then
-    // just walked the whole list (remote servers included) and changed the selected model.
-    if (error instanceof ModelServerError && error.kind !== 'unavailable') throw error
-    lastError = error
-  }
-  const models = await import('./models-manager')
-  const { getRemoteVisionServerSettings } = await import('./vision/remote-vision-server')
-  const remote = getRemoteVisionServerSettings()
-  const selectedLocal = models.getActiveModel()
-  const selectedRemote = remote.servers.find((server) => server.id === remote.activeServerId)
-  const installed = (await models.getStorageInfo()).models
-    .filter((model) => model.kind === 'text' || model.kind === 'vision')
-    .map((model) => model.id)
-  const alternatives = [
-    ...(selectedRemote
-      ? remote.servers
-          .filter((server) => server.id !== selectedRemote.id)
-          .map((server) => ({
-            id: remoteVisionModelId(server.id, server.model),
-            name: server.model
-          }))
-      : []),
-    ...installed
-      .filter((id) => !parseRemoteVisionModelId(id) && (selectedRemote || id !== selectedLocal))
-      .sort((a, b) => (a === selectedLocal ? -1 : b === selectedLocal ? 1 : 0))
-      .map((id) => ({ id, name: id }))
-  ]
-  let failedName = selectedRemote?.model ?? selectedLocal ?? 'Selected model'
-  for (const next of alternatives) {
-    if (options.signal?.aborted || options.canRetry?.() === false) throw lastError
-    try {
-      const activated = await models.activateModel(next.id, 'text')
-      if (!activated.success) continue
-    } catch {
-      continue
-    }
-    if (options.signal?.aborted) throw lastError
-    options.onModelChanged?.(failedName, next.name)
-    try {
-      return { result: await run(), modelName: next.name }
-    } catch (error) {
-      if (options.signal?.aborted || options.canRetry?.() === false) throw error
-      if (error instanceof ModelServerError && error.kind !== 'unavailable') throw error
-      failedName = next.name
-      lastError = error
-    }
-  }
-  throw lastError
-}
 
 async function streamAnswer(
   event: { sender?: { send: (channel: string, payload: unknown) => void } } | undefined,
@@ -866,70 +800,6 @@ export function setupIPC(): void {
         return { ...completion, context: undefined }
       }
 
-      // Project-scoped chat: retrieve from the project's knowledge base (uploaded
-      // docs + optionally captured memory) AND reference sibling chats in the project.
-      if (projectId) {
-        const { ragService } = await import('./rag')
-        const { listProjects } = await import('./rag/store')
-        const { getProjectChatHistory } = await import('./database')
-        const { formatForPrompt } = await import('@offgrid/rag')
-        const { llm } = await import('./llm')
-        const project = listProjects().find((p) => p.id === projectId)
-        const sys = project?.systemPrompt.trim() || 'You are a helpful assistant for this project.'
-        const search = await ragService.searchProject(projectId, query, {
-          topK: 6,
-          contextLength: 4096
-        })
-        const ctx = formatForPrompt(search)
-        // Cross-chat memory: recent messages from other chats in this project.
-        const siblings = getProjectChatHistory(projectId, conversationId ?? '', 12)
-        const siblingCtx = siblings.length
-          ? 'Related discussion from other chats in this project:\n' +
-            siblings
-              .map(
-                (m) =>
-                  `${m.role === 'assistant' ? 'Assistant' : 'User'}${m.title ? ` (${m.title})` : ''}: ${m.content}`
-              )
-              .join('\n')
-          : ''
-        const hist = (conversationHistory ?? [])
-          .slice(-8)
-          .map((m) => `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${m.content}`)
-          .join('\n')
-        const prompt = [
-          sys,
-          ctx,
-          siblingCtx,
-          hist ? `Conversation so far:\n${hist}` : '',
-          `User: ${query}`,
-          'Assistant:'
-        ]
-          .filter(Boolean)
-          .join('\n\n')
-        void llm // retained for non-stream fallback inside streamAnswer
-        if (streamId)
-          event.sender.send('rag:stream', {
-            streamId,
-            type: 'step',
-            step: {
-              kind: 'project',
-              counts: { sources: search.chunks.length, projectChats: siblings.length }
-            }
-          })
-        const completion = await streamAnswer(event, streamId, prompt, thinking, imgs)
-        return {
-          ...completion,
-          context: {
-            sources: search.chunks.map((c) => ({
-              name: c.name,
-              position: c.position,
-              score: c.score
-            })),
-            projectChats: siblings.length
-          }
-        }
-      }
-
       if (streamId)
         event.sender.send('rag:stream', { streamId, type: 'step', step: { kind: 'searching' } })
       const db = getDB()
@@ -1405,7 +1275,13 @@ export function setupIPC(): void {
     // the library (D23) — same lifecycle tie deleteProject has for a project.
     const { deleteArtifactsForConversation } = await import('./artifacts')
     deleteArtifactsForConversation(id)
-    return deleteRagConversation(id)
+    const deleted = deleteRagConversation(id)
+    // Documents only this chat used go with it, now rather than at the 30-day cleanup.
+    const documents = await import('./documents')
+    const { forgetConversationExclusions } = await import('./documents/sqlite-store')
+    forgetConversationExclusions(id)
+    void documents.forgetUnreferencedDocuments()
+    return deleted
   })
 
   // API credentials can be managed only through the trusted desktop IPC surface.
@@ -2264,8 +2140,8 @@ export function setupIPC(): void {
       // Non-stream fallback (no streamId): buffer, no live deltas (matches streamAnswer).
       if (!streamId) {
         return modalityQueue.run(CHAT_JOB, async () => {
-          const { result, modelName } = await runChatWithFallback(() =>
-            toolChat(query, history || [], opts || {})
+          const { result, modelName } = await runChatWithFallback((attempt) =>
+            toolChat(query, history || [], { ...(opts || {}), ...attempt })
           )
           return modelName ? { ...result, metrics: { ...result.metrics, modelName } } : result
         })
@@ -2280,9 +2156,10 @@ export function setupIPC(): void {
       try {
         const { result, modelName } = await modalityQueue.run(CHAT_JOB, () =>
           runChatWithFallback(
-            () =>
+            (attempt) =>
               toolChat(query, history || [], {
                 ...opts,
+                ...attempt,
                 thinking: opts.thinking,
                 signal: controller.signal,
                 onDelta: (text, kind) => {
@@ -2452,6 +2329,51 @@ export function setupIPC(): void {
     const { processUpload } = await import('./files')
     return processUpload(name, bytes)
   })
+  // A picked or dropped file read where it is, so a large document never crosses IPC as bytes.
+  ipcMain.handle('files:process-path', async (_e, filePath: string, name: string) => {
+    const path = await import('path')
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('Invalid file.')
+    const { processUploadPath } = await import('./files')
+    return processUploadPath(filePath, typeof name === 'string' && name ? name : path.basename(filePath))
+  })
+
+  // --- Documents in a chat: what the conversation holds, and which ones answers may use ---
+  ipcMain.handle('documents:list', async (_e, conversationId: string) => {
+    if (typeof conversationId !== 'string' || !conversationId) return []
+    const { conversationDocuments } = await import('./documents/conversation-documents')
+    const { excludedDocuments } = await import('./documents/sqlite-store')
+    const { documentIngest, documentStore } = await import('./documents')
+    const excluded = excludedDocuments(conversationId)
+    const seen = new Set<string>()
+    const rows: Record<string, unknown>[] = []
+    for (const source of await conversationDocuments.list(conversationId)) {
+      if (seen.has(source.id)) continue
+      seen.add(source.id)
+      const stored = await documentStore.getDocument(source.id)
+      rows.push({
+        id: source.id,
+        name: source.name,
+        kind: source.kind,
+        path: source.path ?? null,
+        pageCount: stored?.pageCount ?? 0,
+        state: stored?.state ?? 'reading',
+        unreadablePages: stored?.unreadablePages ?? 0,
+        error: stored?.error ?? null,
+        excluded: excluded.has(source.id),
+        progress: documentIngest.progressOf(source.id) ?? null
+      })
+    }
+    return rows
+  })
+  ipcMain.handle(
+    'documents:set-excluded',
+    async (_e, conversationId: string, documentId: string, excluded: boolean) => {
+      if (typeof conversationId !== 'string' || typeof documentId !== 'string') return false
+      const { setDocumentExcluded } = await import('./documents/sqlite-store')
+      setDocumentExcluded(conversationId, documentId, excluded === true)
+      return true
+    }
+  )
   // An allowed local media file as a data URL. The chat viewer uses this for uploaded PDFs, and
   // artifact download uses it to make exported HTML images work outside the app. Admission matches
   // ogcapture: so this renderer-reachable handler cannot read arbitrary local files.

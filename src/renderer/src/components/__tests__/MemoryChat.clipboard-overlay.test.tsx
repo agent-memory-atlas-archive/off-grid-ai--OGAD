@@ -28,6 +28,12 @@ function installApi(): {
 
   const api = {
     isPro: false,
+    // Documents in a chat (preload `documents`): none attached.
+    documents: {
+      list: async (): Promise<unknown[]> => [],
+      setExcluded: async (): Promise<void> => undefined,
+      onProgress: (): (() => void) => () => undefined
+    },
     imageGenStatus: vi.fn(async () => ({ available: false, models: [], active: '' })),
     onImageGenProgress: vi.fn(() => () => { }),
     onImageGenJobState: vi.fn(() => () => { }),

@@ -19,6 +19,8 @@ export interface AttachmentViewerContent {
   path?: string
   kind?: string
   renderer?: 'image' | 'document' | 'audio' | 'video' | 'text'
+  /** Open a PDF at this page (a citation of that page). */
+  page?: number
 }
 
 /**
@@ -83,7 +85,7 @@ function AttachmentPreviewComponent({
 }: {
   content: AttachmentViewerContent
 }): React.JSX.Element {
-  const [page, setPage] = useState(1)
+  const [page, setPage] = useState(content.page ?? 1)
   const [scale, setScale] = useState(1)
   const src = content.path ? captureUrlForPath(content.path) : ''
   const framedDocument = content.renderer === 'document' && content.kind !== 'pdf' && content.path

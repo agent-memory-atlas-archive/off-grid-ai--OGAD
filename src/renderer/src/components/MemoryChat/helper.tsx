@@ -414,9 +414,26 @@ const MEDIA_TYPE_BY_KIND: Record<Attachment['kind'], string> = {
 }
 
 /** A composer or queued attachment as the library's processing card sees it. */
+/** A ready document still reading or indexing in the background: its pill shows how far. */
+function documentProgress(attachment: Attachment): { message: string; progress?: number } | null {
+  const progress = attachment.progress
+  if (attachment.status !== 'ready' || !progress || progress.phase === 'ready') return null
+  if (progress.phase === 'failed') return null
+  const percent = progress.total > 0 ? Math.min(99, Math.round((progress.done / progress.total) * 100)) : undefined
+  if (progress.phase === 'reading')
+    return { message: progress.done ? `Reading page ${progress.done.toLocaleString()}…` : 'Reading…' }
+  if (progress.phase === 'ocr')
+    return {
+      message: `Reading scanned pages ${progress.done.toLocaleString()}/${progress.total.toLocaleString()}`,
+      ...(percent !== undefined ? { progress: percent } : {})
+    }
+  return { message: 'Indexing… ask anytime', ...(percent !== undefined ? { progress: percent } : {}) }
+}
+
 export function toProcessingAttachment(attachment: Attachment): ProcessingAttachment {
+  const background = documentProgress(attachment)
   const status =
-    attachment.status === 'loading'
+    attachment.status === 'loading' || background
       ? 'processing'
       : attachment.status === 'error'
         ? 'error'
@@ -431,8 +448,10 @@ export function toProcessingAttachment(attachment: Attachment): ProcessingAttach
     mediaType: attachment.mimeType || MEDIA_TYPE_BY_KIND[attachment.kind],
     ...(url ? { url } : {}),
     status,
-    message:
-      attachment.status === 'loading'
+    ...(background?.progress !== undefined ? { progress: background.progress } : {}),
+    message: background
+      ? background.message
+      : attachment.status === 'loading'
         ? attachment.kind === 'image'
           ? 'Reading…'
           : 'Processing…'
@@ -444,7 +463,12 @@ export function toProcessingAttachment(attachment: Attachment): ProcessingAttach
       attachment.kind !== 'image' && status === 'ready' && attachment.text
         ? attachment.text.slice(0, 140)
         : undefined,
-    kindLabel: attachment.kind === 'pasted' ? 'Pasted' : attachment.kind
+    kindLabel:
+      attachment.kind === 'pasted'
+        ? 'Pasted'
+        : attachment.pages && attachment.kind === 'pdf'
+          ? `${attachment.pages.toLocaleString()} pages`
+          : attachment.kind
   }
 }
 

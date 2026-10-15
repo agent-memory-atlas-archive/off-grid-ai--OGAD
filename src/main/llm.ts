@@ -1,3 +1,4 @@
+import { totalmem } from 'os'
 import { settingsChanged } from './settings-version'
 import { budgetChange, speculativePatch, speculativeOptions } from '../shared/text-settings-rules'
 import type { RuntimeBackend } from '../shared/runtime-backends'
@@ -52,6 +53,7 @@ import {
 } from './models/catalog-logic'
 import { pickFreePort, isPortFree } from './free-port'
 import { postCompletionOnce } from './llm/http-post'
+import { modalityQueue } from './modality-queue/queue'
 import { engineSpawnEnv } from './llm/spawn-env'
 import { gpuDeviceAvailable } from './llm/gpu-device-probe'
 import { shouldAutoRecover } from './llm/crash-policy'
@@ -199,6 +201,14 @@ export function buildDecisionRequest(
     min_p: 0,
     grammar: `root ::= [${labels}]`
   }
+}
+
+/** The caller's signal, joined with the running queue job's (set only for a preemptible
+ *  background job), so a preempted job's model request stops with it. */
+function withJobSignal(signal: AbortSignal | undefined): AbortSignal | undefined {
+  const job = modalityQueue.currentSignal()
+  if (!job) return signal
+  return signal ? AbortSignal.any([signal, job]) : job
 }
 
 function withContextMetrics(
@@ -639,7 +649,8 @@ export class LLMService {
           ? this.mtpModelPath()
           : undefined,
       imageMinTokens: this.imageMinTokensForModel(),
-      reportModelPlacement: true
+      reportModelPlacement: true,
+      totalRamBytes: totalmem()
     })
   }
 
@@ -982,6 +993,11 @@ export class LLMService {
   restoreSelectedModel(): void {
     this.runtimeModelOverride = null
     this.reloadModel()
+  }
+
+  /** A reply is being generated right now (background work can wait for the cores). */
+  isGenerating(): boolean {
+    return this.activeGenerations > 0
   }
 
   private async beginGeneration(): Promise<void> {
@@ -1630,12 +1646,14 @@ export class LLMService {
   // which kills long-running LLM requests before they can respond. Delegates to the
   // electron-free postCompletionOnce so the fresh-connection contract lives in one place
   // (see llm/http-post.ts) and is integration-tested against a real socket-closing server.
+  // A background job's request also stops when speech or a chat turn preempts that job
+  // (`modalityQueue.currentSignal`), which frees the model for them within ~1.6 s.
   private httpPost(
     body: string,
     timeoutMs: number | undefined,
     signal?: AbortSignal
   ): Promise<string> {
-    return postCompletionOnce(this.port, body, timeoutMs, signal)
+    return postCompletionOnce(this.port, body, timeoutMs, withJobSignal(signal))
   }
 
   /** Score one typed decision with the resident Decision model. The raw completion
@@ -1780,7 +1798,8 @@ export class LLMService {
         source: screenTaskRequestSource('Chat'),
         model: this.modelPath,
         request: { messages, ...opts, maxTokens },
-        signal: opts.signal
+        // A preempted background request is recorded as cancelled, not failed.
+        signal: withJobSignal(opts.signal)
       },
       async () => {
         const remote = this.activeRemoteTextModel()

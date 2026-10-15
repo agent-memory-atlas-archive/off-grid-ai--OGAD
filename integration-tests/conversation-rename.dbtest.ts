@@ -87,6 +87,11 @@ function installApi(): void {
         finishedAt: null
       }),
       onRagStream: () => () => undefined,
+      documents: {
+        list: async () => [],
+        setExcluded: async () => undefined,
+        onProgress: () => () => undefined
+      },
       onImageGenProgress: () => () => undefined,
       onImageGenJobState: () => () => undefined,
       onImageGenConversationUpdated: () => () => undefined

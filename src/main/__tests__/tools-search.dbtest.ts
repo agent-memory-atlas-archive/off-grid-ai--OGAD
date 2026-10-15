@@ -16,6 +16,8 @@ import { startFakeLlamaServer, type FakeLlamaServer } from './harness/fake-llama
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-search-it-'))
 vi.mock('electron', () => ({
   app: { getPath: () => TMP_DIR, isPackaged: false, getAppPath: () => process.cwd() },
+  // Document progress is broadcast to every window; a test has none.
+  BrowserWindow: { getAllWindows: () => [] },
   safeStorage: {
     isEncryptionAvailable: () => false,
     encryptString: (s: string) => Buffer.from(s),
@@ -36,9 +38,13 @@ vi.mock('@lancedb/lancedb', () => ({
   connect: async () => ({ openTable: async () => ({}), tableNames: async () => [] })
 }))
 
-import { toolChat } from '../tools'
+import { toolChat, type ToolActivity } from '../tools'
 import { llm } from '../llm'
 import { getDB } from '../database'
+import { createProject, ensureRagStoreSchema } from '../rag/store'
+import { knowledgeBase } from '../rag'
+import { documentStore } from '../documents'
+import { parseSearchBlock } from '@offgrid/rag/documents'
 
 let fake: FakeLlamaServer
 
@@ -69,8 +75,6 @@ beforeAll(async () => {
     CREATE TABLE IF NOT EXISTS frames (id INTEGER PRIMARY KEY AUTOINCREMENT, image_path TEXT, text TEXT, surface TEXT, url TEXT, ts DATETIME, source TEXT);
     CREATE TABLE IF NOT EXISTS observation_frames (observation_id INTEGER, frame_id INTEGER);
     CREATE TABLE IF NOT EXISTS meetings (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, summary TEXT, transcript TEXT, started_at INTEGER);
-    CREATE TABLE IF NOT EXISTS rag_documents (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, project_id TEXT, created_at DATETIME);
-    CREATE TABLE IF NOT EXISTS rag_chunks (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_id INTEGER, content TEXT);
     CREATE TABLE IF NOT EXISTS vec_indexed (key TEXT PRIMARY KEY);
   `)
   try {
@@ -78,6 +82,8 @@ beforeAll(async () => {
   } catch {
     /* already present */
   }
+  // Projects and their knowledge-base files, as the app migrates them.
+  ensureRagStoreSchema()
 })
 beforeEach(() => {
   fake.reset()
@@ -209,5 +215,111 @@ describe('search_memory citations — real universalSearch over the real full sc
     const figmaOnly = await universalSearch('   ', { limit: 50, sources: ['Figma'] })
     expect(figmaOnly.map((hit) => hit.key)).toContain(older)
     expect(figmaOnly.every((hit) => hit.surface === 'Figma')).toBe(true)
+  })
+})
+
+/** Add a knowledge-base file through the app's own path and wait until it is indexed. */
+async function addKnowledgeFile(
+  projectId: string,
+  name: string,
+  content: string
+): Promise<import('@offgrid/rag').RagDocument> {
+  const filePath = path.join(TMP_DIR, 'picked', name)
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, content)
+  const added = await knowledgeBase.addFile({
+    projectId,
+    path: filePath,
+    fileName: name,
+    size: fs.statSync(filePath).size
+  })
+  await vi.waitFor(
+    async () => expect((await documentStore.getDocument(added.documentId!))?.state).toBe('ready'),
+    { timeout: 10_000, interval: 50 }
+  )
+  return added
+}
+
+/** A long handbook: too big to give whole, so a turn gives the passages that match. */
+function handbook(fact: string): string {
+  const filler = (n: number): string =>
+    `Section ${n}. Staff read the notice board each morning and log visitors at the front desk. `.repeat(6)
+  const sections = Array.from({ length: 60 }, (_, i) => filler(i + 1))
+  sections.splice(31, 0, fact)
+  return sections.join('\n\n')
+}
+
+describe('project chats answer from the knowledge base', () => {
+  it('gives a project turn its files as cited passages, never another project-s', async () => {
+    createProject({ id: 'p-borealis', name: 'Borealis' })
+    createProject({ id: 'p-elsewhere', name: 'Elsewhere' })
+    await addKnowledgeFile(
+      'p-borealis',
+      'kiosk-hours.md',
+      'KB_TURN: The Borealis kiosk opens at nine and closes at five.'
+    )
+    await addKnowledgeFile(
+      'p-elsewhere',
+      'private-hours.md',
+      'KB_PRIVATE: The Borealis kiosk in the other project opens at noon.'
+    )
+    fake.enqueue({ content: 'It opens at nine [S1].' })
+    const activity: string[] = []
+
+    const r = await toolChat('When does the Borealis kiosk open?', [], {
+      projectId: 'p-borealis',
+      conversationId: 'kb-turn-chat',
+      onActivity: (step: ToolActivity) => {
+        if (step.kind === 'documents') activity.push(step.label)
+      }
+    })
+
+    const prompt = JSON.stringify(fake.requests[0]?.messages ?? [])
+    expect(prompt).toContain('KB_TURN: The Borealis kiosk opens at nine and closes at five.')
+    expect(prompt).not.toContain('KB_PRIVATE')
+    expect(r.answer).toBe('It opens at nine [S1].')
+    expect(r.unified[0]).toMatchObject({ kind: 'attachment', surface: 'kiosk-hours.md' })
+    expect(r.unified.map(({ surface }) => surface)).not.toContain('private-hours.md')
+    // The work timeline says what the turn is doing with the files.
+    expect(activity).toEqual(expect.arrayContaining(['Opening 1 document…', 'Searching 1 document…']))
+  })
+
+  it('numbers search_knowledge_base passages after the turn-s own, reusing a number the turn already gave', async () => {
+    createProject({ id: 'p-handbook', name: 'Handbook' })
+    const fact = 'KIOSK_FACT: The Borealis kiosk opens at nine on weekdays and at ten on Saturdays.'
+    await addKnowledgeFile('p-handbook', 'staff-handbook.md', handbook(fact))
+    fake.enqueue(
+      { toolCalls: [{ name: 'search_knowledge_base', args: { query: 'Borealis kiosk opens' } }] },
+      { content: 'Weekdays at nine [S1, S99].' }
+    )
+
+    const r = await toolChat('When does the Borealis kiosk open?', [], {
+      projectId: 'p-handbook',
+      conversationId: 'kb-tool-chat'
+    })
+
+    // Every source is listed once, and each tag in the tool result points at that very passage.
+    const keys = r.unified.map(({ key }) => key)
+    expect(new Set(keys).size).toBe(keys.length)
+    const toolPassages = parseSearchBlock(r.toolCalls[0]!.result)
+    expect(toolPassages.length).toBeGreaterThan(0)
+    for (const passage of toolPassages) {
+      const source = r.unified[Number(passage.id.slice(1)) - 1]
+      expect(source).toMatchObject({ kind: 'attachment', surface: 'staff-handbook.md' })
+      expect(passage.text.startsWith(source!.snippet)).toBe(true)
+    }
+    // The fact was already among the turn's own passages, so the tool cites it by the same number;
+    // the turn's passages are the first sources, before anything the tool adds.
+    const firstPrompt = JSON.stringify(fake.requests[0]?.messages ?? [])
+    const turnSources = new Set(firstPrompt.match(/<source id=\\"S\d+\\"/g) ?? []).size
+    expect(turnSources).toBeGreaterThan(0)
+    const kiosk = toolPassages.find(({ text }) => text.includes('KIOSK_FACT'))!
+    expect(Number(kiosk.id.slice(1))).toBeLessThanOrEqual(turnSources)
+    expect(firstPrompt).toContain('KIOSK_FACT')
+    // A grouped tag is split, and a tag that points at no source is dropped.
+    expect(r.answer).toBe('Weekdays at nine [S1].')
+    // The project's search stays inside the project: other projects' files are never searched.
+    expect(r.toolCalls[0]!.result).not.toMatch(/KB_TURN|KB_PRIVATE/)
+    expect(r.unified.map(({ title }) => title).join('\n')).not.toMatch(/kiosk-hours|private-hours/)
   })
 })

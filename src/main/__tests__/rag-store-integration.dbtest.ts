@@ -1,20 +1,24 @@
-// Integration tests for the desktop RAG VectorStore + projects/threads CRUD
-// (src/main/rag/store.ts) against a REAL temp SQLite DB. store.ts calls getDB()
-// from database.ts, which imports `electron`; we mock ONLY that boundary (app +
-// safeStorage) pointed at a fresh mkdtemp dir. The store's own migrate() creates
-// the projects/documents/chunks/threads tables in that real file, so every
-// assertion exercises real SQL, real transactions, and real embedding JSON
-// round-trips - no mocks of our logic.
+// Integration tests for projects and their knowledge bases (src/main/rag/*) against a REAL temp
+// SQLite DB. store.ts calls getDB() from database.ts, which imports `electron`; we fake ONLY that
+// boundary (app paths, safeStorage, and a window list with no windows) pointed at a fresh mkdtemp
+// dir. Knowledge-base files go through the real files.ts reader into the real document engine
+// (documents/*), so every assertion exercises real SQL, real extraction, real indexing and real
+// search. The embedding model is the one uncontrolled runtime: the profile's model folder is
+// pinned to a missing one, so the product's own "folder unavailable" path skips vectors and
+// search runs on the real keyword index, never on whatever model this machine has downloaded.
 
 import { describe, it, expect, afterAll, vi } from 'vitest'
+import crypto from 'crypto'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { SYNTHETIC_PDF } from './fixtures/synthetic-pdf'
 
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-ragstore-it-'))
 
 vi.mock('electron', () => ({
   app: { getPath: () => TMP_DIR, isPackaged: false, getAppPath: () => process.cwd() },
+  BrowserWindow: { getAllWindows: () => [] },
   safeStorage: {
     isEncryptionAvailable: () => false,
     encryptString: (s: string) => Buffer.from(s),
@@ -23,27 +27,13 @@ vi.mock('electron', () => ({
 }))
 
 import * as store from '../rag/store'
-import {
-  addRagMessage,
-  createRagConversation,
-  getDB,
-  searchProjectConversations
-} from '../database'
-import { desktopExtraction } from '../rag/extractors'
-import { RagService, type EmbeddingProvider } from '@offgrid/rag'
+import { knowledgeBase } from '../rag'
+import { addRagMessage, createRagConversation, getDB, searchProjectConversations } from '../database'
+import { documentStore, documentTurns } from '../documents'
+import { DesktopBackupDataPort } from '../backup/data-port'
 import { configureRuntime } from '../runtime-env'
 
-configureRuntime({ dataDir: TMP_DIR })
-
-function keywordEmbeddings(...keywords: string[]): EmbeddingProvider {
-  return {
-    dimension: keywords.length,
-    async embed(text) {
-      const normalized = text.toLowerCase()
-      return keywords.map((keyword) => Number(normalized.includes(keyword)))
-    }
-  }
-}
+configureRuntime({ dataDir: TMP_DIR, modelsDir: path.join(TMP_DIR, 'model-folder-not-connected') })
 
 afterAll(() => {
   try {
@@ -52,6 +42,48 @@ afterAll(() => {
     /* best effort */
   }
 })
+
+function writeFile(name: string, content: string | Buffer): string {
+  const filePath = path.join(TMP_DIR, 'picked', name)
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, content)
+  return filePath
+}
+
+async function addFile(
+  projectId: string,
+  name: string,
+  content: string | Buffer
+): Promise<import('@offgrid/rag').RagDocument> {
+  const filePath = writeFile(name, content)
+  return knowledgeBase.addFile({
+    projectId,
+    path: filePath,
+    fileName: name,
+    size: fs.statSync(filePath).size
+  })
+}
+
+/** The document engine's state for a file, once it has finished reading and indexing it. */
+async function finishedIndexing(
+  documentId: string
+): Promise<import('@offgrid/rag/documents').StoredDocument> {
+  await vi.waitFor(
+    async () => {
+      const state = (await documentStore.getDocument(documentId))?.state
+      expect(state === 'ready' || state === 'failed').toBe(true)
+    },
+    { timeout: 10_000, interval: 50 }
+  )
+  return (await documentStore.getDocument(documentId))!
+}
+
+async function projectSearch(
+  projectId: string,
+  query: string
+): Promise<import('@offgrid/rag/documents').FoundPassage[]> {
+  return documentTurns.searchPassages({ projectId }, query)
+}
 
 describe('rag/store.ts - projects CRUD', () => {
   it('searches sibling conversations only inside the selected project', async () => {
@@ -123,352 +155,219 @@ describe('rag/store.ts - projects CRUD', () => {
     expect(store.projectIncludesMemory('no-such-project')).toBe(true)
   })
 
-  it('deleteProject removes the project and its documents/chunks', async () => {
+  it('deleteProject removes the project and its knowledge-base files', async () => {
     store.createProject({ id: 'p-del', name: 'Doomed' })
-    const docId = await store.desktopVectorStore.addDocument({
-      projectId: 'p-del',
-      name: 'doc.txt',
-      path: '/tmp/doc.txt',
-      size: 10,
-      kind: 'text'
-    })
-    await store.desktopVectorStore.addChunks(docId, [{ content: 'c', position: 0 }], [[0.1, 0.2]])
+    await addFile('p-del', 'doomed-notes.txt', 'Doomed project notes about the Basalt migration plan.')
 
     store.deleteProject('p-del')
     expect(store.listProjects().find((x) => x.id === 'p-del')).toBeUndefined()
-    expect(await store.desktopVectorStore.listDocuments('p-del')).toHaveLength(0)
-    // chunks for the deleted doc are gone.
-    const chunks = getDB()
-      .prepare('SELECT COUNT(*) AS c FROM rag_chunks WHERE doc_id = ?')
-      .get(docId) as { c: number }
-    expect(chunks.c).toBe(0)
+    expect(knowledgeBase.listDocuments('p-del')).toHaveLength(0)
+    expect(await projectSearch('p-del', 'Basalt migration')).toEqual([])
   })
 })
 
-describe('rag/store.ts - VectorStore documents + chunks', () => {
-  it('extracts, chunks, persists, and retrieves an attached knowledge document', async () => {
+describe('knowledge base over the document engine', () => {
+  it('adds a file: listed at once, kept by content, then searchable in its project', async () => {
     const projectId = 'p-attach-document'
-    const filePath = path.join(TMP_DIR, 'field-notes.md')
     const quartzFact = 'Project Quartz launches in October after the final accessibility review.'
     const harborFact = 'Project Harbor remains in research while the battery study is repeated.'
-    fs.writeFileSync(filePath, `${quartzFact}\n\n${harborFact}`)
+    const content = `${quartzFact}\n\n${harborFact}`
     store.createProject({ id: projectId, name: 'Attach document' })
-    store.updateProject(projectId, { includeMemory: false })
 
-    // MiniLM is an uncontrollable local-model boundary in this suite. This faithful
-    // deterministic provider preserves semantic separation while all Off Grid AI
-    // extraction, chunking, storage, and retrieval code stays real.
-    const service = new RagService({
-      store: store.desktopVectorStore,
-      embeddings: keywordEmbeddings('quartz', 'harbor'),
-      extraction: desktopExtraction,
-      chunkOptions: { chunkSize: 80, overlap: 0, minChunkLength: 20 }
-    })
-    const stages: string[] = []
+    const added = await addFile(projectId, 'field-notes.md', content)
 
-    const indexed = await service.indexDocument(
-      {
+    const documentId = crypto.createHash('sha256').update(content).digest('hex')
+    expect(knowledgeBase.listDocuments(projectId)).toEqual([
+      expect.objectContaining({
+        id: added.id,
         projectId,
-        path: filePath,
-        fileName: 'field-notes.md',
-        size: fs.statSync(filePath).size
-      },
-      (stage) => stages.push(stage)
-    )
+        name: 'field-notes.md',
+        size: Buffer.byteLength(content),
+        kind: 'text',
+        enabled: true,
+        documentId
+      })
+    ])
+    // The file is kept by content inside the profile, so the picked original can move or go.
+    expect(added.path.startsWith(TMP_DIR)).toBe(true)
+    expect(fs.readFileSync(added.path, 'utf8')).toBe(content)
 
-    expect(indexed).toMatchObject({ kind: 'text', chunkCount: 2 })
-    expect(stages).toEqual(['extracting', 'chunking', 'embedding', 'indexing', 'done'])
+    const indexed = await finishedIndexing(documentId)
+    expect(indexed).toMatchObject({ state: 'ready', name: 'field-notes.md', pageCount: 1 })
+    expect(indexed.chunkCount).toBeGreaterThan(0)
 
-    const documents = await service.listDocuments(projectId)
-    expect(documents).toHaveLength(1)
-    expect(documents[0]).toMatchObject({
-      id: indexed.docId,
-      name: 'field-notes.md',
-      path: filePath,
-      size: fs.statSync(filePath).size,
-      kind: 'text',
-      enabled: true
-    })
-
-    const candidates = await store.desktopVectorStore.getChunkCandidates(projectId)
-    expect(candidates).toHaveLength(2)
-    expect(candidates.map((candidate) => candidate.content)).toEqual([quartzFact, harborFact])
-
-    const search = await service.searchProject(projectId, 'When does Quartz launch?', { topK: 1 })
-    expect(search.chunks).toHaveLength(1)
-    expect(search.chunks[0]).toMatchObject({
-      docId: indexed.docId,
-      name: 'field-notes.md',
-      content: quartzFact,
-      position: 0
-    })
-    expect(service.formatForPrompt(search)).toContain(
-      `[Source: field-notes.md (part 1)]\n${quartzFact}`
-    )
-
-    const rows = getDB()
-      .prepare(
-        `SELECT COUNT(DISTINCT d.id) AS documents, COUNT(c.id) AS chunks
-         FROM rag_documents d
-         JOIN rag_chunks c ON c.doc_id = d.id
-         WHERE d.project_id = ?`
-      )
-      .get(projectId) as { documents: number; chunks: number }
-    expect(rows).toEqual({ documents: 1, chunks: 2 })
+    const found = await projectSearch(projectId, 'When does Quartz launch?')
+    expect(found[0]).toMatchObject({ documentId, name: 'field-notes.md', page: 1 })
+    expect(found[0]!.text).toContain(quartzFact)
   })
 
-  it('grounds retrieval in only the selected project and its enabled documents', async () => {
+  it('grounds a project search in only that project and its enabled files', async () => {
     const selectedProject = 'p-grounded-selected'
     const otherProject = 'p-grounded-other'
     store.createProject({ id: selectedProject, name: 'Selected project' })
     store.createProject({ id: otherProject, name: 'Other project' })
-    store.updateProject(selectedProject, { includeMemory: false })
-    store.updateProject(otherProject, { includeMemory: false })
 
-    const files = [
-      {
-        projectId: selectedProject,
-        name: 'current-plan.md',
-        content: 'Project Quartz launches on October 14 after accessibility sign-off.'
-      },
-      {
-        projectId: selectedProject,
-        name: 'obsolete-plan.md',
-        content: 'An obsolete Project Quartz draft says the launch moved to December.'
-      },
-      {
-        projectId: otherProject,
-        name: 'private-plan.md',
-        content: 'The other project records a confidential Quartz launch in January.'
-      }
-    ] as const
-    const service = new RagService({
-      store: store.desktopVectorStore,
-      embeddings: keywordEmbeddings('quartz'),
-      extraction: desktopExtraction
-    })
-
-    const indexed = new Map<string, number>()
-    for (const file of files) {
-      const filePath = path.join(TMP_DIR, file.name)
-      fs.writeFileSync(filePath, file.content)
-      const result = await service.indexDocument({
-        projectId: file.projectId,
-        path: filePath,
-        fileName: file.name,
-        size: fs.statSync(filePath).size
-      })
-      indexed.set(file.name, result.docId)
-    }
-    await service.toggleDocument(indexed.get('obsolete-plan.md')!, false)
-
-    // Precondition: all three chunks really exist. The missing results below must
-    // come from production project/enabled filtering, not an incomplete fixture.
-    const persisted = getDB()
-      .prepare(
-        `SELECT d.project_id, d.name, d.enabled, COUNT(c.id) AS chunks
-         FROM rag_documents d
-         JOIN rag_chunks c ON c.doc_id = d.id
-         WHERE d.project_id IN (?, ?)
-         GROUP BY d.id
-         ORDER BY d.name`
-      )
-      .all(selectedProject, otherProject) as {
-      project_id: string
-      name: string
-      enabled: number
-      chunks: number
-    }[]
-    expect(persisted).toHaveLength(3)
-    expect(persisted.every((row) => row.chunks === 1)).toBe(true)
-    expect(persisted.find((row) => row.name === 'obsolete-plan.md')?.enabled).toBe(0)
-
-    const selected = await service.searchProject(selectedProject, 'When does Quartz launch?')
-    expect(selected.chunks).toEqual([
-      expect.objectContaining({
-        docId: indexed.get('current-plan.md'),
-        name: 'current-plan.md',
-        content: files[0].content
-      })
-    ])
-    const selectedPrompt = service.formatForPrompt(selected)
-    expect(selectedPrompt).toContain(`[Source: current-plan.md (part 1)]\n${files[0].content}`)
-    expect(selectedPrompt).not.toContain('obsolete-plan.md')
-    expect(selectedPrompt).not.toContain('private-plan.md')
-    expect(selectedPrompt).not.toContain('December')
-    expect(selectedPrompt).not.toContain('January')
-
-    const other = await service.searchProject(otherProject, 'When does Quartz launch?')
-    expect(other.chunks).toEqual([
-      expect.objectContaining({
-        docId: indexed.get('private-plan.md'),
-        name: 'private-plan.md',
-        content: files[2].content
-      })
-    ])
-  })
-
-  it('rejects a damaged PDF during extraction without leaving a half-indexed document', async () => {
-    const projectId = 'p-damaged-pdf'
-    const filePath = path.join(TMP_DIR, 'damaged.pdf')
-    fs.writeFileSync(filePath, 'this is not a PDF')
-    store.createProject({ id: projectId, name: 'Damaged PDF' })
-
-    // Embeddings are an uncontrollable model-runtime boundary and must never be
-    // reached for an extraction failure. Throwing here makes that invariant visible.
-    const embeddings: EmbeddingProvider = {
-      dimension: 1,
-      async embed() {
-        throw new Error('embedding runtime must not run for a damaged document')
-      }
-    }
-    const service = new RagService({
-      store: store.desktopVectorStore,
-      embeddings,
-      extraction: desktopExtraction
-    })
-    const stages: string[] = []
-
-    await expect(
-      service.indexDocument(
-        {
-          projectId,
-          path: filePath,
-          fileName: 'damaged.pdf',
-          size: fs.statSync(filePath).size
-        },
-        (stage) => stages.push(stage)
-      )
-    ).rejects.toThrow('Invalid PDF structure')
-
-    expect(stages).toEqual(['extracting'])
-    expect(await store.desktopVectorStore.listDocuments(projectId)).toHaveLength(0)
-    const chunks = getDB()
-      .prepare(
-        `SELECT COUNT(*) AS c
-         FROM rag_chunks c
-         JOIN rag_documents d ON d.id = c.doc_id
-         WHERE d.project_id = ?`
-      )
-      .get(projectId) as { c: number }
-    expect(chunks.c).toBe(0)
-  })
-
-  it('addDocument returns a rowid and listDocuments maps rows back to RagDocument', async () => {
-    store.createProject({ id: 'p-docs', name: 'Docs' })
-    const id = await store.desktopVectorStore.addDocument({
-      projectId: 'p-docs',
-      name: 'notes.md',
-      path: '/tmp/notes.md',
-      size: 42,
-      kind: 'text'
-    })
-    expect(id).toBeGreaterThan(0)
-    const docs = await store.desktopVectorStore.listDocuments('p-docs')
-    expect(docs).toHaveLength(1)
-    expect(docs[0]).toMatchObject({
-      id,
-      projectId: 'p-docs',
-      name: 'notes.md',
-      path: '/tmp/notes.md',
-      size: 42,
-      kind: 'text',
-      enabled: true
-    })
-    expect(typeof docs[0]!.createdAt).toBe('string')
-  })
-
-  it('setDocumentEnabled toggles the enabled flag (0/1 -> boolean)', async () => {
-    store.createProject({ id: 'p-toggle', name: 'Toggle' })
-    const id = await store.desktopVectorStore.addDocument({
-      projectId: 'p-toggle',
-      name: 'x',
-      path: '/x',
-      size: 1,
-      kind: 'text'
-    })
-    await store.desktopVectorStore.setDocumentEnabled(id, false)
-    expect((await store.desktopVectorStore.listDocuments('p-toggle'))[0]!.enabled).toBe(false)
-    await store.desktopVectorStore.setDocumentEnabled(id, true)
-    expect((await store.desktopVectorStore.listDocuments('p-toggle'))[0]!.enabled).toBe(true)
-  })
-
-  it('getChunkCandidates returns enabled-doc chunks with parsed embeddings', async () => {
-    store.createProject({ id: 'p-cand', name: 'Cand' })
-    // opt OUT of captured memories so we assert only on the uploaded-doc chunks.
-    store.updateProject('p-cand', { includeMemory: false })
-    const id = await store.desktopVectorStore.addDocument({
-      projectId: 'p-cand',
-      name: 'doc',
-      path: '/d',
-      size: 1,
-      kind: 'text'
-    })
-    await store.desktopVectorStore.addChunks(
-      id,
-      [
-        { content: 'chunk zero', position: 0 },
-        { content: 'chunk one', position: 1 }
-      ],
-      [
-        [0.1, 0.2, 0.3],
-        [0.4, 0.5, 0.6]
-      ]
+    const current = await addFile(
+      selectedProject,
+      'current-plan.md',
+      'Project Quartz launches on October 14 after accessibility sign-off.'
     )
-    const cands = await store.desktopVectorStore.getChunkCandidates('p-cand')
-    expect(cands).toHaveLength(2)
-    const zero = cands.find((c) => c.content === 'chunk zero')
-    expect(zero?.embedding).toEqual([0.1, 0.2, 0.3])
-    expect(zero?.docId).toBe(id)
+    const obsolete = await addFile(
+      selectedProject,
+      'obsolete-plan.md',
+      'An obsolete Project Quartz draft says the launch moved to December.'
+    )
+    const other = await addFile(
+      otherProject,
+      'private-plan.md',
+      'The other project records a confidential Quartz launch in January.'
+    )
+    for (const document of [current, obsolete, other])
+      expect((await finishedIndexing(document.documentId!)).state).toBe('ready')
+
+    await knowledgeBase.toggleDocument(obsolete.id, false)
+    expect(knowledgeBase.listDocuments(selectedProject)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'obsolete-plan.md', enabled: false }),
+        expect.objectContaining({ name: 'current-plan.md', enabled: true })
+      ])
+    )
+
+    const selected = await projectSearch(selectedProject, 'When does Quartz launch?')
+    expect(selected.map(({ name }) => name)).toEqual(['current-plan.md'])
+    expect(selected.map(({ text }) => text).join('\n')).not.toMatch(/December|January/)
+
+    const elsewhere = await projectSearch(otherProject, 'When does Quartz launch?')
+    expect(elsewhere.map(({ name }) => name)).toEqual(['private-plan.md'])
+
+    // Turned back on, the file is used again.
+    await knowledgeBase.toggleDocument(obsolete.id, true)
+    const again = await projectSearch(selectedProject, 'Quartz launch December')
+    expect(again.map(({ name }) => name)).toContain('obsolete-plan.md')
   })
 
-  it('getChunkCandidates excludes chunks from disabled documents', async () => {
-    store.createProject({ id: 'p-disabled', name: 'Disabled' })
-    store.updateProject('p-disabled', { includeMemory: false })
-    const id = await store.desktopVectorStore.addDocument({
-      projectId: 'p-disabled',
-      name: 'doc',
-      path: '/d',
-      size: 1,
-      kind: 'text'
-    })
-    await store.desktopVectorStore.addChunks(id, [{ content: 'hidden', position: 0 }], [[1, 0]])
-    await store.desktopVectorStore.setDocumentEnabled(id, false)
-    expect(await store.desktopVectorStore.getChunkCandidates('p-disabled')).toHaveLength(0)
+  it('uses a note shorter than a line of a page', async () => {
+    store.createProject({ id: 'p-short', name: 'Short notes' })
+    const note = await addFile('p-short', 'wifi.txt', 'Wi-Fi code: 4417\n')
+
+    const indexed = await finishedIndexing(note.documentId!)
+    expect(indexed).toMatchObject({ state: 'ready', unreadablePages: 0 })
+    const found = await projectSearch('p-short', 'Wi-Fi code')
+    expect(found.map(({ text }) => text)).toEqual(['Wi-Fi code: 4417'])
   })
 
-  it('getChunkCandidates folds captured memories in when includeMemory is on', async () => {
-    store.createProject({ id: 'p-withmem', name: 'WithMem' }) // includeMemory defaults on
-    // seed a captured memory with an embedding directly in the shared memories table.
-    getDB()
-      .prepare(
-        'INSERT INTO memories (content, source_app, session_id, embedding) VALUES (?, ?, ?, ?)'
-      )
-      .run('a captured thought', 'App', 'sess', JSON.stringify([0.9, 0.8]))
-    const cands = await store.desktopVectorStore.getChunkCandidates('p-withmem')
-    const mem = cands.find((c) => c.name === 'Captured memory')
-    expect(mem).toBeTruthy()
-    expect(mem?.embedding).toEqual([0.9, 0.8])
-    // captured memories are stored with a negative synthetic docId.
-    expect(mem?.docId).toBeLessThan(0)
+  it('keeps a damaged PDF in the list as unreadable, and never answers from it', async () => {
+    store.createProject({ id: 'p-damaged-pdf', name: 'Damaged PDF' })
+    const damaged = await addFile('p-damaged-pdf', 'damaged.pdf', 'this is not a PDF')
+
+    expect(knowledgeBase.listDocuments('p-damaged-pdf')).toEqual([
+      expect.objectContaining({ name: 'damaged.pdf', kind: 'pdf' })
+    ])
+    const indexed = await finishedIndexing(damaged.documentId!)
+    expect(indexed.state).toBe('failed')
+    expect(indexed.error).toBeTruthy()
+    expect(await projectSearch('p-damaged-pdf', 'not a PDF')).toEqual([])
   })
 
-  it('deleteDocument removes the document and its chunks in one transaction', async () => {
+  it('reads a real PDF page by page', async () => {
+    store.createProject({ id: 'p-pdf', name: 'PDF' })
+    const pdf = await addFile('p-pdf', 'decision.pdf', SYNTHETIC_PDF)
+
+    const indexed = await finishedIndexing(pdf.documentId!)
+    expect(indexed.state).toBe('ready')
+    expect(indexed.chunkCount).toBeGreaterThan(0)
+    const [page] = await documentStore.readPages(pdf.documentId!)
+    const found = await projectSearch('p-pdf', page!.text.split(/\s+/).slice(0, 4).join(' '))
+    expect(found[0]).toMatchObject({ name: 'decision.pdf', page: 1 })
+  })
+
+  it('deleting a file removes it, and its index once no other project holds it', async () => {
     store.createProject({ id: 'p-deldoc', name: 'DelDoc' })
-    const id = await store.desktopVectorStore.addDocument({
-      projectId: 'p-deldoc',
-      name: 'doc',
-      path: '/d',
-      size: 1,
+    store.createProject({ id: 'p-keepdoc', name: 'KeepDoc' })
+    const shared = 'Shared glossary: a Mistral is a cold northern wind.'
+    const first = await addFile('p-deldoc', 'glossary.txt', shared)
+    const second = await addFile('p-keepdoc', 'glossary.txt', shared)
+    expect(second.documentId).toBe(first.documentId)
+    await finishedIndexing(first.documentId!)
+
+    await knowledgeBase.deleteDocument(first.id)
+    expect(knowledgeBase.listDocuments('p-deldoc')).toHaveLength(0)
+    expect(await projectSearch('p-deldoc', 'Mistral wind')).toEqual([])
+    // The other project still holds the same content, so its index stays.
+    expect(await documentStore.getDocument(first.documentId!)).not.toBeNull()
+    expect((await projectSearch('p-keepdoc', 'Mistral wind')).map(({ name }) => name)).toEqual([
+      'glossary.txt'
+    ])
+
+    await knowledgeBase.deleteDocument(second.id)
+    expect(await documentStore.getDocument(first.documentId!)).toBeNull()
+  })
+
+  it('indexes a file added before files had document ids when its project is next used', async () => {
+    store.createProject({ id: 'p-legacy-row', name: 'Legacy row' })
+    const filePath = writeFile('legacy-brief.txt', 'Legacy brief: the Granite audit closes in March.')
+    const docId = store.insertRagDocument({
+      projectId: 'p-legacy-row',
+      name: 'legacy-brief.txt',
+      path: filePath,
+      size: fs.statSync(filePath).size,
       kind: 'text'
     })
-    await store.desktopVectorStore.addChunks(id, [{ content: 'c', position: 0 }], [[0.1]])
-    await store.desktopVectorStore.deleteDocument(id)
-    expect(await store.desktopVectorStore.listDocuments('p-deldoc')).toHaveLength(0)
-    const chunks = getDB()
-      .prepare('SELECT COUNT(*) AS c FROM rag_chunks WHERE doc_id = ?')
-      .get(id) as { c: number }
-    expect(chunks.c).toBe(0)
+    expect(store.getRagDocument(docId)?.documentId).toBeUndefined()
+
+    const found = await projectSearch('p-legacy-row', 'Granite audit')
+    expect(found.map(({ name }) => name)).toEqual(['legacy-brief.txt'])
+    expect(store.getRagDocument(docId)?.documentId).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('restores a knowledge-base file from an old backup that carried chunks, ready to answer', async () => {
+    const port = new DesktopBackupDataPort(getDB())
+    const summary = await port.apply({
+      surface: 'offgrid-desktop',
+      projects: [
+        {
+          id: 'p-restored',
+          name: 'Restored',
+          description: '',
+          systemPrompt: '',
+          includeMemory: false,
+          createdAt: '2026-01-01T09:00:00.000Z',
+          updatedAt: '2026-01-01T09:00:00.000Z',
+          documents: [
+            {
+              name: 'Contract.pdf',
+              path: '/an/old/mac/Contract.pdf',
+              size: 42,
+              kind: 'pdf',
+              enabled: true,
+              createdAt: '2026-01-01T09:00:00.000Z',
+              chunks: [
+                { content: 'The tenant pays rent by the fifth of each month.', position: 1 },
+                { content: 'This lease runs for two years from signing.', position: 0 }
+              ]
+            }
+          ]
+        }
+      ],
+      conversations: []
+    })
+    expect(summary.documentsAdded).toBe(1)
+
+    const [restored] = knowledgeBase.listDocuments('p-restored')
+    expect(restored).toMatchObject({ name: 'Contract.pdf', enabled: true })
+    expect(restored!.documentId).toBe(
+      crypto
+        .createHash('sha256')
+        .update(
+          'This lease runs for two years from signing.\n\nThe tenant pays rent by the fifth of each month.'
+        )
+        .digest('hex')
+    )
+
+    const found = await projectSearch('p-restored', 'When is rent due?')
+    expect(found[0]).toMatchObject({ name: 'Contract.pdf', documentId: restored!.documentId })
+    expect(found[0]!.text).toContain('The tenant pays rent by the fifth of each month.')
+    expect((await documentStore.getDocument(restored!.documentId!))?.state).toBe('ready')
   })
 })
 

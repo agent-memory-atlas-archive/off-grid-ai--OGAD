@@ -26,7 +26,6 @@
     "@offgrid/design",
     "better-sqlite3",
     "@types/better-sqlite3",
-    "pdf-parse",
     "kokoro-js",
     "ollama"
   ],

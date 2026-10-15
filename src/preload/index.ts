@@ -1,7 +1,7 @@
 import type { RuntimeBackend } from '../shared/runtime-backends'
 import type { PerformancePackStatus } from '../shared/performance-pack'
 import type { EngineUpdateStatus } from '../shared/engine-updates'
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
   CACHE_CLEANUP_CHANNEL,
   type ArtifactKindContract,
@@ -33,6 +33,12 @@ import type { TaskGuideInput } from '../shared/task-guidance'
 import type { RemoteVisionServerUpdate } from '../shared/remote-vision-server'
 import type { StartupSnapshot } from '../shared/startup-contract'
 import type { ProjectDeleteOutcome } from '../shared/project-delete-outcome'
+import {
+  PROJECT_DOCUMENT_TRANSFER_DISMISS,
+  PROJECT_DOCUMENT_TRANSFER_EVENT,
+  PROJECT_DOCUMENT_TRANSFERS_SNAPSHOT,
+  type ProjectDocumentTransfer
+} from '../shared/project-document-transfer'
 import type { TaskRunSnapshot } from '../main/tasks/task-history-store'
 
 console.log('PRELOAD SCRIPT LOADED')
@@ -706,6 +712,14 @@ const offGridApi = {
       thinking?: boolean
       context?: string
       rules?: readonly string[]
+      /** Documents attached to this message; earlier ones are read from the conversation. */
+      documents?: {
+        documentId?: string
+        name: string
+        kind: string
+        text?: string
+        path?: string
+      }[]
     }
   ) => ipcRenderer.invoke('tools:chat', query, history, opts),
 
@@ -765,6 +779,39 @@ const offGridApi = {
   // --- File attachments → text ---
   processFile: (bytes: ArrayBuffer, name: string) =>
     ipcRenderer.invoke('files:process', bytes, name),
+  /** The file's location on disk when it came from a pick or a drop; '' for in-memory blobs. */
+  filePath: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
+  },
+  /** Read a picked or dropped file where it is, so a large document never crosses IPC as bytes. */
+  processFilePath: (filePath: string, name: string) =>
+    ipcRenderer.invoke('files:process-path', filePath, name),
+
+  // --- Documents in a chat ---
+  documents: {
+    list: (conversationId: string) => ipcRenderer.invoke('documents:list', conversationId),
+    setExcluded: (conversationId: string, documentId: string, excluded: boolean) =>
+      ipcRenderer.invoke('documents:set-excluded', conversationId, documentId, excluded),
+    onProgress: (
+      callback: (progress: {
+        id: string
+        name: string
+        phase: 'reading' | 'ocr' | 'indexing' | 'ready' | 'failed'
+        done: number
+        total: number
+        pageCount: number
+        error?: string
+      }) => void
+    ) => {
+      const sub = (_: unknown, progress: Parameters<typeof callback>[0]): void => callback(progress)
+      ipcRenderer.on('documents:progress', sub)
+      return unsubscribe('documents:progress', sub)
+    }
+  },
   fileDataUrl: (path: string) => ipcRenderer.invoke('files:data-url', path),
 
   // --- Skills ---
@@ -831,7 +878,27 @@ const offGridApi = {
     ipcRenderer.on('tts:voice-progress', listener)
     return unsubscribe('tts:voice-progress', listener)
   },
-  speak: (text: string, voice?: string) => ipcRenderer.invoke('tts:speak', text, voice),
+  /**
+   * Speak `text`; resolves with the whole clip. With `onPass`, each finished pass of a reply that
+   * is spoken in several arrives first, so playback can start before the whole clip is made.
+   */
+  speak: (
+    text: string,
+    voice?: string,
+    onPass?: (pass: { index: number; count: number; dataUrl: string }) => void
+  ): Promise<{ dataUrl: string }> => {
+    if (!onPass) return ipcRenderer.invoke('tts:speak', text, voice)
+    const key = `speak-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const listener = (
+      _event: unknown,
+      pass: { key: string; index: number; count: number; dataUrl: string }
+    ): void => {
+      if (pass.key === key) onPass({ index: pass.index, count: pass.count, dataUrl: pass.dataUrl })
+    }
+    ipcRenderer.on('tts:speech-pass', listener)
+    const stop = unsubscribe('tts:speech-pass', listener)
+    return ipcRenderer.invoke('tts:speak', text, voice, key).finally(stop)
+  },
   saveVoiceRecording: (audio: Uint8Array, extension: string): Promise<string> =>
     ipcRenderer.invoke('voice:save-recording', audio, extension),
 
@@ -912,6 +979,19 @@ const offGridApi = {
     const subscription = (_event: unknown, data: { projectId: string }): void => callback(data)
     ipcRenderer.on('projects:documents-changed', subscription)
     return unsubscribe('projects:documents-changed', subscription)
+  },
+  // A knowledge-base file moving to or from a paired device. Only sync (pro) publishes these.
+  listProjectDocumentTransfers: (projectId: string) =>
+    ipcRenderer.invoke(PROJECT_DOCUMENT_TRANSFERS_SNAPSHOT, projectId) as Promise<
+      ProjectDocumentTransfer[]
+    >,
+  dismissProjectDocumentTransfer: (key: string) =>
+    ipcRenderer.invoke(PROJECT_DOCUMENT_TRANSFER_DISMISS, key) as Promise<void>,
+  onProjectDocumentTransfer: (callback: (transfer: ProjectDocumentTransfer) => void) => {
+    const subscription = (_event: unknown, transfer: ProjectDocumentTransfer): void =>
+      callback(transfer)
+    ipcRenderer.on(PROJECT_DOCUMENT_TRANSFER_EVENT, subscription)
+    return unsubscribe(PROJECT_DOCUMENT_TRANSFER_EVENT, subscription)
   },
 
   // --- CRM: entity records (Entity -> App -> frames) + resolution/corrections ---

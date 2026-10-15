@@ -702,6 +702,11 @@ app.whenReady().then(async () => {
       .catch((error) => console.error('[seed]', error))
   }
 
+  // Document caches no chat uses any more go after 30 days; well after startup, off the hot path.
+  setTimeout(() => {
+    void import('./documents').then((documents) => documents.collectDocumentGarbage())
+  }, 120_000).unref()
+
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow()
   })
@@ -746,6 +751,13 @@ app.on('before-quit', (event) => {
       await grounderRuntime.shutdown()
     } catch {
       /* best-effort — quit regardless so the app never hangs on exit */
+    }
+    try {
+      // Document indexing first: it feeds the embedding worker. Progress is stored; it resumes.
+      const { shutdownDocuments } = await import('./documents')
+      await shutdownDocuments()
+    } catch {
+      /* best-effort — quit even if document cleanup fails */
     }
     try {
       const { embeddings } = await import('./embeddings')

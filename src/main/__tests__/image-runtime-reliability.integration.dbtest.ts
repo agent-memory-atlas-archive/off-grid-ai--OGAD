@@ -36,6 +36,7 @@ vi.mock('electron', () => ({
     getAppPath: () => process.cwd(),
     getVersion: () => 'test'
   },
+  BrowserWindow: { getAllWindows: () => [] },
   safeStorage: {
     isEncryptionAvailable: () => false,
     encryptString: (value: string) => Buffer.from(value),
@@ -144,6 +145,18 @@ process.stdin.on('end', () => {
 })
 `,
     { mode: 0o755 }
+  )
+}
+
+/**
+ * Requests other than fetching the public document-embedding model. A knowledge-base file is
+ * indexed with MiniLM, which downloads on first use (as for chat attachments); offline, that fetch
+ * fails and the file is searched by keyword. It carries no session content; everything else must
+ * stay on this machine.
+ */
+function userRequests(requests: string[]): string[] {
+  return requests.filter(
+    (url) => !url.startsWith('https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/')
   )
 }
 
@@ -272,7 +285,7 @@ afterAll(async () => {
     () => ownedProcessIds.every((pid) => !processIsAlive(pid)),
     'native model processes to exit'
   )
-  expect(offlineNetwork.blockedRequests).toEqual(['https://example.invalid/health'])
+  expect(userRequests(offlineNetwork.blockedRequests)).toEqual(['https://example.invalid/health'])
   vi.unstubAllGlobals()
   delete process.env.OFFGRID_DATA_DIR
   delete process.env.OFFGRID_BIN_DIR
@@ -414,40 +427,40 @@ describe('multimodal runtime reliability', () => {
       'LOCAL_SESSION_AURORA records the release decision without using a remote service.'
     )
 
-    const [{ RagService }, ragStore, { desktopExtraction }] = await Promise.all([
-      import('@offgrid/rag'),
-      import('../rag/store'),
-      import('../rag/extractors')
-    ])
+    const [{ knowledgeBase }, ragStore, { documentStore, documentTurns }, { searchBlock }] =
+      await Promise.all([
+        import('../rag'),
+        import('../rag/store'),
+        import('../documents'),
+        import('@offgrid/rag/documents')
+      ])
     ragStore.createProject({ id: 'offline-session', name: 'Offline session' })
     ragStore.updateProject('offline-session', { includeMemory: false })
-    const localRag = new RagService({
-      store: ragStore.desktopVectorStore,
-      embeddings: {
-        dimension: 1,
-        async embed(text: string) {
-          return [Number(text.toLowerCase().includes('local_session_aurora'))]
-        }
-      },
-      extraction: desktopExtraction
-    })
-    await localRag.indexDocument({
+    const added = await knowledgeBase.addFile({
       projectId: 'offline-session',
       path: sourcePath,
       fileName: path.basename(sourcePath),
       size: fs.statSync(sourcePath).size
     })
-    const retrieval = await localRag.searchProject(
-      'offline-session',
-      'What does LOCAL_SESSION_AURORA record?'
+    await vi.waitFor(
+      async () =>
+        expect((await documentStore.getDocument(added.documentId!))?.state).toBe('ready'),
+      { timeout: 10_000, interval: 50 }
     )
-    expect(retrieval.chunks).toEqual([
+    const question = 'What does LOCAL_SESSION_AURORA record?'
+    const found = await documentTurns.searchPassages({ projectId: 'offline-session' }, question)
+    expect(found).toEqual([
       expect.objectContaining({
         name: 'private-session.md',
-        content: expect.stringContaining('LOCAL_SESSION_AURORA')
+        text: expect.stringContaining('LOCAL_SESSION_AURORA')
       })
     ])
-    expect(await llm.chat(localRag.formatForPrompt(retrieval))).toBe('chat recovered')
+    const passages = searchBlock(
+      question,
+      found,
+      found.map((_, i) => i + 1)
+    )
+    expect(await llm.chat(`${passages.text}\n\n${question}`)).toBe('chat recovered')
 
     const image = await generateImage({
       prompt: 'An emerald privacy diagram',
@@ -474,7 +487,8 @@ describe('multimodal runtime reliability', () => {
       projectId: 'offline-session'
     })
     expect(artifacts.listArtifacts({ projectId: 'offline-session' })).toEqual([saved])
-    expect(offlineNetwork.blockedRequests).toEqual(blockedBefore)
+    expect(userRequests(offlineNetwork.blockedRequests)).toEqual(userRequests(blockedBefore))
+    expect(offlineNetwork.blockedRequests.join('\n')).not.toContain('LOCAL_SESSION_AURORA')
   }, 20_000)
 
   it('coalesces concurrent cold starts into one native model process', async () => {

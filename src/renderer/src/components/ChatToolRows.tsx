@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import type { ChatStreamTool, ProjectedSyncedTool } from '@offgrid/sync'
+import { parseSearchBlock, type SearchBlockPassage } from '@offgrid/rag/documents'
 import {
   CaretDown,
   CircleNotch,
@@ -72,6 +73,154 @@ type ToolEntryState = Extract<ToolTraceEntry, { kind: 'tool' }>['state']
  * step's name. Work waiting on the person stays a collapsible step (a breathing ring) so its row
  * keeps its accessible name and its task.
  */
+function pageSpan(pages: readonly number[]): string {
+  if (!pages.length) return ''
+  const first = pages[0]!
+  const last = pages[pages.length - 1]!
+  return first === last ? `p. ${first}` : `pp. ${first}–${last}`
+}
+
+/** One step for the documents an answer read: a thin row per document, pages it read. */
+function documentsEntry(
+  entry: Extract<AssistantTimelineEntry, { kind: 'documents' }>
+): ToolTraceEntry {
+  return {
+    id: 'documents',
+    kind: 'tool',
+    name: entry.label,
+    ariaLabel: entry.label,
+    state: 'success',
+    description: entry.documents.map((document) => document.name).join(', '),
+    summary: 'complete',
+    result: (
+      <ul className="divide-y divide-border/60 text-sm">
+        {entry.documents.map((document) => (
+          <li key={document.name} className="flex flex-wrap items-baseline gap-x-2 py-1.5">
+            <span className="min-w-0 truncate text-foreground">{document.name}</span>
+            <span className="text-xs text-muted-foreground">
+              {document.whole
+                ? 'read in full'
+                : `${document.passages} passage${document.passages === 1 ? '' : 's'}${
+                    document.pages.length ? ` · ${pageSpan(document.pages)}` : ''
+                  }`}
+            </span>
+            {document.readPages !== undefined ? (
+              <span className="text-xs text-muted-foreground/70">
+                {document.readPages ? `pages 1–${document.readPages} read so far` : 'still reading'}
+              </span>
+            ) : null}
+            {document.unreadablePages ? (
+              <span className="text-xs text-muted-foreground/70">
+                {document.unreadablePages} scanned page{document.unreadablePages === 1 ? '' : 's'}{' '}
+                not read yet
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    )
+  }
+}
+
+/** "5 passages from 2 files". */
+function passagesSummary(passages: readonly SearchBlockPassage[]): string {
+  const files = new Set(passages.map((passage) => passage.document)).size
+  return `${passages.length} passage${passages.length === 1 ? '' : 's'} from ${files} file${
+    files === 1 ? '' : 's'
+  }`
+}
+
+/** Results saved before passages were tagged: "[1] file.pdf (part 12):" blocks. */
+function legacyKnowledgePassages(result: string): SearchBlockPassage[] {
+  const passages: SearchBlockPassage[] = []
+  for (const match of result.matchAll(
+    /^\[(\d+)\] (.+?) \(part (\d+)\):\n([\s\S]*?)(?=\n\n---\n\n|\n\nProject conversations:|$(?![\s\S]))/gm
+  )) {
+    passages.push({
+      id: match[1]!,
+      document: match[2]!,
+      label: `part ${match[3]}`,
+      text: match[4]!.trim()
+    })
+  }
+  return passages
+}
+
+/** Long tool output folds to a few lines; the rest opens on request (progressive disclosure). */
+const LONG_RESULT_CHARS = 600
+
+function FoldedResult({ content }: Readonly<{ content: string }>): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  if (content.length <= LONG_RESULT_CHARS) return <ChatMarkdown content={content} />
+  return (
+    <div className="space-y-1.5">
+      <div
+        className={
+          open
+            ? 'max-h-[400px] overflow-y-auto'
+            : 'max-h-24 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]'
+        }
+      >
+        <ChatMarkdown content={content} />
+      </div>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        className="text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+      >
+        {open ? 'Show less' : 'Show all'}
+      </button>
+    </div>
+  )
+}
+
+/**
+ * A search tool's passages: a thin row each (citation tag, file, page, first words), the full
+ * passage opening below the row clicked. The tag matches the answer's [S#] citations.
+ */
+function SearchPassageList({
+  passages
+}: Readonly<{ passages: readonly SearchBlockPassage[] }>): React.JSX.Element {
+  const [open, setOpen] = useState<string | null>(null)
+  return (
+    <ul className="max-h-80 divide-y divide-border/60 overflow-y-auto pr-1 text-sm">
+      {passages.map((passage, index) => {
+        const key = `${passage.id}:${index}`
+        const place = passage.label ?? (passage.page === undefined ? '' : `p. ${passage.page}`)
+        return (
+          <li key={key}>
+            <Collapsible open={open === key} onOpenChange={(next) => setOpen(next ? key : null)}>
+              <CollapsibleTrigger className="group flex w-full min-w-0 items-baseline gap-1.5 py-1.5 text-left text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                <span className="shrink-0 rounded-sm bg-muted px-1 font-mono text-[10px] leading-4 tabular-nums">
+                  {passage.id}
+                </span>
+                <span className="min-w-0 max-w-[45%] shrink truncate text-foreground">
+                  {passage.document}
+                </span>
+                {place ? <span className="shrink-0 text-xs">· {place}</span> : null}
+                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70">
+                  · {passage.text.slice(0, 240).replace(/\s+/g, ' ').trim()}
+                </span>
+                <CaretDown
+                  aria-hidden="true"
+                  weight="bold"
+                  className="size-3 shrink-0 self-center opacity-60 transition-transform duration-200 group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+                />
+              </CollapsibleTrigger>
+              <CollapsibleContent className="offgrid-smooth-collapsible overflow-hidden">
+                <p className="whitespace-pre-wrap pb-2 text-xs leading-relaxed text-muted-foreground">
+                  {passage.text}
+                </p>
+              </CollapsibleContent>
+            </Collapsible>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
 const ENTRY_STATE: Record<WorkStatus, ToolEntryState> = {
   running: 'running',
   complete: 'success',
@@ -150,6 +299,8 @@ const TOOL_LABELS: Record<string, string> = {
   generate_image: 'Generated image',
   image_generation: 'Generated image',
   search_memory: 'Searched memory',
+  search_knowledge_base: 'Searched knowledge base',
+  search_documents: 'Searched documents',
   search_replay: 'Searched activity',
   search_meetings: 'Searched meetings',
   web_search: 'Searched the web',
@@ -166,6 +317,9 @@ const TOOL_LABELS: Record<string, string> = {
   action_approval: 'Requested approval',
   request_approval: 'Requested approval'
 }
+
+/** Tools whose result is passage blocks (`searchBlock`), shown as rows instead of raw text. */
+const PASSAGE_SEARCH_TOOLS = new Set(['search_knowledge_base', 'search_documents'])
 
 function parseArguments(value: string | undefined): Record<string, unknown> | undefined {
   if (!value) return undefined
@@ -246,7 +400,7 @@ function shortResult(tool: DisplayTool, status = workStatus(tool), taskSummary?:
   }
   if (key === 'web_search' || key === 'brave_search') return 'Search results are ready.'
   if (key === 'read_url') return 'Read the selected web page.'
-  if (key === 'search_meetings') {
+  if (key === 'search_meetings' || PASSAGE_SEARCH_TOOLS.has(key)) {
     const result = visibleToolResult(tool.result).trim()
     if (result) return result.split(/\r?\n/, 1)[0]!
   }
@@ -430,6 +584,10 @@ export function ChatToolRows({
       pushReasoning(`thinking:${orderIndex}`, entry.text, streaming)
       return
     }
+    if (entry.kind === 'documents') {
+      entries.push(documentsEntry(entry))
+      return
+    }
     const projectedTool = projected[entry.toolIndex - toolOffset]
     if (!projectedTool) return
     const { tool, linkedTask, status: stepStatus } = projectedTool
@@ -442,6 +600,13 @@ export function ChatToolRows({
       ? `Searched your memory — ${sourceCount} result${sourceCount === 1 ? '' : 's'}`
       : workStepLabel(tool)
     const result = visibleToolResult(tool.result)
+    const passages =
+      stepStatus === 'complete' && PASSAGE_SEARCH_TOOLS.has(normalizedToolKey(tool.name))
+        ? (() => {
+            const tagged = parseSearchBlock(result)
+            return tagged.length ? tagged : legacyKnowledgePassages(result)
+          })()
+        : []
     const error = 'error' in tool ? tool.error?.trim() : undefined
     const taskSummary = linkedTask?.summary?.trim()
     const liveTaskLine = stepStatus === 'running' ? linkedTask?.currentAction?.trim() : undefined
@@ -455,9 +620,11 @@ export function ChatToolRows({
         (Boolean(details) || hasComputerDetails || Boolean(linkedTask)))
     const detail = !hasDisclosure ? undefined : showMemorySources ? (
       <div className="max-h-[400px] overflow-y-auto text-sm">{memorySources?.content}</div>
+    ) : passages.length ? (
+      <SearchPassageList passages={passages} />
     ) : (
       <AutoHeight className="space-y-2 leading-relaxed text-muted-foreground">
-        {details ? <ChatMarkdown content={details} /> : null}
+        {details ? <FoldedResult content={details} /> : null}
         <ComputerUseStepDetails details={linkedTask?.stepDetails} />
         {linkedTask ? (
           <div className="flex flex-wrap items-start gap-1.5">
@@ -484,7 +651,11 @@ export function ChatToolRows({
       name: stepLabel,
       ariaLabel: `${stepLabel}, ${stepStatus}`,
       state: ENTRY_STATE[stepStatus],
-      description: showMemorySources ? undefined : shortResult(tool, stepStatus, rowSummary),
+      description: showMemorySources
+        ? undefined
+        : passages.length
+          ? passagesSummary(passages)
+          : shortResult(tool, stepStatus, rowSummary),
       summary: stepStatus,
       result: detail,
       // A linked task's row opens that task as well as its detail.
@@ -509,7 +680,9 @@ export function ChatToolRows({
       >
         <WorkTrigger state={workState} count={entries.length} />
         {/* The clip box reaches 12px left of the content, so a checkpoint's glow is not cut off. */}
-        <CollapsibleContent className="offgrid-smooth-collapsible -ml-3 overflow-hidden pl-3">
+        {/* clip, not hidden: an open step's header pins to the chat (library tool timeline),
+            which a scroll container here would stop. */}
+        <CollapsibleContent className="offgrid-smooth-collapsible -ml-3 overflow-clip pl-3">
           <div className="[&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pb-1 [&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pt-2.5 [&>[data-slot=collapsible]>[data-slot=collapsible-trigger]]:hidden">
             <ToolTimeline
               entries={entries}

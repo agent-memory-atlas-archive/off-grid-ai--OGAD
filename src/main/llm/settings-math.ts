@@ -118,6 +118,20 @@ export interface LaunchArgsInput {
   imageMinTokens?: number
   /** Request llama.cpp's model-allocation report for a caller that filters request traces. */
   reportModelPlacement?: boolean
+  /** Machine RAM. Sizes the host prompt cache so it cannot crowd a small machine. */
+  totalRamBytes?: number
+}
+
+/**
+ * llama-server keeps recent prompts in host RAM (`--cache-ram`, 8 GB by default) and restores the
+ * longest matching prefix, which is what makes a follow-up over the same documents cheap. On a
+ * 16 GB machine 8 GB of cache next to the model invites swapping, so it is capped at a quarter of
+ * RAM; machines with 32 GB or more keep the engine default.
+ */
+export function promptCacheMiB(totalRamBytes: number | undefined): number | undefined {
+  if (!totalRamBytes || !Number.isFinite(totalRamBytes)) return undefined
+  const quarter = Math.floor(totalRamBytes / 1024 / 1024 / 4)
+  return quarter >= 8192 ? undefined : Math.max(1024, quarter)
 }
 
 /** Build the exact argv passed to `llama-server`. Pure: same inputs → same args, no I/O.
@@ -146,6 +160,8 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
   // conversation (a dropped screenshot, a compacted turn) re-processes the whole prompt;
   // 2048 caps that re-read at ~2K tokens. Full-attention models create no checkpoints.
   args.push('--checkpoint-min-step', String(CHECKPOINT_MIN_STEP))
+  const cacheMiB = promptCacheMiB(i.totalRamBytes)
+  if (cacheMiB !== undefined) args.push('--cache-ram', String(cacheMiB))
   // llama.cpp maps its model-allocation INFO messages to verbosity 4.
   if (i.reportModelPlacement) args.push('-lv', '4')
   // FlashAttention: faster + lower memory. Required for a quantized KV cache.

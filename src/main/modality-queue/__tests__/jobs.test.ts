@@ -26,8 +26,8 @@ describe('standard modality jobs', () => {
     expect(Object.isFrozen(IMAGE_JOB)).toBe(true)
   })
 
-  it('CAPTURE_JOB is background (tier 3) and evicts a resident image server', () => {
-    expect(CAPTURE_JOB).toEqual({ tier: 3, label: 'capture', evicts: ['image'] })
+  it('CAPTURE_JOB is background (tier 3), evicts a resident image server, and yields to foreground work', () => {
+    expect(CAPTURE_JOB).toEqual({ tier: 3, label: 'capture', evicts: ['image'], preemptible: true })
     expect(Object.isFrozen(CAPTURE_JOB)).toBe(true)
     // Lower priority than chat/image so chat/workspace is always admitted first.
     expect(CAPTURE_JOB.tier).toBeGreaterThan(CHAT_JOB.tier)
@@ -37,6 +37,7 @@ describe('standard modality jobs', () => {
     const j = backgroundJob('screen-replay')
     expect(j.tier).toBe(CAPTURE_JOB.tier)
     expect(j.evicts).toEqual(CAPTURE_JOB.evicts)
+    expect(j.preemptible).toBe(true)
     expect(j.label).toBe('screen-replay')
   })
 })

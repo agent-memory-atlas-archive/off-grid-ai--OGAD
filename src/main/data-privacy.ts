@@ -6,6 +6,7 @@ import fs from 'fs'
 import path from 'path'
 import { app } from 'electron'
 import { getDB } from './database'
+import { ATTACHED_DOCUMENT_TABLES } from './documents/sqlite-store'
 import { deleteByKinds, deleteByKindsOlderThan, resetVectors } from './vectors'
 
 export interface DataCategory {
@@ -121,7 +122,9 @@ const CHAT_TABLES = [
   'messages',
   'rag_conversations',
   'rag_messages',
-  'chat_summaries'
+  'chat_summaries',
+  // Documents attached to chats: their text, passages, vectors and per-chat exclusions.
+  ...ATTACHED_DOCUMENT_TABLES
 ]
 const MEMORY_TABLES = [
   'memories',
@@ -152,7 +155,7 @@ const CORE_PERSONAL: PersonalStore[] = [
   { tables: MEMORY_TABLES, dirs: ['entity-photos'] },
   // Project metadata + knowledge base. Children precede parents so deletion also
   // works when SQLite foreign-key enforcement is enabled.
-  { tables: ['rag_chunks', 'rag_documents', 'projects'], dirs: [] },
+  { tables: ['rag_documents', 'projects'], dirs: [] },
   { tables: ['connectors', 'secrets'], dirs: [] }, // MCP integrations + their OAuth tokens (must not survive a wipe)
   { tables: ['user_profile'], dirs: [] },
   { tables: [], dirs: ['captures'] },

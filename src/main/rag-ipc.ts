@@ -3,10 +3,19 @@
 
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import fs from 'fs'
+import path from 'path'
 import { randomUUID } from 'node:crypto'
-import { ragService, listProjects, createProject, updateProject, deleteProject } from './rag'
+import { knowledgeBase, listProjects, createProject, updateProject, deleteProject } from './rag'
 import { uploadPickerExtensions } from './files-classify'
 import { projectDeleteFailure, type ProjectDeleteOutcome } from '../shared/project-delete-outcome'
+import {
+  PROJECT_DOCUMENT_TRANSFER_DISMISS,
+  PROJECT_DOCUMENT_TRANSFERS_SNAPSHOT
+} from '../shared/project-document-transfer'
+import {
+  dismissProjectDocumentTransfer,
+  projectDocumentTransfers
+} from './project-document-transfers'
 
 // Built from the router's classify sets (files-classify) so the picker allowlist
 // and the processor can never drift: it used to hardcode a subset that omitted
@@ -42,9 +51,50 @@ export function setupRagIPC(): void {
   })
 
   // --- Knowledge base (documents) ------------------------------------------
-  ipcMain.handle('projects:list-documents', (_e, projectId: string) =>
-    ragService.listDocuments(projectId)
-  )
+  // Each file with how far the document engine has read and indexed it. A file that is not
+  // indexed yet (added before files had document ids, or cut off by a restart) starts now, so
+  // the list never shows a file as ready that a question could not use.
+  ipcMain.handle('projects:list-documents', async (e, projectId: string) => {
+    const { documentStore, startDocumentIngest } = await import('./documents')
+    return Promise.all(
+      knowledgeBase.listDocuments(projectId).map(async (document) => {
+        if (!document.documentId) {
+          void knowledgeBase.documentIdFor(document, true).then((id) => {
+            if (id && !e.sender.isDestroyed())
+              e.sender.send('projects:documents-changed', { projectId })
+          })
+        }
+        const indexed = document.documentId
+          ? await documentStore.getDocument(document.documentId)
+          : null
+        if (
+          document.documentId &&
+          document.enabled &&
+          (!indexed || indexed.state === 'reading' || indexed.state === 'indexing') &&
+          fs.existsSync(document.path)
+        ) {
+          startDocumentIngest({
+            id: document.documentId,
+            name: document.name,
+            kind: document.kind,
+            path: document.path
+          })
+        }
+        return {
+          ...document,
+          ...(indexed
+            ? {
+                state: indexed.state,
+                pageCount: indexed.pageCount,
+                chunkCount: indexed.chunkCount,
+                embeddedCount: indexed.embeddedCount,
+                ...(indexed.error ? { error: indexed.error } : {})
+              }
+            : {})
+        }
+      })
+    )
+  })
 
   ipcMain.handle('projects:add-documents', async (e, projectId: string) => {
     const win = BrowserWindow.fromWebContents(e.sender) ?? undefined
@@ -55,23 +105,23 @@ export function setupRagIPC(): void {
     })
     if (result.canceled || result.filePaths.length === 0) return { added: 0 }
 
+    // Each file shows as "Adding…" until it is kept and its reading has started; from then on its
+    // row follows the document engine's progress (documents:progress).
     let added = 0
     for (const filePath of result.filePaths) {
-      const name = filePath.split('/').pop() ?? filePath
+      const name = path.basename(filePath)
       let size = 0
       try {
         size = fs.statSync(filePath).size
       } catch {
         /* ignore */
       }
+      e.sender.send('projects:index-progress', { projectId, name, stage: 'adding' })
       try {
-        await ragService.indexDocument(
-          { projectId, path: filePath, fileName: name, size },
-          (stage) => {
-            e.sender.send('projects:index-progress', { projectId, name, stage })
-          }
-        )
+        await knowledgeBase.addFile({ projectId, path: filePath, fileName: name, size })
         added++
+        e.sender.send('projects:index-progress', { projectId, name, stage: 'done' })
+        e.sender.send('projects:documents-changed', { projectId })
       } catch (err) {
         e.sender.send('projects:index-progress', {
           projectId,
@@ -84,11 +134,19 @@ export function setupRagIPC(): void {
     return { added }
   })
 
+  // Files moving to or from a paired device. Sync registers the source; without it the list is empty.
+  ipcMain.handle(PROJECT_DOCUMENT_TRANSFERS_SNAPSHOT, (_e, projectId: string) =>
+    projectDocumentTransfers(projectId)
+  )
+  ipcMain.handle(PROJECT_DOCUMENT_TRANSFER_DISMISS, (_e, key: string) =>
+    dismissProjectDocumentTransfer(key)
+  )
+
   ipcMain.handle('projects:toggle-document', (_e, docId: number, enabled: boolean) =>
-    ragService.toggleDocument(docId, enabled)
+    knowledgeBase.toggleDocument(docId, enabled)
   )
 
   ipcMain.handle('projects:delete-document', (_e, docId: number) =>
-    ragService.deleteDocument(docId)
+    knowledgeBase.deleteDocument(docId)
   )
 }

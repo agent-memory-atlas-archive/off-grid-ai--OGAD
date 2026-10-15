@@ -63,7 +63,8 @@ describe('ONNX speech worker response evidence', () => {
       'config.json',
       'tokenizer.json',
       'tokenizer_config.json',
-      'onnx/model_fp16.onnx'
+      // Core ML runs Kokoro's FP32 graph (its FP16 graph returned all-NaN audio).
+      'onnx/model.onnx'
     ]) {
       const file = path.join(packageRoot, name)
       fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -78,7 +79,7 @@ describe('ONNX speech worker response evidence', () => {
     )
     expect(host.load).toHaveBeenCalledWith(
       packageRoot,
-      expect.objectContaining({ dtype: 'fp16', local_files_only: true })
+      expect.objectContaining({ dtype: 'fp32', local_files_only: true })
     )
     expect(fs.existsSync(host.modelsDir)).toBe(false)
   })
@@ -128,7 +129,7 @@ describe('ONNX speech worker response evidence', () => {
       expect(host.post).toHaveBeenCalledWith({ id: 2, type: 'complete', device: 'coreml' })
     )
     expect(host.load).toHaveBeenCalledOnce()
-    expect(host.load.mock.calls[0]![1]).toMatchObject({ dtype: 'fp16', device: 'coreml' })
+    expect(host.load.mock.calls[0]![1]).toMatchObject({ dtype: 'fp32', device: 'coreml' })
     const wav = fs.readFileSync(output)
     expect(wav.toString('ascii', 0, 4)).toBe('RIFF')
     expect(wav.readUInt16LE(20)).toBe(1) // PCM

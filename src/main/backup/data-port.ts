@@ -2,8 +2,11 @@ import crypto from 'node:crypto'
 import type Database from 'better-sqlite3-multiple-ciphers'
 import type { BackupDataPort } from '@offgrid/sync/portable'
 import { CORE_SYNC_ENTITIES, emitSyncMutation } from '../sync-mutation'
+import { DOCUMENT_SCHEMA_VERSION } from '@offgrid/rag/documents'
+import { ensureAttachedDocumentSchema } from '../documents/sqlite-store'
 import {
   validateDesktopBackupData,
+  type DesktopBackupAttachedDocument,
   type DesktopBackupConversation,
   type DesktopBackupData,
   type DesktopBackupDocument,
@@ -32,6 +35,7 @@ interface DocumentRow {
   kind: string
   enabled: number
   created_at: string
+  document_id: string | null
 }
 
 interface ConversationRow {
@@ -62,51 +66,7 @@ export class DesktopBackupDataPort implements BackupDataPort<
   DesktopBackupData,
   DesktopRestoreSummary
 > {
-  /**
-   * @param embed Turns a chunk of restored text into a vector. Defaulted to the same MiniLM the RAG indexer
-   *   uses (loaded lazily, so a restore that never touches documents does not pull the model in), and injectable
-   *   so a test can supply a deterministic one.
-   */
-  constructor(
-    private readonly db: Database.Database,
-    private readonly embed: (text: string) => Promise<number[]> = async (text) => {
-      const { embeddings } = await import('../embeddings')
-      return embeddings.generateEmbedding(text)
-    }
-  ) {}
-
-  /**
-   * Vectors for every chunk in the archive, computed BEFORE the write transaction.
-   *
-   * Restored chunks used to land with embedding = NULL, and retrieval requires a non-null embedding
-   * (rag/store.ts: "WHERE d.enabled = 1 AND c.embedding IS NOT NULL"). Nothing re-embedded them either - the
-   * background backfill feeds universal search from observations, frames and transcripts, never rag_chunks. So a
-   * restored document appeared enabled in its project and could never inform an answer, permanently.
-   *
-   * The archive carries no vectors (DesktopBackupChunk is content + position), so they have to be recomputed
-   * here. Computed up front because better-sqlite3 transactions are synchronous and cannot await.
-   *
-   * A model that is unavailable does not fail the restore: those chunks keep their null and the document lands
-   * as it did before this change, which is a worse outcome than being embedded but a much better one than
-   * losing the restore entirely.
-   */
-  private async embedArchiveChunks(data: DesktopBackupData): Promise<Map<string, string | null>> {
-    const vectors = new Map<string, string | null>()
-    for (const project of data.projects) {
-      for (const document of project.documents) {
-        for (const chunk of document.chunks) {
-          const key = `${project.id}#${document.path}#${chunk.position}`
-          try {
-            const vector = await this.embed(chunk.content)
-            vectors.set(key, vector.length > 0 ? JSON.stringify(vector) : null)
-          } catch {
-            vectors.set(key, null)
-          }
-        }
-      }
-    }
-    return vectors
-  }
+  constructor(private readonly db: Database.Database) {}
 
   async collectAll(): Promise<DesktopBackupData> {
     return this.collect()
@@ -115,10 +75,12 @@ export class DesktopBackupDataPort implements BackupDataPort<
   async collectProject(projectId: string): Promise<DesktopBackupData | null> {
     const project = this.project(projectId, true)
     if (!project) return null
+    const conversations = this.conversations(projectId)
     return {
       surface: 'offgrid-desktop',
       projects: [project],
-      conversations: this.conversations(projectId)
+      conversations,
+      attachedDocuments: this.attachedDocuments(conversations, [project])
     }
   }
 
@@ -129,7 +91,8 @@ export class DesktopBackupDataPort implements BackupDataPort<
     return {
       surface: 'offgrid-desktop',
       projects: project ? [project] : [],
-      conversations: [conversation]
+      conversations: [conversation],
+      attachedDocuments: this.attachedDocuments([conversation])
     }
   }
 
@@ -142,7 +105,9 @@ export class DesktopBackupDataPort implements BackupDataPort<
     const addedConversations: string[] = []
     const addedMessages: string[] = []
     let documentsAdded = 0
-    const chunkVectors = await this.embedArchiveChunks(data)
+    // Archives from before the document index carry knowledge-base text as chunks: it is restored
+    // as an indexed document under the hash of that text.
+    const legacyDocuments: DesktopBackupAttachedDocument[] = []
 
     const applyTransaction = this.db.transaction(() => {
       for (const project of data.projects) {
@@ -169,34 +134,37 @@ export class DesktopBackupDataPort implements BackupDataPort<
 
         for (const document of project.documents) {
           if (this.documentExists(project.id, document)) continue
-          const result = this.db
+          let documentId = document.documentId ?? null
+          if (!documentId && document.chunks.length) {
+            const text = [...document.chunks]
+              .sort((a, b) => a.position - b.position)
+              .map((chunk) => chunk.content)
+              .join('\n\n')
+            documentId = crypto.createHash('sha256').update(text, 'utf8').digest('hex')
+            legacyDocuments.push({
+              id: documentId,
+              name: document.name,
+              kind: 'text',
+              pages: [{ page: 1, text }]
+            })
+          }
+          this.db
             .prepare(
               `INSERT INTO rag_documents
-                (project_id, name, path, size, kind, enabled, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`
+                (sync_id, project_id, name, path, size, kind, enabled, document_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
             )
             .run(
+              crypto.randomUUID(),
               project.id,
               document.name,
               document.path,
               document.size,
               document.kind,
               document.enabled ? 1 : 0,
+              documentId,
               document.createdAt
             )
-          const documentId = Number(result.lastInsertRowid)
-          const insertChunk = this.db.prepare(
-            `INSERT INTO rag_chunks (doc_id, content, position, embedding)
-             VALUES (?, ?, ?, ?)`
-          )
-          for (const chunk of document.chunks) {
-            insertChunk.run(
-              documentId,
-              chunk.content,
-              chunk.position,
-              chunkVectors.get(`${project.id}#${document.path}#${chunk.position}`) ?? null
-            )
-          }
           documentsAdded += 1
         }
       }
@@ -266,6 +234,7 @@ export class DesktopBackupDataPort implements BackupDataPort<
     })
     applyTransaction()
 
+    this.restoreAttachedDocuments([...(data.attachedDocuments ?? []), ...legacyDocuments])
     for (const projectId of addedProjects) {
       emitSyncMutation({ entity: CORE_SYNC_ENTITIES.project, entityId: projectId, kind: 'put' })
     }
@@ -292,10 +261,12 @@ export class DesktopBackupDataPort implements BackupDataPort<
     const projects = (
       this.db.prepare('SELECT * FROM projects ORDER BY updated_at DESC').all() as ProjectRow[]
     ).map((row) => this.mapProject(row, true))
+    const conversations = this.conversations()
     return {
       surface: 'offgrid-desktop',
       projects,
-      conversations: this.conversations()
+      conversations,
+      attachedDocuments: this.attachedDocuments(conversations, projects)
     }
   }
 
@@ -311,7 +282,7 @@ export class DesktopBackupDataPort implements BackupDataPort<
       ? (
           this.db
             .prepare(
-              `SELECT id, project_id, name, path, size, kind, enabled, created_at
+              `SELECT id, project_id, name, path, size, kind, enabled, created_at, document_id
                FROM rag_documents WHERE project_id = ? ORDER BY created_at ASC`
             )
             .all(row.id) as DocumentRow[]
@@ -330,10 +301,8 @@ export class DesktopBackupDataPort implements BackupDataPort<
     }
   }
 
+  /** A knowledge-base file; its text travels with the archive's attached documents. */
   private mapDocument(row: DocumentRow): DesktopBackupDocument {
-    const chunks = this.db
-      .prepare('SELECT content, position FROM rag_chunks WHERE doc_id = ? ORDER BY position ASC')
-      .all(row.id) as Array<{ content: string; position: number }>
     return {
       name: row.name,
       path: row.path,
@@ -341,7 +310,8 @@ export class DesktopBackupDataPort implements BackupDataPort<
       kind: row.kind,
       enabled: row.enabled === 1,
       createdAt: row.created_at,
-      chunks
+      chunks: [],
+      ...(row.document_id ? { documentId: row.document_id } : {})
     }
   }
 
@@ -396,6 +366,69 @@ export class DesktopBackupDataPort implements BackupDataPort<
         })
       )
     }
+  }
+
+  /**
+   * The page text of documents the exported messages attach and the exported knowledge bases hold.
+   * Vectors and passages are not kept: the next chat turn re-indexes from the text.
+   */
+  private attachedDocuments(
+    conversations: DesktopBackupConversation[],
+    projects: DesktopBackupProject[] = []
+  ): DesktopBackupAttachedDocument[] {
+    const ids = new Set<string>()
+    for (const project of projects)
+      for (const document of project.documents) if (document.documentId) ids.add(document.documentId)
+    for (const conversation of conversations) {
+      for (const message of conversation.messages) {
+        const attachments = (message.context as { attachments?: unknown } | null | undefined)?.attachments
+        if (!Array.isArray(attachments)) continue
+        for (const attachment of attachments) {
+          const id = (attachment as { documentId?: unknown } | null)?.documentId
+          if (typeof id === 'string' && id) ids.add(id)
+        }
+      }
+    }
+    if (!ids.size) return []
+    try {
+      const documentRow = this.db.prepare('SELECT id, name, kind FROM attached_documents WHERE id = ?')
+      const pageRows = this.db.prepare(
+        'SELECT page, label, text FROM attached_document_pages WHERE document_id = ? ORDER BY page'
+      )
+      return [...ids].flatMap((id) => {
+        const row = documentRow.get(id) as { id: string; name: string; kind: string } | undefined
+        if (!row) return []
+        const pages = (pageRows.all(id) as { page: number; label: string | null; text: string }[]).map(
+          (page) => ({ page: page.page, ...(page.label ? { label: page.label } : {}), text: page.text })
+        )
+        return [{ id: row.id, name: row.name, kind: row.kind, pages }]
+      })
+    } catch {
+      // No document has been attached on this device yet: the tables do not exist.
+      return []
+    }
+  }
+
+  private restoreAttachedDocuments(documents: DesktopBackupAttachedDocument[]): void {
+    if (!documents.length) return
+    ensureAttachedDocumentSchema(this.db)
+    const exists = this.db.prepare('SELECT 1 FROM attached_documents WHERE id = ?')
+    const insertDocument = this.db.prepare(
+      `INSERT INTO attached_documents (id, name, kind, state, page_count, chunk_count, embedded_count,
+         unreadable_pages, embedder, schema_version, created_at, last_used_at)
+       VALUES (?, ?, ?, 'indexing', ?, 0, 0, 0, 'none', ?, ?, ?)`
+    )
+    const insertPage = this.db.prepare(
+      'INSERT OR REPLACE INTO attached_document_pages (document_id, page, label, text, needs_ocr) VALUES (?, ?, ?, ?, 0)'
+    )
+    const now = Date.now()
+    this.db.transaction(() => {
+      for (const document of documents) {
+        if (exists.get(document.id)) continue
+        insertDocument.run(document.id, document.name, document.kind, document.pages.length, DOCUMENT_SCHEMA_VERSION, now, now)
+        for (const page of document.pages) insertPage.run(document.id, page.page, page.label ?? null, page.text)
+      }
+    })()
   }
 
   private documentExists(projectId: string, document: DesktopBackupDocument): boolean {

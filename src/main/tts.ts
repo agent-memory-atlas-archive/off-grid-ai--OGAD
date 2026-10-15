@@ -13,6 +13,8 @@ import {
 import {
   kokoroVoiceLabel,
   speechLanguageLabel,
+  joinPcmWavs,
+  speechChunks,
   spokenText,
   type RuntimeSpeechVoice
 } from '@offgrid/speech'
@@ -28,6 +30,7 @@ import { writeDiagnosticLog } from './diagnostics-log'
 import { modelsDir, requireModelStorage, resourceDirs } from './runtime-env'
 import { modelReadDirectories, resolveIndexedModelPackage } from './model-paths'
 import type { ManagedRuntime } from './runtime-manager'
+import { modalityQueue, SPEECH_JOB } from './modality-queue/queue'
 import { chooseVoice, DEFAULT_VOICE } from './tts-logic'
 import { OnnxSpeechRuntime } from './tts-onnx'
 
@@ -163,23 +166,90 @@ async function prepareVoiceAssetsInner(
   await prepareVoice(cacheDirectory(voice), voice, onProgress, undefined, bundledCacheDirectory())
 }
 
+/** One finished speech pass: the voice can start on pass 0 while the rest is still being made. */
+export interface SpeechPass {
+  readonly index: number
+  readonly count: number
+  readonly dataUrl: string
+}
+
+interface SynthesizeOptions {
+  /** This machine's own voices, even when a remote voice is chosen (a WAV, always). */
+  readonly local?: boolean
+  /** Each local pass as it is ready, before the joined clip resolves. */
+  readonly onPass?: (pass: SpeechPass) => void
+}
+
 /** Synthesize speech for `text`; returns a WAV data URL. */
 export async function synthesize(
   text: string,
   voice?: string,
   onProgress?: (progress: DownloadProgress) => void,
-  options: { readonly local?: boolean } = {}
+  options: SynthesizeOptions = {}
 ): Promise<{ dataUrl: string }> {
-  // First synthesis can download assets even without an explicit Prepare request.
-  return withStorageDownload(() => synthesizeInner(text, voice, onProgress, options))
+  const requestedAt = Date.now()
+  // First synthesis can download assets even without an explicit Prepare request. A queue job, so
+  // no background model pass starts while the listener waits for this voice.
+  return modalityQueue.run(SPEECH_JOB, () =>
+    withStorageDownload(() => synthesizeInner(text, voice, onProgress, options, requestedAt))
+  )
+}
+
+const wavDataUrl = (wav: Uint8Array): string =>
+  `data:audio/wav;base64,${Buffer.from(wav).toString('base64')}`
+
+/**
+ * Kokoro reads at most ~510 phoneme tokens at once and drops the rest, so a reply is spoken in
+ * passes (`speechChunks`) and joined into one WAV at `outputPath`. Pass 0 is the first sentence
+ * alone, handed to `onPass` as soon as it is ready so the voice can start. Returns the device used
+ * and when the first pass was ready.
+ */
+async function synthesizeOnnxPasses(input: {
+  readonly text: string
+  readonly voice: string
+  readonly outputPath: string
+  readonly onProgress?: (progress: DownloadProgress) => void
+  readonly onPass?: (pass: SpeechPass) => void
+}): Promise<{ device: string; passes: number; firstPassAt: number }> {
+  const passes = speechChunks(input.text)
+  if (passes.length === 0) throw new Error('Nothing to speak.')
+  const wavs: Uint8Array[] = []
+  let device = 'cpu'
+  let firstPassAt = 0
+  try {
+    for (const [index, text] of passes.entries()) {
+      const passPath = `${input.outputPath}.${index}.wav`
+      device = await onnxSpeech.synthesize({
+        text,
+        voice: input.voice,
+        outputPath: passPath,
+        onProgress: input.onProgress
+      })
+      const wav = await fs.promises.readFile(passPath)
+      wavs.push(wav)
+      if (index === 0) firstPassAt = Date.now()
+      if (passes.length > 1)
+        input.onPass?.({ index, count: passes.length, dataUrl: wavDataUrl(wav) })
+    }
+  } finally {
+    await Promise.all(
+      passes.map((_, index) =>
+        fs.promises.unlink(`${input.outputPath}.${index}.wav`).catch(() => {})
+      )
+    )
+  }
+  const joined = wavs.length === 1 ? wavs[0] : joinPcmWavs(wavs)
+  if (!joined) throw new Error('Speech passes could not be joined into one clip.')
+  await fs.promises.writeFile(input.outputPath, joined)
+  return { device, passes: passes.length, firstPassAt }
 }
 
 async function synthesizeInner(
   text: string,
-  voice?: string,
-  onProgress?: (progress: DownloadProgress) => void,
-  /** This machine's own voices, even when a remote voice is chosen (a WAV, always). */
-  options: { readonly local?: boolean } = {}
+  voice: string | undefined,
+  onProgress: ((progress: DownloadProgress) => void) | undefined,
+  options: SynthesizeOptions,
+  requestedAt: number
 ): Promise<{ dataUrl: string }> {
   return recordAIRequest(
     { modality: 'tts', source: 'Speech synthesis', request: { text, voice } },
@@ -216,15 +286,19 @@ async function synthesizeInner(
       writeDiagnosticLog('tts', 'request.started', {
         requestId,
         chars: input.length,
+        // Time spent waiting for the speech slot (another voice or dictation ahead of it).
+        queuedMs: startedAt - requestedAt,
         engine: ONNX_VOICES.has(chosenVoice) ? 'onnxruntime' : 'executorch'
       })
 
       try {
         let engine = 'executorch'
         let device = 'cpu'
+        let passes = 1
+        let firstPassAt = 0
         if (ONNX_VOICES.has(chosenVoice)) {
           try {
-            device = await recordAIRequest(
+            const result = await recordAIRequest(
               {
                 modality: 'tts',
                 source: 'ONNX speech attempt',
@@ -232,16 +306,20 @@ async function synthesizeInner(
                 request: { text: input.slice(0, 2000), voice: chosenVoice }
               },
               async (attempt) => {
-                const usedDevice = await onnxSpeech.synthesize({
-                  text: input.slice(0, 2000),
+                const done = await synthesizeOnnxPasses({
+                  text: input,
                   voice: chosenVoice,
                   outputPath,
-                  onProgress
+                  onProgress,
+                  onPass: options.onPass
                 })
-                attempt.update({ backend: usedDevice })
-                return usedDevice
+                attempt.update({ backend: done.device })
+                return done
               }
             )
+            device = result.device
+            passes = result.passes
+            firstPassAt = result.firstPassAt
             engine = 'onnxruntime'
           } catch (error) {
             writeDiagnosticLog(
@@ -274,11 +352,15 @@ async function synthesizeInner(
         writeDiagnosticLog('tts', 'request.completed', {
           requestId,
           durationMs: Date.now() - startedAt,
+          // Request to first playable audio: the wait the listener actually feels. Only a caller
+          // that takes passes hears the first one early; the rest wait for the whole clip.
+          firstAudioMs: (options.onPass && passes > 1 ? firstPassAt : Date.now()) - requestedAt,
+          passes,
           wavBytes: wav.length,
           engine,
           device
         })
-        return { dataUrl: `data:audio/wav;base64,${wav.toString('base64')}` }
+        return { dataUrl: wavDataUrl(wav) }
       } catch (error) {
         writeDiagnosticLog(
           'tts',

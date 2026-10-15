@@ -111,8 +111,14 @@ async function runtime(id: number): Promise<{ runtime: KokoroRuntime; device: De
       // kokoro-js predates the newer ONNX Runtime provider names in its declaration
       // file. Its runtime forwards this value to Transformers.js, which supports
       // Core ML, DirectML, CUDA, WebGPU, and CPU.
+      // Core ML runs the FP32 graph: its FP16 graph returned all-NaN audio for some sentences
+      // (10 of 10 runs of the same 317-character reply, 2026-10-15, Apple M5) at the same speed.
       let dtype: 'q8' | 'fp32' | 'fp16' =
-        device === 'cpu' ? 'q8' : device === 'webgpu' || device === 'cuda' ? 'fp32' : 'fp16'
+        device === 'cpu'
+          ? 'q8'
+          : device === 'webgpu' || device === 'cuda' || device === 'coreml'
+            ? 'fp32'
+            : 'fp16'
       let cached: string | null = null
       // Reuse a complete FP32 package before downloading another precision.
       for (const candidate of [...new Set([dtype, 'fp32'] as const)]) {

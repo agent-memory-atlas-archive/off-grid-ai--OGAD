@@ -118,7 +118,6 @@ import {
   type QueueEdit
 } from '@offgrid/operator-ui/operator/workflows/queue'
 import { AttachmentList } from '@offgrid/operator-ui/operator/workflows/attachments'
-import { attachedDocumentBlock } from '@offgrid/models'
 import { AutoHeight } from '@offgrid/operator-ui/operator/presence'
 import {
   PromptInput,
@@ -223,6 +222,7 @@ import {
 } from './utlis'
 import { ToolMessageTimelineRow } from './components/ToolMessageTimelineRow'
 import { AttachmentPreview } from './components/AttachmentPanes'
+import { ChatDocuments } from './components/ChatDocuments'
 import {
   ASK_EXAMPLES,
   ASK_EXAMPLES_PRO,
@@ -850,6 +850,7 @@ export function MemoryChat({
     path?: string
     kind?: string
     renderer?: 'image' | 'document' | 'audio' | 'video' | 'text'
+    page?: number
   } | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [queueEdit, setQueueEdit] = useState<QueueEdit | null>(null)
@@ -1659,13 +1660,26 @@ export function MemoryChat({
     // The user sees `trimmed`; the model also gets the attachment text folded in.
     const trimmed =
       typed || (atts.length ? `(${atts.length} attachment${atts.length > 1 ? 's' : ''})` : '')
-    const attBlock = atts
-      .filter((a) => a.text)
-      .map((a) => attachedDocumentBlock(a.kind, a.name, a.text as string))
-      .join('\n\n')
+    // Documents are not pasted into the question: main reads every document attached to the
+    // conversation and gives the model what fits (documents/chat-turn.ts).
+    const turnDocuments = atts
+      .filter((a) => a.kind !== 'image' && (a.documentId || a.text))
+      .map((a) => ({
+        ...(a.documentId ? { documentId: a.documentId } : {}),
+        name: a.name,
+        kind: a.kind,
+        ...(a.path ? { path: a.path } : {}),
+        // Pasted text has no file; transcripts and old attachments are read from their text.
+        ...(!a.documentId || a.kind === 'pasted' ? { text: a.text } : {})
+      }))
     // Actual image files go to the multimodal model (not just their captions).
     const imagePaths = atts.filter((a) => a.kind === 'image' && a.path).map((a) => a.path as string)
-    let modelQuery = (attBlock ? `${attBlock}\n\n${typed}` : typed).trim()
+    let modelQuery = (
+      typed ||
+      (turnDocuments.length
+        ? `What is in ${turnDocuments.length > 1 ? 'these documents' : 'this document'}? Give a short overview.`
+        : '')
+    ).trim()
     if (!typed && atts.length === 0) return
     // Don't block the user — if a generation is in flight, queue this message and
     // let them keep typing/sending. The queue drains in order when each finishes.
@@ -1764,7 +1778,7 @@ export function MemoryChat({
             const rest =
               `${typed.slice(0, skillMention!.index)}${skillMention![1]}${typed.slice(skillMention!.index + skillMention![0].length)}`.trim()
             modelQuery =
-              `${attBlock ? attBlock + '\n\n' : ''}# Skill: ${sk.name}\n${sk.instructions}\n\n${rest}`.trim()
+              `# Skill: ${sk.name}\n${sk.instructions}\n\n${rest}`.trim()
           }
         } catch (e) {
           console.error('skill load failed', e)
@@ -1853,7 +1867,14 @@ export function MemoryChat({
           createdAt: Date.now(),
           content: trimmed,
           attachments: [
-            ...atts.map((a) => ({ name: a.name, kind: a.kind, text: a.text, path: a.path })),
+            ...atts.map((a) => ({
+              name: a.name,
+              kind: a.kind,
+              text: a.text,
+              path: a.path,
+              ...(a.documentId ? { documentId: a.documentId } : {}),
+              ...(a.pages ? { pages: a.pages } : {})
+            })),
             // Drawn now, not only after a reload. Persisting it without this left the turn looking as
             // though nothing had been attached until the conversation was loaded again.
             ...(initAttachment
@@ -1895,7 +1916,9 @@ export function MemoryChat({
             path: a.path,
             mimeType: a.mimeType,
             fileSize: a.fileSize,
-            createdAt: a.createdAt
+            createdAt: a.createdAt,
+            ...(a.documentId ? { documentId: a.documentId } : {}),
+            ...(a.pages ? { pages: a.pages } : {})
           }))
           // Appended, never folded into `atts`: those are what the MODEL is given, and the init image is
           // an input to the image runtime rather than text for the language model to read.
@@ -2300,6 +2323,7 @@ export function MemoryChat({
         // God is set up to do everything: every tool, and the selected model reasoning.
         ...(god ? { context: god.context(), rules: god.rules?.(), allTools: true } : {}),
         images: imagePaths,
+        ...(turnDocuments.length ? { documents: turnDocuments } : {}),
         imageAvailable,
         streamId: toolStreamId,
         thinking: god ? true : thinkingEnabled
@@ -3543,6 +3567,33 @@ export function MemoryChat({
     [activeConversationId, setConvMessages]
   )
 
+  // Documents keep reading and indexing in the background after they are attached; their pills
+  // show how far it has got.
+  useEffect(
+    () =>
+      window.api.documents.onProgress((progress) =>
+        setAttachments((previous) =>
+          previous.some((a) => a.documentId === progress.id)
+            ? previous.map((a) =>
+                a.documentId === progress.id
+                  ? {
+                      ...a,
+                      ...(progress.pageCount ? { pages: progress.pageCount } : {}),
+                      progress: {
+                        phase: progress.phase,
+                        done: progress.done,
+                        total: progress.total,
+                        ...(progress.error ? { error: progress.error } : {})
+                      }
+                    }
+                  : a
+              )
+            : previous
+        )
+      ),
+    []
+  )
+
   // Process attached files into text (read/parse/caption/transcribe) on the main side.
   const addFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -3575,13 +3626,17 @@ export function MemoryChat({
           }
         ])
         try {
-          const buf = await file.arrayBuffer()
-          const res = await window.api.processFile(buf, file.name)
+          // A picked or dropped file is read where it is: a large document never crosses IPC.
+          const filePath = window.api.filePath(file)
+          const res = filePath
+            ? await window.api.processFilePath(filePath, file.name)
+            : await window.api.processFile(await file.arrayBuffer(), file.name)
           // An image is ready once its file is saved - it carries no text at all, because the
           // image itself goes to the vision model and captioning it here was removed (it ran the
-          // model synchronously and left the chip stuck on "Reading…"). Everything else is ready
-          // once it has extracted text.
-          const ok = res.kind === 'image' ? !!res.path : !!res.text
+          // model synchronously and left the chip stuck on "Reading…"). A document is ready as
+          // soon as it is kept and indexing has started (a scanned PDF has no text until OCR);
+          // anything else once it has extracted text.
+          const ok = res.kind === 'image' ? !!res.path : !!(res.documentId || res.text)
           setAttachments((prev) =>
             prev.map((a) =>
               a.id === id
@@ -3590,6 +3645,8 @@ export function MemoryChat({
                     kind: res.kind as Attachment['kind'],
                     text: res.text || '',
                     path: res.path,
+                    ...(res.documentId ? { documentId: res.documentId } : {}),
+                    ...(res.pages ? { pages: res.pages } : {}),
                     preview,
                     status: ok ? 'ready' : 'error'
                   }
@@ -3673,9 +3730,28 @@ export function MemoryChat({
         closePanels()
         setSelectedSkillName(name)
         setSkillsOpen(true)
+      },
+      // A document citation opens the document at the page it cites.
+      onOpenDocument: (documentId, page) => {
+        const conversation = messagesByConvRef.current[activeConversationId ?? NEW_CHAT] ?? EMPTY_MSGS
+        const attachment = conversation
+          .flatMap((message) => message.attachments ?? [])
+          .find((candidate) => candidate.documentId === documentId)
+        if (!attachment) return
+        closePanels()
+        const isPdf = attachment.kind === 'pdf' && !!attachment.path
+        setViewer({
+          title: attachment.name,
+          text: isPdf ? '' : attachment.text || '',
+          path: attachment.path,
+          kind: isPdf ? 'pdf' : attachment.kind,
+          renderer: isPdf ? 'document' : 'text',
+          ...(isPdf ? { page } : {})
+        })
       }
     }),
     [
+      activeConversationId,
       closePanels,
       installedSkillNames,
       onNavigateToChat,
@@ -5202,6 +5278,11 @@ export function MemoryChat({
                                 <TooltipContent>Image options</TooltipContent>
                               </Tooltip>
                             )}
+                            <ChatDocuments
+                              conversationId={activeConversationId}
+                              revision={messages.length}
+                              onOpen={(row) => messageNavigation.onOpenDocument?.(row.id, 1)}
+                            />
                             {queuedCount(queuedByConv, activeConversationId) > 0 && (
                               <span className="flex h-8 items-center rounded-full border border-neutral-800 px-2.5 text-[11px] text-neutral-400">
                                 <AnimatedNumber value={queuedCount(queuedByConv, activeConversationId)} />{' '}
@@ -5489,7 +5570,10 @@ export function MemoryChat({
                 </div>
               </header>
               <div className="min-h-0 flex-1 overflow-auto p-4">
-                <AttachmentPreview key={`${viewer.path ?? ''}:${viewer.title}`} content={viewer} />
+                <AttachmentPreview
+                  key={`${viewer.path ?? ''}:${viewer.title}:${viewer.page ?? 0}`}
+                  content={viewer}
+                />
               </div>
             </SidePanel>
           )}

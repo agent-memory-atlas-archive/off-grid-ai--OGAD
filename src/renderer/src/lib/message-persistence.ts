@@ -14,9 +14,20 @@ import type { ResponseCutoffContract } from '../../../shared/ipc-contracts'
 import type { GenerationMetrics } from '../../../shared/generation-metrics'
 
 /** Order of readable reasoning and tool calls in one assistant reply. */
+export type TimelineDocument = {
+  name: string
+  passages: number
+  pages: number[]
+  whole: boolean
+  readPages?: number
+  unreadablePages?: number
+}
+
 export type AssistantTimelineEntry =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; toolIndex: number }
+  /** The attached documents this answer read, and which pages. */
+  | { kind: 'documents'; label: string; documents: TimelineDocument[] }
 
 /** Extra assistant-turn fields that ride in the persisted `context` blob. */
 export interface AssistantContextExtras {
@@ -66,6 +77,27 @@ export function buildAssistantContext(
   return ctx
 }
 
+export function readTimelineDocuments(raw: unknown): TimelineDocument[] {
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((item): TimelineDocument[] => {
+    if (!item || typeof item !== 'object') return []
+    const d = item as Record<string, unknown>
+    if (typeof d.name !== 'string' || typeof d.passages !== 'number') return []
+    return [
+      {
+        name: d.name,
+        passages: d.passages,
+        pages: Array.isArray(d.pages) ? d.pages.filter((p): p is number => typeof p === 'number') : [],
+        whole: d.whole === true,
+        ...(typeof d.readPages === 'number' ? { readPages: d.readPages } : {}),
+        ...(typeof d.unreadablePages === 'number' && d.unreadablePages > 0
+          ? { unreadablePages: d.unreadablePages }
+          : {})
+      }
+    ]
+  })
+}
+
 /** Ignore malformed durable entries instead of passing them to the chat timeline. */
 export function readAssistantTimeline(ctx: unknown): AssistantTimelineEntry[] | undefined {
   if (!ctx || typeof ctx !== 'object') return undefined
@@ -84,6 +116,9 @@ export function readAssistantTimeline(ctx: unknown): AssistantTimelineEntry[] | 
       entry.toolIndex >= 0
     ) {
       entries.push({ kind: 'tool', toolIndex: entry.toolIndex })
+    } else if (entry.kind === 'documents' && typeof entry.label === 'string' && Array.isArray(entry.documents)) {
+      const documents = readTimelineDocuments(entry.documents)
+      if (documents.length) entries.push({ kind: 'documents', label: entry.label, documents })
     }
   }
   return entries.length ? entries : undefined

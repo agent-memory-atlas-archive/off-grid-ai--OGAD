@@ -188,6 +188,14 @@ export class ChatBoundary {
 
   readonly api = {
     isPro: false,
+    // A file made in the page (jsdom) is an in-memory blob: the preload finds no path on disk for it.
+    filePath: (): string => '',
+    // Documents in a chat (preload `documents`): none attached unless a test attaches one.
+    documents: {
+      list: async (): Promise<unknown[]> => [],
+      setExcluded: async (): Promise<void> => undefined,
+      onProgress: (): (() => void) => () => undefined
+    },
     imageGenStatus: vi.fn(async () => ({ available: false, models: [], active: '' })),
     cancelImageGen: vi.fn(),
     cancelRag: this.cancelRag,

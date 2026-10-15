@@ -95,3 +95,72 @@ export async function runOCR(imagePath: string): Promise<string> {
     return ''
   }
 }
+
+/** The Vision helper is present (macOS builds). */
+export function visionOcrAvailable(): boolean {
+  return process.platform === 'darwin' && ocrBin() !== null
+}
+
+/**
+ * Read scanned PDF pages with the Vision helper's PDF mode: one process per page range, pages
+ * streamed back as JSON lines. Ranges run in up to `parallel` helpers at once.
+ */
+export async function runPdfOCR(
+  pdfPath: string,
+  pages: number[],
+  options: {
+    signal?: AbortSignal
+    parallel?: number
+    onPage?: (page: number, text: string) => void
+  } = {}
+): Promise<Map<number, string>> {
+  const bin = ocrBin()
+  const results = new Map<number, string>()
+  if (!bin || !pages.length) return results
+  const { spawn } = await import('child_process')
+  const lanes = Math.max(1, Math.min(options.parallel ?? 2, pages.length))
+  const groups: number[][] = Array.from({ length: lanes }, () => [])
+  pages.forEach((page, i) => groups[i % lanes]!.push(page))
+  await Promise.all(
+    groups.map(
+      (group) =>
+        new Promise<void>((resolve) => {
+          if (options.signal?.aborted) return resolve()
+          const child = spawn(bin, ['--pdf', pdfPath, '--pages', group.join(',')], {
+            stdio: ['ignore', 'pipe', 'ignore']
+          })
+          const stop = (): void => {
+            child.kill()
+          }
+          options.signal?.addEventListener('abort', stop, { once: true })
+          let buffered = ''
+          child.stdout.setEncoding('utf8')
+          child.stdout.on('data', (data: string) => {
+            buffered += data
+            let newline = buffered.indexOf('\n')
+            while (newline >= 0) {
+              const line = buffered.slice(0, newline).trim()
+              buffered = buffered.slice(newline + 1)
+              newline = buffered.indexOf('\n')
+              if (!line) continue
+              try {
+                const value = JSON.parse(line) as { page?: unknown; text?: unknown }
+                if (typeof value.page === 'number' && typeof value.text === 'string') {
+                  results.set(value.page, value.text)
+                  options.onPage?.(value.page, value.text)
+                }
+              } catch {
+                /* a partial line from a killed helper */
+              }
+            }
+          })
+          child.on('close', () => {
+            options.signal?.removeEventListener('abort', stop)
+            resolve()
+          })
+          child.on('error', () => resolve())
+        })
+    )
+  )
+  return results
+}

@@ -1,6 +1,6 @@
 /**
- * Multimodal knowledge journey through the production IPC, extraction router, native adapters,
- * RAG engine, SQLite store, scoped chat prompt, deletion, and profile reopen. The local embedding,
+ * Multimodal knowledge journey through the production IPC, file reader, native adapters, document
+ * engine, SQLite store, project chat prompt, deletion, and profile reopen. The local embedding,
  * vision, and speech executables are controlled at their process boundaries; Off Grid AI code stays real.
  */
 import { execFileSync } from 'node:child_process'
@@ -42,7 +42,7 @@ vi.mock('electron', () => ({
     handle: (channel: string, handler: IpcHandler) => handlers.set(channel, handler),
     on: () => undefined
   },
-  BrowserWindow: { fromWebContents: () => undefined },
+  BrowserWindow: { fromWebContents: () => undefined, getAllWindows: () => [] },
   clipboard: { readText: () => '', writeText: () => undefined },
   systemPreferences: {
     isTrustedAccessibilityClient: () => true,
@@ -58,11 +58,14 @@ vi.mock('electron', () => ({
   }
 }))
 
+// The feature-extraction pipeline's contract: one text gives a [1, 384] tensor, a batch gives
+// [n, 384]; `data` is the flat buffer and `tolist()` the rows.
 vi.mock('@huggingface/transformers', () => ({
   env: {},
-  pipeline: async () => async (text: string) => {
-    if (text.includes('FAIL_EMBED_AURORA')) throw new Error('synthetic embedding interruption')
-    const normalized = text.toLowerCase()
+  pipeline: async () => async (input: string | string[]) => {
+    const texts = Array.isArray(input) ? input : [input]
+    if (texts.some((text) => text.includes('FAIL_EMBED_AURORA')))
+      throw new Error('synthetic embedding interruption')
     const keys = [
       'image_aurora',
       'video_aurora',
@@ -72,11 +75,13 @@ vi.mock('@huggingface/transformers', () => ({
       'text_aurora',
       'other_aurora'
     ]
-    const data = new Float32Array(384)
-    keys.forEach((key, index) => {
-      data[index] = normalized.includes(key) ? 1 : 0
+    const rows = texts.map((text) => {
+      const normalized = text.toLowerCase()
+      return Array.from({ length: 384 }, (_, index) =>
+        index < keys.length && normalized.includes(keys[index]!) ? 1 : 0
+      )
     })
-    return { data }
+    return { data: Float32Array.from(rows.flat()), dims: [rows.length, 384], tolist: () => rows }
   }
 }))
 
@@ -202,8 +207,42 @@ afterAll(async () => {
   fs.rmSync(PROFILE_DIR, { recursive: true, force: true })
 })
 
+type KnowledgeRow = { id: number; name: string; kind: string; state?: string; error?: string }
+
+/** The knowledge-base list once every file has finished reading and indexing. */
+async function settledDocuments(projectId: string): Promise<KnowledgeRow[]> {
+  let rows: KnowledgeRow[] = []
+  await vi.waitFor(
+    async () => {
+      rows = await invoke<KnowledgeRow[]>('projects:list-documents', projectId)
+      expect(rows.every(({ state }) => state === 'ready' || state === 'failed')).toBe(true)
+    },
+    { timeout: 20_000, interval: 100 }
+  )
+  return rows
+}
+
+interface ProjectAnswer {
+  answer: string
+  unified: Array<{ kind: string; surface: string }>
+}
+
+/** A project chat turn through the handler the renderer uses. */
+async function askProject(
+  projectId: string,
+  conversationId: string,
+  question: string,
+  reply: string
+): Promise<ProjectAnswer> {
+  fake.enqueue({ content: reply })
+  return invoke<ProjectAnswer>('tools:chat', question, [], { projectId, conversationId })
+}
+
+const documentNames = (answer: ProjectAnswer): string[] =>
+  answer.unified.filter(({ kind }) => kind === 'attachment').map(({ surface }) => surface)
+
 describe('multimodal import, scoped answer, deletion, and reopen', () => {
-  it('indexes every supported medium and rolls back failed files without cross-project leakage', async () => {
+  it('indexes every supported medium, marks unreadable files, and answers without cross-project leakage', async () => {
     const files = {
       text: path.join(FIXTURES_DIR, 'notes.md'),
       pdf: path.join(FIXTURES_DIR, 'decision.pdf'),
@@ -228,7 +267,10 @@ describe('multimodal import, scoped answer, deletion, and reopen', () => {
       .png()
       .toFile(files.image)
     fs.writeFileSync(files.damaged, 'not a valid PDF')
-    fs.writeFileSync(files.interrupted, 'FAIL_EMBED_AURORA must roll back its document row.')
+    fs.writeFileSync(
+      files.interrupted,
+      'FAIL_EMBED_AURORA: the embedding model stops on this file, and keyword search still finds it.'
+    )
     fs.writeFileSync(files.other, 'OTHER_AURORA belongs only to the private sibling project.')
 
     const selectedProject = await invoke<string>('projects:create', { name: 'Aurora launch' })
@@ -236,108 +278,85 @@ describe('multimodal import, scoped answer, deletion, and reopen', () => {
     await invoke('projects:update', selectedProject, { includeMemory: false })
     await invoke('projects:update', otherProject, { includeMemory: false })
 
-    fake.enqueue({ content: 'VIDEO_AURORA shows the emerald release status board.' })
+    // The vision model captions the image, then each sampled video frame (the first one says what
+    // the clip shows; later frames get the engine's empty turn).
     fake.enqueue({ content: 'IMAGE_AURORA shows the signed launch architecture diagram.' })
+    fake.enqueue({ content: 'VIDEO_AURORA shows the emerald release status board.' })
     boundary.selectedPaths = [
       files.text,
       files.pdf,
       files.docx,
       files.audio,
-      files.video,
       files.image,
+      files.video,
       files.damaged,
       files.interrupted
     ]
+    const progress = (): unknown[] =>
+      progressEvents.filter(({ channel }) => channel === 'projects:index-progress')
+    // Every file is kept and listed; reading happens in the background with progress per file.
     const selectedBatch = await invoke<{ added: number }>('projects:add-documents', selectedProject)
-    expect(
-      selectedBatch,
-      JSON.stringify(progressEvents.filter(({ channel }) => channel === 'projects:index-progress'))
-    ).toEqual({ added: 6 })
+    expect(selectedBatch, JSON.stringify(progress())).toEqual({ added: 8 })
+    expect(progress()).toEqual(
+      expect.arrayContaining([
+        { channel: 'projects:index-progress', payload: { projectId: selectedProject, name: 'notes.md', stage: 'adding' } },
+        { channel: 'projects:index-progress', payload: { projectId: selectedProject, name: 'notes.md', stage: 'done' } }
+      ])
+    )
 
     boundary.selectedPaths = [files.other]
     expect(await invoke('projects:add-documents', otherProject)).toEqual({ added: 1 })
 
-    const documents = await invoke<Array<{ id: number; name: string; kind: string }>>(
-      'projects:list-documents',
-      selectedProject
-    )
+    const documents = await settledDocuments(selectedProject)
     expect(new Set(documents.map(({ kind }) => kind))).toEqual(
       new Set(['text', 'pdf', 'docx', 'audio', 'video', 'image'])
     )
-    expect(documents.map(({ name }) => name)).not.toEqual(
-      expect.arrayContaining(['damaged.pdf', 'interrupted.md'])
-    )
-    expect(
-      progressEvents.filter(
-        ({ channel, payload }) =>
-          channel === 'projects:index-progress' && (payload as { stage?: string }).stage === 'error'
-      )
-    ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ payload: expect.objectContaining({ name: 'damaged.pdf' }) }),
-        expect.objectContaining({ payload: expect.objectContaining({ name: 'interrupted.md' }) })
-      ])
-    )
+    const byName = new Map(documents.map((document) => [document.name, document]))
+    // A file the reader cannot open says so on its row; a file whose vectors stopped is still ready.
+    expect(byName.get('damaged.pdf')).toMatchObject({ state: 'failed', error: expect.any(String) })
+    expect(byName.get('interrupted.md')).toMatchObject({ state: 'ready' })
+    for (const name of ['notes.md', 'decision.pdf', 'memo.docx', 'briefing.wav', 'walkthrough.mp4', 'diagram.png'])
+      expect(byName.get(name), name).toMatchObject({ state: 'ready' })
 
     const conversationId = 'aurora-multimodal-chat'
     await invoke('rag:create-conversation', conversationId, 'Aurora evidence', selectedProject)
-    fake.enqueue({ content: 'The architecture diagram records the signed launch plan.' })
-    const answer = await invoke<{
-      answer: string
-      context: { sources: Array<{ name: string }> }
-    }>(
-      'rag:chat',
-      'What does IMAGE_AURORA show?',
-      'All',
-      [],
+    const answer = await askProject(
       selectedProject,
       conversationId,
-      false,
-      'aurora-answer',
-      false,
-      []
+      'What does IMAGE_AURORA show?',
+      'The architecture diagram records the signed launch plan.'
     )
     expect(answer.answer).toBe('The architecture diagram records the signed launch plan.')
-    expect(answer.context.sources[0]?.name).toBe('diagram.png')
+    expect(documentNames(answer)).toContain('diagram.png')
+    expect(documentNames(answer)).not.toContain('other.md')
     const prompt = JSON.stringify(fake.requests.at(-1)?.messages ?? [])
     expect(prompt).toContain('IMAGE_AURORA shows the signed launch architecture diagram')
+    expect(prompt).toContain('AUDIO_AURORA confirms the narrated release review is complete.')
+    expect(prompt).toContain('DOCX_AURORA records the signed accessibility decision')
+    expect(prompt).toContain('VIDEO_AURORA shows the emerald release status board.')
+    expect(prompt).toContain('FAIL_EMBED_AURORA')
     expect(prompt).not.toContain('OTHER_AURORA')
     await invoke('rag:add-message', conversationId, 'user', 'What does IMAGE_AURORA show?')
     await invoke('rag:add-message', conversationId, 'assistant', answer.answer)
 
-    const imageDocument = documents.find(({ name }) => name === 'diagram.png')!
-    await invoke('projects:delete-document', imageDocument.id)
+    await invoke('projects:delete-document', byName.get('diagram.png')!.id)
     expect(fs.existsSync(files.image)).toBe(true)
-    fake.enqueue({ content: 'The deleted image is no longer available as evidence.' })
-    const afterDelete = await invoke<{ context: { sources: Array<{ name: string }> } }>(
-      'rag:chat',
-      'What does IMAGE_AURORA show now?',
-      'All',
-      [],
+    const afterDelete = await askProject(
       selectedProject,
       conversationId,
-      false,
-      'aurora-after-delete',
-      false,
-      []
+      'What does IMAGE_AURORA show now?',
+      'The deleted image is no longer available as evidence.'
     )
-    expect(afterDelete.context.sources.map(({ name }) => name)).not.toContain('diagram.png')
+    expect(documentNames(afterDelete)).not.toContain('diagram.png')
     expect(JSON.stringify(fake.requests.at(-1)?.messages ?? [])).not.toContain(
       'IMAGE_AURORA shows the signed launch architecture diagram'
     )
 
-    fake.enqueue({ content: 'Maya owns the desktop checklist.' })
-    await invoke(
-      'rag:chat',
-      'What does TEXT_AURORA say?',
-      'All',
-      [],
+    await askProject(
       selectedProject,
       conversationId,
-      false,
-      'aurora-safe-knowledge',
-      false,
-      []
+      'What does TEXT_AURORA say?',
+      'Maya owns the desktop checklist.'
     )
     const safePrompt = JSON.stringify(fake.requests.at(-1)?.messages ?? [])
     expect(safePrompt).toContain('TEXT_AURORA says the desktop checklist owner is Maya.')
@@ -350,28 +369,24 @@ describe('multimodal import, scoped answer, deletion, and reopen', () => {
       db
         .prepare('SELECT COUNT(*) AS count FROM rag_documents WHERE project_id = ?')
         .get(selectedProject)
-    ).toEqual({ count: 5 })
-    expect(
-      db
-        .prepare(
-          "SELECT COUNT(*) AS count FROM rag_chunks WHERE content LIKE '%FAIL_EMBED_AURORA%'"
-        )
-        .get()
-    ).toEqual({ count: 0 })
+    ).toEqual({ count: 7 })
     db.close()
 
     vi.resetModules()
     await bootApplicationModules()
-    expect(await invoke('projects:list-documents', selectedProject)).toHaveLength(5)
+    expect(await invoke('projects:list-documents', selectedProject)).toHaveLength(7)
     expect(await invoke('rag:get-messages', conversationId)).toEqual([
       expect.objectContaining({ role: 'user', content: 'What does IMAGE_AURORA show?' }),
       expect.objectContaining({ role: 'assistant', content: answer.answer })
     ])
+    // The deleted image's text left the document index with it: nothing else held it.
     const reopenedDb = (await import('../database')).getDB()
     expect(
       reopenedDb
-        .prepare("SELECT COUNT(*) AS count FROM rag_chunks WHERE content LIKE '%IMAGE_AURORA%'")
+        .prepare(
+          "SELECT COUNT(*) AS count FROM attached_document_pages WHERE text LIKE '%IMAGE_AURORA%'"
+        )
         .get()
     ).toEqual({ count: 0 })
-  }, 60_000)
+  }, 90_000)
 })

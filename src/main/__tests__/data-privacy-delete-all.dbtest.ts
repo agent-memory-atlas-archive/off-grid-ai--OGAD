@@ -14,7 +14,7 @@
 //
 // On HEAD this is RED: deleteAllData clears only CHAT_TABLES + MEMORY_TABLES +
 // user_profile, so connectors, secrets (OAuth tokens!), and the RAG knowledge base
-// (rag_documents/rag_chunks) all survive a "full erase" — a privacy failure and a
+// (rag_documents and the file text in the document index) all survive a "full erase" — a privacy failure and a
 // broken promise. The fix routes every personal store through one registry.
 
 import { describe, it, expect, afterAll, vi } from 'vitest'
@@ -26,6 +26,7 @@ const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-delall-'))
 
 vi.mock('electron', () => ({
   app: { getPath: () => TMP_DIR, isPackaged: false, getAppPath: () => process.cwd() },
+  BrowserWindow: { getAllWindows: () => [] },
   // Report OS encryption AVAILABLE (identity codec) so setSecret actually stores a
   // row — its refuse-when-unavailable path is correct production behavior, not the
   // bug under test. The at-rest codec is independent of the SQLite key.
@@ -45,7 +46,12 @@ import * as dbmod from '../database'
 import { clearCategory, deleteAllData } from '../data-privacy'
 import { addConnector } from '../mcp'
 import { setSecret } from '../secrets'
-import { createProject, desktopVectorStore } from '../rag/store'
+import { createProject } from '../rag/store'
+import { knowledgeBase } from '../rag'
+import { configureRuntime } from '../runtime-env'
+
+// Knowledge-base files are indexed without vectors: the model folder is pinned to a missing one.
+configureRuntime({ dataDir: TMP_DIR, modelsDir: path.join(TMP_DIR, 'model-folder-not-connected') })
 
 const PERSONAL_DIRS = [
   'uploads',
@@ -75,18 +81,15 @@ describe('deleteAllData — erases EVERY core personal store (D29/D30)', () => {
     addConnector({ name: 'Notion', transport: 'http', url: 'https://mcp.notion.com' })
     setSecret('connector:1:oauth:tokens', JSON.stringify({ access_token: 'live-token-abc' }))
     createProject({ id: 'p1', name: 'Private roadmap' })
-    const docId = await desktopVectorStore.addDocument({
+    const roadmap = path.join(TMP_DIR, 'picked', 'roadmap.md')
+    fs.mkdirSync(path.dirname(roadmap), { recursive: true })
+    fs.writeFileSync(roadmap, 'The secret plan is to ship the private roadmap in spring.')
+    await knowledgeBase.addFile({
       projectId: 'p1',
-      name: 'roadmap.md',
-      path: '/tmp/roadmap.md',
-      size: 100,
-      kind: 'text'
+      path: roadmap,
+      fileName: 'roadmap.md',
+      size: fs.statSync(roadmap).size
     })
-    await desktopVectorStore.addChunks(
-      docId,
-      [{ content: 'secret plan', position: 0 }],
-      [[0.1, 0.2, 0.3]]
-    )
 
     // Control: a chat conversation, which delete-all ALREADY clears today — proves
     // the harness is sound and deleteAllData actually ran end-to-end.
@@ -113,7 +116,10 @@ describe('deleteAllData — erases EVERY core personal store (D29/D30)', () => {
     expect(count('connectors')).toBeGreaterThan(0)
     expect(count('secrets')).toBeGreaterThan(0)
     expect(count('rag_documents')).toBeGreaterThan(0)
-    expect(count('rag_chunks')).toBeGreaterThan(0)
+    expect(count('attached_documents')).toBeGreaterThan(0)
+    expect(count('attached_document_pages')).toBeGreaterThan(0)
+    // The file's passages are indexed in the background; erase after they are written.
+    await vi.waitFor(() => expect(count('attached_document_chunks')).toBeGreaterThan(0))
     expect(count('rag_conversations')).toBeGreaterThan(0)
     expect(count('projects')).toBeGreaterThan(0)
     expect(count('memories')).toBeGreaterThan(0)
@@ -126,7 +132,9 @@ describe('deleteAllData — erases EVERY core personal store (D29/D30)', () => {
     expect(count('connectors')).toBe(0) // D30 — was surviving
     expect(count('secrets')).toBe(0) // D30 — OAuth tokens were surviving
     expect(count('rag_documents')).toBe(0) // D29 — knowledge base was surviving
-    expect(count('rag_chunks')).toBe(0) // D29 — knowledge base was surviving
+    expect(count('attached_documents')).toBe(0) // D29 — the knowledge base's text
+    expect(count('attached_document_pages')).toBe(0)
+    expect(count('attached_document_chunks')).toBe(0)
     expect(count('projects')).toBe(0)
     expect(count('memories')).toBe(0)
     expect(count('user_profile')).toBe(0)
