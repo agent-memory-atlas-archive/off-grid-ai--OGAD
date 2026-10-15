@@ -129,6 +129,7 @@ import {
   noteChatStreamToolStarted,
   takeChatStreamMessageId
 } from './chat-stream-state'
+import { ModelServerError } from './llm/http-post'
 
 const streamControllers = new Map<string, AbortController>()
 
@@ -146,6 +147,10 @@ async function runChatWithFallback<T>(
     return { result: await run() }
   } catch (error) {
     if (options.signal?.aborted || options.canRetry?.() === false) throw error
+    // Only a model that could not answer at all is worth replacing. A request that does not fit
+    // the window, or that the server refused, fails the same way on every model: switching then
+    // just walked the whole list (remote servers included) and changed the selected model.
+    if (error instanceof ModelServerError && error.kind !== 'unavailable') throw error
     lastError = error
   }
   const models = await import('./models-manager')
@@ -185,6 +190,7 @@ async function runChatWithFallback<T>(
       return { result: await run(), modelName: next.name }
     } catch (error) {
       if (options.signal?.aborted || options.canRetry?.() === false) throw error
+      if (error instanceof ModelServerError && error.kind !== 'unavailable') throw error
       failedName = next.name
       lastError = error
     }
