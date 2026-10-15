@@ -689,7 +689,7 @@ export function setupIPC(): void {
 
   ipcMain.handle('db:search-memories', async (_, query: string) => {
     try {
-      const queryVector = await embeddings.generateEmbedding(query)
+      const queryVector = await embeddings.generateEmbedding(query, { interactive: true })
       const vecStr = JSON.stringify(queryVector)
 
       const stmt = db.prepare(`
@@ -945,7 +945,7 @@ export function setupIPC(): void {
         score?: number
       }> = []
       try {
-        const queryVector = await embeddings.generateEmbedding(query)
+        const queryVector = await embeddings.generateEmbedding(query, { interactive: true })
         const vecStr = JSON.stringify(queryVector)
         const params: unknown[] = [vecStr]
         let memoryQuery = `

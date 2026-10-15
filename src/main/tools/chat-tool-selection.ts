@@ -83,7 +83,7 @@ export async function selectChatToolSchemas(
         let embed = options.embed
         if (!embed) {
           const { embeddings } = await import('../embeddings')
-          embed = (t: string): Promise<number[]> => embeddings.generateEmbedding(t)
+          embed = (t: string): Promise<number[]> => embeddings.generateEmbedding(t, { interactive: true })
         }
         const { contextualToolRoutingText, selectRelevantToolsSemantic } =
           await import('./tool-embedding-ranking')
