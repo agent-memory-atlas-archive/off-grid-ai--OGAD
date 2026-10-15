@@ -2,7 +2,6 @@ import { useState, type ReactNode } from 'react'
 import type { ChatStreamTool, ProjectedSyncedTool } from '@offgrid/sync'
 import {
   CaretDown,
-  CheckCircle,
   CircleNotch,
   SidebarSimple,
   StopCircle,
@@ -101,7 +100,8 @@ const NO_TIMELINE_TRIGGER_LABELS: ToolTimelineProps['stateLabels'] = {
   failed: ''
 }
 
-const STATE_GLYPHS: Record<WorkState, React.JSX.Element> = {
+/** A finished turn needs no glyph: its steps carry their own ticks, and the words say it is done. */
+const STATE_GLYPHS: Record<WorkState, React.JSX.Element | null> = {
   working: (
     <CircleNotch
       aria-hidden="true"
@@ -109,7 +109,7 @@ const STATE_GLYPHS: Record<WorkState, React.JSX.Element> = {
       className="size-3.5 shrink-0 text-primary motion-safe:animate-spin"
     />
   ),
-  done: <CheckCircle aria-hidden="true" weight="fill" className="size-3.5 shrink-0 text-primary" />,
+  done: null,
   stopped: (
     <StopCircle
       aria-hidden="true"
