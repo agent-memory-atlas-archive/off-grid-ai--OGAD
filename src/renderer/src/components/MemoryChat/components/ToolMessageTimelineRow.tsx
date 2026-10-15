@@ -5,7 +5,6 @@ import type { ChatMessage } from '../types'
 export const ToolMessageTimelineRow = memo(function ToolMessageTimelineRow({
   messages
 }: Readonly<{ messages: ChatMessage[] }>): React.JSX.Element {
-  console.log('MemoryChat ToolMessageTimelineRow rendered')
   return (
     <div
       className="mb-2 flex flex-col items-start"

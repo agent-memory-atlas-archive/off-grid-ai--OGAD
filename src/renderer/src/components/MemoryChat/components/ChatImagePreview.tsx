@@ -7,7 +7,6 @@ function ImageMetadata({
 }: Readonly<{
   metadata?: ImageGenerationMetadata
 }>): React.JSX.Element | null {
-  console.log('MemoryChat ImageMetadata rendered')
   if (!metadata) return null
   return (
     <p aria-label="Image generation metadata" className="mt-1.5 text-[10px] text-neutral-600">
@@ -35,7 +34,6 @@ export const ChatImagePreview = memo(function ChatImagePreview({
   fill?: boolean
   onOpen: (image: OpenImage) => void
 }>): React.JSX.Element {
-  console.log('MemoryChat ChatImagePreview rendered')
   return (
     <div className={fill ? 'w-full' : undefined}>
       <button

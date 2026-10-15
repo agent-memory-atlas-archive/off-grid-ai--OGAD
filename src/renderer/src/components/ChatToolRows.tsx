@@ -1,9 +1,17 @@
 import { useState, type ReactNode } from 'react'
 import type { ChatStreamTool, ProjectedSyncedTool } from '@offgrid/sync'
-import { SidebarSimple, X } from '@phosphor-icons/react'
+import {
+  CaretDown,
+  CircleNotch,
+  SidebarSimple,
+  StopCircle,
+  WarningCircle,
+  X
+} from '@phosphor-icons/react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Button } from '@offgrid/operator-ui/operator/coss/button'
 import { AutoHeight } from '@offgrid/operator-ui/operator/presence'
+import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import {
   ToolTimeline,
   type ToolTimelineProps,
@@ -20,6 +28,7 @@ import {
 import { ComputerUseStepDetails } from './tasks/ComputerUseStepDetails'
 import { RetryTaskButton } from './tasks/RetryTaskButton'
 import { taskReferenceFromResult, visibleToolResult } from './chat-tool-projection'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 
 type DisplayTool =
@@ -70,12 +79,51 @@ const ENTRY_STATE: Record<WorkStatus, ToolEntryState> = {
   'needs attention': 'pending'
 }
 
+type WorkState = Exclude<ToolTimelineProps['state'], 'needs-attention'>
+
 /** The trigger keeps the product's words for each state of the work. */
-const STATE_LABELS: ToolTimelineProps['stateLabels'] = {
+const STATE_LABELS: Record<WorkState, string> = {
   working: 'Working',
   done: 'Work done',
   stopped: 'Work stopped',
   failed: 'Work failed'
+}
+
+/**
+ * ToolTimeline's own trigger is a bare text button. This row owns the disclosure instead, so the
+ * library's trigger is given no words and removed from layout and the accessibility tree.
+ */
+const NO_TIMELINE_TRIGGER_LABELS: ToolTimelineProps['stateLabels'] = {
+  working: '',
+  done: '',
+  stopped: '',
+  failed: ''
+}
+
+/** A finished turn needs no glyph: its steps carry their own ticks, and the words say it is done. */
+const STATE_GLYPHS: Record<WorkState, React.JSX.Element | null> = {
+  working: (
+    <CircleNotch
+      aria-hidden="true"
+      weight="bold"
+      className="size-3.5 shrink-0 text-primary motion-safe:animate-spin"
+    />
+  ),
+  done: null,
+  stopped: (
+    <StopCircle
+      aria-hidden="true"
+      weight="fill"
+      className="size-3.5 shrink-0 text-muted-foreground"
+    />
+  ),
+  failed: (
+    <WarningCircle
+      aria-hidden="true"
+      weight="fill"
+      className="size-3.5 shrink-0 text-destructive"
+    />
+  )
 }
 
 const PROPOSAL_STAGE_LABELS: Record<string, string> = {
@@ -304,7 +352,7 @@ export function ChatToolRows({
   const workIsLive =
     live ||
     (!stopped && !failed && !settled && projected.some(({ status }) => status === 'running'))
-  const workState: ToolTimelineProps['state'] = workIsLive
+  const workState: WorkState = workIsLive
     ? 'working'
     : stopped
       ? 'stopped'
@@ -453,17 +501,28 @@ export function ChatToolRows({
 
   return (
     <>
-      <div className="ml-1 w-full max-w-[85%]" aria-busy={workIsLive || undefined}>
-        <ToolTimeline
-          entries={entries}
-          state={workState}
-          expanded={expanded}
-          onExpandedChange={setExpanded}
-          label={thinking || hasOrderedThinking ? 'Thinking and tool calls' : 'Tool calls'}
-          stateLabels={STATE_LABELS}
-          showCount={entries.length > 1}
-        />
-      </div>
+      <Collapsible
+        open={expanded}
+        onOpenChange={setExpanded}
+        className="w-full max-w-[85%]"
+        aria-busy={workIsLive || undefined}
+      >
+        <WorkTrigger state={workState} count={entries.length} />
+        {/* The clip box reaches 12px left of the content, so a checkpoint's glow is not cut off. */}
+        <CollapsibleContent className="offgrid-smooth-collapsible -ml-3 overflow-hidden pl-3">
+          <div className="[&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pb-1 [&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pt-2.5 [&>[data-slot=collapsible]>[data-slot=collapsible-trigger]]:hidden">
+            <ToolTimeline
+              entries={entries}
+              state={workState}
+              expanded
+              onExpandedChange={() => undefined}
+              label={thinking || hasOrderedThinking ? 'Thinking and tool calls' : 'Tool calls'}
+              stateLabels={NO_TIMELINE_TRIGGER_LABELS}
+              showCount={false}
+            />
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
       {footer ? (
         <div
           className="ml-5 mt-2 inline-flex items-center text-neutral-500"
@@ -475,6 +534,49 @@ export function ChatToolRows({
         </div>
       ) : null}
     </>
+  )
+}
+
+/**
+ * The work disclosure's header: a compact surface chip in the same vocabulary as the footer's
+ * "Generation details" and Settings sections (Radix trigger, phosphor caret that turns with
+ * data-state, ring on keyboard focus), with a state glyph so a folded turn still reads as
+ * something to open.
+ */
+function WorkTrigger({
+  state,
+  count
+}: Readonly<{ state: WorkState; count: number }>): React.JSX.Element {
+  const reduceMotion = useReducedMotion()
+  const label = STATE_LABELS[state]
+  return (
+    <CollapsibleTrigger
+      aria-label={label}
+      className="group inline-flex h-7 max-w-full items-center gap-1.5 rounded-md border border-border/60 bg-card/50 pl-2 pr-1.5 text-[12px] font-medium text-muted-foreground shadow-[inset_0_1px_0_rgb(255_255_255/0.03)] transition-[color,background-color,border-color,transform] duration-150 ease-out hover:border-border hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring active:scale-[0.97] data-[state=open]:border-border data-[state=open]:text-foreground motion-reduce:transition-none motion-reduce:active:scale-100"
+    >
+      {STATE_GLYPHS[state]}
+      {state === 'working' && !reduceMotion ? (
+        <TextShimmer as="span" duration={1.8}>
+          {label}
+        </TextShimmer>
+      ) : (
+        <span>{label}</span>
+      )}
+      {count < 2 ? null : (
+        // A single step needs no tally. The count is visual; the name stays the state alone.
+        <span
+          aria-hidden="true"
+          className="rounded-sm bg-muted px-1 font-mono text-[10px] leading-4 tabular-nums text-muted-foreground transition-colors group-hover:text-foreground"
+        >
+          {count}
+        </span>
+      )}
+      <CaretDown
+        aria-hidden="true"
+        weight="bold"
+        className="size-3 shrink-0 opacity-70 transition-[transform,opacity] duration-200 group-hover:opacity-100 group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+      />
+    </CollapsibleTrigger>
   )
 }
 

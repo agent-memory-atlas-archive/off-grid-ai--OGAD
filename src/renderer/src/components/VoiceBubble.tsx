@@ -1,31 +1,41 @@
 /**
- * VoiceBubble — desktop voice-note bubble for the chat's voice mode.
+ * VoiceBubble — desktop voice-note player for the chat's voice mode.
  *
- * A WhatsApp-style audio message: play/pause, a 48-bar waveform that tints as
- * the playhead passes, click-to-seek, a duration readout, a speed chip, and a
- * "Show transcript" toggle. Ported from the mobile app's AudioMessageBubble so
- * both products behave identically.
+ * Built to the approved chat-media reference (the TonePlayer in the component library's chat
+ * media workshop): a large round play button with a spring glyph swap, a seek slider holding two
+ * stacked waveforms (unplayed dimmed, played clipped to the playhead and glowing in the brand
+ * green), a glowing playhead and a hover position line, a mono `current / total` readout and a
+ * back-to-start button. Below it, a "Follow along" transcript whose phrases light up with the
+ * playhead and seek when clicked.
  *
- *  - User voice notes carry a recorded clip (`audioUrl`) → we decode its REAL
- *    envelope and play the file directly.
- *  - Assistant replies have no file → we synthesize on-device (Kokoro) the first
- *    time Play is pressed, cache the result, and draw a deterministic
- *    transcript-derived envelope (stable before/during playback).
+ *  - User voice notes carry a recorded clip (`audioUrl`) → we decode its REAL envelope and play
+ *    the file directly.
+ *  - Assistant replies have no file → we synthesize on-device the first time Play is pressed,
+ *    cache the result, and draw a deterministic transcript-derived envelope (stable before and
+ *    during playback).
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react'
 import {
-  Play,
-  Pause,
-  Copy,
+  ArrowCounterClockwise,
   ArrowsClockwise,
   Check,
+  Copy,
+  Pause,
+  Play,
   Subtitles,
   SubtitlesSlash
 } from '@phosphor-icons/react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Button } from '@offgrid/operator-ui/operator/coss/button'
-import { ToggleGroup, ToggleGroupItem } from '@offgrid/operator-ui/operator/coss/toggle-group'
 import { Waveform } from '@offgrid/operator-ui/operator/elevenlabs/waveform'
+import { spokenText } from '@offgrid/speech'
 import {
   Transcription,
   TranscriptionSegment
@@ -35,11 +45,69 @@ import { claimVoicePlayback, onVoicePlaybackClaim } from '@renderer/lib/voice-pl
 import { LoadingDots } from './ui/loading-dots'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 
-const WAVEFORM_BARS = 48
+/** Envelope resolution: enough points that 2px bars across a chat column do not look blocky. */
+const WAVEFORM_POINTS = 96
+const WAVEFORM_HEIGHT = 64
 const SPEED_STEPS = [0.5, 0.8, 1.0, 1.25, 1.5, 2.0]
 /** Arrow keys move the playhead by this share of the clip. */
 const SEEK_STEP = 0.05
 const ease = [0.16, 1, 0.3, 1] as const
+const glyphSpring = { type: 'spring', stiffness: 500, damping: 28 } as const
+/** Long phrases are cut so the highlight keeps moving; this many words at most per phrase. */
+const MAX_PHRASE_WORDS = 10
+/** Lead-ins shorter than this many words join the phrase after them. */
+const MIN_PHRASE_WORDS = 3
+
+/** Every control: hover and focus come from Button; this adds the press. */
+const pressable =
+  'transition-[transform,background-color,color] active:scale-95 motion-reduce:active:scale-100'
+
+/* ── Brand colours for the canvas ──────────────────────────────────────────────────────────────
+ * The waveform paints on a <canvas>, which cannot resolve CSS variables: without an explicit
+ * `barColor` it reads `--foreground` and falls back to black. So the bars get concrete colours
+ * read from the Off Grid tokens on <html>, re-read whenever the theme flips `data-theme`.
+ */
+const tokenCache = new Map<string, string>()
+const tokenListeners = new Set<() => void>()
+let themeObserver: MutationObserver | null = null
+
+function subscribeTheme(listener: () => void): () => void {
+  tokenListeners.add(listener)
+  if (!themeObserver) {
+    themeObserver = new MutationObserver(() => {
+      tokenCache.clear()
+      tokenListeners.forEach((notify) => notify())
+    })
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'class', 'style']
+    })
+  }
+  return () => {
+    tokenListeners.delete(listener)
+    if (tokenListeners.size === 0) {
+      themeObserver?.disconnect()
+      themeObserver = null
+    }
+  }
+}
+
+function readToken(name: string, fallback: string): string {
+  const cached = tokenCache.get(name)
+  if (cached) return cached
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+  tokenCache.set(name, value)
+  return value
+}
+
+/** A brand token as a concrete colour string the canvas can paint. */
+function useBrandColor(name: string, fallback: string): string {
+  return useSyncExternalStore(
+    subscribeTheme,
+    () => readToken(name, fallback),
+    () => fallback
+  )
+}
 
 interface TimedSegment {
   text: string
@@ -47,19 +115,67 @@ interface TimedSegment {
   endSecond: number
 }
 
+/** A run of words longer than MAX_PHRASE_WORDS, cut into near-even pieces. */
+function splitLongPhrase(phrase: string): string[] {
+  const words = phrase.split(/\s+/)
+  if (words.length <= MAX_PHRASE_WORDS) return [phrase]
+  const pieces = Math.ceil(words.length / MAX_PHRASE_WORDS)
+  const size = Math.ceil(words.length / pieces)
+  const out: string[] = []
+  for (let i = 0; i < words.length; i += size) out.push(words.slice(i, i + size).join(' '))
+  return out
+}
+
+/** A lead-in shorter than MIN_PHRASE_WORDS ("Yes,", "Generated for:") stays with what follows. */
+function joinShortLead(phrases: string[], phrase: string): string[] {
+  const previous = phrases.at(-1)
+  if (previous !== undefined && previous.split(/\s+/).length < MIN_PHRASE_WORDS) {
+    phrases[phrases.length - 1] = `${previous} ${phrase}`
+  } else phrases.push(phrase)
+  return phrases
+}
+
 /**
- * The transcript as sentences laid along the clip. Speech has no word timings here, so each
- * sentence takes the share of the duration its length takes of the text: close enough for the
- * words to follow the playhead and for a click on a sentence to land near it.
+ * The transcript as phrases laid along the clip, for the Follow-along view.
+ *
+ * ESTIMATED TIMINGS: neither the recorder nor the speech synthesizer gives us word timings, so
+ * these are not aligned to the audio. The text is cut at punctuation and line breaks (short
+ * lead-ins join the phrase after them, long runs are cut again), and each phrase takes the share
+ * of the real duration that its SPOKEN character count takes of the whole text (emoji are not read
+ * aloud, so they take no time). That is close enough for the highlight to follow the voice and
+ * for a click on a phrase to land near it, and no closer.
  */
-function timedSegments(text: string, duration: number): TimedSegment[] {
-  const sentences = text.split(/(?<=[.!?])\s+|\n+/).filter((sentence) => sentence.trim())
-  const total = sentences.reduce((sum, sentence) => sum + sentence.length, 0) || 1
+/** Cuts a line after a word ending in punctuation and before a word opening with a dash. */
+function cutAtPunctuation(line: string): string[] {
+  const out: string[] = []
+  let current: string[] = []
+  const flush = (): void => {
+    if (current.length > 0) out.push(current.join(' '))
+    current = []
+  }
+  for (const word of line.split(' ')) {
+    if (!word) continue
+    if (/^[—–]/.test(word)) flush()
+    current.push(word)
+    if (/[.!?;:,—–]$/.test(word)) flush()
+  }
+  flush()
+  return out
+}
+
+function phraseSegments(text: string, duration: number): TimedSegment[] {
+  const phrases = text
+    .split('\n')
+    .flatMap((line) => cutAtPunctuation(line.replace(/\s/g, ' ')))
+    .reduce<string[]>((joined, phrase) => joinShortLead(joined, phrase), [])
+    .flatMap((phrase) => splitLongPhrase(phrase))
+  const spokenLength = (phrase: string): number => spokenText(phrase).length
+  const total = phrases.reduce((sum, phrase) => sum + spokenLength(phrase), 0) || 1
   let at = 0
-  return sentences.map((sentence) => {
+  return phrases.map((phrase) => {
     const startSecond = (at / total) * duration
-    at += sentence.length
-    return { text: sentence.trim(), startSecond, endSecond: (at / total) * duration }
+    at += spokenLength(phrase)
+    return { text: phrase, startSecond, endSecond: (at / total) * duration }
   })
 }
 
@@ -165,6 +281,341 @@ async function decodeFileWaveform(url: string, points: number): Promise<number[]
   }
 }
 
+/** A compact ghost icon action with its tooltip. */
+function BubbleAction({
+  label,
+  onClick,
+  disabled,
+  className,
+  children
+}: {
+  label: string
+  onClick: () => void
+  disabled?: boolean
+  className?: string
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          aria-label={label}
+          disabled={disabled}
+          onClick={onClick}
+          className={`text-muted-foreground hover:text-foreground ${pressable} ${className ?? ''}`}
+        >
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+/** Swaps one glyph for another with the reference's spring (a plain fade under reduced motion). */
+function GlyphSwap({
+  swapKey,
+  children
+}: {
+  swapKey: string
+  children: React.ReactNode
+}): React.JSX.Element {
+  const reduceMotion = useReducedMotion()
+  return (
+    <AnimatePresence mode="popLayout" initial={false}>
+      <motion.span
+        key={swapKey}
+        initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.5, rotate: -30 }}
+        animate={{ opacity: 1, scale: 1, rotate: 0 }}
+        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.5, rotate: 30 }}
+        transition={reduceMotion ? { duration: 0.15 } : glyphSpring}
+        className="flex"
+      >
+        {children}
+      </motion.span>
+    </AnimatePresence>
+  )
+}
+
+type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'paused'
+
+/** The large round filled play/pause button, its glyph swapping on a spring. */
+function PlayButton({
+  status,
+  disabled,
+  onClick
+}: {
+  status: PlaybackStatus
+  disabled: boolean
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          size="icon-lg"
+          onClick={onClick}
+          disabled={disabled}
+          aria-label={status === 'playing' ? 'Pause voice note' : 'Play voice note'}
+          aria-pressed={status === 'playing'}
+          aria-busy={status === 'loading' || undefined}
+          className={`shrink-0 rounded-full ${pressable}`}
+        >
+          <GlyphSwap
+            swapKey={status === 'loading' ? 'loading' : status === 'playing' ? 'pause' : 'play'}
+          >
+            {status === 'loading' ? (
+              <LoadingDots size="small" />
+            ) : status === 'playing' ? (
+              <Pause size={18} weight="fill" aria-hidden="true" />
+            ) : (
+              <Play size={18} weight="fill" className="translate-x-px" aria-hidden="true" />
+            )}
+          </GlyphSwap>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{status === 'playing' ? 'Pause' : 'Play'}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
+ * The seek slider: two stacked waveforms (the played one clipped to the playhead and glowing),
+ * the playhead, and a hover position line. Drag, click, or use the arrow keys, Home and End.
+ */
+function SeekWaveform({
+  bars,
+  progress,
+  totalDuration,
+  seekTo
+}: {
+  bars: number[]
+  progress: number
+  totalDuration: number
+  seekTo: (fraction: number) => void
+}): React.JSX.Element {
+  const reduceMotion = useReducedMotion()
+  const scrubbing = useRef(false)
+  const [hover, setHover] = useState<number | null>(null)
+  // Played bars in the brand green, unplayed in the text colour (dimmed by the layer's opacity),
+  // both resolved to concrete colours because the canvas cannot paint a CSS variable.
+  const playedColor = useBrandColor('--og-primary', '#34d399')
+  const unplayedColor = useBrandColor('--og-text', '#ffffff')
+  const fractionAt = (element: HTMLElement, clientX: number): number => {
+    const rect = element.getBoundingClientRect()
+    return rect.width ? (clientX - rect.left) / rect.width : 0
+  }
+  return (
+    <div
+      role="slider"
+      tabIndex={0}
+      aria-label="Seek voice note"
+      aria-valuemin={0}
+      aria-valuemax={Math.round(totalDuration)}
+      aria-valuenow={Math.round(progress * totalDuration)}
+      aria-valuetext={`${formatDuration(progress * totalDuration)} of ${formatDuration(totalDuration)}`}
+      className="group relative order-last min-w-0 basis-full cursor-pointer touch-none rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/60 @sm:order-none @sm:basis-0 @sm:flex-1"
+      onKeyDown={(event) => {
+        const key = event.key
+        if (key === 'ArrowRight') seekTo(progress + SEEK_STEP)
+        else if (key === 'ArrowLeft') seekTo(progress - SEEK_STEP)
+        else if (key === 'Home') seekTo(0)
+        else if (key === 'End') seekTo(1)
+        else return
+        event.preventDefault()
+      }}
+      onPointerDown={(event) => {
+        scrubbing.current = true
+        event.currentTarget.setPointerCapture(event.pointerId)
+        seekTo(fractionAt(event.currentTarget, event.clientX))
+      }}
+      onPointerMove={(event) => {
+        const fraction = fractionAt(event.currentTarget, event.clientX)
+        setHover(Math.max(0, Math.min(1, fraction)))
+        if (scrubbing.current) seekTo(fraction)
+      }}
+      onPointerUp={() => (scrubbing.current = false)}
+      onPointerCancel={() => (scrubbing.current = false)}
+      onPointerLeave={() => setHover(null)}
+    >
+      <Waveform
+        data={bars}
+        height={WAVEFORM_HEIGHT}
+        barWidth={2}
+        barGap={2}
+        barColor={unplayedColor}
+        className="opacity-35 transition-opacity duration-300 group-hover:opacity-45"
+        aria-hidden="true"
+      />
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{ clipPath: `inset(0 ${100 - progress * 100}% 0 0)` }}
+      >
+        <Waveform
+          data={bars}
+          height={WAVEFORM_HEIGHT}
+          barWidth={2}
+          barGap={2}
+          barColor={playedColor}
+          aria-hidden="true"
+          className="drop-shadow-[0_0_8px_rgb(var(--og-rgb-primary)/0.55)]"
+        />
+      </div>
+      <div
+        className="pointer-events-none absolute inset-y-1 w-px bg-primary shadow-[0_0_12px_rgb(var(--og-rgb-primary)/0.9)]"
+        style={{ left: `${progress * 100}%` }}
+      />
+      <AnimatePresence>
+        {hover !== null && (
+          <motion.div
+            data-slot="voice-hover-line"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.2 }}
+            className="pointer-events-none absolute inset-y-3 w-px bg-foreground/30"
+            style={{ left: `${hover * 100}%` }}
+          />
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+/** The transcript under the player: phrases light up with the playhead and seek when clicked. */
+function FollowAlong({
+  open,
+  segments,
+  currentTime,
+  onSeek
+}: {
+  open: boolean
+  segments: TimedSegment[]
+  currentTime: number
+  onSeek: (seconds: number) => void
+}): React.JSX.Element {
+  const reduceMotion = useReducedMotion()
+  return (
+    <AnimatePresence initial={false}>
+      {open ? (
+        <motion.div
+          key="transcript"
+          initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6, filter: 'blur(4px)' }}
+          animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, filter: 'blur(4px)' }}
+          transition={{ duration: reduceMotion ? 0.15 : 0.4, ease }}
+          className="space-y-2 border-t border-border/50 pt-3"
+        >
+          <p className="font-mono text-[10px] tracking-[0.22em] text-muted-foreground uppercase">
+            Follow along
+          </p>
+          {/* Phrases follow the playhead; a click seeks there (timings are estimated). */}
+          <Transcription
+            segments={segments}
+            currentTime={currentTime}
+            onSeek={onSeek}
+            className="gap-x-1.5 text-[14px] leading-relaxed font-light break-words"
+          >
+            {(segment, index) => (
+              <TranscriptionSegment
+                key={index}
+                index={index}
+                segment={segment}
+                className="rounded-sm outline-none transition-[color,text-shadow,opacity] duration-500 ease-out focus-visible:ring-2 focus-visible:ring-ring/60 active:opacity-70 motion-reduce:transition-none data-[active=true]:[text-shadow:0_0_14px_rgb(var(--og-rgb-primary)/0.55)]"
+              />
+            )}
+          </Transcription>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
+  )
+}
+
+/** Speed, captions, copy and regenerate: compact ghost icon buttons, each with a tooltip. */
+function VoiceActions({
+  speed,
+  onCycleSpeed,
+  transcriptShown,
+  onToggleTranscript,
+  copied,
+  onCopy,
+  retryLabel,
+  onRetry
+}: {
+  speed: number
+  onCycleSpeed: () => void
+  transcriptShown: boolean
+  onToggleTranscript?: () => void
+  copied: boolean
+  onCopy?: () => void
+  retryLabel: string
+  onRetry?: () => void
+}): React.JSX.Element {
+  return (
+    <div className="-my-1 flex items-center justify-end gap-0.5">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            onClick={onCycleSpeed}
+            aria-label={`Playback speed ${speed}x`}
+            className={`w-auto min-w-7 px-1.5 font-mono text-[10px] text-muted-foreground tabular-nums hover:text-foreground ${pressable}`}
+          >
+            <GlyphSwap swapKey={String(speed)}>{speed}x</GlyphSwap>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Playback speed</TooltipContent>
+      </Tooltip>
+      {onToggleTranscript ? (
+        <BubbleAction
+          label={transcriptShown ? 'Hide transcript' : 'Show transcript'}
+          onClick={onToggleTranscript}
+          className={transcriptShown ? 'text-foreground' : undefined}
+        >
+          <GlyphSwap swapKey={transcriptShown ? 'hide' : 'show'}>
+            {transcriptShown ? (
+              <SubtitlesSlash size={15} aria-hidden="true" />
+            ) : (
+              <Subtitles size={15} aria-hidden="true" />
+            )}
+          </GlyphSwap>
+        </BubbleAction>
+      ) : null}
+      {onCopy ? (
+        <BubbleAction
+          label={copied ? 'Copied' : 'Copy transcript'}
+          onClick={onCopy}
+          className={copied ? 'text-primary hover:text-primary' : undefined}
+        >
+          <GlyphSwap swapKey={copied ? 'copied' : 'copy'}>
+            {copied ? (
+              <Check size={15} weight="bold" aria-hidden="true" />
+            ) : (
+              <Copy size={15} aria-hidden="true" />
+            )}
+          </GlyphSwap>
+          {copied ? (
+            <span role="status" aria-live="polite" className="sr-only">
+              Copied
+            </span>
+          ) : null}
+        </BubbleAction>
+      ) : null}
+      {onRetry ? (
+        <BubbleAction label={retryLabel} onClick={onRetry}>
+          <ArrowsClockwise size={15} aria-hidden="true" />
+        </BubbleAction>
+      ) : null}
+    </div>
+  )
+}
+
 interface VoiceBubbleProps {
   messageId: string
   /** Recorded clip URL for user voice notes; absent for assistant replies. */
@@ -214,7 +665,9 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const srcRef = useRef<{ dataUrl: string; voice?: string } | null>(null)
-  const [status, setStatus] = useState<'idle' | 'loading' | 'playing' | 'paused'>('idle')
+  /** Where the next fresh clip starts, when the listener sought while no clip was playing. */
+  const pendingStartRef = useRef(0)
+  const [status, setStatus] = useState<PlaybackStatus>('idle')
   const [currentTime, setCurrentTime] = useState(0)
   const [loadedDuration, setLoadedDuration] = useState(0)
   const [speed, setSpeed] = useState(defaultSpeed)
@@ -241,7 +694,7 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
   }, [isLoading, showTranscriptInitially, transcript])
 
   // Telling the audio element about a new preference IS updating an external system, which is what
-  // an effect is for. Resetting the chip is not - see `chosenSpeed`.
+  // an effect is for. Resetting the chip is not - see `appliedDefaultSpeed`.
   useEffect(() => {
     if (audioRef.current) audioRef.current.playbackRate = defaultSpeed
   }, [defaultSpeed])
@@ -257,17 +710,15 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
    * Stable waveform: the real decoded envelope for a recording, else transcript-derived.
    *
    * The decoded envelope is stored WITH the clip it came from, so "which wave belongs to this
-   * clip" is derived rather than kept in sync by clearing state in an effect. That also closes a
-   * real gap: the old effect only cleared on no clip at all, so between one clip's url changing
-   * and the new one finishing decoding, the bubble drew the PREVIOUS recording's envelope. It now
-   * falls back to the transcript-derived shape for that window, which is what it already does
-   * before any clip has decoded.
+   * clip" is derived rather than kept in sync by clearing state in an effect. Between one clip's
+   * url changing and the new one finishing decoding, the bubble draws the transcript-derived
+   * shape, which is what it already does before any clip has decoded.
    */
   const [decodedWave, setDecodedWave] = useState<DecodedWave | null>(null)
   useEffect(() => {
     if (!audioUrl) return
     let cancelled = false
-    void decodeFileWaveform(audioUrl, WAVEFORM_BARS).then((wave) => {
+    void decodeFileWaveform(audioUrl, WAVEFORM_POINTS).then((wave) => {
       if (!cancelled) setDecodedWave({ url: audioUrl, wave })
     })
     return () => {
@@ -277,8 +728,8 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
   const fileWave = waveForClip(audioUrl, decodedWave)
 
   const bars = useMemo(() => {
-    const raw = fileWave.length ? fileWave : waveformFromText(transcript, WAVEFORM_BARS)
-    return normalize(subsample(raw, WAVEFORM_BARS))
+    const raw = fileWave.length ? fileWave : waveformFromText(transcript, WAVEFORM_POINTS)
+    return normalize(subsample(raw, WAVEFORM_POINTS))
   }, [fileWave, transcript])
 
   // Estimate duration before the audio element reports a real value.
@@ -289,11 +740,9 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
   }, [durationSeconds, transcript, speed])
   const { totalDuration, progress } = playbackProgress({ loadedDuration, estDuration, currentTime })
   const segments = useMemo(
-    () => timedSegments(transcript, totalDuration),
+    () => phraseSegments(transcript, totalDuration),
     [transcript, totalDuration]
   )
-  const reduceMotion = useReducedMotion()
-  const scrubbing = useRef(false)
 
   // Pause when another bubble takes over playback.
   useEffect(() => {
@@ -313,6 +762,18 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
     []
   )
 
+  // timeupdate fires a few times a second; follow the playhead every frame while playing so the
+  // played waveform and the playhead glide instead of stepping. Each render that moved the
+  // playhead asks for one more frame; when the clock stands still (buffering) the chain rests
+  // until the next timeupdate moves it again.
+  useEffect(() => {
+    if (status !== 'playing') return
+    const frame = requestAnimationFrame(() => {
+      if (audioRef.current) setCurrentTime(audioRef.current.currentTime)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [status, currentTime])
+
   const wire = useCallback(
     (audio: HTMLAudioElement) => {
       audio.playbackRate = speed
@@ -321,6 +782,7 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
         if (Number.isFinite(audio.duration)) setLoadedDuration(audio.duration)
       }
       audio.onended = () => {
+        pendingStartRef.current = 0
         setStatus('idle')
         setCurrentTime(0)
       }
@@ -345,15 +807,17 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
     try {
       const voice = audioUrl ? undefined : await readVoice?.().catch(() => undefined)
       if (status === 'paused' && audio && (audioUrl || srcRef.current?.voice === voice)) {
+        const pendingStart = pendingStartRef.current
         claimVoicePlayback(messageId)
         await audio.play()
+        // Cleared only once playback starts, and only if no newer seek replaced it.
+        if (pendingStartRef.current === pendingStart) pendingStartRef.current = 0
         setStatus('playing')
         return
       }
       // A changed voice must not resume or reuse the previous synthesized clip.
       audio?.pause()
       audioRef.current = null
-      setCurrentTime(0)
       setLoadedDuration(0)
       const cached = srcRef.current
       let src = audioUrl || (cached && cached.voice === voice ? cached.dataUrl : null)
@@ -363,11 +827,17 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
         srcRef.current = { dataUrl, voice }
         src = dataUrl
       }
+      // Read after synthesis: a seek made while the clip was being prepared still counts.
+      const startAt = pendingStartRef.current
+      setCurrentTime(startAt)
       const audioEl = new Audio(src)
       audioRef.current = audioEl
       wire(audioEl)
+      // Before metadata loads this is the element's default start position.
+      if (startAt > 0) audioEl.currentTime = startAt
       claimVoicePlayback(messageId)
       await audioEl.play()
+      if (pendingStartRef.current === startAt) pendingStartRef.current = 0
       setStatus('playing')
     } catch (e) {
       console.error('[voice] playback failed', e)
@@ -390,12 +860,26 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
     })
   }, [])
 
-  const seekTo = useCallback((fraction: number) => {
-    const audio = audioRef.current
-    if (!audio || !Number.isFinite(audio.duration)) return
-    audio.currentTime = Math.max(0, Math.min(1, fraction)) * audio.duration
-    setCurrentTime(audio.currentTime)
-  }, [])
+  /**
+   * Move the playhead to `seconds`. With a clip loaded it moves the clip; before there is one it
+   * moves the readout and remembers the spot, so Play starts from where the listener pointed.
+   */
+  const seekSeconds = useCallback(
+    (seconds: number) => {
+      const audio = audioRef.current
+      const length = audio && Number.isFinite(audio.duration) ? audio.duration : totalDuration
+      const next = Math.max(0, Math.min(length, seconds))
+      if (audio) audio.currentTime = next
+      // An ended clip is replaced on the next Play, so the spot is remembered either way.
+      pendingStartRef.current = next
+      setCurrentTime(next)
+    },
+    [totalDuration]
+  )
+  const seekTo = useCallback(
+    (fraction: number) => seekSeconds(Math.max(0, Math.min(1, fraction)) * totalDuration),
+    [seekSeconds, totalDuration]
+  )
 
   // Auto-play once a freshly-finished assistant reply is ready.
   const autoPlayedRef = useRef(false)
@@ -407,274 +891,90 @@ export const VoiceBubble: React.FC<VoiceBubbleProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoPlay, isLoading])
 
-  const fractionAt = (element: HTMLElement, clientX: number): number => {
-    const rect = element.getBoundingClientRect()
-    return rect.width ? (clientX - rect.left) / rect.width : 0
-  }
   // Before playback starts nothing is on the clock, so the transcript reads as one even text.
   const transcriptTime = status === 'idle' && currentTime === 0 ? totalDuration : currentTime
+  const waveformLoading = isLoading && !isUser
+
+  const surface = embedded
+    ? 'flex w-full flex-col gap-3'
+    : `flex w-[88%] max-w-[34rem] flex-col gap-3 rounded-2xl border p-4 ${
+        isUser
+          ? 'self-end border-primary/25 bg-primary/[0.06]'
+          : 'self-start border-border/60 bg-card'
+      }`
 
   return (
-    <div
-      className={
-        embedded
-          ? 'flex w-full flex-col gap-2'
-          : `flex w-[88%] max-w-[34rem] flex-col gap-2 rounded-xl border p-3 ${isUser ? 'self-end border-green-500/40 bg-green-500/10' : 'self-start border-neutral-800 bg-neutral-900/50'}`
-      }
-    >
-      <div className="flex items-center gap-2.5">
-        {/* Play / pause / loading */}
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="secondary"
-          onClick={handlePlayPause}
-          disabled={isLoading}
-          aria-pressed={status === 'playing'}
-          aria-busy={status === 'loading' || undefined}
-          className="shrink-0 rounded-full bg-green-500/20 text-green-500 hover:bg-green-500/30"
-          title={status === 'playing' ? 'Pause' : 'Play'}
-        >
-          <AnimatePresence mode="popLayout" initial={false}>
-            <motion.span
-              key={status === 'loading' ? 'loading' : status === 'playing' ? 'pause' : 'play'}
-              initial={reduceMotion ? false : { opacity: 0, scale: 0.5, rotate: -30 }}
-              animate={{ opacity: 1, scale: 1, rotate: 0 }}
-              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.5, rotate: 30 }}
-              transition={{ type: 'spring', stiffness: 500, damping: 28 }}
-              className="flex"
-            >
-              {status === 'loading' ? (
-                <LoadingDots size="small" />
-              ) : status === 'playing' ? (
-                <Pause size={16} weight="fill" />
-              ) : (
-                <Play size={16} weight="fill" />
-              )}
-            </motion.span>
-          </AnimatePresence>
-        </Button>
+    // Its own provider: voice notes also render outside the app shell's provider.
+    <TooltipProvider delayDuration={300}>
+      <div className={`@container ${surface}`}>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-3">
+          <PlayButton status={status} disabled={isLoading} onClick={() => void handlePlayPause()} />
 
-        {/* Waveform: fills with light as it plays; drag or use the arrow keys to seek */}
-        {isLoading && !isUser ? (
-          <div className="flex h-10 flex-1 items-center">
-            <LoadingDots className="mx-1" />
-          </div>
-        ) : (
-          <div
-            role="slider"
-            tabIndex={0}
-            aria-label="Seek voice note"
-            aria-valuemin={0}
-            aria-valuemax={Math.round(totalDuration)}
-            aria-valuenow={Math.round(progress * totalDuration)}
-            aria-valuetext={`${formatDuration(progress * totalDuration)} of ${formatDuration(totalDuration)}`}
-            className="relative h-10 min-w-0 flex-1 cursor-pointer touch-none rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-            onKeyDown={(event) => {
-              if (event.key === 'ArrowRight') seekTo(progress + SEEK_STEP)
-              else if (event.key === 'ArrowLeft') seekTo(progress - SEEK_STEP)
-              else if (event.key === 'Home') seekTo(0)
-              else if (event.key === 'End') seekTo(1)
-            }}
-            onPointerDown={(event) => {
-              scrubbing.current = true
-              event.currentTarget.setPointerCapture(event.pointerId)
-              seekTo(fractionAt(event.currentTarget, event.clientX))
-            }}
-            onPointerMove={(event) => {
-              if (scrubbing.current) seekTo(fractionAt(event.currentTarget, event.clientX))
-            }}
-            onPointerUp={() => (scrubbing.current = false)}
-            onPointerCancel={() => (scrubbing.current = false)}
-          >
-            <Waveform
-              data={bars}
-              height={40}
-              barWidth={2}
-              barGap={2}
-              fadeEdges={false}
-              className="opacity-35 [--foreground:var(--primary)]"
-              aria-hidden="true"
-            />
+          {waveformLoading ? (
             <div
-              className="pointer-events-none absolute inset-0"
-              style={{ clipPath: `inset(0 ${100 - progress * 100}% 0 0)` }}
+              className="order-last flex min-w-0 basis-full items-center @sm:order-none @sm:basis-0 @sm:flex-1"
+              style={{ height: WAVEFORM_HEIGHT }}
             >
-              <Waveform
-                data={bars}
-                height={40}
-                barWidth={2}
-                barGap={2}
-                fadeEdges={false}
-                aria-hidden="true"
-                className="[--foreground:var(--primary)] drop-shadow-[0_0_8px_rgb(var(--og-rgb-primary)/0.55)]"
-              />
+              <LoadingDots className="mx-1" />
             </div>
-            {progress > 0 ? (
-              <div
-                className="pointer-events-none absolute inset-y-1 w-px bg-primary shadow-[0_0_12px_rgb(var(--og-rgb-primary)/0.9)]"
-                style={{ left: `${progress * 100}%` }}
-              />
-            ) : null}
-          </div>
-        )}
-      </div>
-
-      {/* Its own provider: voice notes also render outside the app shell's provider. */}
-      <TooltipProvider delayDuration={300}>
-        <div className="flex items-center justify-between">
-          {transcript ? (
-            <ToggleGroup
-              size="sm"
-              value={showTranscript ? ['transcript'] : []}
-              onValueChange={(values) => setShowTranscript(values.includes('transcript'))}
-            >
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <ToggleGroupItem
-                    value="transcript"
-                    aria-label={showTranscript ? 'Hide transcript' : 'Show transcript'}
-                    className="text-neutral-500 hover:text-neutral-300"
-                  >
-                    <AnimatePresence mode="popLayout" initial={false}>
-                      <motion.span
-                        key={showTranscript ? 'hide' : 'show'}
-                        initial={reduceMotion ? false : { opacity: 0, scale: 0.6 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.6 }}
-                        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-                        className="flex"
-                      >
-                        {showTranscript ? (
-                          <SubtitlesSlash size={14} aria-hidden="true" />
-                        ) : (
-                          <Subtitles size={14} aria-hidden="true" />
-                        )}
-                      </motion.span>
-                    </AnimatePresence>
-                  </ToggleGroupItem>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {showTranscript ? 'Hide transcript' : 'Show transcript'}
-                </TooltipContent>
-              </Tooltip>
-            </ToggleGroup>
           ) : (
-            <span />
+            <SeekWaveform
+              bars={bars}
+              progress={progress}
+              totalDuration={totalDuration}
+              seekTo={seekTo}
+            />
           )}
-          <div className="flex items-center gap-2.5">
-            <span className="min-w-[2rem] text-right text-[11px] text-neutral-500 tabular-nums">
-              {isLoading
-                ? '—'
-                : formatDuration(status === 'idle' ? totalDuration : currentTime || totalDuration)}
-            </span>
-            <button
-              type="button"
-              onClick={cycleSpeed}
-              className="cursor-pointer rounded-md border border-neutral-700 px-1.5 py-0.5 text-[10px] text-neutral-400 transition-colors hover:border-green-500 hover:text-green-500 active:scale-95"
-              title="Playback speed"
-            >
-              {speed}x
-            </button>
-            {!isLoading && onCopy ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    size="icon-xs"
-                    variant="ghost"
-                    onClick={() => onCopy(transcript)}
-                    className={copied ? 'text-green-500' : 'text-neutral-600 hover:text-green-500'}
-                    aria-label={copied ? 'Copied' : 'Copy transcript'}
-                  >
-                    <AnimatePresence mode="popLayout" initial={false}>
-                      <motion.span
-                        key={copied ? 'copied' : 'copy'}
-                        initial={reduceMotion ? false : { opacity: 0, scale: 0.5, rotate: -30 }}
-                        animate={{ opacity: 1, scale: 1, rotate: 0 }}
-                        exit={
-                          reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.5, rotate: 30 }
-                        }
-                        transition={{ type: 'spring', stiffness: 500, damping: 28 }}
-                        className="flex"
-                      >
-                        {copied ? (
-                          <Check size={13} weight="bold" aria-hidden="true" />
-                        ) : (
-                          <Copy size={13} aria-hidden="true" />
-                        )}
-                      </motion.span>
-                    </AnimatePresence>
-                    {copied ? (
-                      <span role="status" aria-live="polite" className="sr-only">
-                        Copied
-                      </span>
-                    ) : null}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{copied ? 'Copied' : 'Copy transcript'}</TooltipContent>
-              </Tooltip>
-            ) : null}
-            {!isLoading && onRetry ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    size="icon-xs"
-                    variant="ghost"
-                    onClick={onRetry}
-                    className="text-neutral-600 hover:text-green-500"
-                    aria-label={isUser ? 'Resend' : 'Regenerate'}
-                  >
-                    <ArrowsClockwise size={13} aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{isUser ? 'Resend' : 'Regenerate'}</TooltipContent>
-              </Tooltip>
-            ) : null}
-          </div>
-        </div>
-      </TooltipProvider>
 
-      <AutoHeight>
-        <AnimatePresence initial={false}>
-          {showTranscript && transcript ? (
-            <motion.div
-              key="transcript"
-              initial={reduceMotion ? false : { opacity: 0, y: 6, filter: 'blur(4px)' }}
-              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-              exit={{ opacity: 0, filter: 'blur(4px)' }}
-              transition={{ duration: 0.4, ease }}
-              className="border-t border-neutral-800 pt-2"
-            >
-              {/* Words follow the playhead; a sentence seeks there once the clip is loaded. */}
-              <Transcription
-                segments={segments}
-                currentTime={transcriptTime}
-                onSeek={(seconds) => seekTo(totalDuration ? seconds / totalDuration : 0)}
-                className="gap-x-1 break-words text-xs leading-relaxed"
-              >
-                {(segment, index) => (
-                  <TranscriptionSegment
-                    key={index}
-                    index={index}
-                    segment={segment}
-                    className="rounded-sm transition-[color,text-shadow] duration-500 ease-out data-[active=true]:[text-shadow:0_0_14px_rgb(var(--og-rgb-primary)/0.55)]"
-                  />
-                )}
-              </Transcription>
-            </motion.div>
-          ) : null}
-        </AnimatePresence>
-        {playbackError ? (
-          <div
-            role="alert"
-            className="mt-2 border-t border-red-500/30 pt-2 text-[11px] leading-relaxed text-red-300"
+          <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums @sm:ml-0">
+            {isLoading ? (
+              '—'
+            ) : (
+              <>
+                <span className="text-foreground">{formatDuration(currentTime)}</span>
+                <span className="mx-1 text-muted-foreground/50">/</span>
+                {formatDuration(totalDuration)}
+              </>
+            )}
+          </span>
+          <BubbleAction
+            label="Back to start"
+            disabled={isLoading || currentTime === 0}
+            onClick={() => seekSeconds(0)}
           >
-            {playbackError}
-          </div>
-        ) : null}
-      </AutoHeight>
-    </div>
+            <ArrowCounterClockwise size={16} aria-hidden="true" />
+          </BubbleAction>
+        </div>
+
+        {/* Secondary actions: compact ghost icons under the row, so the row itself matches the reference. */}
+        <VoiceActions
+          speed={speed}
+          onCycleSpeed={cycleSpeed}
+          transcriptShown={showTranscript}
+          onToggleTranscript={transcript ? () => setShowTranscript((shown) => !shown) : undefined}
+          copied={copied}
+          onCopy={!isLoading && onCopy ? () => onCopy(transcript) : undefined}
+          retryLabel={isUser ? 'Resend' : 'Regenerate'}
+          onRetry={!isLoading ? onRetry : undefined}
+        />
+
+        <AutoHeight>
+          <FollowAlong
+            open={showTranscript && Boolean(transcript)}
+            segments={segments}
+            currentTime={transcriptTime}
+            onSeek={seekSeconds}
+          />
+          {playbackError ? (
+            <div
+              role="alert"
+              className="mt-3 border-t border-destructive/30 pt-2 text-[11.5px] leading-relaxed text-destructive"
+            >
+              {playbackError}
+            </div>
+          ) : null}
+        </AutoHeight>
+      </div>
+    </TooltipProvider>
   )
 }

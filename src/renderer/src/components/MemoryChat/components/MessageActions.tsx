@@ -12,7 +12,6 @@ export function CopyAction({
   copied,
   onCopy
 }: Readonly<{ copied: boolean; onCopy: () => void }>): React.JSX.Element {
-  console.log('MemoryChat CopyAction rendered')
   return (
     <DropdownMenuItem onSelect={onCopy} title="Copy">
       {copied ? (
@@ -43,7 +42,6 @@ export function RegenerateAction({
   disabled?: boolean
   onRegenerate: () => void
 }>): React.JSX.Element {
-  console.log('MemoryChat RegenerateAction rendered')
   return (
     <DropdownMenuItem
       disabled={disabled}
@@ -76,7 +74,6 @@ function UserMessageActionsComponent({
   onEdit: () => void
   onRegenerate: () => void
 }>): React.JSX.Element {
-  console.log('MemoryChat UserMessageActions rendered')
   return (
     <MessageActionsMenu>
       <CopyAction copied={copied} onCopy={onCopy} />
@@ -127,7 +124,6 @@ function VoiceMessageActionsComponent({
   onEdit: () => void
   onTranscribe: () => void
 }>): React.JSX.Element {
-  console.log('MemoryChat VoiceMessageActions rendered')
   return (
     <MessageActionsMenu label="Voice message actions">
       <CopyAction copied={copied} onCopy={onCopy} />
@@ -164,7 +160,6 @@ export function MessageActionsMenu({
   children,
   label = 'Message actions'
 }: Readonly<{ children: React.ReactNode; label?: string }>): React.JSX.Element {
-  console.log('MemoryChat MessageActionsMenu rendered')
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

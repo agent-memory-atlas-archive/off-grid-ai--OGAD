@@ -244,6 +244,11 @@ export function readGgufContextLength(
   }
 }
 
+// Parsing up to tens of MiB of metadata is the costly part, and the answer is fixed for
+// one file version. Callers ask on every model-list read, so remember it per path, size
+// and modification time.
+const mtpSupportCache = new Map<string, boolean>()
+
 /** True only when the GGUF declares one or more embedded NextN/MTP layers. */
 export function readGgufMtpSupport(
   p: string,
@@ -254,10 +259,13 @@ export function readGgufMtpSupport(
   expectedSize?: number
 ): boolean {
   try {
-    const size = fs.statSync(p).size
+    const { size, mtimeMs } = fs.statSync(p)
     if (expectedSize !== undefined && size !== expectedSize) return false
     const toRead = Math.min(size, maxBytes)
     if (toRead <= 0) return false
+    const key = mtimeMs === undefined ? null : `${p}\0${size}\0${mtimeMs}\0${toRead}`
+    const known = key === null ? undefined : mtpSupportCache.get(key)
+    if (known !== undefined) return known
     const fd = fs.openSync(p, 'r')
     const buf = Buffer.alloc(toRead)
     try {
@@ -265,7 +273,9 @@ export function readGgufMtpSupport(
     } finally {
       fs.closeSync(fd)
     }
-    return (parseGgufMetadata(buf, true).nextnPredictLayers ?? 0) > 0
+    const supported = (parseGgufMetadata(buf, true).nextnPredictLayers ?? 0) > 0
+    if (key !== null) mtpSupportCache.set(key, supported)
+    return supported
   } catch {
     return false
   }

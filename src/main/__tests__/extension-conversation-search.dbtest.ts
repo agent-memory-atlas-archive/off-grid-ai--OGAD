@@ -126,8 +126,9 @@ describe('bridge saved chat pages, real SQLite', () => {
     )
     expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(10_000)
     // Listing retains its existing turn window and content limits.
-    const listed = plainConversationPage({ limit: 1 }).conversations[0]!
-    expect(listed.id).toBe(id)
+    // Found by id: earlier tests' chats can share this one's timestamp, so list order is not it.
+    const listed = plainConversationPage({ limit: 50 }).conversations.find((c) => c.id === id)!
+    expect(listed).toBeDefined()
     expect(listed.turns).toHaveLength(40)
     expect(listed.turns[0]!.content).toHaveLength(20_000)
     expect(listed).not.toHaveProperty('snippet')

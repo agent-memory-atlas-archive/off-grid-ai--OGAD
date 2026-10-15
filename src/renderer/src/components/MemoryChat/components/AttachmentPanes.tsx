@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import { FilePreview, type FilePreviewState } from '@offgrid/operator-ui/operator/media/file-preview'
 import pdfWorkerUrl from '@offgrid/operator-ui/pdf.worker.min.mjs?url'
 import { captureUrlForPath } from '../../../../../shared/ogcapture-url'
+import { useMediaUrl, type MediaUrlState } from '@renderer/lib/media-url'
 
 const ease = [0.16, 1, 0.3, 1] as const
 const PDF_OPTIONS = { useSystemFonts: true }
@@ -40,6 +41,7 @@ function FramedDocument({ src, title }: { src: string; title: string }): React.J
 function previewFor(
   content: AttachmentViewerContent,
   src: string,
+  pdfMedia: MediaUrlState,
   pdf: { page: number; setPage: (page: number) => void; scale: number; setScale: (s: number) => void }
 ): FilePreviewState {
   const missing = (what: string): FilePreviewState => ({
@@ -55,11 +57,14 @@ function previewFor(
   }
   if (content.renderer === 'document' && content.path) {
     // A document renders from its BYTES, served by the loopback media origin (connect-src allows it).
-    if (!src) return missing('file')
+    // pdf.js fetches them, and a page cannot fetch the ogcapture:// scheme, so this is the media
+    // server's http URL, never the capture URL the images use.
+    if (pdfMedia.status === 'idle' || pdfMedia.status === 'loading') return { kind: 'loading' }
+    if (pdfMedia.status !== 'ready') return missing('file')
     return {
       kind: 'pdf',
       viewer: {
-        file: src,
+        file: pdfMedia.url,
         workerSrc: pdfWorkerUrl,
         pageNumber: pdf.page,
         onPageChange: pdf.setPage,
@@ -78,12 +83,14 @@ function AttachmentPreviewComponent({
 }: {
   content: AttachmentViewerContent
 }): React.JSX.Element {
-  console.log('MemoryChat AttachmentPreview rendered')
   const [page, setPage] = useState(1)
   const [scale, setScale] = useState(1)
   const src = content.path ? captureUrlForPath(content.path) : ''
   const framedDocument = content.renderer === 'document' && content.kind !== 'pdf' && content.path
-  const preview = previewFor(content, src, { page, setPage, scale, setScale })
+  const pdfMedia = useMediaUrl(
+    content.renderer === 'document' && !framedDocument ? content.path : null
+  )
+  const preview = previewFor(content, src, pdfMedia, { page, setPage, scale, setScale })
 
   return (
     <AnimatePresence mode="popLayout" initial={false}>
@@ -93,7 +100,10 @@ function AttachmentPreviewComponent({
         animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
         exit={{ opacity: 0, y: -4, filter: 'blur(6px)' }}
         transition={{ duration: 0.4, ease }}
-        className={framedDocument ? 'h-full' : PREVIEW_SURFACE}
+        // A PDF fills the panel's height; the viewer fits each page to it.
+        className={
+          framedDocument ? 'h-full' : preview.kind === 'pdf' ? `h-full ${PREVIEW_SURFACE}` : PREVIEW_SURFACE
+        }
       >
         {framedDocument ? (
           src ? (

@@ -1,3 +1,4 @@
+import { settingsChanged } from '../../settings-version'
 import { conversationSnippet } from '../bridge-conversations'
 import { describe, expect, it } from 'vitest'
 import {
@@ -378,6 +379,38 @@ describe('sealed rpc', () => {
         error: 'invalid'
       })
     }
+  })
+
+  it('answers a settings watch when something changes, not on a timer', async () => {
+    const s = await setup()
+    await s.pair()
+    // A browser with no version yet is answered at once with the current one.
+    const first = await s.call('device000001', 'settings.watch', {})
+    expect(first.body).toMatchObject({ ok: true, result: { version: expect.any(Number) } })
+    const since = (first.body as { result: { version: number } }).result.version
+
+    // Holding the current version waits; a browser's own save moves it.
+    let answered = false
+    const waiting = s.call('device000001', 'settings.watch', { since }).then((reply) => {
+      answered = true
+      return reply
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(answered).toBe(false)
+    await s.call('device000001', 'settings.set', {
+      section: 'voice',
+      patch: { voice: 'bm_george' }
+    })
+    const moved = (await waiting).body as { ok: boolean; result: { version: number } }
+    expect(moved.ok).toBe(true)
+    expect(moved.result.version).toBeGreaterThan(since)
+
+    // So does a change made on the desktop itself, through any settings writer.
+    const next = s.call('device000001', 'settings.watch', { since: moved.result.version })
+    settingsChanged()
+    expect(((await next).body as { result: { version: number } }).result.version).toBeGreaterThan(
+      moved.result.version
+    )
   })
 
   it('lets a paired browser give a model a task role, and refuses what the desktop refuses', async () => {

@@ -186,7 +186,7 @@ function ReprocessingBanner(): React.JSX.Element | null {
 // text token, so `hover:text-neutral-900` painted the label near-white on a near-white row.
 const navRowClass = (expanded: boolean, active = false): string =>
   cn(
-    'group/nav relative isolate flex items-center gap-3 rounded-lg py-2 text-sm transition-colors',
+    'group/nav relative isolate flex items-center gap-3 rounded-lg py-2 text-sm',
     expanded ? 'px-3' : 'justify-center px-0',
     active ? 'text-emerald-400' : 'text-neutral-400 hover:bg-neutral-500/10 hover:text-white'
   )
@@ -271,6 +271,7 @@ function ModelStatusDot({
       onClick={onClick}
       title={label}
       aria-label={label}
+      data-slot="button"
       className={navRowClass(open)}
     >
       <IconActivityHeartbeat className={cn('h-5 w-5 shrink-0', color)} />
@@ -356,6 +357,7 @@ function AppContent(): React.JSX.Element {
   const [replayTarget, setReplayTarget] = useState<number | null>(null)
   // A search hit can deep-link to a specific meeting; cleared on leaving Meetings.
   const [meetingTarget, setMeetingTarget] = useState<number | null>(null)
+  const [meetingEventTarget, setMeetingEventTarget] = useState<number | null>(null)
   // Which tab the Actions screen opens on when reached via a Day "View all" link.
   const [actionsMode, setActionsMode] = useState<'todo' | 'approvals' | null>(null)
   const [actionTarget, setActionTarget] = useState<number | null>(null)
@@ -387,6 +389,7 @@ function AppContent(): React.JSX.Element {
   // God (Pro) mounts through slots: its screen, an always-on root, and its nav item's dot.
   const GodScreen = proReady && isPro ? getSlot(SLOTS.godScreen) : undefined
   const GodRoot = proReady && isPro ? getSlot(SLOTS.godRoot) : undefined
+  const AppRoot = proReady && isPro ? getSlot(SLOTS.appRoot) : undefined
   const GodBadge = proReady && isPro ? getSlot(SLOTS.godBadge) : undefined
   const openGod = useCallback((): void => navigateTo('explore'), [navigateTo])
   const [sidebarHovered, setSidebarHovered] = useState(false)
@@ -457,6 +460,7 @@ function AppContent(): React.JSX.Element {
     setSearchSort('relevance')
     setReplayTarget(null)
     setMeetingTarget(null)
+    setMeetingEventTarget(null)
     setActionsMode(null)
     setActionTarget(null)
     setApprovalTarget(null)
@@ -812,6 +816,9 @@ function AppContent(): React.JSX.Element {
         },
         openReplay: (timestamp) => {
           navigateTo('replay', () => setReplayTarget(timestamp))
+        },
+        openLink: (url) => {
+          window.open(url, '_blank', 'noopener')
         }
       })
     },
@@ -855,6 +862,9 @@ function AppContent(): React.JSX.Element {
           setReplayTarget(intent.seekMs ?? null)
         } else {
           setMeetingTarget(intent.meetingId ?? null)
+          setMeetingEventTarget(intent.calendarEventId ?? null)
+          // Calendar is a URL tab (/meetings/calendar), so Back returns to it.
+          setNavigationSubroute(intent.mode === 'calendar' ? 'calendar' : null)
         }
       })
     },
@@ -880,7 +890,10 @@ function AppContent(): React.JSX.Element {
     prevViewRef.current = viewMode
     if (prev === viewMode) return
     if (prev === 'replay' && viewMode !== 'replay') setReplayTarget(null)
-    if (prev === 'meetings' && viewMode !== 'meetings') setMeetingTarget(null)
+    if (prev === 'meetings' && viewMode !== 'meetings') {
+      setMeetingTarget(null)
+      setMeetingEventTarget(null)
+    }
     if (prev === 'day' && viewMode !== 'day') setCalendarEventTarget(null)
     if (prev === 'actions' && viewMode !== 'actions') {
       setActionTarget(null)
@@ -1058,11 +1071,23 @@ function AppContent(): React.JSX.Element {
         onClick={() => goToView(item.view)}
         aria-label={item.label}
         title={!sidebarOpen ? item.label : undefined}
+        data-slot="button"
         className={navRowClass(sidebarOpen, active)}
       >
         {/* One highlight across the rail: it glides from the old item to the new one. */}
-        <NavHighlight active={active} group="sidebar" />
-        <span className="relative z-10 flex shrink-0">{item.icon}</span>
+        <NavHighlight
+          active={active}
+          group="sidebar"
+          className="bg-[linear-gradient(90deg,rgb(var(--og-rgb-primary)/0.18),rgb(var(--og-rgb-primary)/0.04)_75%)] shadow-[inset_2px_0_0_rgb(var(--og-rgb-primary)),inset_0_0_0_1px_rgb(var(--og-rgb-primary)/0.18),0_0_18px_-4px_rgb(var(--og-rgb-primary)/0.55)]"
+        />
+        <span
+          className={cn(
+            'relative z-10 flex shrink-0 transition-[scale,rotate,filter] duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] group-hover/nav:-rotate-6 group-hover/nav:scale-110 group-active/nav:scale-95 motion-reduce:transition-none',
+            active && 'drop-shadow-[0_0_6px_rgb(var(--og-rgb-primary)/0.55)]'
+          )}
+        >
+          {item.icon}
+        </span>
         {sidebarOpen && (
           <span className="relative z-10 flex-1 text-left whitespace-pre">{item.label}</span>
         )}
@@ -1228,8 +1253,9 @@ function AppContent(): React.JSX.Element {
                   disabled={!canGoBack}
                   aria-label="Back"
                   title={`Back (${primaryModifier()}+[)`}
+                  data-slot="button"
                   className={cn(
-                    'flex items-center justify-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-800/40 text-neutral-300 transition-colors hover:border-neutral-700 hover:bg-neutral-800 hover:text-white disabled:opacity-30 disabled:hover:bg-neutral-800/40',
+                    'flex items-center justify-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-800/40 text-neutral-300 hover:border-neutral-700 hover:bg-neutral-800 hover:text-white disabled:opacity-30 disabled:hover:bg-neutral-800/40',
                     sidebarOpen ? 'flex-1 px-2 py-1.5' : 'h-9 w-9'
                   )}
                 >
@@ -1241,7 +1267,8 @@ function AppContent(): React.JSX.Element {
                     disabled={!canGoForward}
                     aria-label="Forward"
                     title={`Forward (${primaryModifier()}+])`}
-                    className="flex items-center justify-center rounded-lg border border-neutral-800 bg-neutral-800/40 px-2 py-1.5 text-neutral-300 transition-colors hover:border-neutral-700 hover:bg-neutral-800 hover:text-white disabled:opacity-30 disabled:hover:bg-neutral-800/40"
+                    data-slot="button"
+                    className="flex items-center justify-center rounded-lg border border-neutral-800 bg-neutral-800/40 px-2 py-1.5 text-neutral-300 hover:border-neutral-700 hover:bg-neutral-800 hover:text-white disabled:opacity-30 disabled:hover:bg-neutral-800/40"
                   >
                     <IconArrowRight className="h-4 w-4 shrink-0" />
                   </button>
@@ -1251,7 +1278,9 @@ function AppContent(): React.JSX.Element {
               {/* Navigation (scrolls; Settings is pinned to the bottom) */}
               <div
                 className={cn(
-                  'mt-5 flex flex-1 flex-col overflow-y-auto overflow-x-hidden pr-0.5',
+                  // Side padding (offset by the negative margin) keeps the selected row's glow
+                  // inside this scroll area's clip instead of cut at the edges.
+                  'mt-5 -mx-4 flex flex-1 flex-col overflow-y-auto overflow-x-hidden px-4',
                   !sidebarOpen && 'sidebar-nav-scroll-collapsed'
                 )}
               >
@@ -1296,6 +1325,7 @@ function AppContent(): React.JSX.Element {
                 onClick={() => openExternal(OFF_GRID_MOBILE_URL)}
                 aria-label="Mobile app"
                 title={!sidebarOpen ? 'Get the mobile app' : undefined}
+                data-slot="button"
                 className={navRowClass(sidebarOpen)}
               >
                 <IconDeviceMobile className="h-5 w-5 shrink-0" />
@@ -1440,6 +1470,7 @@ function AppContent(): React.JSX.Element {
                         navigateBack,
                         replayTarget,
                         meetingTarget,
+                        meetingEventTarget,
                         actionTarget,
                         approvalTarget,
                         calendarEventTarget,
@@ -1482,6 +1513,7 @@ function AppContent(): React.JSX.Element {
       </AnimatePresence>
       {TaskFloatingView ? <TaskFloatingView /> : null}
       {GodRoot ? <GodRoot isOpen={viewMode === 'explore'} open={openGod} /> : null}
+      {AppRoot ? <AppRoot /> : null}
     </div>
   )
 }
@@ -1499,8 +1531,10 @@ function SidebarPinButton({
       aria-label={pinned ? 'Unpin sidebar' : 'Pin sidebar'}
       aria-pressed={pinned}
       title={pinned ? 'Unpin: open on hover' : 'Pin: keep the sidebar open'}
+      data-slot="button"
+      data-size="icon"
       className={cn(
-        'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-neutral-800 bg-neutral-800/40 transition-colors hover:border-neutral-700 hover:bg-neutral-800 hover:text-white',
+        'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-neutral-800 bg-neutral-800/40 hover:border-neutral-700 hover:bg-neutral-800 hover:text-white',
         pinned ? 'text-green-500' : 'text-neutral-400'
       )}
     >

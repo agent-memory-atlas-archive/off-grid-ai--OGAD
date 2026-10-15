@@ -19,7 +19,6 @@ function GenerationMetricsRowComponent({
   open: boolean
   onOpenChange: (open: boolean) => void
 }>): React.JSX.Element | null {
-  console.log('MemoryChat GenerationMetricsRow rendered')
   const displayMetrics = metrics?.modelName
     ? { ...metrics, modelName: resolveModelName([], metrics.modelName) ?? metrics.modelName }
     : metrics
@@ -83,7 +82,6 @@ function ToolsSentDisclosureComponent({
   open: boolean
   onOpenChange: (open: boolean) => void
 }>): React.JSX.Element | null {
-  console.log('MemoryChat ToolsSentDisclosure rendered')
   if (!names?.length) return null
   return (
     <Collapsible open={open} onOpenChange={onOpenChange} className="contents">
@@ -109,7 +107,6 @@ function ToolsSentDisclosureComponent({
 function ResponseCutoffNoticeComponent({
   cutoff
 }: Readonly<{ cutoff?: ResponseCutoffContract }>): React.JSX.Element | null {
-  console.log('MemoryChat ResponseCutoffNotice rendered')
   if (!cutoff) return null
   return (
     <p

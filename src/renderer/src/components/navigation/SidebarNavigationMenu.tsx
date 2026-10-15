@@ -54,10 +54,11 @@ export function SidebarNavigationMenu<Item extends { view: string; label: string
               <button
                 type="button"
                 title={!expanded ? group.label : undefined}
+                data-slot="button"
                 aria-label={
                   !open && activeItem ? `${group.label}, current: ${activeItem.label}` : group.label
                 }
-                className={`group relative flex h-9 w-full items-center rounded-lg py-2 text-neutral-500 transition-colors hover:bg-neutral-500/10 hover:text-white active:scale-95 ${
+                className={`group relative flex h-9 w-full items-center rounded-lg py-2 text-neutral-500 hover:bg-neutral-500/10 hover:text-white ${
                   expanded
                     ? 'gap-2 px-3 text-left text-[10px] uppercase tracking-[0.14em]'
                     : `justify-center px-0 ${activeItem && !open ? 'text-emerald-400' : ''}`
@@ -83,7 +84,10 @@ export function SidebarNavigationMenu<Item extends { view: string; label: string
                 )}
               </button>
             </CollapsibleTrigger>
-            <CollapsibleContent className="offgrid-smooth-collapsible flex flex-col gap-1 overflow-hidden pb-1">
+            {/* The panel clips while its height animates. Inner padding, offset by an equal
+                negative margin, leaves room for the selected row's glow without moving rows; the
+                overlap above the heading passes clicks through to it. */}
+            <CollapsibleContent className="offgrid-smooth-collapsible pointer-events-none -mx-4 -mt-3 -mb-3 flex flex-col gap-1 overflow-hidden px-4 pt-3 pb-4 [&>*]:pointer-events-auto">
               {group.items.map(renderItem)}
             </CollapsibleContent>
           </Collapsible>

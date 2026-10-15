@@ -16,6 +16,8 @@ export interface ProViewContext {
   navigateBack: () => void
   replayTarget: number | null
   meetingTarget: number | null
+  /** Meetings > Calendar: the event to scroll to and open prep for. */
+  meetingEventTarget?: number | null
   actionTarget: number | null
   approvalTarget: number | null
   calendarEventTarget: number | null

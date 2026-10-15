@@ -159,6 +159,26 @@ export class LoopbackMediaServer {
 
 let productionServer: LoopbackMediaServer | null = null
 
+/**
+ * The library's audio player loads with crossOrigin="anonymous", so the browser reads a file only
+ * when this server names the page's origin. Only the app's own pages are named: packaged pages
+ * load from file:// (origin "null") and the dev renderer from its local URL. The path token still
+ * gates every file.
+ */
+function corsHeaders(origin: string | undefined): Record<string, string> {
+  if (!origin) return {}
+  const devRenderer = process.env['ELECTRON_RENDERER_URL']
+  const allowed = origin === 'null' || (!!devRenderer && origin === new URL(devRenderer).origin)
+  // pdf.js reads these to fetch a large file in ranges instead of whole.
+  return allowed
+    ? {
+        'Access-Control-Allow-Origin': origin,
+        'Access-Control-Expose-Headers': 'Accept-Ranges, Content-Length, Content-Range',
+        Vary: 'Origin'
+      }
+    : {}
+}
+
 function serveFile(req: http.IncomingMessage, res: http.ServerResponse, filePath: string): void {
   let stat: fs.Stats
   try {
@@ -174,6 +194,7 @@ function serveFile(req: http.IncomingMessage, res: http.ServerResponse, filePath
   const size = stat.size
   const type = mimeForExt(path.extname(filePath))
   const r = parseRange(req.headers.range, size)
+  const cors = corsHeaders(req.headers.origin)
 
   if (r.unsatisfiable) {
     res.writeHead(416, { 'Content-Range': `bytes */${size}` }).end()
@@ -185,7 +206,8 @@ function serveFile(req: http.IncomingMessage, res: http.ServerResponse, filePath
       'Content-Length': r.end - r.start + 1,
       'Content-Range': `bytes ${r.start}-${r.end}/${size}`,
       'Accept-Ranges': 'bytes',
-      'Cache-Control': 'no-store'
+      'Cache-Control': 'no-store',
+      ...cors
     })
     const rs = fs.createReadStream(filePath, { start: r.start, end: r.end })
     rs.on('error', () => res.destroy())
@@ -197,7 +219,8 @@ function serveFile(req: http.IncomingMessage, res: http.ServerResponse, filePath
     'Content-Type': type,
     'Content-Length': size,
     'Accept-Ranges': 'bytes',
-    'Cache-Control': 'no-store'
+    'Cache-Control': 'no-store',
+    ...cors
   })
   const rs = fs.createReadStream(filePath)
   rs.on('error', () => res.destroy())

@@ -58,7 +58,7 @@ beforeAll(async () => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS observations (
       id INTEGER PRIMARY KEY AUTOINCREMENT, summary TEXT NOT NULL, surface TEXT, url TEXT,
-      category TEXT NOT NULL DEFAULT 'work', ts DATETIME DEFAULT CURRENT_TIMESTAMP
+      category TEXT NOT NULL DEFAULT 'work', ts DATETIME DEFAULT CURRENT_TIMESTAMP, source_key TEXT
     );
     CREATE VIRTUAL TABLE IF NOT EXISTS observation_fts USING fts5(summary, content='observations', content_rowid='id');
     CREATE TRIGGER IF NOT EXISTS observations_ai AFTER INSERT ON observations BEGIN
@@ -66,7 +66,7 @@ beforeAll(async () => {
     END;
     -- Empty capture tables the post-search thumbnail/boost lookups touch (thumbFor joins
     -- observation_frames→frames for a screen hit); empty is fine → null thumbnail.
-    CREATE TABLE IF NOT EXISTS frames (id INTEGER PRIMARY KEY AUTOINCREMENT, image_path TEXT, text TEXT, surface TEXT, url TEXT, ts DATETIME);
+    CREATE TABLE IF NOT EXISTS frames (id INTEGER PRIMARY KEY AUTOINCREMENT, image_path TEXT, text TEXT, surface TEXT, url TEXT, ts DATETIME, source TEXT);
     CREATE TABLE IF NOT EXISTS observation_frames (observation_id INTEGER, frame_id INTEGER);
     CREATE TABLE IF NOT EXISTS meetings (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, summary TEXT, transcript TEXT, started_at INTEGER);
     CREATE TABLE IF NOT EXISTS rag_documents (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, project_id TEXT, created_at DATETIME);
@@ -186,5 +186,28 @@ describe('search_memory citations — real universalSearch over the real full sc
     expect(source?.url).toBe('conversation-release')
     expect(source?.snippet).toContain('starling rollout')
     expect(result.answer).toBe('The rollout is planned for Friday.')
+  })
+
+  it('opens on the newest of everything when nothing is typed, within the chosen sources', async () => {
+    const { universalSearch } = await import('../search')
+    const db = getDB()
+    const at = (summary: string, surface: string, ts: string): string =>
+      `obs:${Number(
+        db
+          .prepare('INSERT INTO observations (summary, surface, category, ts) VALUES (?, ?, ?, ?)')
+          .run(summary, surface, 'work', ts).lastInsertRowid
+      )}`
+    const older = at('Reviewed the quarterly plan', 'Figma', '2026-10-01 09:00:00')
+    const newer = at('Answered the release thread', 'Slack', '2026-10-14 09:00:00')
+
+    const recent = await universalSearch('', { limit: 50 })
+    const keys = recent.map((hit) => hit.key)
+    // Search never opens on an empty page: the feed is newest first.
+    expect(keys).toContain(newer)
+    expect(keys.indexOf(newer)).toBeLessThan(keys.indexOf(older))
+
+    const figmaOnly = await universalSearch('   ', { limit: 50, sources: ['Figma'] })
+    expect(figmaOnly.map((hit) => hit.key)).toContain(older)
+    expect(figmaOnly.every((hit) => hit.surface === 'Figma')).toBe(true)
   })
 })

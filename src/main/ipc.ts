@@ -1,3 +1,4 @@
+import { settingsChanged } from './settings-version'
 import { withStorageDownload, storageDownloadsActive } from './model-storage-guard'
 import { moveModelStorage } from './model-storage-move'
 import { ipcMain, BrowserWindow, app, clipboard } from 'electron'
@@ -128,6 +129,7 @@ import {
   noteChatStreamToolStarted,
   takeChatStreamMessageId
 } from './chat-stream-state'
+import { ModelServerError } from './llm/http-post'
 
 const streamControllers = new Map<string, AbortController>()
 
@@ -145,6 +147,10 @@ async function runChatWithFallback<T>(
     return { result: await run() }
   } catch (error) {
     if (options.signal?.aborted || options.canRetry?.() === false) throw error
+    // Only a model that could not answer at all is worth replacing. A request that does not fit
+    // the window, or that the server refused, fails the same way on every model: switching then
+    // just walked the whole list (remote servers included) and changed the selected model.
+    if (error instanceof ModelServerError && error.kind !== 'unavailable') throw error
     lastError = error
   }
   const models = await import('./models-manager')
@@ -184,6 +190,7 @@ async function runChatWithFallback<T>(
       return { result: await run(), modelName: next.name }
     } catch (error) {
       if (options.signal?.aborted || options.canRetry?.() === false) throw error
+      if (error instanceof ModelServerError && error.kind !== 'unavailable') throw error
       failedName = next.name
       lastError = error
     }
@@ -682,7 +689,7 @@ export function setupIPC(): void {
 
   ipcMain.handle('db:search-memories', async (_, query: string) => {
     try {
-      const queryVector = await embeddings.generateEmbedding(query)
+      const queryVector = await embeddings.generateEmbedding(query, { interactive: true })
       const vecStr = JSON.stringify(queryVector)
 
       const stmt = db.prepare(`
@@ -938,7 +945,7 @@ export function setupIPC(): void {
         score?: number
       }> = []
       try {
-        const queryVector = await embeddings.generateEmbedding(query)
+        const queryVector = await embeddings.generateEmbedding(query, { interactive: true })
         const vecStr = JSON.stringify(queryVector)
         const params: unknown[] = [vecStr]
         let memoryQuery = `
@@ -1943,6 +1950,7 @@ export function setupIPC(): void {
         m.addModelScanFolder(app.getPath('userData'), result.filePaths[0]!)
       )
       BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('models:inventory-changed'))
+      settingsChanged()
       return { folders }
     } catch (error) {
       return { error: error instanceof Error ? error.message : 'Cannot read this folder.' }
@@ -1953,6 +1961,7 @@ export function setupIPC(): void {
       m.removeModelScanFolder(app.getPath('userData'), directory)
     )
     BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('models:inventory-changed'))
+      settingsChanged()
     return folders
   })
   ipcMain.handle('models:delete-orphans', () =>

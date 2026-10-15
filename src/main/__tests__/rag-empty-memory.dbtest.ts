@@ -96,7 +96,8 @@ beforeAll(async () => {
       text TEXT,
       surface TEXT,
       url TEXT,
-      ts DATETIME
+      ts DATETIME,
+      source TEXT
     );
     CREATE TABLE IF NOT EXISTS observation_frames (observation_id INTEGER, frame_id INTEGER);
     CREATE TABLE IF NOT EXISTS meetings (

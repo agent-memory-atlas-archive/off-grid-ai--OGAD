@@ -1,3 +1,4 @@
+import { settingsChanged } from './settings-version'
 import { budgetChange, speculativePatch, speculativeOptions } from '../shared/text-settings-rules'
 import type { RuntimeBackend } from '../shared/runtime-backends'
 import { parseNativeBackend } from './runtime-backends'
@@ -672,6 +673,7 @@ export class LLMService {
         JSON.stringify({ ...this.getSettings(), userExplicit: [...this.userExplicit] })
       )
       fs.renameSync(temporaryFile, this.settingsFile)
+      settingsChanged()
     } catch (error) {
       try {
         fs.rmSync(temporaryFile, { force: true })

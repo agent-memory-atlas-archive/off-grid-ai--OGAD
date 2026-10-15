@@ -170,7 +170,6 @@ function MessageMarkdownComponent({
   /** The artifact card shows the code; the markdown keeps the sentences around it. */
   withoutArtifact?: boolean
 }>): React.JSX.Element {
-  console.log('MemoryChat MessageMarkdown rendered')
   const components =
     message.role === 'assistant'
       ? makeCiteComponents(message.context?.unified, navigation)

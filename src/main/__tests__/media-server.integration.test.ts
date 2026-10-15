@@ -77,6 +77,21 @@ describe('loopback media server integration', () => {
     expect(Buffer.from(await response.arrayBuffer())).toEqual(fixtures.video.bytes.subarray(4, 9))
   })
 
+  it("names only the app's own page origin, for the library's cross-origin audio player", async () => {
+    const url = await server.urlFor(fixturePath('audio'))
+    // Packaged pages load from file://, which the browser sends as origin "null".
+    const own = await fetch(url!, { headers: { Origin: 'null' } })
+    expect(own.headers.get('Access-Control-Allow-Origin')).toBe('null')
+    // pdf.js reads these to load a large PDF in ranges.
+    expect(own.headers.get('Access-Control-Expose-Headers')).toContain('Content-Range')
+    await own.arrayBuffer()
+
+    const other = await fetch(url!, { headers: { Origin: 'https://example.com' } })
+    expect(other.status).toBe(200)
+    expect(other.headers.get('Access-Control-Allow-Origin')).toBeNull()
+    await other.arrayBuffer()
+  })
+
   it('serves real audio suffix ranges through the same service', async () => {
     const url = await server.urlFor(fixturePath('audio'))
     const response = await fetch(url!, { headers: { Range: 'bytes=-4' } })

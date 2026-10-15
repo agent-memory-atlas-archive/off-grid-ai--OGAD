@@ -1,7 +1,6 @@
 import { replaceAppLocation } from '@renderer/lib/app-location'
 import { useState, useEffect, useCallback } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { GridBackdrop } from './ui/grid-backdrop'
 import { X, Cpu, ArrowLeft } from '@phosphor-icons/react'
 import {
   Progress,
@@ -186,7 +185,6 @@ export function PermissionGate({ children }: PermissionGateProps): React.JSX.Ele
   if (isChecking && !permissionStatus) {
     return (
       <div className="h-screen w-screen bg-neutral-950 flex items-center justify-center fixed inset-0">
-        <GridBackdrop className="z-0" />
         <motion.div
           initial={{ opacity: 0, filter: 'blur(10px)' }}
           animate={{ opacity: 1, filter: 'blur(0px)' }}
@@ -244,7 +242,6 @@ export function PermissionGate({ children }: PermissionGateProps): React.JSX.Ele
   // Detailed setup screen — opened on demand from the nudge (no longer a hard wall).
   return (
     <div className="h-screen w-screen bg-neutral-950 fixed inset-0 overflow-hidden">
-      <GridBackdrop className="z-0" />
       <IconTip label="Back to app">
         <Button
           type="button"

@@ -4,6 +4,7 @@
 // observation/frame/transcript backlog (using the in-app MiniLM model) so the
 // semantic half actually covers your captured life. All local, all offline.
 import { getDB } from './database'
+import { frameTextIndexBackfilling } from './frame-text-index'
 import { embeddings } from './embeddings'
 import { ensureRagStoreSchema } from './rag/store'
 import { addChunks, searchVectors, vectorCount, type VecChunk } from './vectors'
@@ -142,13 +143,33 @@ export async function searchStatus(): Promise<{ vectors: number; pending: number
 }
 
 /** Data sources available to filter by (surfaces seen, busiest first, + meetings). */
+/** Bulk mail synced from a connected account (newsletters, promotions): searchable, but never counted
+ *  or featured, as the ambient rules have it. Screens of videos or feeds you watched stay. */
+const SYNCED_BULK_MAIL = `(COALESCE(o.category, '') = 'consumption' AND o.source_key IS NOT NULL)`
+
+/** Distinct moments, as the result list shows them: one per app and summary, not one per capture. */
+const DISTINCT_MOMENTS = 'COUNT(DISTINCT lower(trim(o.summary)))'
+
+/** Totals are a full pass over every observation; the rail asks for them on every visit. */
+const SOURCE_TOTALS_TTL_MS = 60_000
+let sourceTotals: { at: number; rows: { source: string; count: number }[] } | null = null
+
 export function searchSources(): { source: string; count: number }[] {
+  const now = Date.now()
+  if (sourceTotals && now - sourceTotals.at < SOURCE_TOTALS_TTL_MS) return sourceTotals.rows
+  const rows = countSources()
+  sourceTotals = { at: now, rows }
+  return rows
+}
+
+function countSources(): { source: string; count: number }[] {
   ensureRagStoreSchema()
   const db = getDB()
   const rows = db
     .prepare(
-      `SELECT surface AS source, COUNT(*) AS count FROM observations
-        WHERE surface IS NOT NULL AND surface != '' GROUP BY surface ORDER BY count DESC LIMIT 20`
+      `SELECT o.surface AS source, ${DISTINCT_MOMENTS} AS count FROM observations o
+        WHERE o.surface IS NOT NULL AND o.surface != '' AND NOT ${SYNCED_BULK_MAIL}
+        GROUP BY o.surface ORDER BY count DESC LIMIT 20`
     )
     .all() as { source: string; count: number }[]
   const mtg = db.prepare('SELECT COUNT(*) AS c FROM meetings').get() as { c: number }
@@ -175,9 +196,10 @@ export function searchFacets(query: string): { source: string; count: number }[]
     out.push(
       ...(db
         .prepare(
-          `SELECT COALESCE(o.surface,'') AS source, COUNT(*) AS count
+          `SELECT COALESCE(o.surface,'') AS source, ${DISTINCT_MOMENTS} AS count
              FROM observation_fts f JOIN observations o ON o.id = f.rowid
             WHERE observation_fts MATCH ? AND o.surface IS NOT NULL AND o.surface != ''
+              AND NOT ${SYNCED_BULK_MAIL}
             GROUP BY o.surface ORDER BY count DESC`
         )
         .all(m) as { source: string; count: number }[])
@@ -272,8 +294,8 @@ function keywordHits(query: string, perSource: number): RawHit[][] {
     ),
     // Recorded meeting transcripts (no FTS table) — LIKE over title/summary/transcript.
     likeMeetingHits(query, perSource),
-    // Raw frame OCR via LIKE — catches exact on-screen words dropped from the summary.
-    likeFrameHits(query, perSource),
+    // Every word on screen, from the frame text index (raw OCR the summaries dropped).
+    frameHits(query, perSource),
     // Your own chat conversations (title + message content), one hit per chat.
     likeChatHits(query, perSource),
     // Project knowledge-base documents (chunked file content).
@@ -330,19 +352,157 @@ function likeMeetingHits(query: string, limit: number): RawHit[] {
     .all(...args, limit) as RawHit[]
 }
 
-// Frames have no FTS index; match raw OCR text on all tokens (AND), newest first.
+/** One moment, once. Capture records the same screen again and again while it stays put, each
+ *  with the same summary; a result list showed dozens of identical cards. Keeps the first (best
+ *  ranked or newest) of each app and summary. */
+function collapseRepeats(results: SearchResult[]): SearchResult[] {
+  const seen = new Set<string>()
+  return results.filter((result) => {
+    if (result.kind !== 'screen') return true
+    const identity = `${result.surface.toLowerCase()}\u0000${result.snippet.trim().toLowerCase()}`
+    if (seen.has(identity)) return false
+    seen.add(identity)
+    return true
+  })
+}
+
+/** Observations made from a connected account (synced mail and chat) are messages, not screens:
+ *  they have no screenshot, and calling them SCREEN with an empty picture misled. */
+function markSyncedMessages(results: SearchResult[]): void {
+  const ids = results.filter((r) => r.key.startsWith('obs:')).map((r) => r.refId)
+  if (!ids.length) return
+  const synced = new Set(
+    (
+      getDB()
+        .prepare(
+          `SELECT DISTINCT of.observation_id AS id FROM observation_frames of
+             JOIN frames f ON f.id = of.frame_id
+            WHERE f.source = 'connector' AND of.observation_id IN (${ids.map(() => '?').join(',')})`
+        )
+        .all(...ids) as { id: number }[]
+    ).map((row) => row.id)
+  )
+  for (const result of results) {
+    if (result.key.startsWith('obs:') && synced.has(result.refId)) {
+      result.kind = 'message'
+      result.imagePath = null
+    }
+  }
+}
+
+/** The newest things in the index, for an empty query: captured moments, recorded meetings and
+ *  your chats, newest first, within the chosen sources. Search opens on this feed. */
+function recentHits(limit: number, sources?: string[]): RawHit[] {
+  const db = getDB()
+  const wanted = sources?.length ? sources.map((source) => source.toLowerCase()) : null
+  const want = (source: string): boolean => !wanted || wanted.includes(source.toLowerCase())
+  const observations = db
+    .prepare(
+      `SELECT 'obs:'||o.id AS key, 'screen' AS kind, o.id AS refId, COALESCE(o.surface,'Screen') AS title,
+              o.summary AS snippet, COALESCE(o.surface,'') AS surface, o.url AS url, ${epochMsSql('o.ts')} AS ts
+         FROM observations o
+        WHERE o.summary IS NOT NULL AND o.summary != ''
+          AND NOT ${SYNCED_BULK_MAIL}
+          ${wanted ? `AND lower(o.surface) IN (${wanted.map(() => '?').join(',')})` : ''}
+        ORDER BY o.ts DESC LIMIT ?`
+    )
+    .all(...(wanted ?? []), limit) as RawHit[]
+  const meetings = want('Meeting')
+    ? (db
+        .prepare(
+          `SELECT 'mtg:'||id AS key, 'meeting' AS kind, id AS refId, COALESCE(title,'Meeting') AS title,
+                  substr(COALESCE(summary, transcript, ''),1,300) AS snippet, 'Meeting' AS surface,
+                  NULL AS url, COALESCE(started_at,0) AS ts
+             FROM meetings ORDER BY started_at DESC LIMIT ?`
+        )
+        .all(limit) as RawHit[])
+    : []
+  const chats = want('Chat')
+    ? (db
+        .prepare(
+          `SELECT 'chat:'||rc.id AS key, 'chat' AS kind, 0 AS refId, COALESCE(rc.title,'Chat') AS title,
+                  COALESCE((SELECT substr(rm.content,1,300) FROM rag_messages rm
+                             WHERE rm.conversation_id = rc.id ORDER BY rm.rowid DESC LIMIT 1),'') AS snippet,
+                  'Chat' AS surface, rc.id AS url, ${epochMsSql('rc.updated_at')} AS ts
+             FROM rag_conversations rc ORDER BY rc.updated_at DESC LIMIT ?`
+        )
+        .all(limit) as RawHit[])
+    : []
+  return [...observations, ...meetings, ...chats]
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+    .slice(0, limit)
+}
+
+/** Frames whose on-screen text matches, from the frame text index. While older frames are still
+ *  being indexed (or before the index exists), recent frames are also matched word for word. */
+function frameHits(query: string, limit: number): RawHit[] {
+  const db = getDB()
+  const indexed = !!db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'frame_fts'")
+    .get()
+  const match = ftsExpr(query)
+  const hits: RawHit[] =
+    indexed && match
+      ? (db
+          .prepare(
+            `SELECT 'frame:'||f.id AS key, 'screen' AS kind, f.id AS refId, COALESCE(f.surface,'Screen') AS title,
+                    substr(f.text,1,300) AS snippet, COALESCE(f.surface,'') AS surface, f.url AS url,
+                    ${epochMsSql('f.ts')} AS ts
+               FROM frame_fts x JOIN frames f ON f.id = x.rowid
+              WHERE frame_fts MATCH ? ORDER BY bm25(frame_fts) LIMIT ?`
+          )
+          .all(match, limit) as RawHit[])
+      : []
+  if (indexed && !frameTextIndexBackfilling()) return hits
+  const seen = new Set(hits.map((hit) => hit.key))
+  return [...hits, ...likeFrameHits(query, limit).filter((hit) => !seen.has(hit.key))]
+}
+
+// Raw OCR text on all tokens (AND), newest first.
 function likeFrameHits(query: string, limit: number): RawHit[] {
   const terms = queryTerms(query, 6)
   if (!terms.length) return []
   const { where, args } = likeMatch(LIKE_COLUMNS.frame, terms)
+  // Only while the frame text index is incomplete. Scanning all raw OCR (hundreds of MB) took
+  // seconds on the main thread, so this reads recent frames only, through the ts index.
+  const since = new Date(Date.now() - RAW_FRAME_TEXT_DAYS * 86_400_000).toISOString().slice(0, 10)
   return getDB()
     .prepare(
       `SELECT 'frame:'||id AS key, 'screen' AS kind, id AS refId, COALESCE(surface,'Screen') AS title,
               substr(text,1,300) AS snippet, COALESCE(surface,'') AS surface, url AS url,
               ${epochMsSql('ts')} AS ts
-         FROM frames WHERE text IS NOT NULL AND ${where} ORDER BY ts DESC LIMIT ?`
+         FROM frames
+        WHERE ts >= ? AND text IS NOT NULL AND COALESCE(source, '') != 'connector' AND ${where}
+        ORDER BY ts DESC LIMIT ?`
     )
-    .all(...args, limit) as RawHit[]
+    .all(since, ...args, limit) as RawHit[]
+}
+
+/** How far back search reads raw on-screen text word for word. */
+const RAW_FRAME_TEXT_DAYS = 30
+
+/** Ranking penalty for bulk mail (newsletters, promos): still searchable, never on top of the
+ *  user's real conversations just because it is recent. */
+const BULK_MAIL_PENALTY = 0.02
+
+/** Push bulk-mail observations down the ranking. Reads their category in one query. */
+function demoteBulkMail(results: Iterable<SearchResult>): void {
+  const byId = new Map<number, SearchResult>()
+  for (const r of results) {
+    if (r.key.startsWith('obs:')) byId.set(Number(r.key.slice(4)), r)
+  }
+  if (!byId.size) return
+  try {
+    const ids = JSON.stringify([...byId.keys()])
+    const rows = getDB()
+      .prepare(
+        "SELECT id FROM observations WHERE id IN (SELECT value FROM json_each(?)) AND category = 'consumption'"
+      )
+      .all(ids) as { id: number }[]
+    for (const { id } of rows) byId.get(id)!.score -= BULK_MAIL_PENALTY
+  } catch {
+    // Observations are a Pro table; without it there is nothing to demote.
+  }
 }
 
 function sourceRowExists(sql: string, id: number): boolean {
@@ -399,7 +559,8 @@ export async function searchSemanticSources(vector: number[], limit: number): Pr
 }
 
 async function semanticHits(query: string, limit: number): Promise<RawHit[]> {
-  const vector = await embeddings.generateEmbedding(query)
+  // Someone is waiting on this one: it goes ahead of queued background indexing.
+  const vector = await embeddings.generateEmbedding(query, { interactive: true })
   return searchSemanticSources(vector, limit)
 }
 
@@ -445,8 +606,23 @@ export async function universalSearch(
 ): Promise<SearchResult[]> {
   ensureRagStoreSchema()
   const q = query.trim()
-  if (!q) return []
   const limit = opts.limit ?? 30
+  if (!q) {
+    // No words yet: the newest of everything, so Search never opens on an empty page.
+    const recent = rankResults(Array.from(fuseHits([recentHits(limit * 4, opts.sources)]).values()), {
+      query: '',
+      sources: opts.sources,
+      kinds: opts.kinds,
+      excludeChatId: opts.excludeChatId,
+      sort: 'recency'
+    })
+    const page = collapseRepeats(recent).slice(0, limit)
+    markSyncedMessages(page)
+    for (const r of page)
+      if (r.kind !== 'message')
+        r.imagePath = thumbFor({ key: r.key, kind: r.kind, refId: r.refId } as RawHit)
+    return page
+  }
   // When filtering by source, cast a wider net per source so enough survive the filter.
   const perSource = opts.sources?.length ? 80 : Math.min(40, limit + 10)
 
@@ -468,6 +644,7 @@ export async function universalSearch(
   // older), plus a small nudge for your own deliberate content (chats / KB docs) so
   // it isn't buried under thousands of ambient screen captures.
   applyBoosts(fused.values(), Date.now())
+  demoteBulkMail(fused.values())
 
   // Filter (source / current chat) then sort (relevance / recency / match).
   const ordered = rankResults(Array.from(fused.values()), {
@@ -478,17 +655,20 @@ export async function universalSearch(
     sort: opts.sort
   })
   opts.signal?.throwIfAborted()
-  for (const r of ordered)
-    r.imagePath = thumbFor({ key: r.key, kind: r.kind, refId: r.refId } as RawHit)
+  const distinct = collapseRepeats(ordered)
+  markSyncedMessages(distinct.slice(0, limit * 2))
+  for (const r of distinct)
+    if (r.kind !== 'message')
+      r.imagePath = thumbFor({ key: r.key, kind: r.kind, refId: r.refId } as RawHit)
 
-  if (!opts.collapseScreenMoments) return ordered.slice(0, limit)
+  if (!opts.collapseScreenMoments) return distinct.slice(0, limit)
 
   // One captured moment is indexed twice: its raw OCR frame and its distilled
   // observation. Replay shows moments, not index records, so collapse both forms
   // after ranking and thumbnail resolution. General search keeps both records.
   const seenMoments = new Set<string>()
   const moments: SearchResult[] = []
-  for (const result of ordered) {
+  for (const result of distinct) {
     const identity =
       result.kind === 'screen'
         ? result.imagePath || `${String(result.ts)}:${result.surface}`

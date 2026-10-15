@@ -182,7 +182,8 @@ export function messageContentClass(message: ChatMessage, editing: boolean): str
   if (bubble === 'hidden') return 'hidden'
   const flow = 'block min-w-0 gap-0 overflow-visible group-[.is-assistant]:text-neutral-200'
   if (message.role !== 'user') return `${flow} ${bubble}`
-  const wide = Boolean(editing || message.image || message.attachments?.length)
+  // Attachments ride inside the same bubble as the words; only an editor or a picture is wide.
+  const wide = Boolean(editing || message.image)
   if (message.context?.taskGuidance) {
     return `${flow} ${bubble} group-[.is-user]:rounded-md group-[.is-user]:bg-green-500/5 group-[.is-user]:px-3.5 group-[.is-user]:py-2.5 group-[.is-user]:text-foreground`
   }

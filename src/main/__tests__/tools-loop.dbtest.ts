@@ -38,6 +38,7 @@ import {
 } from '../tools'
 import { llm } from '../llm'
 import { toolPromptChars, toolPromptTokens } from '../tools/prompt-budget'
+import { attachedDocumentBlock } from '@offgrid/models'
 import { HOOKS, registerHook, unregisterHook } from '../bootstrap/hookRegistry'
 import { NativeActionToolExtension, type ActionsPort } from '../tools/nativeActionToolExtension'
 
@@ -708,6 +709,37 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
     } finally {
       service.ctxSize = previousContext
       unregisterToolExtension(extension.id, extension)
+    }
+  })
+
+  it('fits a long attached document into the window instead of ending in "Context is full."', async () => {
+    // A book is ~45k tokens; the window is 16k. Compacting earlier turns cannot make room for it.
+    const book = Array.from(
+      { length: 400 },
+      (_, i) =>
+        `Chapter ${i + 1}. ${'Achilles sulks beside the black ships while the Trojans press the wall. '.repeat(6)}`
+    ).join('\n\n')
+    const service = llm as unknown as { ctxSize: number }
+    const previousContext = service.ctxSize
+    service.ctxSize = 16_384
+    try {
+      enqueueReactiveAfterEmptyPlan({ content: 'It reads as the Iliad, from excerpts.' })
+
+      const result = await toolChat(
+        `${attachedDocumentBlock('pdf', 'Iliad.pdf', book)}\n\nwhats happening in this PDF`,
+        []
+      )
+
+      expect(result.answer).toBe('It reads as the Iliad, from excerpts.')
+      const sent = fake.requests.at(-1)!
+      expect(toolPromptTokens(sent.messages, sent.tools)).toBeLessThanOrEqual(16_384)
+      const prompt = JSON.stringify(sent.messages)
+      expect(prompt).toContain('whats happening in this PDF')
+      expect(prompt).toContain('Only excerpts of Iliad.pdf fit')
+      expect(prompt).toContain('Chapter 1.')
+      expect(prompt).not.toContain(book)
+    } finally {
+      service.ctxSize = previousContext
     }
   })
 

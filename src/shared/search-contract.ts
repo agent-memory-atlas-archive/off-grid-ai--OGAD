@@ -1,4 +1,13 @@
-export type SearchKind = 'screen' | 'meeting' | 'memory' | 'entity' | 'fact' | 'chat' | 'doc'
+/** `message`: a synced email or chat (from a connected account), not something seen on screen. */
+export type SearchKind =
+  | 'screen'
+  | 'message'
+  | 'meeting'
+  | 'memory'
+  | 'entity'
+  | 'fact'
+  | 'chat'
+  | 'doc'
 
 export type SearchSort = 'relevance' | 'recency' | 'match'
 

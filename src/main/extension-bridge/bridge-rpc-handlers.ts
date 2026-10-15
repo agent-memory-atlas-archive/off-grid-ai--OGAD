@@ -4,6 +4,10 @@ import { parseConversationParams, type ConversationSearchParams } from './bridge
 import { isSettingsSection, parseSettingsPatch } from './bridge-settings'
 import type { BridgeFeatures, RpcMethod } from './bridge-protocol'
 import type { BridgeDeps, PairedBrowser } from './bridge-types'
+import { nextSettingsVersion, settingsChanged } from '../settings-version'
+
+/** How long one watch request waits before answering unchanged. */
+const SETTINGS_WATCH_MS = 25_000
 
 const isTaskId = (value: unknown): value is string =>
   typeof value === 'string' && /^[\w-]{1,128}$/.test(value)
@@ -119,7 +123,14 @@ export function rpcHandlers(
         throw new Error('invalid')
       }
       await deps.data.writeSettings(p.section, patch)
+      settingsChanged()
       return deps.data.readSettings(p.section)
+    },
+    // Held open until something a Settings screen shows changes, so an open panel re-reads on
+    // change instead of on a timer. A timeout answers with the same version and is asked again.
+    'settings.watch': async (p) => {
+      const since = typeof p.since === 'number' ? p.since : undefined
+      return { version: await nextSettingsVersion(since, SETTINGS_WATCH_MS) }
     },
     unpair: async (_p, browser) => {
       await deps.data.chat?.({ action: 'disconnect' }, browser).catch(() => undefined)

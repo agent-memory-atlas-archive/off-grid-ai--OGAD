@@ -12,6 +12,58 @@ import {
   resolveOauthBuildConfig
 } from './scripts/oauth-build-config.mjs'
 
+// Dev-only: link @offgrid/operator-ui to a local checkout of off-grid-ai/ui-library, so library
+// edits hot-reload here without a PR, pin and bump. Unset (CI, releases) changes nothing.
+//   OPERATOR_UI_SRC=../../component-library-animations npm run dev   (or npm run dev:linked)
+const operatorUiRoot = process.env.OPERATOR_UI_SRC ? resolve(process.env.OPERATOR_UI_SRC) : null
+if (operatorUiRoot) console.log(`[operator-ui] linked to ${operatorUiRoot}`)
+
+/** Each package export, pointed at the source file behind its dist output. */
+function operatorUiAliases(): { find: RegExp; replacement: string }[] {
+  if (!operatorUiRoot) return []
+  const pkg = JSON.parse(readFileSync(resolve(operatorUiRoot, 'package.json'), 'utf8')) as {
+    exports: Record<string, string | { import?: string }>
+  }
+  const aliases: { find: RegExp; replacement: string }[] = []
+  for (const [subpath, target] of Object.entries(pkg.exports)) {
+    const built = typeof target === 'string' ? target : target.import
+    if (!built?.startsWith('./dist/')) continue
+    const rel = built.slice('./dist/'.length)
+    let source: string | undefined
+    if (rel.endsWith('.js')) {
+      const base = resolve(operatorUiRoot, 'src', rel.slice(0, -'.js'.length))
+      source = ['.tsx', '.ts'].map((ext) => base + ext).find((file) => existsSync(file))
+    } else if (rel.endsWith('.css') && rel !== 'styles.css' && rel !== 'desktop.css') {
+      // Plain CSS in src (alive, skins, lightbox, pdf). styles.css and desktop.css are Tailwind
+      // entry points, so their dist builds stay.
+      const candidate = resolve(operatorUiRoot, 'src', rel)
+      source = existsSync(candidate) ? candidate : undefined
+    }
+    if (!source) continue // e.g. pdf.worker.min.mjs stays on the installed package
+    const name = `@offgrid/operator-ui${subpath.slice(1)}`
+    aliases.push({
+      find: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`),
+      replacement: source
+    })
+  }
+  return aliases
+}
+
+// Tailwind scans the installed dist (main.css @source); when linked, scan the library's src too,
+// so classes used only in a new library change are generated.
+const operatorUiTailwindSource = {
+  name: 'offgrid-operator-ui-link-source',
+  enforce: 'pre' as const,
+  transform(code: string, id: string): string | null {
+    if (!operatorUiRoot || !id.replace(/\?.*$/, '').endsWith('/src/renderer/src/assets/main.css'))
+      return null
+    return code.replace(
+      '@source "../../../../node_modules/@offgrid/operator-ui/dist";',
+      `@source "../../../../node_modules/@offgrid/operator-ui/dist";\n@source "${resolve(operatorUiRoot, 'src')}";`
+    )
+  }
+}
+
 // Open-core seam: the private `pro/` git submodule is present only in paid
 // builds. When it's missing (free / contributor build) we alias the pro entry
 // points to a null stub so the app builds and runs with core features only.
@@ -123,14 +175,29 @@ export default defineConfig({
     build: { sourcemap: coverageSourcemap },
     html: { cspNonce: rendererStyleNonce },
     resolve: {
-      alias: {
-        '@renderer': resolve('src/renderer/src'),
-        '@': resolve('src/renderer/src'),
-        '@offgrid/core': resolve('src'),
-        '@offgrid/pro/renderer': proRenderer
-      }
+      alias: [
+        { find: '@renderer', replacement: resolve('src/renderer/src') },
+        { find: '@', replacement: resolve('src/renderer/src') },
+        { find: '@offgrid/core', replacement: resolve('src') },
+        { find: '@offgrid/pro/renderer', replacement: proRenderer },
+        ...operatorUiAliases()
+      ],
+      // Linked library source imports these from its own node_modules: one copy each (two Reacts
+      // break hooks; two motions break shared animation context).
+      dedupe: operatorUiRoot
+        ? [
+            'react',
+            'react-dom',
+            'motion',
+            'radix-ui',
+            '@phosphor-icons/react',
+            'react-resizable-panels'
+          ]
+        : undefined
     },
+    server: operatorUiRoot ? { fs: { allow: [resolve('.'), operatorUiRoot] } } : undefined,
     plugins: [
+      operatorUiTailwindSource,
       {
         name: 'offgrid-renderer-csp',
         transformIndexHtml: {

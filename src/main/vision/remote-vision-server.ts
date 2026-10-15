@@ -1,3 +1,4 @@
+import { settingsChanged } from '../settings-version'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -151,6 +152,7 @@ function readStored(): StoredRemoteVisionConfig {
 function writeStored(value: StoredRemoteVisionConfig): void {
   fs.mkdirSync(path.dirname(configPath()), { recursive: true })
   fs.writeFileSync(configPath(), JSON.stringify(value, null, 2))
+  settingsChanged()
 }
 
 function serverApiKey(serverId: string): string {

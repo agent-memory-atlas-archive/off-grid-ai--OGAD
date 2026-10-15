@@ -10,7 +10,12 @@ import {
   speechCapabilities,
   type DownloadProgress
 } from '@offgrid/executorch-speech'
-import { kokoroVoiceLabel, speechLanguageLabel, type RuntimeSpeechVoice } from '@offgrid/speech'
+import {
+  kokoroVoiceLabel,
+  speechLanguageLabel,
+  spokenText,
+  type RuntimeSpeechVoice
+} from '@offgrid/speech'
 import fs from 'fs'
 import { createHash } from 'node:crypto'
 import { recordAIRequest } from './ai-request-log'
@@ -179,27 +184,29 @@ async function synthesizeInner(
   return recordAIRequest(
     { modality: 'tts', source: 'Speech synthesis', request: { text, voice } },
     async (log) => {
+      // Every voice, local or remote, speaks the same words: emoji are not read aloud.
+      const spoken = spokenText(text || '')
+      if (!spoken) throw new Error('Nothing to speak.')
       const remote = options.local ? null : getActiveRemoteVisionServerForModality('voice')
       if (remote) {
         log.update({ model: remote.selectedModel, backend: 'Remote' })
-        if (remote.provider !== 'openrouter') return synthesizeRemoteVoice(remote, text, voice)
+        if (remote.provider !== 'openrouter') return synthesizeRemoteVoice(remote, spoken, voice)
         const voices = await listRemoteVoices(remote)
         const chosenVoice = voices.find((candidate) => candidate.id === voice)?.id ?? voices[0]?.id
         if (!chosenVoice) throw new Error('This remote model has no available speakers.')
-        log.update({ effectiveRequest: { text, voice: chosenVoice } })
-        return synthesizeRemoteVoice(remote, text, chosenVoice)
+        log.update({ effectiveRequest: { text: spoken, voice: chosenVoice } })
+        return synthesizeRemoteVoice(remote, spoken, chosenVoice)
       }
       const selected = getActiveModal('speech')
       const requestedVoice = chooseVoice(voice, selected) || DEFAULT_VOICE
       // Older releases persisted Kokoro voices that the ExecuTorch catalogue does not contain.
       // Keep those profiles able to speak after upgrade; the runtime manifest remains the voice SSOT.
       const chosenVoice = SUPPORTED_VOICES.has(requestedVoice) ? requestedVoice : DEFAULT_VOICE
-      const input = (text || '').trim()
+      const input = spoken
       log.update({
         model: selected ?? 'Kokoro',
         effectiveRequest: { text: input.slice(0, 2000), voice: chosenVoice }
       })
-      if (!input) throw new Error('Nothing to speak.')
       if (busy) throw new Error('Already generating speech. Please wait.')
 
       busy = true

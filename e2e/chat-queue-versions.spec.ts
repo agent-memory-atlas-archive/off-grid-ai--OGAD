@@ -409,6 +409,7 @@ test.describe('Desktop queue and saved response versions', () => {
       await expect(
         page.getByTestId('chat-composer').getByText('2 queued', { exact: true })
       ).toBeVisible()
+      fs.writeFileSync(`${auditFile}.release`, '')
       if (sendNow)
         await submit(
           'Send this ahead of the queue.',

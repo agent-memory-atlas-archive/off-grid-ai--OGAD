@@ -49,6 +49,16 @@ describe('normalizeProNavigationIntent', () => {
       mode: 'approvals'
     })
     expect(normalizeProNavigationIntent({ view: 'meetings' })).toEqual({ view: 'meetings' })
+    expect(normalizeProNavigationIntent({ view: 'meetings', mode: 'calendar' })).toEqual({
+      view: 'meetings',
+      mode: 'calendar'
+    })
+    // An event target always opens the Calendar tab.
+    expect(normalizeProNavigationIntent({ view: 'meetings', calendarEventId: 41 })).toEqual({
+      view: 'meetings',
+      mode: 'calendar',
+      calendarEventId: 41
+    })
     expect(normalizeProNavigationIntent({ view: 'replay' })).toEqual({ view: 'replay' })
     expect(normalizeProNavigationIntent({ view: 'day' })).toEqual({ view: 'day' })
   })
@@ -69,6 +79,10 @@ describe('normalizeProNavigationIntent', () => {
     { view: 'actions', entity: { id: -1, name: 'Maya' } },
     { view: 'actions', entity: { id: 7, name: ' ' } },
     { view: 'meetings', meetingId: Number.NaN },
+    { view: 'meetings', mode: 'agenda' },
+    { view: 'meetings', calendarEventId: 0 },
+    { view: 'meetings', meetingId: 8, calendarEventId: 41 },
+    { view: 'meetings', calendarEventId: 41, mode: 'recorded' },
     { view: 'replay', seekMs: -1 },
     { view: 'day', calendarEventId: 0 }
   ])('rejects invalid navigation data without a fallback route: %j', (intent) => {

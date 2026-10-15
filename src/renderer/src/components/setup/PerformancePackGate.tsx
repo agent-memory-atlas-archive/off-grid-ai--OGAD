@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { GridBackdrop } from '../ui/grid-backdrop'
 import { PerformancePackPanel } from './PerformancePackPanel'
 import type { PerformancePackStatus } from '../../../../shared/performance-pack'
 
@@ -28,8 +27,7 @@ export function PerformancePackGate({ children }: { children: React.ReactNode })
   }
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-neutral-950 p-6">
-      <GridBackdrop className="z-0" />
+    <div className="fixed inset-0 flex items-center justify-center p-6">
       <div className="relative z-10 w-full max-w-xl">
         <p className="mb-3 font-mono text-[10px] uppercase tracking-widest text-green-500">Optional setup</p>
         <PerformancePackPanel onSkip={dismiss} />

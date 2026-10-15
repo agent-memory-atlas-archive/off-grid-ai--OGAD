@@ -1,4 +1,4 @@
-import { C as ClipboardBridge, e as ClipboardRead, b as ClipboardItem } from '../types-B7DdTBPa.mjs';
+import { C as ClipboardBridge, a as ClipboardRead, b as ClipboardItem } from '../types-hjEscIvQ.mjs';
 
 /** Minimal shape of Electron's nativeImage instances we use. */
 interface ElectronImage {
@@ -25,10 +25,15 @@ declare class ElectronClipboardBridge implements ClipboardBridge {
     private readonly clipboard;
     private readonly nativeImage;
     constructor(clipboard: ElectronClipboard, nativeImage: ElectronNativeImage);
+    private reference;
+    private resolving;
     read(): ClipboardRead | null;
     write(item: ClipboardItem): void;
     private extract;
     private extractFile;
+    /** Resolved path for a Finder reference URL, PENDING while osascript runs, or null
+     *  for a normal URL. Only the current clipboard URL is cached. */
+    private resolveReference;
 }
 
 export { type ElectronClipboard, ElectronClipboardBridge, type ElectronNativeImage };

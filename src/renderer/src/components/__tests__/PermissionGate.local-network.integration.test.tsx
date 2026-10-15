@@ -138,7 +138,7 @@ describe('<PermissionGate/> Local Network recovery', () => {
     expect(openScreenRecordingSettings).toHaveBeenCalledOnce()
     expect(await screen.findByText('Restart required')).toBeTruthy()
     expect(
-      screen.getByText('Relaunch once to apply the access selected in System Settings.')
+      screen.getByText('Turned it on in System Settings? Relaunch to apply it.')
     ).toBeTruthy()
 
     await user.click(

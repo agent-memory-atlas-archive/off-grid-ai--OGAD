@@ -68,7 +68,7 @@ function seed(n: number, tag: string): void {
 beforeAll(() => {
   // Pro's capture tables, as its schema creates them; a core DB test cannot import Pro.
   getDB().exec(`
-    CREATE TABLE IF NOT EXISTS frames (id INTEGER PRIMARY KEY AUTOINCREMENT, ts DATETIME DEFAULT CURRENT_TIMESTAMP, surface TEXT, url TEXT, text TEXT);
+    CREATE TABLE IF NOT EXISTS frames (id INTEGER PRIMARY KEY AUTOINCREMENT, ts DATETIME DEFAULT CURRENT_TIMESTAMP, surface TEXT, url TEXT, text TEXT, source TEXT);
     CREATE TABLE IF NOT EXISTS observations (id INTEGER PRIMARY KEY AUTOINCREMENT, summary TEXT, surface TEXT, url TEXT, ts DATETIME);
     CREATE TABLE IF NOT EXISTS meetings (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, summary TEXT, transcript TEXT, started_at INTEGER);
   `)

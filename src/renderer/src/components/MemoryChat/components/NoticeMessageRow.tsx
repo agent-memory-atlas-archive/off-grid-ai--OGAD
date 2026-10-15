@@ -5,7 +5,6 @@ import { noticeText } from '../utlis'
 export const NoticeMessageRow = memo(function NoticeMessageRow({
   message
 }: Readonly<{ message: ChatMessage }>): React.JSX.Element {
-  console.log('MemoryChat NoticeMessageRow rendered')
   const text = noticeText(message.content)
   if (text === 'Compacted') {
     return (

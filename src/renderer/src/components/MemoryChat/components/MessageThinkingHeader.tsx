@@ -10,7 +10,6 @@ import type { ChatMessage } from '../types'
 import { activityLabel, isSupportingMessage } from '../utlis'
 
 function WebTaskStepFeed(): React.JSX.Element | null {
-  console.log('MemoryChat WebTaskStepFeed rendered')
   const [steps, setSteps] = useState<string[]>([])
   useEffect(() => {
     const offStep = window.api.browser?.onStep((e) => {
@@ -58,7 +57,6 @@ function MessageThinkingHeaderComponent({
   message,
   timeline = false
 }: Readonly<{ message: ChatMessage; timeline?: boolean }>): React.JSX.Element {
-  console.log('MemoryChat MessageThinkingHeader rendered')
   if (message.role !== 'assistant') return <></>
   if (message.streaming) {
     const activity = activityLabel(message.activity)

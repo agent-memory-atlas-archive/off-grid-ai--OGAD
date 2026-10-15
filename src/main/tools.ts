@@ -29,6 +29,7 @@ import {
   conversationSummaryRequest,
   conversationSummaryTurn,
   elideStaleToolResults,
+  fitAttachedDocuments,
   normalizeConversationSummary,
   normalizeMaxToolCalls,
   repeatedToolCallDecision,
@@ -932,6 +933,36 @@ export async function toolChat(
   ]
   // Tokens counted by script: characters / 4 lets a Japanese or Chinese chat overflow first.
   const compactAtTokens = Math.floor(ctx * 0.8)
+  // Compaction only shrinks earlier turns; a long attached document can outgrow the window on its
+  // own, which ended the turn in "Context is full." right after compacting. The document is cut
+  // to excerpts that fit what the system prompt, tools and a share of the history leave, and the
+  // model is told it is reading excerpts. Earlier turns still compact below if they need to.
+  // The room is what is left once the reply, the system prompt, the history (capped, it compacts)
+  // and the tools that must be sent are counted. In assistant mode every tool must fit, and with God
+  // or connectors on they can fill most of a small window; otherwise tools are trimmed to fit later.
+  const historyTokens = toolPromptTokens(messages.slice(1, -1))
+  const turnReplyReserve = Math.min(1024, Math.max(256, Math.floor(ctx * 0.1)))
+  const turnBudget = Math.max(
+    512,
+    Math.floor(
+      (ctx -
+        turnReplyReserve -
+        toolPromptTokens([messages[0]], opts.assistantOnly ? tools : undefined) -
+        Math.min(historyTokens, Math.floor(ctx * 0.2))) *
+        // JSON escaping and the per-message envelope cost a little more than the text estimate.
+        0.9
+    )
+  )
+  const turn = messages[messages.length - 1]
+  const fitTurnText = (text: string): string => fitAttachedDocuments(text, turnBudget).text
+  if (typeof turn.content === 'string') turn.content = fitTurnText(turn.content)
+  else if (Array.isArray(turn.content)) {
+    turn.content = turn.content.map((part: { type?: string; text?: unknown }) =>
+      part.type === 'text' && typeof part.text === 'string'
+        ? { ...part, text: fitTurnText(part.text) }
+        : part
+    )
+  }
   // One model call folds every earlier turn into a structured summary that stands in for them
   // from now on. If it fails, the oldest turns fall back to short excerpts as before.
   const summary =

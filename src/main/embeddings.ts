@@ -41,8 +41,12 @@ class EmbeddingService {
     number,
     { resolve: (v: number[]) => void; reject: (e: Error) => void; log: AIRequestHandle }
   >()
-  /** Serializes requests: the tail of the queue, not a list, so memory does not grow with it. */
+  /** Settles once every request scheduled so far has finished; shutdown waits on it. */
   private queue: Promise<unknown> = Promise.resolve()
+  /** Requests waiting for the worker, one at a time. Interactive ones (a search someone is waiting
+   *  on) go ahead of background indexing, which can queue hundreds. */
+  private readonly pending: { interactive: boolean; start: () => void }[] = []
+  private running = false
   private reportedDevice: string | null = null
   private shuttingDown = false
 
@@ -127,12 +131,43 @@ class EmbeddingService {
     await this.generateEmbedding('')
   }
 
-  async generateEmbedding(text: string): Promise<number[]> {
+  /** `interactive`: someone is waiting on this vector (a search), so it runs before background
+   *  indexing that is already queued. */
+  async generateEmbedding(text: string, opts: { interactive?: boolean } = {}): Promise<number[]> {
     // A cold worker may download its model while handling its first embedding.
-    return withStorageDownload(() => this.generateEmbeddingInner(text))
+    return withStorageDownload(() => this.generateEmbeddingInner(text, opts.interactive === true))
   }
 
-  private async generateEmbeddingInner(text: string): Promise<number[]> {
+  /** Run `task` when the worker is free, interactive requests first, then in arrival order. */
+  private schedule<T>(task: () => Promise<T>, interactive: boolean): Promise<T> {
+    const result = new Promise<T>((resolve, reject) => {
+      const start = (): void => {
+        void task()
+          .then(resolve, reject)
+          .finally(() => {
+            this.running = false
+            this.pump()
+          })
+      }
+      const entry = { interactive, start }
+      const firstBackground = interactive ? this.pending.findIndex((p) => !p.interactive) : -1
+      if (firstBackground >= 0) this.pending.splice(firstBackground, 0, entry)
+      else this.pending.push(entry)
+      this.pump()
+    })
+    this.queue = Promise.allSettled([this.queue, result])
+    return result
+  }
+
+  private pump(): void {
+    if (this.running) return
+    const next = this.pending.shift()
+    if (!next) return
+    this.running = true
+    next.start()
+  }
+
+  private async generateEmbeddingInner(text: string, interactive: boolean): Promise<number[]> {
     if (this.shuttingDown) throw new Error('Embedding runtime is shutting down.')
     return recordAIRequest(
       {
@@ -182,10 +217,7 @@ class EmbeddingService {
             }
           }
         }
-        const result = this.queue.then(runWithResidency, runWithResidency)
-        // Keep the chain alive after a rejection, or one failure stalls every later request.
-        this.queue = result.catch(() => undefined)
-        const vector = await result
+        const vector = await this.schedule(runWithResidency, interactive)
         log.update({
           backend: this.reportedDevice ?? embeddingDevice() ?? 'Unknown',
           metrics: { dimensions: vector.length }

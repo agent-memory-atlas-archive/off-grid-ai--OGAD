@@ -6,6 +6,7 @@ import type {
   ModelsInventoryResponse
 } from './bridge-media-protocol'
 import { readModelInventory, activateBridgeModel } from './bridge-models'
+import { forgetModelReads, shortLivedRead } from './bridge-model-reads'
 import { readAudioVoices, speakBridgeAudio, transcribeBridgeAudio } from './bridge-audio'
 
 export interface BridgeMediaData {
@@ -17,8 +18,14 @@ export interface BridgeMediaData {
 }
 
 export const bridgeMediaData: BridgeMediaData = {
-  modelInventory: readModelInventory,
-  activateModel: activateBridgeModel,
+  modelInventory: shortLivedRead(readModelInventory),
+  activateModel: async (params) => {
+    try {
+      return await activateBridgeModel(params)
+    } finally {
+      forgetModelReads()
+    }
+  },
   audioVoices: readAudioVoices,
   transcribeAudio: transcribeBridgeAudio,
   speakAudio: speakBridgeAudio

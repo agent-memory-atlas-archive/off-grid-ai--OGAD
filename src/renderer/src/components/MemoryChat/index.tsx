@@ -80,6 +80,8 @@ import { SettingsPanel } from '../SettingsPanel'
 import { OPEN_ACTIVE_MODELS_PANEL_EVENT } from '@renderer/lib/model-settings-panel'
 import { LoadingDots } from '../ui/loading-dots'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
+import { Checkbox } from '@offgrid/operator-ui/operator/animate/checkbox'
+import { SettingsSelect } from '../SettingsSelect'
 import ElasticSlider from '@offgrid/operator-ui/operator/bits/elastic-slider'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
 import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
@@ -116,6 +118,7 @@ import {
   type QueueEdit
 } from '@offgrid/operator-ui/operator/workflows/queue'
 import { AttachmentList } from '@offgrid/operator-ui/operator/workflows/attachments'
+import { attachedDocumentBlock } from '@offgrid/models'
 import { AutoHeight } from '@offgrid/operator-ui/operator/presence'
 import {
   PromptInput,
@@ -1658,7 +1661,7 @@ export function MemoryChat({
       typed || (atts.length ? `(${atts.length} attachment${atts.length > 1 ? 's' : ''})` : '')
     const attBlock = atts
       .filter((a) => a.text)
-      .map((a) => `--- attached ${a.kind}: ${a.name} ---\n${a.text}`)
+      .map((a) => attachedDocumentBlock(a.kind, a.name, a.text as string))
       .join('\n\n')
     // Actual image files go to the multimodal model (not just their captions).
     const imagePaths = atts.filter((a) => a.kind === 'image' && a.path).map((a) => a.path as string)
@@ -4461,20 +4464,19 @@ export function MemoryChat({
                       {mode === 'image' && showImageOptions && (
                         <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border border-neutral-800 px-3 py-2 text-[11px] text-neutral-500">
                           {imgModels.length > 1 && (
-                            <label className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5">
                               Model
-                              <select
+                              <SettingsSelect
+                                id="chat-image-model"
+                                label="Model"
                                 value={imgModel}
-                                onChange={(e) => chooseImageModel(e.target.value)}
-                                className="max-w-[12rem] rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-neutral-300 outline-none focus:border-green-500"
-                              >
-                                {imgModels.map((m) => (
-                                  <option key={m} value={m}>
-                                    {m.replace(/\.gguf$/i, '').replace(/-Q\d.*$/i, '')}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
+                                options={imgModels.map((m) => ({
+                                  value: m,
+                                  label: m.replace(/\.gguf$/i, '').replace(/-Q\d.*$/i, '')
+                                }))}
+                                onValueChange={chooseImageModel}
+                              />
+                            </div>
                           )}
                           <div className="flex items-center gap-1.5">
                             Size
@@ -4538,11 +4540,9 @@ export function MemoryChat({
                             className="flex items-center gap-1.5"
                             title="Rewrite your prompt with the local model for richer, more detailed images"
                           >
-                            <input
-                              type="checkbox"
+                            <Checkbox
                               checked={enhanceImg}
-                              onChange={(e) => setEnhanceImg(e.target.checked)}
-                              className="accent-green-500"
+                              onCheckedChange={(checked) => setEnhanceImg(checked)}
                             />
                             Enhance
                           </label>
@@ -4723,9 +4723,11 @@ export function MemoryChat({
                         a stray form submit (a button without a type, Enter in a gate field) does nothing
                         and leaves the draft as it is. */}
                         <PromptInput
+                          // The page's main action: its beam runs even before it is focused.
+                          data-field-focus="always"
                           onSubmit={() => {}}
                           resetOnSubmit={false}
-                          groupClassName={`h-auto flex-col items-stretch rounded-xl bg-card text-card-foreground shadow-sm transition-colors ${dragOver ? 'border-primary' : ''}`}
+                          groupClassName={`relative h-auto flex-col items-stretch rounded-xl bg-card text-card-foreground shadow-sm transition-colors ${dragOver ? 'border-primary' : ''}`}
                         >
                         <PromptInputHeader className="cursor-auto select-auto flex-col items-stretch gap-0 p-0 font-normal text-foreground">
                         <AutoHeight>
@@ -4751,6 +4753,9 @@ export function MemoryChat({
                             >
                               <AttachmentList
                                 attachments={attachments.map(toProcessingAttachment)}
+                                // One compact row of pills, so a few files do not push the
+                                // composer up the screen.
+                                layout="chips"
                                 onRemove={removeAttachment}
                                 onOpen={(id) => {
                                   const a = attachments.find((attachment) => attachment.id === id)
