@@ -998,7 +998,7 @@ export async function toolChat(
         )
       )
       exts.push(documentToolExtension)
-      messages[0].content = `${messages[0].content}\n${documentToolExtension.systemHint?.() ?? ''}`
+      messages[0].content = `${messages[0].content}\n${documentToolExtension.systemHint()}`
     }
     if (attachedDocuments.stable)
       messages[0].content = `${messages[0].content}\n\n${attachedDocuments.stable}`
