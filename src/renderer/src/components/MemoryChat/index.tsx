@@ -4723,6 +4723,8 @@ export function MemoryChat({
                         a stray form submit (a button without a type, Enter in a gate field) does nothing
                         and leaves the draft as it is. */}
                         <PromptInput
+                          // The page's main action: its beam runs even before it is focused.
+                          data-field-focus="always"
                           onSubmit={() => {}}
                           resetOnSubmit={false}
                           groupClassName={`relative h-auto flex-col items-stretch rounded-xl bg-card text-card-foreground shadow-sm transition-colors ${dragOver ? 'border-primary' : ''}`}
