@@ -274,6 +274,8 @@ jobs:
           npm --prefix ../shared/packages/use run build
           npm --prefix ../shared/packages/automation run build
           npm --prefix ../shared/packages/models run build
+          # @offgrid/rag (the document engine) ships a built dist/ like sync and models.
+          npm --prefix ../shared/packages/rag run build
           npm --prefix ../shared/packages/speech run build
           npm --prefix ../shared/packages/ui run build
       - name: Check out the private Desktop speech runtime
@@ -621,6 +623,8 @@ jobs:
           npm --prefix ../shared/packages/use run build
           npm --prefix ../shared/packages/automation run build
           npm --prefix ../shared/packages/models run build
+          # @offgrid/rag (the document engine) ships a built dist/ like sync and models.
+          npm --prefix ../shared/packages/rag run build
           npm --prefix ../shared/packages/speech run build
           npm --prefix ../shared/packages/ui run build
       - name: Check out the private Desktop speech package
