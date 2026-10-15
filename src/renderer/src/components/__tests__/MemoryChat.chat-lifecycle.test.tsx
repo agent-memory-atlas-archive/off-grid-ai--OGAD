@@ -143,7 +143,9 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
     }
   })
 
-  it('includes a saved pasted attachment when sending a follow-up in the same chat', async () => {
+  // Documents never ride in history: every turn rebuilds the chat's documents (pasted text included)
+  // from the saved attachments in the main process, so history keeps only the marker.
+  it('sends a follow-up with the saved pasted attachment marked in history, not pasted into it', async () => {
     const boundary = new ChatBoundary()
     boundary.messages['conversation-a'] = [
       {
@@ -172,8 +174,9 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
     const history = vi.mocked(boundary.api.toolChat).mock.calls[0]?.[1] as
       | { content: string }[]
       | undefined
-    expect(history?.[0]?.content).toContain('Find nearby beef ribs under $100')
+    expect(history?.[0]?.content).toContain('[Attached: Pasted text]')
     expect(history?.[0]?.content).toContain('(1 attachment)')
+    expect(history?.[0]?.content).not.toContain('Find nearby beef ribs under $100')
   })
 
   it('opens a task follow-up as a confirmed draft in its owning conversation', async () => {

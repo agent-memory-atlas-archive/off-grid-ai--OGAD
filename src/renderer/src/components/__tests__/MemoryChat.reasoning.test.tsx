@@ -66,6 +66,13 @@ function installApi(): { addRagMessage: AddRagMessageBoundary } {
     listProjects: vi.fn(async () => []),
     styleThumbs: vi.fn(async () => ({})),
     listSkills: vi.fn(async () => []),
+    // Documents in a chat (preload `documents`): none attached.
+    documents: {
+      list: async (): Promise<unknown[]> => [],
+      setExcluded: async (): Promise<void> => undefined,
+      onProgress: (): (() => void) => () => undefined
+    },
+    filePath: (): string => '',
     onRagStream: vi.fn((cb: (e: StreamEvent) => void) => {
       streamCb = cb
       return () => { }

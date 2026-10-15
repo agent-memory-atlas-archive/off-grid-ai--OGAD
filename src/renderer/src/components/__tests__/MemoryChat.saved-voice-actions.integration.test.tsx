@@ -81,6 +81,13 @@ function installSavedVoiceBoundary(): void {
     getRagMessages: async () => messages.map((message) => ({ ...message })),
     getActiveRagStreams: async () => [],
     onRagStream: () => () => { },
+    // Documents in a chat (preload `documents`): none attached.
+    documents: {
+      list: async (): Promise<unknown[]> => [],
+      setExcluded: async (): Promise<void> => undefined,
+      onProgress: (): (() => void) => () => undefined
+    },
+    filePath: (): string => '',
     onRagConversationsChanged: () => () => { },
     addRagMessage: async (
       conversationId: string,

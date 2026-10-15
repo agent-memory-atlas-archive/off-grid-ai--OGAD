@@ -345,6 +345,14 @@ function installApi(opts: InstallApiOptions): InstalledApi {
     styleThumbs: vi.fn(async () => ({ ...(opts.styleThumbs ?? {}) })),
     listSkills: vi.fn(async () => []),
     onRagStream: vi.fn(() => () => { }),
+    // A file made in the page (jsdom) is an in-memory blob: the preload finds no path on disk for it.
+    filePath: (): string => '',
+    // Documents in a chat (preload `documents`): none attached.
+    documents: {
+      list: async (): Promise<unknown[]> => [],
+      setExcluded: async (): Promise<void> => undefined,
+      onProgress: (): (() => void) => () => undefined
+    },
     chatVisionAvailable,
     processFile,
     ragChat,

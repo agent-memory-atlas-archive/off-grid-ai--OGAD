@@ -48,6 +48,13 @@ function installApi(): { addRagMessage: AddRag } {
       finishedAt: null
     })),
     onRagStream: vi.fn(() => () => { }),
+    // Documents in a chat (preload `documents`): none attached.
+    documents: {
+      list: async (): Promise<unknown[]> => [],
+      setExcluded: async (): Promise<void> => undefined,
+      onProgress: (): (() => void) => () => undefined
+    },
+    filePath: (): string => '',
     getRagConversations: vi.fn(async () => []),
     getRagMessages: vi.fn(async () => []),
     createRagConversation: vi.fn(async () => { }),

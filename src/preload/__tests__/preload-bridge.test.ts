@@ -128,6 +128,12 @@ describe('the preload bridge', () => {
     })
   })
 
+  /** Methods that answer from an Electron API in the renderer itself, with nothing to ask main. */
+  const RENDERER_LOCAL = new Set([
+    // webUtils.getPathForFile: where a picked or dropped file is on disk.
+    'filePath'
+  ])
+
   describe('every method reaches the main process', () => {
     it('has no dead ends: each function invokes, sends, or subscribes', async () => {
       const bridge = await loadBridge({ 'pro:is-enabled': true })
@@ -160,7 +166,7 @@ describe('the preload bridge', () => {
             electron.removeListener.mock.calls.length +
             electron.removeAllListeners.mock.calls.length >
           0
-        if (!talked) dead.push(path)
+        if (!talked && !RENDERER_LOCAL.has(path)) dead.push(path)
       }
 
       // This is the assertion that would have caught a dead button: a bridge method that quietly does

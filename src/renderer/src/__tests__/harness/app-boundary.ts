@@ -16,6 +16,12 @@ export function installAppBoundary(overrides: Record<string, unknown> = {}): voi
   const eventSubscription = (): (() => void) => () => {}
   const values: Record<string, unknown> = {
     isPro: false,
+    // Documents in a chat (preload `documents`): none attached.
+    documents: {
+      list: async (): Promise<unknown[]> => [],
+      setExcluded: async (): Promise<void> => undefined,
+      onProgress: eventSubscription
+    },
     platform: 'darwin',
     getPermissionStatus: async () => ({
       accessibility: true,

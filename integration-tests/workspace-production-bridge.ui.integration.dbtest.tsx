@@ -175,8 +175,17 @@ beforeEach(() => {
   }
 })
 
-afterEach(() => {
+afterEach(async () => {
   cleanup()
+  // Background passes (follow-up suggestions) wait out the foreground grace and may still be queued
+  // when a test ends; let them finish so the next test's model replies are its own.
+  const { modalityQueue } = await import('../src/main/modality-queue/queue')
+  const deadline = Date.now() + 20_000
+  for (;;) {
+    const { running, queued } = modalityQueue.getState()
+    if ((!running.length && !queued.length) || Date.now() > deadline) break
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
   fake.reset()
 })
 
@@ -213,6 +222,11 @@ async function inTranscript(text: string | RegExp): Promise<HTMLElement> {
   )
 }
 
+/** Follow-up suggestions are background passes: they wait out the 3 s foreground grace after a reply,
+ *  and behind any background pass still queued. Tests that wait for several get a matching timeout. */
+const SUGGESTION_TEST_TIMEOUT_MS = 60_000
+const SUGGESTION_WAIT_MS = 15_000
+
 describe('production workspace bridge', () => {
   it('sends a rendered chat turn through preload, IPC, the model socket, and SQLite', async () => {
     fake.enqueue(
@@ -238,7 +252,7 @@ describe('production workspace bridge', () => {
         ['assistant', 'The production bridge persisted this answer.']
       ])
     })
-    expect(await screen.findByPlaceholderText('Check the saved answer (Tab)')).toBeTruthy()
+    expect(await screen.findByPlaceholderText('Check the saved answer (Tab)', undefined, { timeout: SUGGESTION_WAIT_MS })).toBeTruthy()
     expect(fake.requests).toHaveLength(2)
   })
 
@@ -325,10 +339,12 @@ describe('production workspace bridge', () => {
   }, 15_000)
 
   it('shows the real memory-chat failure instead of a fabricated answer', async () => {
-    fake.enqueue({
+    // An unavailable model is tried again once (chat fallback policy): it fails both times here.
+    const unavailable = {
       errorStatus: 503,
       errorBody: JSON.stringify({ error: { message: 'Memory model is unavailable.' } })
-    })
+    }
+    fake.enqueue(unavailable, unavailable)
     const user = userEvent.setup()
     renderChat()
 
@@ -389,7 +405,7 @@ describe('production workspace bridge', () => {
     fireEvent.change(composer, { target: { value: 'Start a long conversation' } })
     await user.click(screen.getByRole('button', { name: /^send$/i }))
     expect(await inTranscript(longAnswer)).toBeTruthy()
-    expect(await screen.findByPlaceholderText('Continue after the context fills (Tab)')).toBeTruthy()
+    expect(await screen.findByPlaceholderText('Continue after the context fills (Tab)', undefined, { timeout: SUGGESTION_WAIT_MS })).toBeTruthy()
 
     fireEvent.change(composer, { target: { value: 'Continue after the context fills' } })
     await user.click(screen.getByRole('button', { name: /^send$/i }))
@@ -397,7 +413,7 @@ describe('production workspace bridge', () => {
     expect(
       await screen.findByText('Compacted conversation to make room for more messages.')
     ).toBeTruthy()
-    expect(await screen.findByPlaceholderText('Review the shorter conversation (Tab)')).toBeTruthy()
+    expect(await screen.findByPlaceholderText('Review the shorter conversation (Tab)', undefined, { timeout: SUGGESTION_WAIT_MS })).toBeTruthy()
     const summaryRequest = JSON.stringify(fake.requests[2])
     expect(summaryRequest).toContain('## Facts and preferences')
     const nextModelRequest = JSON.stringify(fake.requests[3])
@@ -413,7 +429,7 @@ describe('production workspace bridge', () => {
     const notice = getRagMessages(conversation!.id).find(({ content }) => content === '_Compacted_')
     expect(notice).toBeTruthy()
     expect(JSON.parse(String(notice!.context))).toEqual({ notice: true, compactionSummary: summary })
-  })
+  }, SUGGESTION_TEST_TIMEOUT_MS)
 
   it('uses the same chat Thinking control for remote provider requests', async () => {
     const endpoint = `http://127.0.0.1:${fake.port}/v1`
@@ -436,7 +452,7 @@ describe('production workspace bridge', () => {
         fireEvent.change(composer, { target: { value: `Test ${provider} with Thinking on` } })
         await user.click(screen.getByRole('button', { name: /^send$/i }))
         expect(await inTranscript(`${provider} answered with Thinking on.`)).toBeTruthy()
-        expect(await screen.findByPlaceholderText('Try with Thinking off (Tab)')).toBeTruthy()
+        expect(await screen.findByPlaceholderText('Try with Thinking off (Tab)', undefined, { timeout: SUGGESTION_WAIT_MS })).toBeTruthy()
         const onRequest = fake.requests[0]
         if (provider === 'openrouter') {
           expect(onRequest?.reasoning).toEqual({ max_tokens: 1024 })
@@ -451,7 +467,7 @@ describe('production workspace bridge', () => {
         fireEvent.change(composer, { target: { value: `Test ${provider} with Thinking off` } })
         await user.click(screen.getByRole('button', { name: /^send$/i }))
         expect(await inTranscript(`${provider} answered with Thinking off.`)).toBeTruthy()
-        expect(await screen.findByPlaceholderText('Compare both answers (Tab)')).toBeTruthy()
+        expect(await screen.findByPlaceholderText('Compare both answers (Tab)', undefined, { timeout: SUGGESTION_WAIT_MS })).toBeTruthy()
         const offRequest = fake.requests[2]
         if (provider === 'openrouter') {
           expect(offRequest?.reasoning).toEqual({ effort: 'none' })
@@ -470,7 +486,7 @@ describe('production workspace bridge', () => {
       })
       await window.api.setLlmSettings({ reasoningBudget: 0 })
     }
-  }, 15_000)
+  }, SUGGESTION_TEST_TIMEOUT_MS)
 
   it('shows Gemini thinking and completes a signed reasoning tool round', async () => {
     const endpoint = `http://127.0.0.1:${fake.port}/v1`
