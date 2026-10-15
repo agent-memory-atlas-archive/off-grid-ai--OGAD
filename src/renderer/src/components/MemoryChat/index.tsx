@@ -40,7 +40,6 @@ import { useActiveModelSummary } from '@renderer/hooks/useActiveModelSummary'
 import { shouldFollowBottom } from '@renderer/lib/scroll-follow'
 import {
   attachmentKindFor,
-  boundAttachmentTextForSync,
   describeAttachment,
   isPromptEnhancementReasoningLabel,
   type ChatStreamPreviewRow,
@@ -208,8 +207,7 @@ import {
   mergeRemotePreviewTools,
   queuedTurnId,
   toProcessingAttachment,
-  toQueuedMessage,
-  withPastedDocumentIds
+  toQueuedMessage
 } from './helper'
 import {
   findDurableWorkMessageId,
@@ -1655,12 +1653,9 @@ export function MemoryChat({
     // Attachments (pasted blocks + processed files) ride along on a normal send
     // from the composer, or on a drained queue item (opts.atts) — not on
     // resend/regenerate/example.
-    // Pasted text has no file: its id is the hash of its full text, so later turns read all of it
-    // even though the saved message keeps a copy bounded for sync.
-    const atts = await withPastedDocumentIds(
+    const atts =
       opts?.atts ??
-        (isInput ? attachments.filter((a) => a.status === 'ready' && (a.text || a.path)) : [])
-    )
+      (isInput ? attachments.filter((a) => a.status === 'ready' && (a.text || a.path)) : [])
     const typed = (override ?? draftStore.getSnapshot()).trim()
     // The user sees `trimmed`; the model also gets the attachment text folded in.
     const trimmed =
@@ -1934,10 +1929,8 @@ export function MemoryChat({
                 path: opts.voiceClip.path
               }
             : undefined
-          // A message syncs as one record: attachment text is bounded so it always saves and syncs.
-          // The full text stays here, in the document index, for this device's answers.
           const persisted = [
-            ...boundAttachmentTextForSync(attMeta),
+            ...attMeta,
             ...(initAttachment ? [initAttachment] : []),
             ...(voiceAttachment ? [voiceAttachment] : [])
           ]

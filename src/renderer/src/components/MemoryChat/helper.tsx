@@ -414,22 +414,6 @@ const MEDIA_TYPE_BY_KIND: Record<Attachment['kind'], string> = {
 }
 
 /** A composer or queued attachment as the library's processing card sees it. */
-async function sha256Hex(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
-}
-
-/** Pasted text gets the same identity main gives a document: the SHA-256 of its full text. */
-export async function withPastedDocumentIds(attachments: Attachment[]): Promise<Attachment[]> {
-  return Promise.all(
-    attachments.map(async (attachment) =>
-      attachment.kind === 'pasted' && attachment.text && !attachment.documentId
-        ? { ...attachment, documentId: await sha256Hex(attachment.text) }
-        : attachment
-    )
-  )
-}
-
 /** A ready document still reading or indexing in the background: its pill shows how far. */
 function documentProgress(attachment: Attachment): { message: string; progress?: number } | null {
   const progress = attachment.progress
