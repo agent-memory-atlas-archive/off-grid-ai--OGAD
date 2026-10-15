@@ -82,6 +82,8 @@ describe('loopback media server integration', () => {
     // Packaged pages load from file://, which the browser sends as origin "null".
     const own = await fetch(url!, { headers: { Origin: 'null' } })
     expect(own.headers.get('Access-Control-Allow-Origin')).toBe('null')
+    // pdf.js reads these to load a large PDF in ranges.
+    expect(own.headers.get('Access-Control-Expose-Headers')).toContain('Content-Range')
     await own.arrayBuffer()
 
     const other = await fetch(url!, { headers: { Origin: 'https://example.com' } })

@@ -169,7 +169,14 @@ function corsHeaders(origin: string | undefined): Record<string, string> {
   if (!origin) return {}
   const devRenderer = process.env['ELECTRON_RENDERER_URL']
   const allowed = origin === 'null' || (!!devRenderer && origin === new URL(devRenderer).origin)
-  return allowed ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}
+  // pdf.js reads these to fetch a large file in ranges instead of whole.
+  return allowed
+    ? {
+        'Access-Control-Allow-Origin': origin,
+        'Access-Control-Expose-Headers': 'Accept-Ranges, Content-Length, Content-Range',
+        Vary: 'Origin'
+      }
+    : {}
 }
 
 function serveFile(req: http.IncomingMessage, res: http.ServerResponse, filePath: string): void {
