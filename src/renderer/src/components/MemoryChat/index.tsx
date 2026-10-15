@@ -118,7 +118,6 @@ import {
   type QueueEdit
 } from '@offgrid/operator-ui/operator/workflows/queue'
 import { AttachmentList } from '@offgrid/operator-ui/operator/workflows/attachments'
-import { BorderBeam } from '../ui/border-beam'
 import { attachedDocumentBlock } from '@offgrid/models'
 import { AutoHeight } from '@offgrid/operator-ui/operator/presence'
 import {
@@ -4728,14 +4727,6 @@ export function MemoryChat({
                           resetOnSubmit={false}
                           groupClassName={`relative h-auto flex-col items-stretch rounded-xl bg-card text-card-foreground shadow-sm transition-colors ${dragOver ? 'border-primary' : ''}`}
                         >
-                        {/* A slow beam around the composer marks it as the place to type. */}
-                        <BorderBeam
-                          size={640}
-                          duration={2.4}
-                          borderWidth={2}
-                          colorFrom="var(--og-primary, #34d399)"
-                          colorTo="#a7f3d0"
-                        />
                         <PromptInputHeader className="cursor-auto select-auto flex-col items-stretch gap-0 p-0 font-normal text-foreground">
                         <AutoHeight>
                         {attachWarn && (
