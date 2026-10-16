@@ -383,6 +383,7 @@ export function SettingsPanel({
   const [transcriptionInfo, setTranscriptionInfo] = useState<TranscriptionInfo | null>(null)
   const [tools, setTools] = useState<ToolSetting[]>([])
   const [toolsEnabled, setToolsEnabled] = useState(true)
+  const [connectorsEnabled, setConnectorsEnabled] = useState(true)
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [connectors, setConnectors] = useState<Connector[]>([])
   const [newConn, setNewConn] = useState({ name: '', url: '' })
@@ -471,6 +472,7 @@ export function SettingsPanel({
       .then((settings) => {
         setShowGenerationDetails(settings.showGenerationDetails === true)
         setToolsEnabled(settings.toolsEnabled !== false)
+        setConnectorsEnabled(settings.connectorsEnabled !== false)
       })
       .catch(() => {})
     ;(window.api as Partial<typeof window.api>)
@@ -1348,6 +1350,22 @@ export function SettingsPanel({
 
         {tab === 'connectors' && (
           <>
+            <SettingRow
+              icon={<Plugs />}
+              title="Enable connectors"
+              description="Controls whether any connector tools are sent to the chat model."
+              className="mb-3 pt-0"
+            >
+              <Switch
+                aria-label="Enable connectors"
+                checked={connectorsEnabled}
+                onCheckedChange={() => {
+                  const next = !connectorsEnabled
+                  setConnectorsEnabled(next)
+                  void window.api.saveSetting('connectorsEnabled', next)
+                }}
+              />
+            </SettingRow>
             <p className="mb-2 text-[11.5px] leading-snug text-neutral-500">
               Connect MCP servers — your reusable tool library (web search, fetch, etc.). Add an
               HTTP MCP endpoint:
