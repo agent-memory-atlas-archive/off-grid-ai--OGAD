@@ -619,6 +619,11 @@ function StandardMessageRow({
         ) : null}
         {message.role === 'user' ? (
           <div className="mt-1.5 flex items-center justify-end gap-2 pr-1">
+            <VariantNavigation
+              message={message}
+              noun="question"
+              onSelect={(direction) => actions.selectVariant(message.id, direction)}
+            />
             <MessageTime message={message} />
             {message.context?.taskGuidance ? (
               <MessageActionsMenu>

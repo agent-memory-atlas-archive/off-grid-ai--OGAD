@@ -3,11 +3,11 @@
  *
  * Real app and real bridge; the boundaries are the fake paired browser and a fake llama-server
  * that records every request. The browser starts a chat, renames it, retries its first answer
- * (which keeps the original chat and makes a branch), and stops a run midway.
+ * (which adds a version in the same chat), chooses a version, and stops a run midway.
  *
  * Asserts: the chat appears in Desktop's chat list with Desktop's answer, which also streams back
- * to the browser; the rename shows in Desktop; the retry leaves the original intact beside the
- * branch; a stopped run saves its partial answer once, with no repeated question; and a tool
+ * to the browser; the retry keeps the first answer as a version, and a version the browser
+ * chooses is the one Desktop shows; a stopped run saves its partial answer once, with no repeated question; and a tool
  * switched off in Desktop is not offered to the model for a browser chat.
  */
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test'
@@ -138,7 +138,7 @@ test.describe('Paired-browser chat', () => {
     if (profileDir) fs.rmSync(profileDir, { recursive: true, force: true })
   })
 
-  test('A browser chat shows in Desktop, renames, branches on retry, and stops cleanly', async () => {
+  test('A browser chat shows in Desktop, renames, keeps versions on retry, and stops cleanly', async () => {
     test.setTimeout(180_000)
     const conversationId = id()
     const started = await browser!.rpc('chat.start', {
@@ -174,7 +174,7 @@ test.describe('Paired-browser chat', () => {
     expect(renamed.ok, JSON.stringify(renamed)).toBe(true)
     await expect(page.getByText('Riverside picnic', { exact: true }).first()).toBeVisible()
 
-    // Retrying the first answer branches: the original chat keeps its turns.
+    // Retrying the first answer adds a version in the same chat, as Regenerate does on Desktop.
     const retry = await browser!.rpc('chat.start', {
       runId: id(),
       conversationId,
@@ -183,21 +183,49 @@ test.describe('Paired-browser chat', () => {
       branchFrom: 0
     })
     expect(retry.ok, JSON.stringify(retry)).toBe(true)
-    const branch = await readRun((retry.result as { runId: string }).runId)
-    expect(branch.conversationId).not.toBe(conversationId)
-    const stored = await page.evaluate(
-      async (ids) =>
-        Promise.all(
-          ids.map(async (conversation) =>
-            (await window.api.getRagMessages(conversation)).map(
-              (message: { role: string; content: string }) => `${message.role}: ${message.content}`
-            )
-          )
-        ),
-      [conversationId, branch.conversationId]
-    )
-    expect(stored[0]).toEqual([`user: ${FIRST}`, `assistant: ${answer}`])
-    expect(stored[1]).toEqual([`user: ${FIRST}`, `assistant: ${answer}`])
+    const again = await readRun((retry.result as { runId: string }).runId)
+    expect(again.conversationId).toBe(conversationId)
+    const listed = async (): Promise<
+      Array<{
+        role: string
+        content: string
+        id?: string
+        versions?: { index: number; count: number }
+      }>
+    > => {
+      const reply = await browser!.rpc('conversations.list', {})
+      const conversation = (reply.result as Array<{ id: string; turns: unknown[] }>).find(
+        (entry) => entry.id === conversationId
+      )
+      return (conversation?.turns ?? []) as Array<{
+        role: string
+        content: string
+        id?: string
+        versions?: { index: number; count: number }
+      }>
+    }
+    const turns = await listed()
+    expect(turns.map((turn) => `${turn.role}: ${turn.content}`)).toEqual([
+      `user: ${FIRST}`,
+      `assistant: ${answer}`
+    ])
+    expect(turns[1]!.versions).toEqual({ index: 1, count: 2 })
+    await expect(page.getByText('2/2', { exact: true })).toBeVisible()
+
+    // The browser chooses the earlier answer; Desktop shows the same choice.
+    const chosen = await browser!.rpc('conversations.selectVersion', {
+      id: conversationId,
+      messageId: turns[1]!.id,
+      direction: -1
+    })
+    expect(chosen.ok, JSON.stringify(chosen)).toBe(true)
+    expect((await listed())[1]!.versions).toEqual({ index: 0, count: 2 })
+    await expect(page.getByText('1/2', { exact: true })).toBeVisible()
+    await browser!.rpc('conversations.selectVersion', {
+      id: conversationId,
+      messageId: (await listed())[1]!.id,
+      direction: 1
+    })
 
     // A run stopped midway keeps its partial answer and asks its question once.
     const slow = 'Count slowly for the picnic'

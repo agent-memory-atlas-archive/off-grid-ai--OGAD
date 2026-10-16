@@ -60,6 +60,19 @@ export function rpcHandlers(
       await deps.data.putConversation(p.conversation, browser)
       return true
     },
+    'conversations.selectVersion': async (p) => {
+      if (
+        typeof p.id !== 'string' ||
+        !p.id ||
+        typeof p.messageId !== 'string' ||
+        !p.messageId ||
+        (p.direction !== 1 && p.direction !== -1)
+      ) {
+        throw new Error('invalid')
+      }
+      if (!deps.data.selectConversationVersion) throw new Error('chats_unavailable')
+      return deps.data.selectConversationVersion(p.id, p.messageId, p.direction)
+    },
     'conversations.delete': async (p) => {
       if (typeof p.id !== 'string' || !p.id) {
         throw new Error('invalid')

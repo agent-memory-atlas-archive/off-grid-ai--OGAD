@@ -1250,6 +1250,27 @@ export function setupIPC(): void {
     }
   )
 
+  // Versions: retrying an answer or editing a question adds a version beside the old one.
+  ipcMain.handle('rag:prepare-answer-version', async (_e, conversationId: string, ofUuid: string) =>
+    (await import('./database')).prepareAnswerVersion(conversationId, ofUuid)
+  )
+  ipcMain.handle(
+    'rag:add-message-version',
+    async (
+      _e,
+      conversationId: string,
+      ofUuid: string,
+      role: 'user' | 'assistant',
+      content: string,
+      context?: unknown
+    ) => (await import('./database')).addRagMessageVersion(conversationId, ofUuid, role, content, context)
+  )
+  ipcMain.handle(
+    'rag:select-version',
+    async (_e, conversationId: string, uuid: string, direction: number) =>
+      (await import('./database')).selectRagMessageVersion(conversationId, uuid, direction)
+  )
+
   ipcMain.handle('rag:truncate-messages', async (_e, conversationId: string, keepCount: number) => {
     const { truncateRagMessages } = await import('./database')
     return truncateRagMessages(conversationId, keepCount)

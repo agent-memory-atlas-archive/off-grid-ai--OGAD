@@ -1618,6 +1618,8 @@ export function MemoryChat({
     opts?: {
       regen?: boolean
       priorVariants?: ResponseVersion[]
+      /** The saved answer a retry's new answer sits beside (shown in its place while it streams). */
+      versionOf?: string
       priorAnswer?: ChatMessage
       replacementMessageId?: string
       history?: ChatMessage[]
@@ -2161,6 +2163,7 @@ export function MemoryChat({
       const toolStreamMessage: ChatMessage = {
         id: toolStreamId,
         replacementMessageId: opts?.replacementMessageId,
+        ...(opts?.versionOf ? { versionOf: opts.versionOf } : {}),
         role: 'assistant',
         content: '',
         reasoning: '',
@@ -2825,6 +2828,9 @@ export function MemoryChat({
               context
             )
           : await window.api.addRagMessage(convId, 'assistant', failed.content, context)
+        // A retry that failed is kept as a version, and the answer it was retrying stays shown.
+        if (stored && stored !== true && opts?.versionOf)
+          await window.api.selectRagMessageVersion(convId, stored.uuid, -1)
         if (stored && sid)
           setConvMessages(convId, (previous) =>
             previous.map((message) =>
@@ -3557,9 +3563,8 @@ export function MemoryChat({
     markGenerating,
     resetPreview: () => setRemoteWorkPreview(null),
     stopTask: stopLiveWebUseForConversation,
-    update: (...args) => window.api.updateRagMessage(...args),
-    truncate: (...args) => window.api.truncateRagMessages(...args),
-    removeTasks: async (ids) => window.api.tasks?.remove?.(ids),
+    addVersion: (...args) => window.api.addRagMessageVersion(...args),
+    prepareAnswerVersion: (...args) => window.api.prepareAnswerVersion(...args),
     setMessages: setConvMessages,
     refresh: refreshConversationMessages,
     announceSettled: announceRunSettled,
@@ -3864,7 +3869,16 @@ export function MemoryChat({
     selectVariant: (messageId, direction) => {
       const selected = messages.find((message) => message.id === messageId)
       const cid = activeConversationId
-      if (!selected?.variants?.length || !cid || selected.streaming) return
+      if (!selected || !cid || selected.streaming) return
+      // A saved version shows its own thread: the turns after it come back with it.
+      if (selected.threadVersions) {
+        void window.api
+          .selectRagMessageVersion(cid, messageId, direction)
+          .then((changed) => (changed ? refreshConversationMessages(cid) : undefined))
+          .catch((error) => console.error('Failed to show the selected version:', error))
+        return
+      }
+      if (!selected.variants?.length) return
       const restored = selectAnswerVersion(selected, direction)
       setMessages((previous) =>
         previous.map((message) => (message.id === messageId ? restored : message))
