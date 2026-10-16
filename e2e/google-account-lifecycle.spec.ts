@@ -59,7 +59,8 @@ async function installGoogle(): Promise<void> {
     const network = globalThis.fetch
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url)
-      if (!url.hostname.endsWith('googleapis.com')) return network(input, init)
+      if (url.hostname !== 'googleapis.com' && !url.hostname.endsWith('.googleapis.com'))
+        return network(input, init)
       const form = new URLSearchParams(
         typeof init?.body === 'string' ? init.body : String(init?.body ?? '')
       )
@@ -105,7 +106,9 @@ async function consent(): Promise<void> {
   await expect
     .poll(
       async () => {
-        const url = (await google()).opened.find((u) => u.includes('accounts.google.com'))
+        const url = (await google()).opened.find(
+          (u) => new URL(u).hostname === 'accounts.google.com'
+        )
         consentUrl = url ? new URL(url) : undefined
         return Boolean(consentUrl)
       },
