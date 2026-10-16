@@ -88,6 +88,19 @@ export const pairingDialogs = (app: ElectronApplication): Promise<string[]> =>
     () => (globalThis as unknown as { __pairingDialogs?: string[] }).__pairingDialogs ?? []
   )
 
+/** A browser paired the way a person pairs one (matching words confirmed), with its socket open. */
+export const pairedBrowser = async (
+  app: ElectronApplication,
+  name = 'E2E Browser'
+): Promise<FakeExtension> => {
+  const browser = new FakeExtension(name)
+  await answerPairingDialog(app, await browser.pairingCode())
+  const paired = await browser.pair()
+  if (paired.status !== 200) throw new Error(`pairing failed: ${JSON.stringify(paired)}`)
+  if (!(await browser.connect())) throw new Error('the paired browser could not connect')
+  return browser
+}
+
 export class FakeExtension {
   readonly name: string
   deviceId = ''
