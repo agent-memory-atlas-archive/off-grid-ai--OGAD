@@ -209,10 +209,15 @@ try {
 # --- ffmpeg (GPL, win64) — single ffmpeg.exe flat in resources/bin -----------
 Write-Host '== ffmpeg =='
 try {
+  # Pinned FFmpeg 9.0.2 build from BtbN, mirrored on our release because BtbN prunes old autobuilds.
   $zip = Join-Path $tmp 'ffmpeg.zip'
   Invoke-WebRequest -Headers @{ 'User-Agent' = 'offgrid-fetch-win' } `
-    -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' `
+    -Uri 'https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/ffmpeg-n9.0.2-28-g669f5ab083-win64-gpl-9.0.zip' `
     -OutFile $zip
+  $ffmpegSha = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+  if ($ffmpegSha -ne '1bb62cfd4bdc12a63a6a1151458ea5ae7001fd055202afc5463517028882a631') {
+    throw "ffmpeg archive SHA256 mismatch: $ffmpegSha"
+  }
   $out = Join-Path $tmp 'ffmpeg'
   Expand-Archive -Path $zip -DestinationPath $out -Force
   Get-ChildItem -Path $out -Recurse -Filter 'ffmpeg.exe' |
