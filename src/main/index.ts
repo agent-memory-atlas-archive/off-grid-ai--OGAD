@@ -72,7 +72,7 @@ import { nativeImage } from 'electron'
 import { purgeLegacyChatImports, getSetting, saveSetting, optimizeDB } from './database'
 import { modalityQueue } from './modality-queue/queue'
 import { applyQueueConfig, readQueueConfig } from './modality-queue/config'
-import { registerRuntime } from './runtime-manager'
+import { liveMemory, registerRuntime } from './runtime-manager'
 import { guardConsoleStreams } from './stream-guards'
 import { PRODUCT_NAME } from '../shared/product-identity'
 import { installMediaPermissionHandler } from './media-permission'
@@ -682,6 +682,8 @@ app.whenReady().then(async () => {
         const { llm } = await import('./llm')
         registerRuntime(llm.runtime, { readChatBackend: () => llm.runtimeBackend() })
         applyQueueConfig(modalityQueue, readQueueConfig(getSetting))
+        // Models stay loaded while they fit live memory; the queue frees only what it must.
+        modalityQueue.setMemoryProbe(liveMemory)
         // A remote chat model needs no local engine: loading one anyway holds gigabytes of
         // memory for nothing. Chat starts it on demand if the user switches back.
         const { getActiveRemoteVisionServer } = await import('./vision/remote-vision-server')

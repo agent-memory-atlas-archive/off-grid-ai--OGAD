@@ -12,6 +12,7 @@
 //      engine reads getResidencyMode(modality) — the same rule, applied once per side.
 
 import os from 'node:os'
+import type { ResidentType } from '@offgrid/models'
 import { modalityQueue, type ModalityQueue } from './modality-queue/queue'
 import { getResidencyMode, type Modality, type ResidencyMode } from './runtime-residency'
 import type { RuntimeBackend } from '../shared/runtime-backends'
@@ -32,31 +33,46 @@ export interface ManagedRuntime {
    *  engine stays down and lazily loads on its own next use. Usually a no-op for
    *  engines that already load per job; the LLM clears its pause flag here. */
   release(): Promise<void> | void
+  /** What it holds in memory now, in MB (0 when nothing is loaded). */
+  footprintMB?(): number
+  /** What it will hold once its current model is loaded, in MB. */
+  expectedMB?(): number
+}
+
+/** Live memory the system can still give, in MB. macOS counts free, file-cache and purgeable pages
+ *  (what Activity Monitor treats as available); elsewhere Node's free memory is already the
+ *  available figure. Read at each job's admission, so it follows the person's other apps. */
+export function liveMemory(): { availableMB: number; totalMB: number } {
+  const totalMB = os.totalmem() / 1024 ** 2
+  if (process.platform === 'darwin' && typeof process.getSystemMemoryInfo === 'function') {
+    const info = process.getSystemMemoryInfo() as {
+      free: number
+      fileBacked?: number
+      purgeable?: number
+    }
+    return {
+      availableMB: (info.free + (info.fileBacked ?? 0) + (info.purgeable ?? 0)) / 1024,
+      totalMB
+    }
+  }
+  return { availableMB: os.freemem() / 1024 ** 2, totalMB }
+}
+
+/** Each modality's kind in the shared residency policy (text is kept longest). */
+const RESIDENT_TYPE: Record<Modality, ResidentType> = {
+  llm: 'text',
+  image: 'image',
+  stt: 'whisper',
+  tts: 'tts',
+  grounding: 'grounding',
+  decision: 'decision',
+  embeddings: 'embedding'
 }
 
 /** The action the queue's re-warm hook takes for a given residency mode. Pure +
  *  exported so the one rule that maps mode to behavior is unit-tested in isolation. */
 export function warmActionForMode(mode: ResidencyMode): 'warm' | 'release' {
   return mode === 'resident' ? 'warm' : 'release'
-}
-
-/** Unified memory at which an in-memory image model and the chat model fit together (the chat
- *  model plus the Qwen-Image stack is about 16 GB). Below it, chat and image still take turns. */
-export const IMAGE_BESIDE_CHAT_MIN_BYTES = 32 * 1024 ** 3
-
-/** Whether a job that displaces the image model leaves it loaded: the person chose in-memory, the
- *  job keeps the chat model loaded (a chat turn or background pass, not video, which frees both),
- *  and the machine has room for both. Pure, so the rule is tested on its own. */
-export function keepsImageResident(
-  mode: ResidencyMode,
-  totalMemoryBytes: number,
-  jobEvicts: readonly string[]
-): boolean {
-  return (
-    mode === 'resident' &&
-    !jobEvicts.includes('llm') &&
-    totalMemoryBytes >= IMAGE_BESIDE_CHAT_MIN_BYTES
-  )
 }
 
 const registry = new Map<Modality, ManagedRuntime>()
@@ -69,7 +85,6 @@ export interface RegisterDeps {
   queue?: ModalityQueue
   readMode?: (m: Modality) => ResidencyMode
   readChatBackend?: () => RuntimeBackend
-  totalMemory?: () => number
 }
 
 /** Register a runtime into the queue through the ONE mode-aware policy. The queue
@@ -84,12 +99,11 @@ export function registerRuntime(rt: ManagedRuntime, deps: RegisterDeps = {}): vo
   const readMode = deps.readMode ?? getResidencyMode
   registry.set(rt.modality, rt)
   queue.registerEvictable(rt.modality, {
-    evict: (by) => {
-      if (
-        rt.modality === 'image' &&
-        keepsImageResident(readMode('image'), (deps.totalMemory ?? os.totalmem)(), by?.evicts ?? [])
-      )
-        return
+    type: RESIDENT_TYPE[rt.modality],
+    // An on-demand engine frees itself after each use, so it never counts as resident here.
+    footprintMB: () => (readMode(rt.modality) === 'resident' ? (rt.footprintMB?.() ?? 0) : 0),
+    ...(rt.expectedMB ? { expectedMB: () => rt.expectedMB!() } : {}),
+    evict: () => {
       // Dedicated CUDA runtimes have their own allocation/auto-fit policy. Do not
       // apply the unified-memory Mac's unconditional chat/image teardown there.
       // Explicit Unload and shutdown still call rt.evict() directly.
