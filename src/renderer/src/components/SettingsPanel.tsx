@@ -384,8 +384,10 @@ export function SettingsPanel({
   const [tools, setTools] = useState<ToolSetting[]>([])
   const [toolsEnabled, setToolsEnabled] = useState(true)
   const [connectorsEnabled, setConnectorsEnabled] = useState(true)
-  const [knowledgeRetrieval, setKnowledgeRetrieval] = useState<'every-answer' | 'relevant'>(
-    'every-answer'
+  const [knowledgeRetrieval, setKnowledgeRetrieval] = useState<
+    'when-needed' | 'relevant' | 'every-answer'
+  >(
+    'when-needed'
   )
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [connectors, setConnectors] = useState<Connector[]>([])
@@ -477,7 +479,10 @@ export function SettingsPanel({
         setToolsEnabled(settings.toolsEnabled !== false)
         setConnectorsEnabled(settings.connectorsEnabled !== false)
         setKnowledgeRetrieval(
-          settings.knowledgeBaseRetrieval === 'relevant' ? 'relevant' : 'every-answer'
+          settings.knowledgeBaseRetrieval === 'relevant' ||
+            settings.knowledgeBaseRetrieval === 'every-answer'
+            ? settings.knowledgeBaseRetrieval
+            : 'when-needed'
         )
       })
       .catch(() => {})
@@ -867,7 +872,7 @@ export function SettingsPanel({
               <Row
                 inline
                 label="Project knowledge"
-                hint="Every answer reads all of a project's knowledge-base documents. Relevant passages searches them for each question and adds only the best matches, which suits a large knowledge base."
+                hint="When needed searches a project's knowledge base only for questions that need it, so other answers stay fast. Relevant passages searches it for every question and adds the best matches. Every answer reads all of it each time."
               >
                 <Segmented
                   label="Project knowledge"
@@ -878,8 +883,9 @@ export function SettingsPanel({
                     void window.api.saveSetting('knowledgeBaseRetrieval', value)
                   }}
                   options={[
-                    { id: 'every-answer', label: 'Every answer' },
-                    { id: 'relevant', label: 'Relevant passages' }
+                    { id: 'when-needed', label: 'When needed' },
+                    { id: 'relevant', label: 'Relevant passages' },
+                    { id: 'every-answer', label: 'Every answer' }
                   ]}
                 />
               </Row>

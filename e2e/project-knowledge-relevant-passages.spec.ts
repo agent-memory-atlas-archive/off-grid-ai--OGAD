@@ -1,12 +1,16 @@
 /**
- * Settings → Text → Answers → Project knowledge: "Relevant passages" adds only the best
- * knowledge-base passages for the question, instead of every document.
+ * Settings → Text → Answers → Project knowledge: how much of a project's knowledge base each
+ * answer reads.
  *
  * Real app, real document engine and ranking (with the installed local embedding model); the
- * only boundaries are the OS file picker and a fake llama-server that records every request.
- * A project holds twelve small documents. With the default, "Every answer", a question puts all
- * twelve into the prompt. With "Relevant passages", the same question in a new chat puts in the
- * document it is about, and no more than the eight best passages.
+ * only boundaries are the OS file picker and a fake llama-server that records every request and
+ * searches the knowledge base only when a question needs it. A project holds twelve small
+ * documents, one per station.
+ *
+ * When needed (the default): no document goes into the prompt, so a question that does not need
+ * them is not slowed by them; a question about a station searches and answers from the result.
+ * Every answer: all twelve go in. Relevant passages: the matching document, and no more than the
+ * eight best passages.
  */
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test'
 import type { ChildProcess } from 'node:child_process'
@@ -33,6 +37,7 @@ const STATIONS = [
 ]
 const codeword = (station: string): string => `${station.toUpperCase()}-${station.length * 7}`
 const QUESTION = 'What is the keeper codeword for the quokka station?'
+const UNRELATED = 'What is a good name for a lighthouse cat?'
 
 let app: ElectronApplication | null = null
 let page: Page
@@ -77,40 +82,40 @@ function installModelBoundary(): string {
   }
   fs.mkdirSync(path.join(modelsDir, '.cache'), { recursive: true })
   fs.symlinkSync(embeddingCache, path.join(modelsDir, '.cache', 'Xenova'), 'dir')
-  // Records every request it receives (OFFGRID_APP143_MODEL_LOG) and answers plainly.
+  // Records every request (OFFGRID_KNOWLEDGE_MODEL_LOG); searches only for a codeword question.
   const executable = path.join(llamaDir, 'llama-server')
-  fs.copyFileSync(path.resolve('e2e/fixtures/app143-approval-llama-server.mjs'), executable)
+  fs.copyFileSync(path.resolve('e2e/fixtures/knowledge-search-llama-server.mjs'), executable)
   fs.chmodSync(executable, 0o755)
   return binDir
 }
 
-/** The codewords that reached the model in the request carrying this turn's question. */
-async function codewordsSentFor(chatNumber: number): Promise<string[]> {
-  let sent: string[] = []
+/** The first request of each turn that asked `question` (not a tool round, not a suggestion). */
+function turnsAsking(question: string): string[] {
+  if (!fs.existsSync(modelLog)) return []
+  return fs
+    .readFileSync(modelLog, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .filter((line) => {
+      const request = JSON.parse(line) as { messages?: { role: string; content: unknown }[] }
+      const messages = request.messages ?? []
+      const users = messages.filter((message) => message.role === 'user')
+      const last = JSON.stringify(users[users.length - 1]?.content ?? '')
+      return (
+        last.includes(question) &&
+        !last.includes('The user asked:') &&
+        !messages.some((message) => message.role === 'tool')
+      )
+    })
+}
+
+/** The codewords that reached the model before it searched, in the `turn`-th turn asking it. */
+async function codewordsSentFor(turn: number, question = QUESTION): Promise<string[]> {
   await expect
-    .poll(
-      () => {
-        if (!fs.existsSync(modelLog)) return 0
-        // Chat turns only: a follow-up suggestion request also quotes the question.
-        const turns = fs
-          .readFileSync(modelLog, 'utf8')
-          .split('\n')
-          .filter(Boolean)
-          .filter((line) => {
-            const request = JSON.parse(line) as { messages?: { role: string; content: unknown }[] }
-            const users = (request.messages ?? []).filter((message) => message.role === 'user')
-            const last = JSON.stringify(users[users.length - 1]?.content ?? '')
-            return last.includes(QUESTION) && !last.includes('The user asked:')
-          })
-        const turn = turns[chatNumber - 1]
-        if (!turn) return 0
-        sent = STATIONS.map(codeword).filter((word) => turn.includes(word))
-        return turns.length
-      },
-      { timeout: 60_000 }
-    )
-    .toBeGreaterThanOrEqual(chatNumber)
-  return sent
+    .poll(() => turnsAsking(question).length, { timeout: 60_000 })
+    .toBeGreaterThanOrEqual(turn)
+  const sent = turnsAsking(question)[turn - 1]!
+  return STATIONS.map(codeword).filter((word) => sent.includes(word))
 }
 
 async function openProject(): Promise<void> {
@@ -121,14 +126,14 @@ async function openProject(): Promise<void> {
   await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
 }
 
-async function askInNewProjectChat(): Promise<void> {
+async function askInNewProjectChat(question = QUESTION): Promise<void> {
   await openProject()
   await page.getByText(PROJECT, { exact: true }).first().click()
   await page.getByRole('radio', { name: 'Chats', exact: true }).click()
   await page.getByRole('button', { name: 'New chat', exact: true }).click()
   const composer = page.getByRole('textbox', { name: 'Message', exact: true })
   await expect(composer).toHaveAttribute('placeholder', /Ask about/i)
-  await composer.fill(QUESTION)
+  await composer.fill(question)
   await page.keyboard.press('Enter')
   await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeHidden({
     timeout: 60_000
@@ -149,7 +154,7 @@ test.describe('Project knowledge: relevant passages', () => {
         ...process.env,
         OFFGRID_USER_DATA: profileDir,
         OFFGRID_BIN_DIR: binDir,
-        OFFGRID_APP143_MODEL_LOG: modelLog,
+        OFFGRID_KNOWLEDGE_MODEL_LOG: modelLog,
         OFFGRID_PRO: '0',
         NODE_ENV: 'production',
         NO_PROXY: '127.0.0.1,localhost'
@@ -167,7 +172,7 @@ test.describe('Project knowledge: relevant passages', () => {
     fs.rmSync(rootDir, { recursive: true, force: true })
   })
 
-  test('Relevant passages sends the matching document, not the whole knowledge base', async () => {
+  test('When needed reads the knowledge base only for a question that needs it; the other modes read it every time', async () => {
     // A project with twelve documents, one per station.
     await openProject()
     await page.getByTitle('New project').click()
@@ -197,23 +202,44 @@ test.describe('Project knowledge: relevant passages', () => {
       timeout: 120_000
     })
 
-    // Every answer (the default) reads the whole knowledge base: all twelve documents go in.
+    // When needed (the default): a question that does not need the documents reads none of them.
+    await askInNewProjectChat(UNRELATED)
+    expect(await codewordsSentFor(1, UNRELATED)).toEqual([])
+    await expect(page.getByText('Plain answer.').first()).toBeVisible()
+    // A question that needs them searches, and is answered from what the search found.
     await askInNewProjectChat()
-    expect(await codewordsSentFor(1)).toHaveLength(STATIONS.length)
+    expect(await codewordsSentFor(1)).toEqual([])
+    await expect(page.getByText(`The codeword is ${codeword('quokka')}.`).first()).toBeVisible({
+      timeout: 30_000
+    })
 
-    // Settings → Text → Answers → Project knowledge → Relevant passages.
+    // Settings → Text → Answers → Project knowledge.
+    const chooseMode = async (label: string): Promise<void> => {
+      await page.getByRole('button', { name: 'Chat', exact: true }).click()
+      await page.getByRole('button', { name: 'Active models' }).click()
+      await page.getByRole('button', { name: 'Settings', exact: true }).last().click()
+      const mode = page.getByRole('radiogroup', { name: 'Project knowledge' })
+      await mode.getByRole('radio', { name: label }).click()
+      await expect(mode.getByRole('radio', { name: label })).toBeChecked()
+      await page.keyboard.press('Escape')
+    }
+    const mode = page.getByRole('radiogroup', { name: 'Project knowledge' })
     await page.getByRole('button', { name: 'Chat', exact: true }).click()
     await page.getByRole('button', { name: 'Active models' }).click()
     await page.getByRole('button', { name: 'Settings', exact: true }).last().click()
-    const mode = page.getByRole('radiogroup', { name: 'Project knowledge' })
-    await expect(mode.getByRole('radio', { name: 'Every answer' })).toBeChecked()
-    await mode.getByRole('radio', { name: 'Relevant passages' }).click()
-    await expect(mode.getByRole('radio', { name: 'Relevant passages' })).toBeChecked()
+    await expect(mode.getByRole('radio', { name: 'When needed' })).toBeChecked()
     await page.keyboard.press('Escape')
+
+    // Every answer reads the whole knowledge base: all twelve documents go in.
+    await chooseMode('Every answer')
+    await askInNewProjectChat()
+    expect(await codewordsSentFor(2)).toHaveLength(STATIONS.length)
+
+    await chooseMode('Relevant passages')
 
     // The same question in a new chat: the quokka document goes in, and only the best passages.
     await askInNewProjectChat()
-    const relevant = await codewordsSentFor(2)
+    const relevant = await codewordsSentFor(3)
     expect(relevant).toContain(codeword('quokka'))
     expect(relevant.length).toBeLessThanOrEqual(8)
   })
