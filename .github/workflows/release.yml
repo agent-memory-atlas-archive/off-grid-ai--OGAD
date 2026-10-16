@@ -136,8 +136,8 @@ jobs:
       - name: Stage pinned macOS native engines
         run: |
           curl -fL --retry 3 -o "$RUNNER_TEMP/mac-native.tar.gz" \
-            'https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/ogad-mac-native-2026-09-arm64-v1.tar.gz'
-          echo 'ef1880daac727595bf825a254b1ebbc2a0c15c0cecd8da422c499b1568db0ad0  '"$RUNNER_TEMP/mac-native.tar.gz" | shasum -a 256 -c -
+            'https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/ogad-mac-native-2026-10-v1.tar.gz'
+          echo '6bf0aa4a93ad16d62eef7d4242043501fca0f885b467ed129ee4e4865153acbc  '"$RUNNER_TEMP/mac-native.tar.gz" | shasum -a 256 -c -
           tar -xzf "$RUNNER_TEMP/mac-native.tar.gz" -C resources/bin
       - name: Verify cached macOS engines
         run: |
