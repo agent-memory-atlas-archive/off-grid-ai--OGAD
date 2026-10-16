@@ -407,7 +407,10 @@ class SdServerService {
       const pollUrl = job.poll_url ?? (job.id ? `/sdcpp/v1/jobs/${job.id}` : null)
       if (!pollUrl) throw new Error('sd-server did not return a job to poll.')
       this.currentJobId = job.id ?? null
+      // Every progress event carries the latest frame: a consumer replaces its progress with each
+      // event, so a step without a new frame must not drop the picture from the screen.
       let lastPreview = ''
+      let lastPreviewUrl: string | undefined
 
       for (;;) {
         await new Promise((r) => setTimeout(r, 150))
@@ -417,15 +420,17 @@ class SdServerService {
         const outcome = parseJobResult(status)
         if (onProgress && outcome.preview) {
           const { pngBase64, step: previewStep, total: previewTotal } = outcome.preview
-          const fresh = pngBase64 !== lastPreview
-          lastPreview = pngBase64
-          onProgress({
-            step: previewStep,
-            total: previewTotal,
-            ...(fresh ? { preview: `data:image/png;base64,${pngBase64}` } : {})
-          })
+          if (pngBase64 !== lastPreview) {
+            lastPreview = pngBase64
+            lastPreviewUrl = `data:image/png;base64,${pngBase64}`
+          }
+          onProgress({ step: previewStep, total: previewTotal, preview: lastPreviewUrl })
         } else if (onProgress && typeof outcome.progress === 'number') {
-          onProgress({ step: Math.min(total, Math.round(outcome.progress * total)), total })
+          onProgress({
+            step: Math.min(total, Math.round(outcome.progress * total)),
+            total,
+            ...(lastPreviewUrl ? { preview: lastPreviewUrl } : {})
+          })
         }
         if (!outcome.done) continue
         if (!outcome.ok) throw new Error(outcome.error ?? 'image generation failed.')
