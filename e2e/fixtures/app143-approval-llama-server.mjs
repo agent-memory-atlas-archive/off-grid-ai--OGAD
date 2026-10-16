@@ -54,8 +54,32 @@ http
           typeof message.content === 'string' &&
           message.content.includes('Complete this approved action now.')
       )?.content
+      const prompt = messages
+        .filter((message) => message.role === 'user' && typeof message.content === 'string')
+        .map((message) => message.content)
+        .join('\n')
       let text = 'Ready to review an action.'
-      if (result) {
+      if (prompt.includes('You are my proactive personal secretary.')) {
+        // The secretary proposes the write that completes the to-do, citing it as evidence.
+        const todo = prompt.match(/\[(T\d+)\] (Ship guarded approval journey[^\n]*)/)
+        if (!todo) throw new Error('The secretary prompt is missing the APP-143 to-do')
+        text = JSON.stringify({
+          actions: [
+            {
+              connector: 'APP-143 guarded connector',
+              tool: 'create_external_task',
+              args: { title: 'Ship guarded approval journey', project: 'Desktop P0' },
+              title: 'Create APP-143 release task',
+              why: 'The open to-do asks to ship the guarded approval journey in Desktop P0.',
+              entity: 'Off Grid AI Desktop',
+              source: todo[1],
+              quote: 'Ship guarded approval journey'
+            }
+          ]
+        })
+      } else if (prompt.includes('You are the quality gate for my proactive assistant.')) {
+        text = JSON.stringify({ keep: [1] })
+      } else if (result) {
         text = `Created external task. ${result.content}`
       } else if (tool && brief) {
         const title = brief.match(/^title: (.+)$/m)?.[1]
