@@ -125,10 +125,12 @@ async function createProject(project: string, document: string, content: string)
   fs.writeFileSync(filePath, content)
   await chooseFile(filePath)
   await page.getByRole('button', { name: 'Add files', exact: true }).click()
-  await expect(page.getByText(`${document}: indexed`, { exact: true })).toBeVisible({
+  // The file is listed once (its upload row gives way to the stored row), and done once its
+  // indexing progress bar has gone.
+  await expect(page.getByText(document, { exact: true })).toHaveCount(1, { timeout: 60_000 })
+  await expect(page.getByRole('progressbar', { name: `Indexing ${document}` })).toHaveCount(0, {
     timeout: 60_000
   })
-  await expect(page.getByText(document, { exact: true })).toBeVisible()
 }
 
 async function startFreshProjectChat(project: string): Promise<void> {
