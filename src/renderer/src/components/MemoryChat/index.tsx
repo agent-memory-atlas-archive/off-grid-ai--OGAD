@@ -3006,12 +3006,26 @@ export function MemoryChat({
     saveRecording: (audio, extension) => window.api.saveVoiceRecording(audio, extension),
     cancelTranscription: (requestId) => window.api.cancelTranscription(requestId),
     getTranscriptionLabel: () => window.api.getTranscriptionInfo(),
-    onTranscript: (text, clip) => {
+    onTranscript: (text, clip, owner) => {
       if (voiceMode && clip) {
+        // Sent in the chat it was recorded in, even when another chat is open by now.
+        const recordedIn = owner === NEW_CHAT ? null : owner
+        if (recordedIn !== (activeConversationId ?? null)) {
+          // A new chat left before it had any message has nowhere to receive it.
+          if (recordedIn === null) return false
+          const home = conversations.find((conversation) => conversation.id === recordedIn)
+          void sendMessage(text, {
+            voiceClip: clip,
+            conversationId: recordedIn,
+            ...(home ? { projectIdOverride: home.project_id ?? null } : {})
+          })
+          return true
+        }
         void sendMessage(text, { voiceClip: clip })
-        return
+        return true
       }
       draftStore.update((previous) => `${previous}${previous ? ' ' : ''}${text}`)
+      return true
     }
   })
   const recording =
