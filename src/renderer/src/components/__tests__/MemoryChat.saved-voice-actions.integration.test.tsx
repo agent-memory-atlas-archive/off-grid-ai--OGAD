@@ -108,7 +108,7 @@ function installSavedVoiceBoundary(): void {
         conversation_id: conversationId,
         role,
         content,
-        context: placed,
+        context: placed ?? null,
         created_at: `2026-09-14 10:00:0${id}`
       })
       return { id, uuid }

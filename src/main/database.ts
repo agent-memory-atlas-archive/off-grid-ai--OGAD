@@ -11,7 +11,7 @@ import fs from 'fs'
 import crypto from 'crypto'
 import { createSettingsStore, initializeSettingsStore } from './settings-store'
 import { CORE_SYNC_ENTITIES, emitSyncMutation } from './sync-mutation'
-import { chatThread, neighbourVersion, parentForNext, parentOfVersion } from '@offgrid/sync'
+import { appendPlace, chatThread, neighbourVersion, parentOfVersion } from '@offgrid/sync'
 import { migrateLegacyChatVersions } from './chat-thread-migration'
 import type {
   ConversationSurface,
@@ -1631,7 +1631,12 @@ export function addRagMessage(
   // starts a new turn, so no retry from before it can claim the next answer.
   const versionParent = role === 'assistant' ? pendingAnswerParents.get(conversationId) : undefined
   pendingAnswerParents.delete(conversationId)
-  const contextJson = JSON.stringify(withThreadPlace(conversationId, context, versionParent))
+  const placed = withThreadPlace(conversationId, context, versionParent)
+  const contextJson = placed
+    ? JSON.stringify(placed)
+    : context
+      ? JSON.stringify(context)
+      : null
   const uuid = knownUuid ?? crypto.randomUUID()
 
   // uuid is the cross-device identity for sync (the autoincrement id is device-local).
@@ -1838,18 +1843,26 @@ export function addRagMessageVersion(
   return addRagMessage(conversationId, role, content, { ...base, parent })
 }
 
-/** A new message follows the end of the shown thread unless its context says which message it
- *  follows (a new version), and it is the chosen version from now. */
+/**
+ * Where a new message goes. A version (its context names its parent, or it is the answer a retry
+ * prepared) is chosen from now. Any other message is appended: in a chat without versions it
+ * stores nothing (appendPlace), so turns from several devices keep their order by time. Null when
+ * nothing about the thread needs storing.
+ */
 function withThreadPlace(
   conversationId: string,
   context: unknown,
   versionParent?: string
-): Record<string, unknown> {
+): Record<string, unknown> | null {
   const base = withoutInMessageVersions(context)
-  if (typeof base.parent !== 'string')
-    base.parent = versionParent ?? parentForNext(threadRows(storedRagMessages(conversationId)))
-  if (typeof base.selectedAt !== 'number') base.selectedAt = Date.now()
-  return base
+  if (typeof base.parent === 'string' || versionParent) {
+    if (typeof base.parent !== 'string') base.parent = versionParent
+    if (typeof base.selectedAt !== 'number') base.selectedAt = Date.now()
+    return base
+  }
+  const place = appendPlace(threadRows(storedRagMessages(conversationId)))
+  if (place.parent) return { ...base, parent: place.parent }
+  return context && typeof context === 'object' && !Array.isArray(context) ? base : null
 }
 
 /** Every saved message of the conversation, every version, in storage order. */
