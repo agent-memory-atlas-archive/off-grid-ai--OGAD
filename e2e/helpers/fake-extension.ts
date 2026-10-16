@@ -56,7 +56,7 @@ export interface DownCommand {
 export type CommandAnswer = (command: DownCommand) => unknown | Promise<unknown>
 
 export interface OfferedTab {
-  id: number
+  tabId: number
   url: string
   title: string
 }
@@ -104,7 +104,7 @@ export const pairedBrowser = async (
 export class FakeExtension {
   readonly name: string
   deviceId = ''
-  tabs: OfferedTab[] = [{ id: 101, url: 'https://example.test/', title: 'Example tab' }]
+  tabs: OfferedTab[] = [{ tabId: 101, url: 'https://example.test/', title: 'Example tab' }]
   /** Every command Desktop sent down, in order. */
   readonly commands: DownCommand[] = []
   /** Answers by op; `tabs.list` and `browser.caps` have defaults. */
@@ -275,9 +275,21 @@ export class FakeExtension {
         return { cdp: false }
       case 'tabs.list':
         return this.tabs
-      case 'tab.adopt':
-      case 'tab.create':
-        return this.tabs[0]
+      case 'tab.adopt': {
+        const offered = this.tabs.find((tab) => tab.tabId === command.args.tabId) ?? this.tabs[0]!
+        return typeof command.args.url === 'string'
+          ? { ...offered, url: command.args.url }
+          : offered
+      }
+      case 'tab.create': {
+        const created = {
+          tabId: 200 + this.tabs.length,
+          url: typeof command.args.url === 'string' ? command.args.url : 'about:blank',
+          title: 'New tab'
+        }
+        this.tabs.push(created)
+        return created
+      }
       case 'tab.close':
         return true
       case 'page.call':
