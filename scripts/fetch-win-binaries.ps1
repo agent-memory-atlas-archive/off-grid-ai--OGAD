@@ -150,12 +150,12 @@ Copy-Runtime $x 'llama-prism-cpu' | Out-Null
 # --- whisper.cpp (whisper-cli.exe + DLLs): CUDA GPU + CPU fallback -----------
 # The newest semantic release can have no binary assets. Pin the current build
 # release so Windows voice cannot disappear because GitHub's "latest" moved.
-$WhisperRef = 'b5130'
+$WhisperRef = 'b5454'
 Write-Host "== whisper.cpp (pinned $WhisperRef): CUDA 12.4 + CPU =="
 if ($IncludeCuda) {
   # The CUDA 11.8 build needs cublas64_11.dll, while the performance pack
   # provides CUDA 12.4. Keep Whisper's CUDA major version aligned with the pack.
-  $x = Expand-Asset 'ggml-org/whisper.cpp' '^whisper-cublas-12\.4\.0-bin-x64\.zip$' $WhisperRef 'af520ddd034d985b55dfeea3e465ed93653ba2aee1a55e865033edc548c272a7'
+  $x = Expand-Asset 'ggml-org/whisper.cpp' '^whisper-bin-win-cuda-12\.4\.0-x64\.zip$' $WhisperRef 'afef0b881c500958921c3f5523b50e59ee2ec9b6f5cbd25b324c51ed308a957a'
   $dest = Copy-Runtime $x 'whisper'
   # Older releases ship the CLI as main.exe; the app expects whisper-cli.exe.
   $wc = Join-Path $dest 'whisper-cli.exe'
@@ -164,7 +164,7 @@ if ($IncludeCuda) {
 }
 
 try {
-  $x = Expand-Asset 'ggml-org/whisper.cpp' '^whisper-bin-x64\.zip$' $WhisperRef 'f9ec6c52a2e949b62ab51fa21d0d497958f9e41c3010c157c4e42932d5316f3c'
+  $x = Expand-Asset 'ggml-org/whisper.cpp' '^whisper-bin-x64\.zip$' $WhisperRef '6ba69e3482d7826214f90a6a9c84ca07782aec1e1d0c6a7c30c994fd5d816ccb'
   $dest = Copy-Runtime $x 'whisper-cpu'
   $wc = Join-Path $dest 'whisper-cli.exe'
   $mn = Join-Path $dest 'main.exe'
