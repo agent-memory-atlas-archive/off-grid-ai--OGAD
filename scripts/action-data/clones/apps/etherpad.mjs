@@ -43,10 +43,8 @@ const DOC = { role: 'generic', name: 'Pad content' }
 // The ep_headings2 style dropdown: its text starts with the current style, then the options.
 const STYLE = { role: 'generic', text: /^(Style|Normal|Heading [1-4]|Code) Normal Heading 1 Heading 2/ }
 const lastEmpty = { role: 'paragraph', text: /^$/, nth: 999 }
-const emptyItem = { role: 'listitem', text: /^$/, nth: 999 }
 const SEL = [{ do: 'press', key: 'Home', mayNotChange: true, settle: 300 }, { do: 'press', key: 'Shift+End', mayNotChange: true, settle: 300 }]
 const unique = (pid, l) => lines(pid).filter((x) => x.text === l.text).length === 1
-const textHas = (sh, pid, s) => getText(sh, pid).includes(s)
 
 const SENTENCES = ['We will review progress again next week.', 'Budget approval is still pending from finance.', 'The vendor confirmed the new timeline by email.',
   'Customer feedback so far has been positive.', 'We need one more designer for this work.', 'Legal has signed off on the data terms.',
@@ -212,7 +210,7 @@ const tasks = {
   },
 
   // Create a new doc by name and write its title line.
-  create_pad: async ({ rng, sh }) => {
+  create_pad: async ({ rng }) => {
     const topic = rng.pick(['hiring-plan', 'launch-checklist', 'retro-notes', 'budget-draft', 'vendor-review', 'team-goals', 'support-playbook', 'release-notes'])
     const name = `${topic}-${rng.pick(['oct', 'nov', 'dec'])}-${rng.int(1, 28)}`
     if (pads().includes(name)) return null

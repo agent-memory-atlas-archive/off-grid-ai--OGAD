@@ -16,7 +16,6 @@ function sql(sh, q) {
   return out.split('\n').filter(Boolean).map((l) => l.split('\t'))
 }
 const lit = (s) => `'${String(s).replace(/'/g, "''")}'`
-const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** An open task: { id, title, project, projectId, column, columnId, owner, due } with a title unique in its project. */
 function pickTask(sh, rng, where = '1=1') {

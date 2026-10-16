@@ -73,7 +73,7 @@ export default {
         verify: async ({ sh }) => db(sh, `select count(*) from post p join content c on c.object_model = '${POST}' and c.object_id = p.id join contentcontainer cc on cc.id = c.contentcontainer_id where cc.class = '${SPACE}' and cc.pk = ${s.id} and c.created_by = ${meId(sh)} and c.created_at > now() - interval 30 minute and p.message like ${sqlStr(`%${head(text, 4)}%`)}`)[0][0] !== '0'
       }
     },
-    post_status: async ({ rng, sh }) => {
+    post_status: async ({ rng }) => {
       const text = statusText(rng, { tags: false })
       return {
         goal: rng.pick([`Post a status update on my profile: "${text}"`, `Share "${text}" on my own profile stream.`, `Update my profile with a post that says: ${text}`]),

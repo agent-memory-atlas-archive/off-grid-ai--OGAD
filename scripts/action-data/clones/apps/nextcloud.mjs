@@ -13,7 +13,6 @@ export const USER = 'asha.rao'
 
 // ---------- helpers ----------
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const exact = (s) => new RegExp(`^${esc(s)}$`)
 /** Some dropdowns split words into spans ("In pro gress"): allow a space anywhere. */
 const loose = (s) => new RegExp(`^${[...s.replace(/\s+/g, '')].map(esc).join('\\s?')}$`)
 const b64 = (s) => Buffer.from(s).toString('base64')
@@ -233,7 +232,7 @@ export default {
           { plan: 4, do: 'click', target: { role: 'button', name: 'Save document' }, settle: 2500, mayNotChange: true }
         ],
         answer: `Created ${path}.`,
-        verify: async ({ sh }) => { try { return readFileSync(`${DATA}/${USER}/files/${path}`, 'utf8').includes(body.slice(0, 20)) } catch { return false } }
+        verify: async () => { try { return readFileSync(`${DATA}/${USER}/files/${path}`, 'utf8').includes(body.slice(0, 20)) } catch { return false } }
       }
     },
     favorite_file: async ({ rng, sh }) => {
@@ -253,7 +252,7 @@ export default {
       }
     },
     // ----- Calendar -----
-    create_event: async ({ rng, sh }) => {
+    create_event: async ({ rng }) => {
       const r = R(rng)
       const title = r.pick(NEW_EVENTS)
       const day = new Date(Date.parse(`${TODAY}T00:00:00Z`) + r.int(1, 30) * 86_400_000)

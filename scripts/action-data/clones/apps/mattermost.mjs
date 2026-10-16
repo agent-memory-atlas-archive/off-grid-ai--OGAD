@@ -56,8 +56,6 @@ function newMessage(rng) {
 }
 const REPLIES = ['Thanks, noted.', 'I can help with this.', 'Agreed.', 'Let us discuss in standup.', 'Looks good to me.', 'On it.',
   'Can you share the doc?', 'Great news!', 'I will check and update here.', 'Please loop me in.', 'Works for me.', 'Done.']
-const EMOJI = [['thumbsup', '+1', /thumbsup|\+1/], ['heart', 'heart', /heart/], ['tada', 'tada', /tada/], ['eyes', 'eyes', /eyes/],
-  ['rocket', 'rocket', /rocket/], ['white check mark', 'white_check_mark', /white_check_mark/], ['joy', 'joy', /joy/], ['fire', 'fire', /fire/]]
 
 const short = (m) => (m.length > 48 ? `${m.slice(0, 45).replace(/\s+\S*$/, '')}...` : m)
 const chanStart = (ch) => `/${ch[0]}/channels/${ch[1]}`
@@ -149,7 +147,7 @@ export default {
         verify: async ({ sh }) => sql(sh, `select 1 from reactions r join users u on u.id = r.userid where r.postid = ${lit(post.id)} and u.username = ${lit(ME)} and r.emojiname = ${lit(emoji)} and r.deleteat = 0`).length === 1,
       }
     },
-    custom_status: async ({ rng, sh }) => {
+    custom_status: async ({ rng }) => {
       const suggested = [['In a meeting', ':calendar: In a meeting 1 hour'], ['Out for lunch', ':hamburger: Out for lunch 30 minutes'], ['Working from home', ':house: Working from home Today'], ['On a vacation', ':palm_tree: On a vacation This week'], ['Out sick', ':sneezing_face: Out sick Today']]
       const own = ['At the Pune office today', 'Focus time, slow replies', 'Travelling to Bengaluru', 'In interviews all afternoon', 'On call this week', 'Back after 3 PM']
       const pickSuggested = rng.chance(0.5)
@@ -234,7 +232,7 @@ export default {
         verify: async ({ sh }) => sql(sh, `select 1 from posts where id = ${lit(post.id)} and message = ${lit(text)}`).length === 1,
       }
     },
-    create_channel: async ({ rng, sh }) => {
+    create_channel: async ({ rng }) => {
       const team = rng.pick([['orbit', 'Orbit Labs'], ['monsoon', 'Monsoon Retail']])
       const name = `${rng.pick(['Atlas', 'Nimbus', 'Kestrel', 'Lotus', 'Orion', 'Q4', 'Diwali', 'Offsite', 'Vendor', 'Pune', 'Mobile', 'Design'])} ${rng.pick(['launch', 'planning', 'war room', 'feedback', 'standup', 'review', 'hiring', 'ops'])}`
       const priv = rng.chance(0.4)
@@ -243,7 +241,6 @@ export default {
         { plan: 2, do: 'type', target: { role: 'textbox', name: /channel name/i }, text: name }]
       if (priv) steps.push({ plan: 2, do: 'click', target: { role: 'button', name: /Private Channel/ } })
       steps.push({ plan: 3, do: 'click', target: { role: 'button', name: /^Create channel/i }, settle: 2000 })
-      const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
       return {
         goal: rng.pick([`Create a ${priv ? 'private' : 'public'} channel called "${name}" in ${team[1]}.`, `Make a new ${priv ? 'private ' : ''}channel named ${name}.`]),
         start: `/${team[0]}/channels/town-square`, answer: `Created the channel ${name}.`,
@@ -273,7 +270,7 @@ export default {
       const rows = sql(sh, `select p.id, p.message, u.username, u.firstname || ' ' || u.lastname, c.displayname from posts p join users u on u.id = p.userid join channels c on c.id = p.channelid
         join teams t on t.id = c.teamid join channelmembers m on m.channelid = c.id and m.userid = (select id from users where username = ${lit(ME)})
         where t.name = ${lit(team)} and c.type in ('O','P') and p.type = '' and p.rootid = '' and p.deleteat = 0 and u.username <> 'farmadmin' order by random() limit 60`)
-      for (const [id, message, username, fullName, chName] of rows) {
+      for (const [, message, username, fullName, chName] of rows) {
         const word = words.find((w) => message.includes(w))
         if (!word) continue
         // One message only from that person about that word, so the answer is unambiguous.

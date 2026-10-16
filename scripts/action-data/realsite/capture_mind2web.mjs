@@ -70,7 +70,7 @@ for (const m of meta) {
       for (const id of ids) document.querySelector(`[backend_node_id="${id}"]`)?.setAttribute('data-ogad-gold', '1')
     }, m.gold_ids)
     const candidates = snapshot.split('\n').map((l) => l.match(REF_LINE)).filter(Boolean)
-      .filter(([line, , d]) => !/^generic(?: \[active\])?$/.test(d.trim()))
+      .filter(([, , d]) => !/^generic(?: \[active\])?$/.test(d.trim()))
     let refs = []
     const holders = []
     const deadline = Date.now() + 45_000 // a page that stalls is skipped, not waited on
@@ -97,7 +97,7 @@ for (const m of meta) {
     appendFileSync(out, JSON.stringify({ messages: [{ role: 'user', content: request }, { role: 'assistant', content: accepted[0] }], images: [join(dir, m.image)] }) + '\n')
     appendFileSync(metaOut, JSON.stringify({ id: m.id, family: m.domain, label: accepted[0], accepted, website: m.website, op: m.op, target_in_view: inView }) + '\n')
     totals.written++
-  } catch (error) {
+  } catch {
     totals.errors++
   }
   if (++done % 20 === 0) console.log(JSON.stringify({ done, ...totals }))

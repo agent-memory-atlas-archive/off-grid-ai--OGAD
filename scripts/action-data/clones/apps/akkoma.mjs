@@ -42,7 +42,7 @@ export default {
     // Sign in through Akkoma's OAuth page (as the web UI does), then switch the UI to one column, like X.
     await page.context().clearCookies()
     await page.goto(`${ORIGIN}/web`)
-    await page.evaluate(() => { try { localStorage.clear() } catch {} })
+    await page.evaluate(() => { try { localStorage.clear() } catch { /* storage may be unavailable */ } })
     await page.goto(`${ORIGIN}/web`)
     await page.waitForSelector('input[type=password]', { timeout: 30_000 })
     await page.fill('input[type=text]', ME)
@@ -55,7 +55,7 @@ export default {
     await sleep(1500)
   },
   tasks: {
-    post_status: async ({ rng, sh }) => {
+    post_status: async ({ rng }) => {
       const text = statusText(rng)
       const goal = rng.pick([`Post "${text}" on Chirp.`, `Publish a new post that says: ${text}`, `Share this status: "${text}"`, `Write a post: ${text}`])
       return {
