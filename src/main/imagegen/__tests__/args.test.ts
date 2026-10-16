@@ -128,7 +128,9 @@ describe('buildQwenImage21Args', () => {
     })
     expect(flagVal(inTurboFolder, '--steps')).toBe('40')
     const turbo = buildQwenImage21Args({ ...base, model: 'C:\\m\\qwen-image-2.1-turbo-Q4_K.gguf' })
-    expect(flagVal(turbo, '--steps')).not.toBe('40')
+    expect(flagVal(turbo, '--steps')).toBe(
+      String(standardModelDefaults('qwen_image_2.1-turbo').defaultSteps)
+    )
   })
 
   it('adds the vision projector and reference image for editing', () => {

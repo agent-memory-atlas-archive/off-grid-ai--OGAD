@@ -12,6 +12,7 @@ import {
   buildSdServerContextArgs,
   contextKey,
   buildImgGenRequest,
+  stepProgress,
   parseJobResult,
   describeSdFetchFailure
 } from '../sd-server'
@@ -183,6 +184,42 @@ describe('parseJobResult', () => {
       done: false,
       progress: 0.5
     })
+  })
+})
+
+describe('step previews', () => {
+  const running = {
+    status: 'generating',
+    progress: 0.25,
+    preview: { b64_json: 'cG5n', step: 3, total_steps: 20, pass: 1 }
+  }
+
+  it('reads the running preview with its step and total', () => {
+    expect(parseJobResult(running)).toMatchObject({
+      done: false,
+      preview: { pngBase64: 'cG5n', step: 3, total: 20 }
+    })
+    expect(parseJobResult({ ...running, preview: { b64_json: 'cG5n' } })).not.toHaveProperty(
+      'preview'
+    )
+  })
+
+  it('reports a new preview image, then only the step while the image is unchanged', () => {
+    const outcome = parseJobResult(running)
+    expect(stepProgress(outcome, 8, '')).toEqual({
+      step: 3,
+      total: 20,
+      preview: 'data:image/png;base64,cG5n'
+    })
+    expect(stepProgress(outcome, 8, 'cG5n')).toEqual({ step: 3, total: 20 })
+  })
+
+  it('falls back to fractional progress, and to nothing without it', () => {
+    expect(stepProgress(parseJobResult({ status: 'running', progress: 0.5 }), 8, '')).toEqual({
+      step: 4,
+      total: 8
+    })
+    expect(stepProgress(parseJobResult({ status: 'queued' }), 8, '')).toBeNull()
   })
 })
 

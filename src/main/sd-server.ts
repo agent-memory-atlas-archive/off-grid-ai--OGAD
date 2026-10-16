@@ -212,6 +212,28 @@ interface SdGenProgress {
   preview?: string
 }
 
+/** The progress to report for one poll: the server's step preview when it sent one (its image
+ *  only when it changed since `lastPreview`), else its fractional progress over `total` steps,
+ *  else nothing. Pure. */
+export function stepProgress(
+  outcome: JobOutcome,
+  total: number,
+  lastPreview: string
+): SdGenProgress | null {
+  if (outcome.preview) {
+    const { pngBase64, step, total: previewTotal } = outcome.preview
+    return {
+      step,
+      total: previewTotal,
+      ...(pngBase64 === lastPreview ? {} : { preview: `data:image/png;base64,${pngBase64}` })
+    }
+  }
+  if (typeof outcome.progress === 'number') {
+    return { step: Math.min(total, Math.round(outcome.progress * total)), total }
+  }
+  return null
+}
+
 /** The resident image server. One instance (the exported `sdServer`). */
 class SdServerService {
   private server: ChildProcess | null = null
@@ -404,18 +426,9 @@ class SdServerService {
         if (!res.ok) throw new Error(`job poll failed (HTTP ${res.status}).`)
         const status = await res.json()
         const outcome = parseJobResult(status)
-        if (onProgress && outcome.preview) {
-          const { pngBase64, step: previewStep, total: previewTotal } = outcome.preview
-          const fresh = pngBase64 !== lastPreview
-          lastPreview = pngBase64
-          onProgress({
-            step: previewStep,
-            total: previewTotal,
-            ...(fresh ? { preview: `data:image/png;base64,${pngBase64}` } : {})
-          })
-        } else if (onProgress && typeof outcome.progress === 'number') {
-          onProgress({ step: Math.min(total, Math.round(outcome.progress * total)), total })
-        }
+        const progress = onProgress ? stepProgress(outcome, total, lastPreview) : null
+        if (outcome.preview) lastPreview = outcome.preview.pngBase64
+        if (progress) onProgress?.(progress)
         if (!outcome.done) continue
         if (!outcome.ok) throw new Error(outcome.error ?? 'image generation failed.')
         const png = Buffer.from(outcome.pngBase64!, 'base64')
