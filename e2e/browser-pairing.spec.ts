@@ -17,7 +17,12 @@ import path from 'node:path'
 import { completeOnboarding } from './helpers/onboarding'
 import { launchOffGrid, targetIsPackaged } from './helpers/launch'
 import { enginePortsUnavailableReason } from './helpers/ports'
-import { answerPairingDialog, FakeExtension, pairingDialogs } from './helpers/fake-extension'
+import {
+  answerPairingDialog,
+  FakeExtension,
+  pairedBrowser,
+  pairingDialogs
+} from './helpers/fake-extension'
 import { closeAndWait, mainWindow } from './helpers/windows'
 
 const PRO_PRESENT = fs.existsSync(path.resolve('pro/package.json'))
@@ -99,5 +104,31 @@ test.describe('Browser pairing', () => {
     await expect(page.getByText('No browser is paired', { exact: false })).toBeVisible({
       timeout: 15_000
     })
+  })
+
+  test('Desktop removes a paired browser, which then cannot reconnect', async () => {
+    test.setTimeout(120_000)
+    browser = await pairedBrowser(app!)
+    await openTaskSettings()
+    const list = page.getByRole('list', { name: 'Paired browsers' })
+    await expect(list.getByRole('listitem').filter({ hasText: 'E2E Browser' })).toContainText(
+      'Connected'
+    )
+
+    const closed = browser.closed()
+    await list.getByRole('button', { name: 'Remove E2E Browser', exact: true }).click()
+    const confirm = list.getByRole('group', { name: 'Remove E2E Browser?' })
+    await expect(confirm).toContainText('Pair it again from the extension')
+    await confirm.getByRole('button', { name: 'Remove', exact: true }).click()
+
+    // Its live connection closes at once, and its key no longer opens Desktop.
+    await closed
+    expect(browser.connected).toBe(false)
+    expect(await browser.connect()).toBe(false)
+    expect((await browser.rpc('state')).status).toBe(401)
+    await expect(page.getByRole('list', { name: 'Paired browsers' })).toHaveCount(0)
+    await expect(
+      page.getByText('To use your own browser, install the Off Grid AI extension', { exact: false })
+    ).toBeVisible()
   })
 })

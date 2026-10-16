@@ -2,7 +2,7 @@ import { settingsChanged } from './settings-version'
 import { withStorageDownload, storageDownloadsActive } from './model-storage-guard'
 import { moveModelStorage } from './model-storage-move'
 import { ipcMain, BrowserWindow, app, clipboard } from 'electron'
-import { listBridgeBrowsers } from './extension-bridge/bridge-electron'
+import { listBridgeBrowsers, removeBridgeBrowser } from './extension-bridge/bridge-electron'
 import { setupAIRequestLogIPC } from './ai-request-log-ipc'
 import { setupChatNextActionIpc } from './chat-next-action'
 import { setupArtifactPreviewIpc } from './artifact-preview-ipc'
@@ -1308,6 +1308,7 @@ export function setupIPC(): void {
 
   // Browsers paired through the extension bridge, and which are connected (Tasks > Web Use).
   ipcMain.handle('extension-bridge:browsers', () => listBridgeBrowsers())
+  ipcMain.handle('extension-bridge:remove', (_e, id: string) => removeBridgeBrowser(id))
 
   // App version (for the Settings footer — so users know what build they're on). A packaged app
   // reads its own; an unpackaged launch of a script reports Electron's, so it uses the build's.
