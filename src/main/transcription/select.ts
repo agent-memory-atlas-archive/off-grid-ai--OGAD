@@ -347,6 +347,7 @@ export function residentWhisperAvailable(): boolean {
  *  no-ops (it lazily re-spawns via ensureUp on the next resident transcription). */
 export const sttRuntime: ManagedRuntime = {
   modality: 'stt',
+  footprintMB: () => whisperServer.residentMB(),
   evict: () => {
     whisperServer.stop()
   },

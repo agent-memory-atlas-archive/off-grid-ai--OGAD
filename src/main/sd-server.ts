@@ -27,6 +27,10 @@ import { killOrphansOnPort as reapOrphansOnPort } from './kill-orphan-port'
 import { findSdBinaries, sdRuntimeLibraryEnv } from './imagegen/sd-runtime'
 import { getBackendPreference } from './backend-preferences'
 import { getResidencyMode } from './runtime-residency'
+import { filesMB } from './model-footprint'
+
+/** An allowance for activations and buffers beside the weights while generating. */
+export const SD_WORKING_MB = 1536
 
 /** Off the LLM's 8439 so both engines can bind (they never run at once, but a
  *  lingering LLM shouldn't block the image server's port either). */
@@ -211,6 +215,7 @@ class SdServerService {
   private server: ChildProcess | null = null
   private port = SD_SERVER_PORT
   private activeKey: string | null = null // contextKey of the loaded model, null when down
+  private activeContext: SdServerContext | null = null // what activeKey was built from
   private startPromise: Promise<void> | null = null
   private startEpoch = 0
   private activeBinary: string | null = null
@@ -234,6 +239,17 @@ class SdServerService {
 
   isUp(): boolean {
     return this.server !== null && this.activeKey !== null
+  }
+
+  /** Memory the loaded model holds, in MB: its weight files plus a working allowance for
+   *  activations at the default size. 0 when the server is down. */
+  residentMB(): number {
+    const ctx = this.activeContext
+    if (!this.isUp() || !ctx) return 0
+    return (
+      filesMB([ctx.modelPath, ctx.llmPath, ctx.llmVisionPath, ctx.vaePath, ctx.taesdPath]) +
+      SD_WORKING_MB
+    )
   }
 
   private base(): string {
@@ -351,6 +367,7 @@ class SdServerService {
       throw error
     }
     this.activeKey = key
+    this.activeContext = ctx
     this.activeBinary = bin
   }
 

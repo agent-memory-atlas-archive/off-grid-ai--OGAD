@@ -2312,9 +2312,19 @@ export class LLMService {
 
   /** This engine as a ManagedRuntime for the shared residency seam (runtime-manager),
    *  so the chat model is managed identically to image/STT/TTS — one code path. */
+  /** What the chat engine holds once its model is loaded, in MB: the weights with projector and
+   *  MTP companion, plus an allowance for the KV cache (about 64 MB per 1K context at f16; q8_0
+   *  halves it, q4_0 quarters it) and the server's own buffers. */
+  expectedResidentMB(): number {
+    const kvScale = this.kvCacheType === 'q4_0' ? 0.25 : this.kvCacheType === 'q8_0' ? 0.5 : 1
+    return this.localWeightsGb() * 1024 + (this.ctxSize / 1024) * 64 * kvScale + 300
+  }
+
   get runtime(): ManagedRuntime {
     return {
       modality: 'llm',
+      footprintMB: () => (this.server && this.initialized ? this.expectedResidentMB() : 0),
+      expectedMB: () => this.expectedResidentMB(),
       evict: () => this.pauseAndWait(),
       warm: () => {
         this.resume()
