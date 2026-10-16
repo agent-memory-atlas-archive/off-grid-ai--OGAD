@@ -145,7 +145,7 @@ jobs:
             test -x "resources/bin/$variant/llama-server"
             minos=$(otool -l "resources/bin/$variant/llama-server" | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print $2; exit}')
             test -n "$minos"
-            case "$minos" in 1[0-3].*|[1-9].*) ;; *) echo "Unsupported $variant minos $minos" >&2; exit 1 ;; esac
+            case "$minos" in 1[0-5].*|[1-9].*) ;; *) echo "Unsupported $variant minos $minos" >&2; exit 1 ;; esac
             DYLD_LIBRARY_PATH="resources/bin/$variant" "resources/bin/$variant/llama-server" --help >/dev/null
           done
           test -x resources/bin/whisper/whisper-cli
