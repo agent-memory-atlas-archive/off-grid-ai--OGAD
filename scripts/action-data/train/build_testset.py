@@ -2,6 +2,7 @@
 """Build the frozen test sets from a generator run whose seeds are never used for training.
 
   python3 build_testset.py --run /workspace/action-data/frozen1 --out /workspace/action-train/test/frozen1
+  python3 build_testset.py --run /workspace/action-data/clones-test-a /workspace/action-data/clones-test-b --out ...  (several runs: one set)
 
 Writes <role>.jsonl (ms-swift inference input) and <role>.meta.jsonl (what counts as correct),
 aligned by line. Evaluator test keeps every rare verdict and an equal number of `continue`.
@@ -17,26 +18,29 @@ def parse(line):
         return None
 
 
-def rows(run, kind):
-    for path in sorted(glob.glob(os.path.join(run, f'{kind}-w*.jsonl'))):
-        for line in open(path):
-            r = parse(line)
-            if r is not None:
-                yield r
+def rows(runs, kind):
+    for run in runs:
+        for path in sorted(glob.glob(os.path.join(run, f'{kind}-w*.jsonl'))):
+            for line in open(path):
+                r = parse(line)
+                if r is not None:
+                    r['_run'] = run
+                    yield r
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--run', required=True)
+    ap.add_argument('--run', required=True, nargs='+')
     ap.add_argument('--out', required=True)
     ap.add_argument('--actor', type=int, default=500)
     ap.add_argument('--evaluator', type=int, default=400)
     ap.add_argument('--planner', type=int, default=150)
+    ap.add_argument('--actor-per-family', type=int, default=0, help='cap actor rows per family (0 = no cap), so one app does not fill the set')
     a = ap.parse_args()
     rng = random.Random(11)
     os.makedirs(a.out, exist_ok=True)
     done = {}
-    for path in glob.glob(os.path.join(a.run, 'episodes-w*.jsonl')):
+    for path in [p for run in a.run for p in glob.glob(os.path.join(run, 'episodes-w*.jsonl'))]:
         for line in open(path):
             e = parse(line)
             if e is None:
@@ -48,7 +52,7 @@ def main():
             for r in items:
                 out = {'messages': [{'role': 'user', 'content': r['request']}, {'role': 'assistant', 'content': r['response']}]}
                 if image:
-                    out['images'] = [os.path.join(a.run, r['image'])]
+                    out['images'] = [os.path.join(r['_run'], r['image'])]
                 f.write(json.dumps(out) + '\n')
                 m.write(json.dumps(meta(r)) + '\n')
 
@@ -59,6 +63,9 @@ def main():
         per[r['seed']].append(r)
     pool = [x for v in per.values() for x in (rng.sample(v, 5) if len(v) > 5 else v)]
     rng.shuffle(pool)
+    if a.actor_per_family:
+        fam = collections.Counter()
+        pool = [r for r in pool if (fam.update([r['family']]) or fam[r['family']] <= a.actor_per_family)]
     actor = pool[:a.actor]
     write('actor', actor, True, lambda r: {'id': r['id'], 'family': r['family'], 'label': r['response'], 'accepted': r['accepted']})
 
