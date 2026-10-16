@@ -79,7 +79,7 @@ D=/workspace/action-data
 resume roundcube  600 $D/clones-roundcube        9700 r1
 resume snappymail 300 $D/clones-test-snappymail  9701 t1
 resume nextcloud  600 $D/clones-nextcloud        9710 c1
-resume mattermost 900 $D/clones-mattermost       9720 c1
+resume mattermost 1100 $D/clones-mattermost       9720 c1
 resume gitea      600 $D/clones-gitea            9721 c1
 resume kanboard   400 $D/clones-test-kanboard    9722 c1
 resume ethercalc  500 $D/clones-ethercalc        9730 c1

@@ -78,7 +78,8 @@ async function observe(settle = 1200) {
   const pages = context.pages()
   if (pages.length > 1) { for (const p of pages.slice(0, -1)) await p.close().catch(() => {}); page = pages.at(-1) }
   const snapshot = (await tool('browser_snapshot', { boxes: false })).text
-  const image = `images/${app.name}-w${worker}-${shot++}.jpg`
+  // The seed is in the name: a resumed run in the same folder must never overwrite an earlier run's images.
+  const image = `images/${app.name}-w${worker}-${args.seed ?? 'c1'}-${shot++}.jpg`
   await page.screenshot({ path: join(out, image), type: 'jpeg', quality: 65 }).catch(() => {})
   return { snapshot, image, url: page.url() }
 }
