@@ -1,7 +1,9 @@
 // Shared helpers for the social clones (akkoma, lemmy, humhub): text generators, SQL and HTTP helpers.
 
 export const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-export const plain = (html) => html.replace(/<br\s*\/?>/g, ' ').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim()
+const untag = (s) => { let t = s; let p; do { p = t; t = t.replace(/<[^>]+>/g, '') } while (t !== p); return t }
+/** Visible text of an HTML fragment; &amp; is decoded last, so an escaped entity is read once. */
+export const plain = (html) => untag(html.replace(/<br\s*\/?>/g, ' ')).replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim()
 /** First words of a text, enough to recognise it. */
 export const head = (s, n = 6) => s.split(/\s+/).slice(0, n).join(' ')
 

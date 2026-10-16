@@ -15,8 +15,10 @@ const api = (sh, fn, params) => {
 }
 const getText = (sh, padID) => api(sh, 'getText', { padID }).data?.text ?? ''
 const getHTML = (sh, padID) => api(sh, 'getHTML', { padID }).data?.html ?? ''
-const decode = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&nbsp;/g, ' ')
-const strip = (s) => decode(s.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim()
+// &amp; last, so an escaped entity is read once.
+const decode = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+const untag = (s) => { let t = s; let p; do { p = t; t = t.replace(/<[^>]+>/g, '') } while (t !== p); return t }
+const strip = (s) => decode(untag(s)).replace(/\s+/g, ' ').trim()
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 /** RegExp for a line's whole text (the snapshot splits bold runs into separate nodes). */
 const lineRe = (text) => new RegExp(`^${text.split(/\s+/).map(esc).join('\\s*')}$`)

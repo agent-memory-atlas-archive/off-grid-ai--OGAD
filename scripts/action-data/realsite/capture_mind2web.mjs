@@ -11,6 +11,17 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { actorRequest, boundedSnapshot } from '../contract.mjs'
 
+/** The page without its scripts, removed until none is left. */
+const withoutScripts = (html) => {
+  let text = html
+  let previous
+  do {
+    previous = text
+    text = text.replace(/<script\b[\s\S]*?<\/script[^>]*>/gi, '')
+  } while (text !== previous)
+  return text
+}
+
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs, v, i, all) => {
   if (v.startsWith('--')) pairs.push([v.slice(2), all[i + 1]])
   return pairs
@@ -58,7 +69,7 @@ let done = 0
 
 for (const m of meta) {
   try {
-    html = readFileSync(join(dir, 'html', `${m.id}.html`), 'utf8').replace(/<script\b[\s\S]*?<\/script>/gi, '')
+    html = withoutScripts(readFileSync(join(dir, 'html', `${m.id}.html`), 'utf8'))
     host = `www.${m.website.replace(/[^a-z0-9-]/gi, '').toLowerCase() || 'site'}.com`
     const nav = await withTimeout(tool('browser_navigate', { url: `https://${host}/` }), 30_000)
     if (nav.isError) { totals.errors++; continue }

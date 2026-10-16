@@ -42,7 +42,10 @@ for (const d of dos) {
   await sleep(1500)
 }
 let out = await snap()
-if (opt('grep')) out = out.split('\n').filter((l) => new RegExp(opt('grep'), 'i').test(l)).join('\n')
+if (opt('grep')) {
+  const needle = opt('grep').toLowerCase()
+  out = out.split('\n').filter((l) => l.toLowerCase().includes(needle)).join('\n')
+}
 console.log(out.slice(0, Number(opt('max') ?? 30000)))
 console.log(`-- url: ${page.url()}  chars: ${out.length}`)
 await client.close()

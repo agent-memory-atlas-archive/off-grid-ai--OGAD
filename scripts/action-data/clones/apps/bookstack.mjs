@@ -16,7 +16,7 @@ const lit = (s) => `'${String(s).replace(/\\/g, '\\\\').replace(/'/g, "''")}'`
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 // Search results split a title into <strong> words: match it with any spacing.
 const loose = (s) => [...s.replace(/\s+/g, '')].map(esc).join('\\s*')
-const decode = (s) => s.replace(/&amp;/g, '&').replace(/&#039;|&#39;/g, "'").replace(/&quot;/g, '"')
+const decode = (s) => s.replace(/&#039;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&')
 
 let PAGES = null
 /** Every page with its book (slug, name), url, and Key facts. Pages never change identity, so cache. */
