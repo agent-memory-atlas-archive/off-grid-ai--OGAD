@@ -59,7 +59,14 @@ http
         .map((message) => message.content)
         .join('\n')
       let text = 'Ready to review an action.'
-      if (prompt.includes('You are my proactive personal secretary.')) {
+      // A scheduled routine asks for the same write on its own; nobody is watching, so the app
+      // must hold it for approval. Once the tool answers (held), the routine reports it.
+      const routine = prompt.includes('File the guarded release task in Desktop P0.')
+      if (routine && tool && !result && !brief) {
+        text = `<tool_call>${JSON.stringify({ name: tool.function.name, arguments: { title: 'Ship guarded approval journey', project: 'Desktop P0' } })}</tool_call>`
+      } else if (routine && result && !brief) {
+        text = 'The release task is waiting for your approval.'
+      } else if (prompt.includes('You are my proactive personal secretary.')) {
         // The secretary proposes the write that completes the to-do, citing it as evidence.
         const todo = prompt.match(/\[(T\d+)\] (Ship guarded approval journey[^\n]*)/)
         if (!todo) throw new Error('The secretary prompt is missing the APP-143 to-do')
