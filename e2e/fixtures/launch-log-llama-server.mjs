@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-// The native llama-server boundary for the resource-mode rollback spec. It refuses one launch
+// A native llama-server boundary that records how it was launched. Each launch's arguments, and
+// each chat request, are written to OFFGRID_LLAMA_LAUNCH_LOG. It refuses the quantized KV cache
 // flag the way a llama.cpp build without that option does: it prints the error and exits before
 // it listens. Every other launch serves llama.cpp's OpenAI-compatible HTTP/SSE contract.
-// Each launch's arguments, and each chat request, are written to OFFGRID_RESOURCE_MODE_LOG.
 
 import fs from 'node:fs'
 import http from 'node:http'
@@ -11,7 +11,7 @@ import http from 'node:http'
 const args = process.argv.slice(2)
 const portFlag = Math.max(args.indexOf('--port'), args.indexOf('-p'))
 const port = portFlag >= 0 ? Number(args[portFlag + 1]) : 8439
-const log = process.env.OFFGRID_RESOURCE_MODE_LOG
+const log = process.env.OFFGRID_LLAMA_LAUNCH_LOG
 const REFUSED_FLAG = '--cache-type-k'
 
 const record = (entry) => {
@@ -36,7 +36,7 @@ const server = http.createServer((request, response) => {
   }
   if (request.method === 'GET' && request.url === '/v1/models') {
     response.writeHead(200, { 'Content-Type': 'application/json' })
-    response.end(JSON.stringify({ data: [{ id: 'resource-mode-model' }] }))
+    response.end(JSON.stringify({ data: [{ id: 'launch-log-model' }] }))
     return
   }
   if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
@@ -52,7 +52,7 @@ const server = http.createServer((request, response) => {
   request.on('end', () => {
     const payload = JSON.parse(body)
     record({ event: 'chat', body })
-    const text = 'The engine answered after the mode change.'
+    const text = 'The local engine answered.'
     if (!payload.stream) {
       response.writeHead(200, { 'Content-Type': 'application/json' })
       response.end(

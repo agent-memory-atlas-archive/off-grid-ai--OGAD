@@ -16,7 +16,7 @@ import { gotoSettings, openSettingsSection } from './helpers/settings'
 import { closeAndWait, mainWindow } from './helpers/windows'
 
 const QUESTION = 'Are you still answering after the mode change?'
-const ANSWER = 'The engine answered after the mode change.'
+const ANSWER = 'The local engine answered.'
 
 let app: ElectronApplication | null = null
 let page: Page
@@ -56,7 +56,7 @@ const installModelBoundary = (): void => {
     JSON.stringify({ id: 'resource-mode-model', primary: 'resource-mode.gguf', mmproj: null })
   )
   const executable = path.join(llamaDir, 'llama-server')
-  fs.copyFileSync(path.resolve('e2e/fixtures/resource-mode-llama-server.mjs'), executable)
+  fs.copyFileSync(path.resolve('e2e/fixtures/launch-log-llama-server.mjs'), executable)
   fs.chmodSync(executable, 0o755)
 }
 
@@ -75,7 +75,7 @@ test.describe('Resource mode rollback', () => {
         ...process.env,
         OFFGRID_USER_DATA: profileDir,
         OFFGRID_BIN_DIR: path.join(profileDir, 'bin'),
-        OFFGRID_RESOURCE_MODE_LOG: modelLog,
+        OFFGRID_LLAMA_LAUNCH_LOG: modelLog,
         OFFGRID_PRO: '0',
         NODE_ENV: 'production',
         NO_PROXY: '127.0.0.1,localhost'
@@ -154,7 +154,7 @@ test.describe('Resource mode rollback', () => {
         ...process.env,
         OFFGRID_USER_DATA: profileDir,
         OFFGRID_BIN_DIR: path.join(profileDir, 'bin'),
-        OFFGRID_RESOURCE_MODE_LOG: modelLog,
+        OFFGRID_LLAMA_LAUNCH_LOG: modelLog,
         OFFGRID_PRO: '0',
         NODE_ENV: 'production',
         NO_PROXY: '127.0.0.1,localhost'
