@@ -283,6 +283,7 @@ jobs:
         with:
           repository: off-grid-ai/executorch-speech
           token: ${{ secrets.CI_CROSS_REPO_TOKEN }}
+          ref: 45d7fd41a1cbf268fa3e712aa5558f08fa1a75d9 # ExecuTorch 1.5.1; the same commit on every platform
           path: _executorch_speech
           lfs: true # Mac releases bundle the default English voices for offline first use.
           persist-credentials: false
@@ -632,6 +633,7 @@ jobs:
         with:
           repository: off-grid-ai/executorch-speech
           token: ${{ secrets.CI_CROSS_REPO_TOKEN }}
+          ref: 45d7fd41a1cbf268fa3e712aa5558f08fa1a75d9 # ExecuTorch 1.5.1; the same commit on every platform
           path: _executorch_speech
           lfs: false # The current native speech engine is macOS-only.
           persist-credentials: false
@@ -865,7 +867,7 @@ jobs:
         with:
           repository: off-grid-ai/executorch-speech
           token: ${{ secrets.CI_CROSS_REPO_TOKEN }}
-          ref: e3b471e6ea8504f3877cd9f27a11bfe98ce3b3b5
+          ref: 45d7fd41a1cbf268fa3e712aa5558f08fa1a75d9
           path: _executorch_speech
           lfs: false # Build the Linux executable from the pinned source.
           submodules: recursive
@@ -878,7 +880,7 @@ jobs:
         run: |
           curl -fL --retry 3 -o "$RUNNER_TEMP/linux-native.tar.gz" \
             'https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/ogad-linux-native-2026-10-x64-v1.tar.gz'
-          echo '49c09a1ed8e02ca84a9dcae0ba023333a9ad79c3f7f5ada920891641dacd8ec6  '"$RUNNER_TEMP/linux-native.tar.gz" | sha256sum -c -
+          echo 'd043e3d12c68a07a6059a3e62e1283ea2cb2a23bf4a448d742149ad45586a6cf  '"$RUNNER_TEMP/linux-native.tar.gz" | sha256sum -c -
           mkdir -p build/linux-bin
           tar -xzf "$RUNNER_TEMP/linux-native.tar.gz" -C build/linux-bin
           git lfs pull --include="resources/bin/kev-local-server.py" --exclude=""
