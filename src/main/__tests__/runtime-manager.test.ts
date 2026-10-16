@@ -4,6 +4,7 @@ import {
   registerRuntime,
   unloadRuntime,
   registeredModalities,
+  liveMemory,
   type ManagedRuntime
 } from '../runtime-manager'
 import { ModalityQueue } from '../modality-queue/queue'
@@ -137,6 +138,55 @@ describe('registerRuntime (single mode-aware seam, real queue)', () => {
       })
       expect(log).toEqual(['evict', 'job', modes[modality] === 'resident' ? 'warm' : 'release'])
     }
+  })
+})
+
+describe('residents stay loaded while they fit', () => {
+  const imageJob = {
+    tier: 2 as const,
+    label: 'image',
+    evicts: ['llm'],
+    uses: { id: 'image', expectedMB: 2_000 }
+  }
+  const sized = (log: string[]): ManagedRuntime => ({
+    ...recordingRuntime('llm', log),
+    footprintMB: () => 4_000,
+    expectedMB: () => 4_000
+  })
+
+  it('keeps a resident chat model through an image job when memory allows', async () => {
+    const q = new ModalityQueue()
+    q.setMemoryProbe(() => ({ availableMB: 48_000, totalMB: 64_000 }))
+    const log: string[] = []
+    registerRuntime(sized(log), { queue: q, readMode: () => 'resident' })
+    await q.run(imageJob, async () => void log.push('job'))
+    expect(log).not.toContain('evict')
+    expect(log).toContain('job')
+  })
+
+  it('evicts it when the image model would not fit beside it', async () => {
+    const q = new ModalityQueue()
+    q.setMemoryProbe(() => ({ availableMB: 1_000, totalMB: 16_000 }))
+    const log: string[] = []
+    registerRuntime(sized(log), { queue: q, readMode: () => 'resident' })
+    await q.run(imageJob, async () => void log.push('job'))
+    expect(log.slice(0, 2)).toEqual(['evict', 'job'])
+  })
+
+  it('an on-demand engine never counts as resident', async () => {
+    const q = new ModalityQueue()
+    q.setMemoryProbe(() => ({ availableMB: 1_000, totalMB: 16_000 }))
+    const log: string[] = []
+    registerRuntime(sized(log), { queue: q, readMode: () => 'on-demand' })
+    await q.run(imageJob, async () => void log.push('job'))
+    expect(log).not.toContain('evict')
+  })
+
+  it('reads live memory as available within total', () => {
+    const { availableMB, totalMB } = liveMemory()
+    expect(totalMB).toBeGreaterThan(0)
+    expect(availableMB).toBeGreaterThan(0)
+    expect(availableMB).toBeLessThanOrEqual(totalMB)
   })
 })
 
