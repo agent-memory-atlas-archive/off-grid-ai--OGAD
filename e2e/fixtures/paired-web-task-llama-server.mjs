@@ -5,7 +5,8 @@
 //   - A chat turn that asks for the headline calls web_use; once the tool has answered, it reports.
 //   - The task's plan request gets two phases.
 //   - A page step returns "done" with the headline the snapshot shows. With OFFGRID_WEB_TASK_HOLD
-//     set, a page step is held open until the client goes away, so a spec can stop the task.
+//     set, or for a task whose goal says "slowly", a page step is held open until the client goes
+//     away, so a spec can stop the task.
 
 import fs from 'node:fs'
 import http from 'node:http'
@@ -103,7 +104,8 @@ const server = http.createServer((request, response) => {
     const prompt = messages.map((message) => textOf(message.content)).join('\n')
     const stream = payload.stream === true
     if (prompt.includes('You control one visible browser page with Playwright')) {
-      if (hold) return // held until Stop closes the request
+      const goal = prompt.match(/Goal: ([^\n]*(?:\n[^\n]+)*)/)?.[1] ?? ''
+      if (hold || /slowly/i.test(goal)) return // held until Stop closes the request
       reply(response, stream, { content: step(prompt) })
       return
     }
@@ -116,6 +118,7 @@ const server = http.createServer((request, response) => {
     const webUse = (payload.tools ?? []).some((tool) => tool.function?.name === 'web_use')
     const toolResult = messages.find((message) => message.role === 'tool')
     if (webUse && !toolResult && prompt.includes('headline')) {
+      const slowly = /slowly/i.test(textOf(messages.filter((m) => m.role === 'user').at(-1)?.content))
       reply(response, stream, {
         content: '',
         tool_calls: [
@@ -124,7 +127,11 @@ const server = http.createServer((request, response) => {
             type: 'function',
             function: {
               name: 'web_use',
-              arguments: JSON.stringify({ goal: 'Read the headline on the open page.' })
+              arguments: JSON.stringify({
+                goal: slowly
+                  ? 'Read the headline on the open page slowly.'
+                  : 'Read the headline on the open page.'
+              })
             }
           }
         ]
