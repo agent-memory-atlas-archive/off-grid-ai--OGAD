@@ -242,6 +242,7 @@ import {
 } from './stream-view-store'
 
 import { stopLiveTask, stopLiveWebUseForConversation } from './helper'
+import { PassPlayback, type PlayableClip } from '@renderer/lib/pass-playback'
 import {
   ACTIVE_CHAT_TAB_KEY,
   EMPTY_MSGS,
@@ -894,7 +895,7 @@ export function MemoryChat({
   const draftInputRef = useRef<ChatDraftInputHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioRef = useRef<PlayableClip | null>(null)
   const voiceMountedRef = useRef(true)
   const speechRequestRef = useRef(0)
   const bottomRef = useRef<HTMLDivElement | null>(null)
@@ -3152,17 +3153,11 @@ export function MemoryChat({
       setSpeakError(null)
       setSpeakLoadingId(id) // generating on-device — show a loading state
       try {
-        const { dataUrl } = await window.api.speak(messageToSpeakable(text))
-        if (!voiceMountedRef.current || speechRequestRef.current !== request) return
-        if (!dataUrl) throw new Error('empty dataUrl')
-        const audio = new Audio(dataUrl)
+        // A long reply is spoken in passes: play each as it arrives, so the voice starts after
+        // the first sentence instead of after the whole reply.
+        const audio = new PassPlayback()
         audioRef.current = audio
-        audio.onended = () => {
-          setSpeakingId((cur) => (cur === id ? null : cur))
-          if (audioRef.current === audio) audioRef.current = null
-        }
-        audio.onerror = () => {
-          console.error('[tts] audio element error', audio.error)
+        const failed = (): void => {
           setSpeakingId((cur) => (cur === id ? null : cur))
           setSpeakLoadingId((cur) => (cur === id ? null : cur))
           setSpeakError({
@@ -3171,7 +3166,38 @@ export function MemoryChat({
               'Speech could not be played. Check your audio output, then try speaking the reply again.'
           })
         }
-        await audio.play()
+        audio.onended = () => {
+          setSpeakingId((cur) => (cur === id ? null : cur))
+          if (audioRef.current === audio) audioRef.current = null
+        }
+        audio.onerror = () => {
+          console.error('[tts] audio element error')
+          failed()
+        }
+        const made = window.api
+          .speak(messageToSpeakable(text), undefined, (pass) =>
+            audio.addPass(pass.index, pass.dataUrl)
+          )
+          .then(({ dataUrl }) => {
+            if (!dataUrl) throw new Error('empty dataUrl')
+            audio.setFull(dataUrl)
+          })
+        const playing = audio.play()
+        // The first audio, or the synthesis failing before any audio exists.
+        await Promise.race([playing, made.then(() => playing)])
+        if (!voiceMountedRef.current || speechRequestRef.current !== request) {
+          audio.pause()
+          made.catch(() => undefined)
+          return
+        }
+        // The rest of the reply can still fail after its first sentence started playing.
+        made.catch((e: unknown) => {
+          console.error('[tts] failed', e)
+          if (audioRef.current !== audio) return
+          audio.pause()
+          audioRef.current = null
+          failed()
+        })
         setSpeakLoadingId((cur) => (cur === id ? null : cur))
         setSpeakingId(id) // now actually speaking
       } catch (e) {
