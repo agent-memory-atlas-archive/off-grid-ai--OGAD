@@ -108,7 +108,10 @@ export function contextKey(ctx: SdServerContext): string {
 /** Build the JSON body for POST /sdcpp/v1/img_gen. The steps/method/guidance
  *  live in a NESTED `sample_params` object — a top-level `sample_steps` is
  *  silently ignored by sd-server (it falls back to its 20-step default). Pure. */
-export function buildImgGenRequest(req: SdGenRequest): Record<string, unknown> {
+export function buildImgGenRequest(
+  req: SdGenRequest,
+  withPreview = false
+): Record<string, unknown> {
   const body: Record<string, unknown> = {
     prompt: req.prompt,
     negative_prompt: req.negativePrompt ?? '',
@@ -119,10 +122,13 @@ export function buildImgGenRequest(req: SdGenRequest): Record<string, unknown> {
       sample_method: req.sampleMethod ?? 'dpm++2m',
       scheduler: req.scheduler ?? 'karras',
       guidance: { txt_cfg: req.cfgScale ?? 2.0 }
-    },
-    // A rough frame every step ('proj' needs no extra model), so the image forms on screen.
-    preview: 'proj',
-    preview_interval: 1
+    }
+  }
+  // A rough frame every step ('proj' needs no extra model), so the image forms on screen.
+  // Only when a caller shows it; otherwise the server keeps its default of no previews.
+  if (withPreview) {
+    body.preview = 'proj'
+    body.preview_interval = 1
   }
   if (req.refImages?.length) body.ref_images = req.refImages
   if (typeof req.seed === 'number' && req.seed >= 0) body.seed = req.seed
@@ -383,7 +389,7 @@ class SdServerService {
       const submit = await this.sdFetch(`${this.base()}/sdcpp/v1/img_gen`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildImgGenRequest(req))
+        body: JSON.stringify(buildImgGenRequest(req, Boolean(onProgress)))
       })
       if (!submit.ok) throw new Error(`sd-server rejected the request (HTTP ${submit.status}).`)
       const job = (await submit.json()) as { id?: string; poll_url?: string }

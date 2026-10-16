@@ -121,6 +121,14 @@ describe('buildImgGenRequest', () => {
     expect(sp.guidance).toEqual({ txt_cfg: 2 })
   })
 
+  it('asks for step previews only when the caller shows them', () => {
+    expect(buildImgGenRequest({ prompt: 'x' }, true)).toMatchObject({
+      preview: 'proj',
+      preview_interval: 1
+    })
+    expect(buildImgGenRequest({ prompt: 'x' })).not.toHaveProperty('preview')
+  })
+
   it('sends a concrete seed, but omits it when -1 (random)', () => {
     expect(buildImgGenRequest({ prompt: 'x', seed: 42 }).seed).toBe(42)
     expect(buildImgGenRequest({ prompt: 'x', seed: -1 })).not.toHaveProperty('seed')
