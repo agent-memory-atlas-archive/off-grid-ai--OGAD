@@ -877,8 +877,8 @@ jobs:
       - name: Stage pinned Linux native engines
         run: |
           curl -fL --retry 3 -o "$RUNNER_TEMP/linux-native.tar.gz" \
-            'https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/ogad-linux-native-2026-09-x64-v1.tar.gz'
-          echo '11f57bddc8b7b4c5efa4b4c298b8a000aaf0f203567f6c18953a6aff7a4e4b54  '"$RUNNER_TEMP/linux-native.tar.gz" | sha256sum -c -
+            'https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/ogad-linux-native-2026-10-x64-v1.tar.gz'
+          echo '49c09a1ed8e02ca84a9dcae0ba023333a9ad79c3f7f5ada920891641dacd8ec6  '"$RUNNER_TEMP/linux-native.tar.gz" | sha256sum -c -
           mkdir -p build/linux-bin
           tar -xzf "$RUNNER_TEMP/linux-native.tar.gz" -C build/linux-bin
           git lfs pull --include="resources/bin/kev-local-server.py" --exclude=""
