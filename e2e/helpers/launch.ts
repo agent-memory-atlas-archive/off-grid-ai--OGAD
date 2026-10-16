@@ -117,6 +117,8 @@ const withCoverage = (env: Record<string, string>): Record<string, string> => {
 
 export interface LaunchOptions {
   env?: Record<string, string | undefined>
+  /** Leave launch-time offers (Tidy up) for the spec to answer, instead of "Not now". */
+  keepLaunchOffers?: boolean
   /** Extra Chromium/Electron flags (e.g. fake media devices). Applied to both targets. */
   extraArgs?: string[]
   /** Working directory for the DEV target's app process. The native actions
@@ -130,7 +132,7 @@ export interface LaunchOptions {
 }
 
 /** The Tidy up offer: it opens at launch when stored data predates the current rules, which the
- *  seeded fixtures do. A spec about Tidy up itself calls page.removeLocatorHandler with this. */
+ *  seeded fixtures do. A spec about Tidy up itself launches with keepLaunchOffers. */
 export const tidyUpDialog = (page: Page): Locator =>
   page.getByRole('dialog', { name: 'Tidy up your timeline, people and to-dos' })
 
@@ -160,6 +162,8 @@ export const launchOffGrid = async (options: LaunchOptions = {}): Promise<Electr
   // run as node.
   delete env.ELECTRON_RUN_AS_NODE
   const extraArgs = options.extraArgs ?? []
+  const offers = (app: ElectronApplication): ElectronApplication =>
+    options.keepLaunchOffers ? app : answerLaunchOffers(app)
 
   if (targetIsPackaged()) {
     const unavailable = packagedTargetUnavailable()
@@ -167,7 +171,7 @@ export const launchOffGrid = async (options: LaunchOptions = {}): Promise<Electr
     // A packaged build ignores OFFGRID_PRO=1, so pro specs need a real cached license.
     seedLicense(env)
     // A packaged app loads its own app.asar — passing '.' would point it at the repo instead.
-    return answerLaunchOffers(
+    return offers(
       await electron.launch({ executablePath: packagedExecutable(), args: extraArgs, env })
     )
   }
@@ -178,7 +182,7 @@ export const launchOffGrid = async (options: LaunchOptions = {}): Promise<Electr
   // assert free-tier UI stay unlicensed and deterministic.
   seedLicense(env)
   // The app path must stay absolute once a spec overrides cwd.
-  return answerLaunchOffers(
+  return offers(
     await electron.launch({
       args: [path.resolve(options.appEntry ?? '.'), ...extraArgs],
       env,
