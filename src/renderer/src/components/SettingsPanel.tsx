@@ -384,6 +384,9 @@ export function SettingsPanel({
   const [tools, setTools] = useState<ToolSetting[]>([])
   const [toolsEnabled, setToolsEnabled] = useState(true)
   const [connectorsEnabled, setConnectorsEnabled] = useState(true)
+  const [knowledgeRetrieval, setKnowledgeRetrieval] = useState<'every-answer' | 'relevant'>(
+    'every-answer'
+  )
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [connectors, setConnectors] = useState<Connector[]>([])
   const [newConn, setNewConn] = useState({ name: '', url: '' })
@@ -473,6 +476,9 @@ export function SettingsPanel({
         setShowGenerationDetails(settings.showGenerationDetails === true)
         setToolsEnabled(settings.toolsEnabled !== false)
         setConnectorsEnabled(settings.connectorsEnabled !== false)
+        setKnowledgeRetrieval(
+          settings.knowledgeBaseRetrieval === 'relevant' ? 'relevant' : 'every-answer'
+        )
       })
       .catch(() => {})
     ;(window.api as Partial<typeof window.api>)
@@ -858,7 +864,27 @@ export function SettingsPanel({
                   onCheckedChange={() => setReplySound(!replySound)}
                 />
               </Row>
-              <Row inline
+              <Row
+                inline
+                label="Project knowledge"
+                hint="Every answer reads all of a project's knowledge-base documents. Relevant passages searches them for each question and adds only the best matches, which suits a large knowledge base."
+              >
+                <Segmented
+                  label="Project knowledge"
+                  size="sm"
+                  value={knowledgeRetrieval}
+                  onValueChange={(value) => {
+                    setKnowledgeRetrieval(value)
+                    void window.api.saveSetting('knowledgeBaseRetrieval', value)
+                  }}
+                  options={[
+                    { id: 'every-answer', label: 'Every answer' },
+                    { id: 'relevant', label: 'Relevant passages' }
+                  ]}
+                />
+              </Row>
+              <Row
+                inline
                 label="Maximum tool calls"
                 controlId="maximum-tool-calls"
                 hint="Emergency limit for tool calls in one response."
@@ -1003,7 +1029,8 @@ export function SettingsPanel({
                 />
               </Row>
               {['mtp', 'draft', 'dflash'].includes(s.speculativeDecoding ?? 'off') && (
-                <Row inline
+                <Row
+                  inline
                   label="Draft token limit"
                   controlId="speculative-draft-max"
                   hint="Maximum tokens proposed per step. More is not always faster. Auto uses two for MTP and the engine default for Draft and DFlash."

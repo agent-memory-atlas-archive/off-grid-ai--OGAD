@@ -93,9 +93,15 @@ export async function prepareTurnDocuments(input: {
   const sources = await documentTurns.documentsFor(scope, current)
   if (!sources.length) return null
   const { getActiveRemoteVisionServer } = await import('../vision/remote-vision-server')
+  const { getSetting } = await import('../database')
   const result = await documentTurns.prepare({
     ...scope,
     current,
+    // Settings → Text: a large knowledge base can add only its relevant passages to each answer.
+    projectDocuments:
+      getSetting<string>('knowledgeBaseRetrieval', 'every-answer') === 'relevant'
+        ? 'relevant'
+        : 'every-answer',
     onStatus: (status) =>
       input.onActivity?.({ kind: 'documents', label: describeTurnStatus(status) }),
     question: input.question,
