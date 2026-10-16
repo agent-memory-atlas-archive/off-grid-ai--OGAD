@@ -480,12 +480,12 @@ const data: BridgeData = {
     deleteRagConversation(id)
     notifyRagConversationChanged({ conversationId: id })
   },
-  selectConversationVersion: async (id, messageId, direction) => {
+  selectConversationVersion: (id, messageId, direction) => {
     const row = getRagConversation(id)
-    if (!row) throw new Error('not_found')
+    if (!row) return Promise.reject(new Error('not_found'))
     selectRagMessageVersion(id, messageId, direction)
     notifyRagConversationChanged({ conversationId: id })
-    return toBridgeConversation(row, getRagMessages(id))
+    return Promise.resolve(toBridgeConversation(row, getRagMessages(id)))
   },
   listTools: listBridgeTools,
   runTool: async (name, args, browser, tabId) => {

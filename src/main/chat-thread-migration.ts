@@ -167,7 +167,7 @@ export function migrateLegacyChatVersions(db: Database.Database): number {
     ).map((row) => ({
       ...row,
       createdMs: Date.parse(
-        `${row.created_at.replace(' ', 'T')}${/[zZ]|[+-]\d\d:?\d\d$/.test(row.created_at) ? '' : 'Z'}`
+        `${row.created_at.replace(' ', 'T')}${/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(row.created_at) ? '' : 'Z'}`
       )
     }))
     const plan = planThreadMigration(rows, () => randomUUID())
