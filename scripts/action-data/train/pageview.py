@@ -13,11 +13,13 @@ message changes.
 """
 import argparse, json, re, sys
 
-REF = re.compile(r'\[ref=([^\]]+)\]')
+# Ref and tag patterns stop at the next '[', so a failed match costs only to there (no
+# polynomial backtracking on long lines). Whitespace left by NOISE is collapsed by clean().
+REF = re.compile(r'\[ref=([^\]\[]+)\]')
 TREE = re.compile(r'^\s*- ')
 INPUT_ROLE = re.compile(r"^\s*- '?(textbox|searchbox|combobox|button)\b")
-NOISE = re.compile(r'\s*\[(ref|cursor|active|level|checked|expanded|selected|pressed|disabled)[^\]]*\]')
-GLYPH_CTRL = re.compile(r"^\s*- '?(link|button|generic|img|menuitem|tab)\b(?: \"([^\"]*)\")?.*\[ref=[^\]]+\](?: \[cursor=pointer\])?:?\s*(.*)$")
+NOISE = re.compile(r'\[(ref|cursor|active|level|checked|expanded|selected|pressed|disabled)[^\]\[]*\]')
+GLYPH_ROLE = re.compile(r"^\s*- '?(link|button|generic|img|menuitem|tab)\b(?: \"([^\"]*)\")?")
 TOK = re.compile(r'[a-z0-9]+')
 STOP = set('the a an to of in on for and or is be by with this that it at as from open click type find tell what which page then into'.split())
 
@@ -26,8 +28,18 @@ def toks(s):
     return [t for t in TOK.findall(s.lower()) if t not in STOP]
 
 
+def strip_noise(line):
+    """NOISE tags removed with the whitespace before each, as `\\s*\\[tag]` did, in linear time."""
+    out, pos = [], 0
+    for m in NOISE.finditer(line):
+        out.append(line[pos:m.start()].rstrip())
+        pos = m.end()
+    out.append(line[pos:])
+    return ''.join(out)
+
+
 def clean(line):
-    s = NOISE.sub('', line).strip()
+    s = strip_noise(line).strip()
     s = re.sub(r'^- ', '', s)
     s = s.replace('"', '').replace("'", '')
     return re.sub(r'\s+', ' ', s).strip(': ')
@@ -36,8 +48,8 @@ def clean(line):
 def parse(request):
     """GOAL, current step, and the AX block split into header / tree lines / tail with parents and units."""
     goal = (re.search(r'^GOAL: (.*)$', request, re.M) or [None, ''])[1].strip()
-    m = re.search(r'^\[>\]\s*\d*\s*(.*)$', request, re.M)
-    step = m.group(1).strip() if m else ''
+    m = re.search(r'^\[>\](.*)$', request, re.M)
+    step = m.group(1).lstrip().lstrip('0123456789').strip() if m else ''
     head, sep, ax = request.partition('\nAX:\n')
     lines = ax.split('\n')
     start = next((i + 1 for i, l in enumerate(lines) if l.startswith('```yaml')), 0)
@@ -70,7 +82,7 @@ def parse(request):
     units = []
     for i, l in enumerate(tree):
         c = clean(l)
-        named = '"' in l or re.search(r':\s*\S', NOISE.sub('', l).split('- ', 1)[-1] if '- ' in l else '')
+        named = '"' in l or re.search(r':\s*\S', strip_noise(l).split('- ', 1)[-1] if '- ' in l else '')
         extra = desc_text(i) if (REF.search(l) and not named) else ' '.join(
             clean(tree[j]) for j in children[i] if not REF.search(tree[j]))[:160]
         units.append((c + ' ' + extra).strip() if extra else c)
@@ -79,10 +91,18 @@ def parse(request):
 
 
 def is_glyph(line):
-    m = GLYPH_CTRL.match(line)
+    m = GLYPH_ROLE.match(line)
     if not m or ('cursor=pointer' not in line and not line.lstrip().startswith(('- link', '- button'))):
         return False
-    return not re.search(r'[A-Za-z0-9]', (m.group(2) or '') + (m.group(3) or ''))
+    # The text after the last [ref=…] (and its optional [cursor=pointer] and ':'), by slicing.
+    at = line.rfind('[ref=')
+    end = line.find(']', at) if at >= 0 else -1
+    if end <= at + len('[ref='):
+        return False
+    rest = line[end + 1:]
+    rest = rest[len(' [cursor=pointer]'):] if rest.startswith(' [cursor=pointer]') else rest
+    rest = rest[1:] if rest.startswith(':') else rest
+    return not re.search(r'[A-Za-z0-9]', (m.group(2) or '') + rest)
 
 
 def round_robin(*orders):

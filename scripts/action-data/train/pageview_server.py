@@ -29,7 +29,7 @@ def mark_offscreen(request, viewport):
             off = y + h <= 0 or y >= viewport['height'] or x + w <= 0 or x >= viewport['width'] or (w == 0 and h == 0)
             line = BOX.sub('', line)
             if off and '[ref=e' in line:  # frame content (ref=fN…) has boxes in its own frame's viewport
-                line = re.sub(r'(\[ref=[^\]]+\])', r'\1 [offscreen]', line, count=1)
+                line = re.sub(r'(\[ref=[^\]\[]+\])', r'\1 [offscreen]', line, count=1)
         else:
             line = BOX.sub('', line)
         out.append(line)
