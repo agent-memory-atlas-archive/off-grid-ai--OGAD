@@ -106,8 +106,11 @@ export function registerRuntime(rt: ManagedRuntime, deps: RegisterDeps = {}): vo
   registry.set(rt.modality, rt)
   queue.registerEvictable(rt.modality, {
     type: RESIDENT_TYPE[rt.modality],
-    // An on-demand engine frees itself after each use, so it never counts as resident here.
-    footprintMB: () => (readMode(rt.modality) === 'resident' ? (rt.footprintMB?.() ?? 0) : 0),
+    // What the engine holds right now, whatever its mode (as mobile counts it): an on-demand engine
+    // can stay loaded after its job (Whisper keeps its server for five minutes), and every
+    // footprint reads 0 once the engine is down. The plan frees idle sidecars first, so counting a
+    // loaded on-demand engine frees it, not the model it would otherwise squeeze out.
+    footprintMB: () => rt.footprintMB?.() ?? 0,
     ...(rt.expectedMB ? { expectedMB: () => rt.expectedMB!() } : {}),
     evict: () => {
       // Dedicated CUDA runtimes have their own allocation/auto-fit policy. Do not

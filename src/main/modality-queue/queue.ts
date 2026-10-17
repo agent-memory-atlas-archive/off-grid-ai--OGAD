@@ -126,6 +126,8 @@ interface Waiter {
 
 interface RunningEntry {
   job: QueueJob
+  /** The engine this job runs on: never evicted for another job while this one runs. */
+  uses?: string
   /** Ids this job evicted, to release when it finishes. */
   evicted: string[]
   /** Stops a preemptible job's model request (see `currentSignal`). */
@@ -196,18 +198,24 @@ export class ModalityQueue {
   }
 
   /**
-   * Which of the job's declared evictables to free, from the shared residency policy: residents
-   * stay loaded while they all fit live memory; when the job's engine does not fit, the lowest
-   * priority, least recently used declared resident goes first, one at a time. Anything the job
-   * did not declare is never touched. Without a probe, or a size for the incoming engine, it frees
-   * every declared id (the safe behaviour for jobs that need all the memory, such as video).
+   * Which loaded engines to free so this job's engine fits, from the shared residency policy (as
+   * mobile plans it): residents stay loaded while they all fit live memory; when the job's engine
+   * does not fit, idle engines go one at a time, lowest priority first (voice, transcription and
+   * embedding sidecars before image, text last), then least recently used. Any idle engine may go,
+   * not only the ones the job names: a job that could free only its named engine was admitted
+   * without room when other idle engines held the memory. An engine a running job is using is
+   * never freed. Without a probe, or a size for the incoming engine, it frees every declared id
+   * (the safe behaviour for jobs that need all the memory, such as video).
    */
   private planEvictions(request: QueueRequest): string[] {
     const declared = request.evicts ?? []
     const uses = request.uses
-    if (!uses || !this.memoryProbe || declared.length === 0) return declared
+    if (!uses || !this.memoryProbe) return declared
     const incomingMB = uses.expectedMB ?? this.evictables.get(uses.id)?.expectedMB?.()
     if (incomingMB === undefined || !Number.isFinite(incomingMB)) return declared
+    const inUse = new Set(
+      [...this.running.values()].flatMap((entry) => (entry.uses ? [entry.uses] : []))
+    )
     const now = Date.now()
     const residents: Resident[] = []
     for (const [id, e] of this.evictables) {
@@ -217,8 +225,7 @@ export class ModalityQueue {
         key: id,
         type: e.type ?? 'classifier',
         sizeMB,
-        // Only what this job declared may be evicted; the rest are fixed for this plan.
-        pinned: !declared.includes(id),
+        pinned: inUse.has(id),
         lastUsedAt: this.lastUsedAt.get(id) ?? now
       })
     }
@@ -383,6 +390,7 @@ export class ModalityQueue {
       this.waiting.splice(idx, 1)
       const entry: RunningEntry = {
         job: waiter.job,
+        ...(waiter.request.uses ? { uses: waiter.request.uses.id } : {}),
         evicted: [],
         startedAt: Date.now(),
         ...(waiter.request.preemptible ? { controller: new AbortController() } : {})

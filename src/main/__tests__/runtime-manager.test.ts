@@ -156,13 +156,72 @@ describe('residents stay loaded while they fit', () => {
     expect(log.slice(0, 2)).toEqual(['evict', 'job'])
   })
 
-  it('an on-demand engine never counts as resident', async () => {
+  // As mobile counts it: what an engine holds now, whatever its mode. An on-demand engine can stay
+  // loaded after its job (Whisper keeps its server for five minutes), so it counts while loaded.
+  it('a loaded on-demand engine counts, and is freed when the job needs its memory', async () => {
     const q = new ModalityQueue()
     q.setMemoryProbe(() => ({ availableMB: 1_000, totalMB: 16_000 }))
     const log: string[] = []
     registerRuntime(sized(log), { queue: q, readMode: () => 'on-demand' })
     await q.run(imageJob, async () => void log.push('job'))
+    expect(log.slice(0, 2)).toEqual(['evict', 'job'])
+  })
+
+  it('an on-demand engine that is down takes no room', async () => {
+    const q = new ModalityQueue()
+    q.setMemoryProbe(() => ({ availableMB: 1_000, totalMB: 16_000 }))
+    const log: string[] = []
+    registerRuntime(
+      { ...sized(log), footprintMB: () => 0 },
+      { queue: q, readMode: () => 'on-demand' }
+    )
+    await q.run(imageJob, async () => void log.push('job'))
     expect(log).not.toContain('evict')
+  })
+
+  /** A stand-in engine of `modality` holding `heldMB` now. */
+  const holding = (modality: Modality, heldMB: number, log: string[]): ManagedRuntime => ({
+    modality,
+    evict: () => void log.push(`evict ${modality}`),
+    release: () => undefined,
+    footprintMB: () => heldMB,
+    expectedMB: () => heldMB
+  })
+
+  // As mobile plans it: any idle engine may be freed, sidecars first, not only the one a job names.
+  it('frees an idle transcription engine the job did not name, and keeps the chat model', async () => {
+    const q = new ModalityQueue()
+    // 4.2 GB free beside 5.5 GB held, less 3 GB headroom: the 2 GB image model fits once the
+    // 1.5 GB transcription engine goes; the chat model can stay.
+    q.setMemoryProbe(() => ({ availableMB: 4_200, totalMB: 16_000 }))
+    const log: string[] = []
+    registerRuntime(holding('llm', 4_000, log), { queue: q, readMode: () => 'resident' })
+    registerRuntime(holding('stt', 1_500, log), { queue: q, readMode: () => 'on-demand' })
+    await q.run(imageJob, async () => void log.push('job'))
+    expect(log).toEqual(['evict stt', 'job'])
+  })
+
+  it('never frees an engine a running job is using', async () => {
+    const q = new ModalityQueue()
+    // 2 GB free beside 7 GB held: dictation's 1.5 GB fits once one model goes. The image model is
+    // the lower-priority one, but an image job is using it, so the idle chat model goes instead.
+    q.setMemoryProbe(() => ({ availableMB: 2_000, totalMB: 16_000 }))
+    const log: string[] = []
+    registerRuntime(holding('llm', 4_000, log), { queue: q, readMode: () => 'resident' })
+    registerRuntime(holding('image', 3_000, log), { queue: q, readMode: () => 'resident' })
+    let finishImage = (): void => undefined
+    const imageRunning = q.run(
+      { tier: 2, label: 'image', uses: { id: 'image', expectedMB: 3_000 } },
+      () => new Promise<void>((resolve) => (finishImage = resolve))
+    )
+    await vi.waitFor(() => expect(q.getState().running).toHaveLength(1))
+    await q.run(
+      { tier: 1, label: 'dictation', uses: { id: 'stt', expectedMB: 1_500 } },
+      async () => void log.push('dictation')
+    )
+    finishImage()
+    await imageRunning
+    expect(log).toEqual(['evict llm', 'dictation'])
   })
 
   it('reads live memory as available within total', () => {

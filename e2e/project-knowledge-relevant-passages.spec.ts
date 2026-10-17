@@ -77,11 +77,13 @@ function installModelBoundary(): string {
     '.cache',
     'Xenova'
   )
-  if (!fs.existsSync(embeddingCache)) {
-    throw new Error(`This spec requires the installed local embedding cache at ${embeddingCache}`)
+  // The real local embedder runs (no fake of our own retrieval). With this machine's embedding
+  // cache present it is linked in, so the run starts at once; on a clean runner the app downloads
+  // the embedder itself on first use (free, no key), as it does for a new user.
+  if (fs.existsSync(embeddingCache)) {
+    fs.mkdirSync(path.join(modelsDir, '.cache'), { recursive: true })
+    fs.symlinkSync(embeddingCache, path.join(modelsDir, '.cache', 'Xenova'), 'dir')
   }
-  fs.mkdirSync(path.join(modelsDir, '.cache'), { recursive: true })
-  fs.symlinkSync(embeddingCache, path.join(modelsDir, '.cache', 'Xenova'), 'dir')
   // Records every request (OFFGRID_KNOWLEDGE_MODEL_LOG); searches only for a codeword question.
   const executable = path.join(llamaDir, 'llama-server')
   fs.copyFileSync(path.resolve('e2e/fixtures/knowledge-search-llama-server.mjs'), executable)
