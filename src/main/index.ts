@@ -667,16 +667,15 @@ app.whenReady().then(async () => {
     }
   ])
 
-  // Text-model preparation starts a memory-heavy native runtime. Do not start it
-  // until Pro activation has finished and the first renderer frame can present.
+  // Text-model preparation registers the chat engine and applies its best settings. It does not
+  // load the model: the engine loads on its first use, so an idle app holds no model memory.
   void (async () => {
     await proFeaturesStartup
     await new Promise<void>((resolve) => setImmediate(resolve))
     await runStartupStage({
       name: 'models.text.prepare',
-      // A USB model load can stay quiet for ten minutes; allow setup time as well
-      // before the startup notice reports that preparation did not finish.
-      deadlineMs: 900_000,
+      // No model loads here; the settings check reads the model file headers only.
+      deadlineMs: 60_000,
       lateEffect: 'keep',
       run: async () => {
         const { llm } = await import('./llm')
@@ -684,14 +683,10 @@ app.whenReady().then(async () => {
         applyQueueConfig(modalityQueue, readQueueConfig(getSetting))
         // Models stay loaded while they fit live memory; the queue frees only what it must.
         modalityQueue.setMemoryProbe(liveMemory)
-        // A remote chat model needs no local engine: loading one anyway holds gigabytes of
-        // memory for nothing. Chat starts it on demand if the user switches back.
-        const { getActiveRemoteVisionServer } = await import('./vision/remote-vision-server')
         // Before the first launch, so a fresh install starts on its fastest settings.
         await import('./best-settings')
           .then((m) => m.prepareBestSettingsOnStartup())
           .catch((error: unknown) => console.warn('[best-settings] startup check failed', error))
-        if (llm.modelsExist() && !getActiveRemoteVisionServer()) await llm.init()
       }
     })
   })()

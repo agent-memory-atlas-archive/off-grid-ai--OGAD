@@ -1281,18 +1281,15 @@ async function runImageGen(
 
 /** Image generation as a ManagedRuntime for the shared residency seam. Only the
  *  RESIDENT sd-server holds memory between images; evict stops it so another
- *  modality can reclaim the RAM. warm/release are no-ops — the server lazily
- *  re-spawns on the next eligible resident generation (ensureUp), and the one-shot
- *  sd-cli/mflux paths hold nothing between jobs. */
+ *  modality can reclaim the RAM. The server lazily re-spawns on the next eligible
+ *  resident generation (ensureUp), and the one-shot sd-cli/mflux paths hold nothing
+ *  between jobs. */
 export const imageRuntime: ManagedRuntime = {
   modality: 'image',
   footprintMB: () => sdServer.residentMB(),
   expectedMB: () => expectedImageResidentMB() ?? 0,
   evict: () => {
     sdServer.stop()
-  },
-  warm: () => {
-    /* lazily re-spawned by ensureUp on the next resident generation */
   },
   release: () => {
     sdServer.stop()

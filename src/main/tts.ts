@@ -123,7 +123,6 @@ export const ttsRuntime: ManagedRuntime = {
   footprintMB: () => (onnxSpeech.isLoaded() ? KOKORO_MB : 0),
   expectedMB: () => KOKORO_MB,
   evict: () => onnxSpeech.close(),
-  warm: () => onnxSpeech.prepare(DEFAULT_VOICE).then(() => undefined),
   release: () => onnxSpeech.close()
 }
 

@@ -4,12 +4,14 @@
 // So if residency works for one engine it works for all, and if it breaks it breaks
 // for all — no per-engine special-casing to drift out of sync (DSP + SRP).
 //
-// Two aspects of residency, both driven off the same getResidencyMode source:
-//   1. Memory management (here): the queue evicts a runtime before a competing
-//      heavy job and, when that job finishes, re-warms it MODE-AWARE via this seam.
+// Every engine loads lazily: on its first use, never at launch and never only because memory
+// came free. The residency mode decides what happens between uses:
+//   1. Memory management (here): a 'resident' engine keeps its model loaded and counts toward
+//      the queue's live-memory plan, so it stays beside other models while they all fit. The
+//      queue evicts it only when a job needs the memory, and it then loads again on its next use.
 //   2. Job execution (in each engine's run path): a 'resident' engine routes work
-//      through its warm server; an 'on-demand' engine uses its one-shot path. Each
-//      engine reads getResidencyMode(modality) — the same rule, applied once per side.
+//      through its warm server; an 'on-demand' engine uses its one-shot path and frees its
+//      memory after each job. Each engine reads getResidencyMode(modality).
 
 import os from 'node:os'
 import type { ResidentType } from '@offgrid/models'
@@ -27,11 +29,8 @@ export interface ManagedRuntime {
   readonly modality: Modality
   /** Free resident memory NOW. MUST be idempotent/safe when already down. */
   evict(): Promise<void> | void
-  /** Reload into memory now — the 'resident' re-warm after an evicting job ends. */
-  warm(): Promise<void> | void
-  /** Clear any eviction block WITHOUT reloading — the 'on-demand' re-warm: the
-   *  engine stays down and lazily loads on its own next use. Usually a no-op for
-   *  engines that already load per job; the LLM clears its pause flag here. */
+  /** Clear any eviction block WITHOUT reloading, after the job that evicted it ends: the
+   *  engine stays down and loads on its own next use. The LLM clears its pause flag here. */
   release(): Promise<void> | void
   /** What it holds in memory now, in MB (0 when nothing is loaded). */
   footprintMB?(): number
@@ -69,12 +68,6 @@ const RESIDENT_TYPE: Record<Modality, ResidentType> = {
   embeddings: 'embedding'
 }
 
-/** The action the queue's re-warm hook takes for a given residency mode. Pure +
- *  exported so the one rule that maps mode to behavior is unit-tested in isolation. */
-export function warmActionForMode(mode: ResidencyMode): 'warm' | 'release' {
-  return mode === 'resident' ? 'warm' : 'release'
-}
-
 const registry = new Map<Modality, ManagedRuntime>()
 let shuttingDown = false
 
@@ -87,9 +80,9 @@ export interface RegisterDeps {
   readChatBackend?: () => RuntimeBackend
 }
 
-/** Register a runtime into the queue through the ONE mode-aware policy. The queue
- *  always calls evict() (idempotent) before a job that displaces this runtime, then
- *  calls the mode-aware re-warm when that job ends. */
+/** Register a runtime into the queue through the ONE residency seam. The queue calls evict()
+ *  (idempotent) before a job that needs this runtime's memory, and release() when that job
+ *  ends; the runtime reloads only when it is next used. */
 export function registerRuntime(rt: ManagedRuntime, deps: RegisterDeps = {}): void {
   if (shuttingDown) {
     void Promise.resolve(rt.evict()).catch(() => {})
@@ -112,20 +105,21 @@ export function registerRuntime(rt: ManagedRuntime, deps: RegisterDeps = {}): vo
         readMode(rt.modality) === 'resident' &&
         (rt.modality === 'llm' || rt.modality === 'image')
       ) {
-        const imageBinary = rt.modality === 'image'
-          ? sdServer.getBinaryPath()
-          : findSdBinaries('sd-server', getBackendPreference('image'))[0]
+        const imageBinary =
+          rt.modality === 'image'
+            ? sdServer.getBinaryPath()
+            : findSdBinaries('sd-server', getBackendPreference('image'))[0]
         const chat = rt.modality === 'llm' ? deps.readChatBackend?.() : undefined
         if (
-          imageBinary && imageBackendForRuntime(process.platform, imageBinary) === 'CUDA' &&
+          imageBinary &&
+          imageBackendForRuntime(process.platform, imageBinary) === 'CUDA' &&
           (rt.modality === 'image' || (chat?.state === 'loaded' && chat.backend?.includes('CUDA')))
         )
           return
       }
       return rt.evict()
     },
-    recover: () => rt.release(),
-    warm: () => (warmActionForMode(readMode(rt.modality)) === 'warm' ? rt.warm() : rt.release())
+    recover: () => rt.release()
   })
 }
 

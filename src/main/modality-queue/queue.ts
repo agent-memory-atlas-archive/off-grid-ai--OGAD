@@ -2,8 +2,8 @@
 //
 // On a 16GB unified-memory Mac two big models resident at once (chat + image, or
 // chat + replay-vision) overflow RAM and swap the whole machine into a beachball.
-// This queue serializes heavy jobs by PRIORITY (see policy.ts) and evicts named
-// engines before a job runs, so only one heavy model is resident at a time. It
+// This queue serializes heavy jobs by PRIORITY (see policy.ts) and, before a job runs, evicts
+// only the engines the shared residency plan says must go for it to fit live memory. It
 // generalizes the ad-hoc llm.pause()/resume() bracketing that imagegen.ts did
 // inline: engines register themselves as evictable, jobs declare what they evict.
 //
@@ -15,21 +15,17 @@ import { AsyncLocalStorage } from 'async_hooks'
 import { liveBudgetMB, planEviction, type Resident, type ResidentType } from '@offgrid/models'
 import { DEFAULT_POLICY, selectNext, type PolicyConfig, type QueueJob, type Tier } from './policy'
 
-/** An engine that can free its resident memory on demand (and warm back up). */
+/** An engine that can free its resident memory on demand; it loads again on its own next use. */
 export interface Evictable {
   /** Free the engine's memory NOW. Awaited before a job that evicts it runs.
    *  MUST be idempotent/safe when the engine is already down (the queue always
    *  calls it for a declared id rather than tracking exact residency, so an engine
    *  that lazily reloaded can't slip through and leave two models resident). */
   evict: (by?: QueueRequest) => Promise<void> | void
-  /** Clear an eviction block if a later engine fails to evict. This must not
-   *  load a model while the failed engine may still hold memory. */
+  /** Clear the engine's eviction block WITHOUT loading a model. Called when the job that
+   *  evicted it ends, and when a later engine fails to evict. The engine then loads on its
+   *  own next use: nothing is reloaded only because memory came free. */
   recover?: () => Promise<void> | void
-  /** Warm the engine back up after the evicting job finishes. Called by the queue
-   *  in run()'s finally. Make it MODE-AWARE: a 'resident' engine reloads here (low
-   *  latency next use); an 'on-demand' engine should NOT reload — just clear any
-   *  eviction block so it can lazily load on its own next use (frees RAM meanwhile). */
-  warm?: () => Promise<void> | void
   /** What the engine holds in memory now, in MB (0 when nothing is loaded). With
    *  expectedMB and type, this lets the queue keep it resident while everything fits. */
   footprintMB?: () => number
@@ -130,7 +126,7 @@ interface Waiter {
 
 interface RunningEntry {
   job: QueueJob
-  /** Ids this job evicted, to re-warm when it finishes. */
+  /** Ids this job evicted, to release when it finishes. */
   evicted: string[]
   /** Stops a preemptible job's model request (see `currentSignal`). */
   controller?: AbortController
@@ -326,16 +322,13 @@ export class ModalityQueue {
     } finally {
       this.running.delete(job.id)
       if (job.tier !== 3) this.holdBackground()
-      // Re-warm what this job evicted. Each engine's warm() is mode-aware: a
-      // 'resident' engine reloads now; an 'on-demand' engine just clears its
-      // eviction block and stays down until its own next use.
+      // Let what this job evicted load again on its own next use. Nothing reloads here: a model
+      // nobody asks for next would only take back the memory the job just freed.
       for (const id of entry?.evicted ?? []) {
-        const e = this.evictables.get(id)
-        if (!e?.warm) continue
         try {
-          await e.warm()
+          await this.evictables.get(id)?.recover?.()
         } catch (err) {
-          console.error(`[ModalityQueue] warm '${id}' failed:`, err)
+          console.error(`[ModalityQueue] release '${id}' failed:`, err)
         }
       }
       this.emitChange()
@@ -405,7 +398,7 @@ export class ModalityQueue {
 
   private async admitAfterEvict(waiter: Waiter, entry: RunningEntry): Promise<void> {
     // Evict what the residency plan picks from the declared ids (all of them when the queue
-    // cannot size the job). evict is idempotent when the engine is down. Record each for re-warm.
+    // cannot size the job). evict is idempotent when the engine is down. Record each for release.
     if (waiter.request.uses) this.lastUsedAt.set(waiter.request.uses.id, Date.now())
     for (const id of this.planEvictions(waiter.request)) {
       const e = this.evictables.get(id)
