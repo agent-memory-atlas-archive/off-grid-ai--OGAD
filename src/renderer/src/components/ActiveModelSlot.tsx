@@ -67,7 +67,11 @@ export function ActiveModelSlot(props: {
   /** What the slot's model does (Task roles). */
   readonly does?: ReactNode
   /** The active model, or null when nothing is picked yet. */
-  readonly active: { readonly name: string; readonly detail?: ReactNode; readonly remote?: boolean } | null
+  readonly active: {
+    readonly name: string
+    readonly detail?: ReactNode
+    readonly remote?: boolean
+  } | null
   /** Shown instead of the card and dropdown when no model of this kind is on the device. */
   readonly empty?: ReactNode
   readonly busy?: boolean
@@ -120,10 +124,7 @@ export function ActiveModelSlot(props: {
           <p className="text-xs text-neutral-500">{props.empty}</p>
         ) : (
           <div className="space-y-2">
-            <motion.div
-              layout={!reduceMotion}
-              transition={{ duration: 0.4, ease: EASE }}
-            >
+            <motion.div layout={!reduceMotion} transition={{ duration: 0.4, ease: EASE }}>
               <Card
                 aria-label={`${props.ariaLabel} active model`}
                 className={`flex w-full min-w-0 flex-row items-center justify-between gap-3 border-l-2 px-3 py-2 text-xs ${
@@ -158,15 +159,23 @@ export function ActiveModelSlot(props: {
                 </span>
               </Card>
             </motion.div>
-            {others.length > 0 ? (
+            {/* Every model slot picks the same way, a list you can type into, however short. With
+                nothing else to switch to it stays, disabled and saying so, rather than vanishing. */}
+            {select ? (
               <SettingsSelect<string>
-                id={select!.id}
-                label={select!.label}
+                id={select.id}
+                label={select.label}
                 value=""
-                placeholder={active ? 'Switch to another model' : 'Choose a model'}
-                searchable={others.length > 8}
-                disabled={select!.disabled || props.busy}
-                onValueChange={select!.onValueChange}
+                placeholder={
+                  others.length === 0
+                    ? 'No other model on this device'
+                    : active
+                      ? 'Switch to another model'
+                      : 'Choose a model'
+                }
+                searchable
+                disabled={others.length === 0 || select.disabled || props.busy}
+                onValueChange={select.onValueChange}
                 options={others}
               />
             ) : null}
