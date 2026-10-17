@@ -15,14 +15,22 @@ mkdir -p "$R"/{runs,eval} "$BASE"
 log() { echo "[$(date -u +%FT%TZ)] $*"; }
 
 log "build data from: $*"
-$PY "$T/build_dataset.py" --runs "$@" --out "$R/data" --actor-max "$actor_max" --evaluator-max "$eval_max" ${PLANNER_RUNS:+--planner-runs $PLANNER_RUNS} > "$R/data.log" || { log "data build failed"; exit 1; }
+$PY "$T/build_dataset.py" --runs "$@" --out "$R/data" --actor-max "$actor_max" --evaluator-max "$eval_max" ${PLANNER_RUNS:+--planner-runs $PLANNER_RUNS} ${BUILD_ARGS:-} > "$R/data.log" || { log "data build failed"; exit 1; }
 
 # Requests are re-rendered with the current contract (snapshot compaction and focused cut).
 NODE_T=/workspace/action-data-gen/scripts/train
 node "$NODE_T/rerender.mjs" "$R/data/actor.jsonl" "$R/data/evaluator.jsonl" "$R/data/planner.jsonl" >> "$R/data.log"
-if [[ ! -f "$TEST/.rerendered" ]]; then
-  node "$NODE_T/rerender.mjs" "$TEST/actor.jsonl" "$TEST/evaluator.jsonl" "$TEST/planner.jsonl" >> "$R/data.log" && touch "$TEST/.rerendered"
-fi
+# Test sets are re-rendered once per contract version (the marker holds the contract's hash).
+CONTRACT_HASH=$(sha256sum /workspace/action-data-gen/scripts/contract.mjs | cut -c1-16)
+# One writer at a time: rounds on two pods share these files on /workspace.
+exec 9>/workspace/action-train/realsite/.rerender.lock; flock 9
+for set in "$TEST" /workspace/action-train/realsite/*/; do
+  set=${set%/}
+  [[ "$(cat "$set/.rendered-with" 2>/dev/null)" == "$CONTRACT_HASH" ]] && continue
+  files=(); for f in actor evaluator planner; do [[ -s "$set/$f.jsonl" ]] && files+=("$set/$f.jsonl"); done
+  node "$NODE_T/rerender.mjs" "${files[@]}" >> "$R/data.log" && echo "$CONTRACT_HASH" > "$set/.rendered-with"
+done
+flock -u 9
 
 test_role() {  # test_role <role> <test_name> <test.jsonl> <meta.jsonl> <adapter>
   local role=$1 name=$2 data=$3 meta=$4 ckpt=$5
@@ -36,7 +44,8 @@ test_role() {  # test_role <role> <test_name> <test.jsonl> <meta.jsonl> <adapter
   log "$role $name: base $($PY -c "import json;print(json.load(open('$BASE/$role-$name-score.json'))['rate'])") trained $($PY -c "import json;print(json.load(open('$R/eval/$role-$name-score.json'))['rate'])")"
 }
 
-for role in actor evaluator planner; do
+# ROLES (space-separated) trains only some models, e.g. ROLES=actor.
+for role in ${ROLES:-actor evaluator planner}; do
   log "train $role"
   BS=4 GA=2 GROUP_BY_LENGTH=true GRAD_CKPT=${GRAD_CKPT:-false} DATA_PROCS=8 LOADERS=4 bash "$T/train_role.sh" "$role" "$R/data/$role.jsonl" "$R/runs/$role" > "$R/runs/$role.log" 2>&1 || { log "$role training failed"; continue; }
   ckpt=$(ls -d "$R"/runs/$role/v*/checkpoint-* | sort -V | tail -1)

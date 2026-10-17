@@ -6,7 +6,7 @@ role="$1"; data="$2"; out="$3"; adapter="${4:-}"
 R=/workspace/ogad-action-model-research
 test -f "$data"
 test ! -e "$out"
-export CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=2 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONUNBUFFERED=1
+export CUDA_VISIBLE_DEVICES=${GPU:-0} OMP_NUM_THREADS=2 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True DOWNSAMPLE_MODE=4x MAX_SLICE_NUMS=4
 extra=()
 if [[ -n "$adapter" ]]; then extra=(--adapters "$adapter"); fi

@@ -7,7 +7,7 @@ role="$1"; data="$2"; out="$3"
 R=/workspace/ogad-action-model-research
 test -f "$data"
 test ! -e "$out"
-export CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONUNBUFFERED=1
+export CUDA_VISIBLE_DEVICES=${GPU:-0} OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True TOKENIZERS_PARALLELISM=false
 # Fewer image slices than the Codex runs (9): the AX snapshot carries the text, and fewer image
 # tokens means faster prefill on the Mac. Inference must use the same value.
@@ -18,7 +18,7 @@ common=(--tuner_type lora --lora_rank 16 --lora_alpha 32 --lora_dropout 0.05
   --per_device_train_batch_size "${BS:-2}" --gradient_accumulation_steps "${GA:-4}" --gradient_checkpointing "${GRAD_CKPT:-true}"
   --group_by_length "${GROUP_BY_LENGTH:-false}"
   --learning_rate 0.0001 --lr_scheduler_type cosine --warmup_ratio 0.02 --weight_decay 0.1
-  --num_train_epochs 1 --save_steps 250 --save_total_limit 3 --logging_steps 5 --eval_strategy no
+  --num_train_epochs 1 ${MAX_STEPS:+--max_steps $MAX_STEPS} --save_steps 250 --save_total_limit 3 --logging_steps 5 --eval_strategy no
   --dataset_num_proc "${DATA_PROCS:-4}" --dataloader_num_workers "${LOADERS:-2}" --report_to none --seed 42 --data_seed 42
   --output_dir "$out")
 if [[ "$role" == planner ]]; then

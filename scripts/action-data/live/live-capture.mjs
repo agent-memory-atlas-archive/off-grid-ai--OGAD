@@ -41,11 +41,13 @@ const timeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout((
 
 process.setMaxListeners(0)
 const [vw, vh] = rng.pick(VIEWPORTS)
-const browser = await chromium.launch({
-  channel: process.env.CHROME_CHANNEL ?? 'chrome', headless: false,
-  args: [`--remote-debugging-port=${port}`, '--disable-blink-features=AutomationControlled', `--window-size=${vw},${vh + 120}`]
-})
-const context = await browser.newContext({ viewport: { width: vw, height: vh }, locale: 'en-IN', timezoneId: 'Asia/Kolkata' })
+const launchArgs = [`--remote-debugging-port=${port}`, '--disable-blink-features=AutomationControlled', `--window-size=${vw},${vh + 120}`]
+// --profile <dir>: a copy of a signed-in browser profile (logged-in pages); --browser <path> picks
+// the binary that made it (Brave), so its stored cookies decrypt.
+const context = args.profile
+  ? await chromium.launchPersistentContext(args.profile, { executablePath: args.browser, headless: false, args: launchArgs, viewport: { width: vw, height: vh } })
+  : await (await chromium.launch({ channel: process.env.CHROME_CHANNEL ?? 'chrome', headless: false, args: launchArgs })).newContext({ viewport: { width: vw, height: vh }, locale: 'en-IN', timezoneId: 'Asia/Kolkata' })
+const browser = context.browser() ?? context
 const page = await context.newPage()
 const server = await createConnection({
   browser: { browserName: 'chromium', cdpEndpoint: `http://127.0.0.1:${port}` },

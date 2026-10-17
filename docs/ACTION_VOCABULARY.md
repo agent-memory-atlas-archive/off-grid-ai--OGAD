@@ -144,6 +144,7 @@ Default timeout: 5000 ms. Last argument overrides it: `wait_appears(e9, 10000)`.
 
 | Call | Returns |
 |---|---|
+| `find("text")` | Up to 8 lines of the full snapshot that contain the text (contract v1, see below) |
 | `read(t)` | Text or value of t |
 | `read_table(t)` | Rows of a table or list |
 | `exists(t)` | true / false |
@@ -166,6 +167,28 @@ error blocked sensitive_field
 ```
 
 The next step must react to `timeout` and `error`.
+
+### `find("text")` (contract v1)
+
+Under contract v1 the actor sees only what is on screen (see MODEL_CONTRACT.md, "On-screen AX").
+`find` searches the full snapshot. No page action. The harness:
+
+- matches every snapshot line that contains the text, case-insensitive (the accessible name is part of the line);
+- reports a line without a ref by its nearest ancestor with a ref, once per ref;
+- lists controls first, then other lines, each in page order; at most 8;
+- writes `<ref> <role> "<name>"` per match, names cut at 60 characters.
+
+```
+find("Order now") -> 2 matches: e275 button "Order Now"; e301 link "Order now"
+find("Gift card") -> 11 matches (first 8): e12 link "Gift cards"; …
+find("Zzz") -> 0 matches
+```
+
+The refs in a find result are valid targets for the next actions, also when the on-screen AX
+does not show them, until an action other than `find` runs. The generator writes a `find` step
+when the correct target is not on screen and a find on its name returns it; otherwise it writes
+`scroll_down()` or `scroll_up()` toward it. Pure function: `findResult` in
+`scripts/action-data/contract.mjs`.
 
 ## Audio events
 

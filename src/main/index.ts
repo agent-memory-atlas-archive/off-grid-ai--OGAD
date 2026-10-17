@@ -699,6 +699,15 @@ app.whenReady().then(async () => {
       .catch((error) => console.error('[seed]', error))
   }
 
+  // Development: the Web Use task list runner (src/main/browser/web-use-bench.ts).
+  if (process.env.OFFGRID_WEBUSE_BENCH) {
+    setTimeout(() => {
+      void import('./browser/web-use-bench').then(({ startWebUseBench }) =>
+        startWebUseBench().catch((e) => console.error('[web-use][bench] failed', e))
+      )
+    }, 15_000)
+  }
+
   // Document caches no chat uses any more go after 30 days; well after startup, off the hot path.
   setTimeout(() => {
     void import('./documents').then((documents) => documents.collectDocumentGarbage())

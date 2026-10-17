@@ -21,7 +21,7 @@ const started = Date.now()
 const runs = Array.from({ length: workers }, (_, i) => new Promise((resolve) => {
   const child = spawn(process.execPath, [
     capture, '--worker', String(first + i), '--episodes', String(args.episodes ?? 50),
-    '--seed', args.seed ?? 'run', '--out', out, '--noise', String(args.noise ?? 0.12), '--family', args.family ?? '', '--settle', String(args.settle ?? 0)
+    '--seed', args.seed ?? 'run', '--out', out, '--noise', String(args.noise ?? 0.12), '--family', args.family ?? '', '--settle', String(args.settle ?? 0), ...(args.view ? ['--view', args.view] : []), ...(args.policy ? ['--policy', args.policy, '--policy-rate', String(args['policy-rate'] ?? 0.7)] : [])
   ], { stdio: ['ignore', 'ignore', 'pipe'] })
   let errors = ''
   child.stderr.on('data', (chunk) => { if (!/MaxListeners|trace-warnings/.test(chunk)) errors += chunk })
@@ -35,6 +35,7 @@ for (const { worker } of results) {
   if (!existsSync(file)) continue
   const s = JSON.parse(readFileSync(file, 'utf8'))
   for (const key of ['episodes', 'completed', 'actorRows', 'evaluatorRows', 'plannerRows', 'actions']) totals[key] += s[key]
+  for (const key of ['findSteps', 'scrollForView']) if (s[key]) totals[key] = (totals[key] ?? 0) + s[key]
   for (const group of ['reasons', 'verdicts', 'families']) {
     for (const [key, count] of Object.entries(s[group])) totals[group][key] = (totals[group][key] ?? 0) + count
   }

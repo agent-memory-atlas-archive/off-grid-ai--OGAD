@@ -64,7 +64,11 @@ def main():
     ap.add_argument('--planner-max', type=int, default=4000)
     ap.add_argument('--bulk-cap', type=int, default=12)
     ap.add_argument('--continue-ratio', type=float, default=1.5)
+    ap.add_argument('--success-share', type=float, default=0.0, help='cap success rows at this share of kept evaluator rows (0 = no cap)')
     ap.add_argument('--seed', type=int, default=7)
+    ap.add_argument('--keep-family', default='', help='families kept whole, outside the balanced share and --actor-max (e.g. ground)')
+    ap.add_argument('--keep-max', type=int, default=0, help='cap on rows kept from --keep-family families (0 = all)')
+    ap.add_argument('--upweight', default='', help='family=times, comma-separated: repeat that family\'s actor rows (e.g. teacher=4)')
     a = ap.parse_args()
     rng = random.Random(a.seed)
     os.makedirs(a.out, exist_ok=True)
@@ -83,7 +87,18 @@ def main():
         if rows[0]['family'] == 'bulk' and len(rows) > a.bulk_cap:
             rows = rng.sample(rows, a.bulk_cap)
         kept.extend(rows)
+    # The model's own mistakes (on-policy rows where it chose wrong) are always kept: they are the
+    # most useful rows we have. The rest is balanced across task types.
+    mistakes = [r for r in kept if r.get('policy_wrong')]
+    kept = [r for r in kept if not r.get('policy_wrong')]
+    a.actor_max = max(0, a.actor_max - len(mistakes))
     # Balance task types: each family gets an equal share; unused share goes to the others.
+    keep_all = set(filter(None, a.keep_family.split(',')))
+    whole = [r for r in kept if r['family'] in keep_all]
+    if a.keep_max and len(whole) > a.keep_max:
+        rng.shuffle(whole)
+        whole = whole[:a.keep_max]
+    kept = [r for r in kept if r['family'] not in keep_all]
     by_family = collections.defaultdict(list)
     for r in kept:
         by_family[r['family']].append(r)
@@ -93,9 +108,14 @@ def main():
     picked = [r for rows in by_family.values() for r in rows[:share]]
     rest = [r for rows in by_family.values() for r in rows[share:]]
     rng.shuffle(rest)
-    kept = picked + rest[:max(0, a.actor_max - len(picked))]
+    kept = picked + rest[:max(0, a.actor_max - len(picked))] + mistakes + whole
+    # Upweight scarce, high-value families (teacher runs on the product's real sites).
+    for spec in filter(None, a.upweight.split(',')):
+        fam, times = spec.split('=')
+        extra = [r for r in kept if r['family'] == fam]
+        kept += extra * (int(times) - 1)
     rng.shuffle(kept)
-    report['actor'] = {'raw': len(actor), 'kept': len(kept), 'tasks': len(by_task),
+    report['actor'] = {'raw': len(actor), 'kept': len(kept), 'tasks': len(by_task), 'mistakes': len(mistakes),
                        'families': collections.Counter(r['family'] for r in kept),
                        'actions': collections.Counter(r['response'].split('(')[0] for r in kept)}
     with open(os.path.join(a.out, 'actor.jsonl'), 'w') as f:
@@ -106,6 +126,13 @@ def main():
     other = [r for r in ev if not r['response'].startswith('continue(')]
     cont = [r for r in ev if r['response'].startswith('continue(')]
     rng.shuffle(cont)
+    rng.shuffle(other)
+    if a.success_share:
+        # Too many success rows teach the evaluator to stop early (round 5e: 87 of 193 continue -> success).
+        succ = [r for r in other if r['response'].startswith('success(')]
+        rest = [r for r in other if not r['response'].startswith('success(')]
+        cap = int(a.evaluator_max * a.success_share)
+        other = rest + succ[:cap]
     cont = cont[:int(len(other) * a.continue_ratio)]
     ev_kept = other + cont
     rng.shuffle(ev_kept)

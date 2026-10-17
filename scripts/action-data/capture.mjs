@@ -5,7 +5,7 @@
 //
 // node scripts/action-data/capture.mjs --worker 0 --episodes 50 --out outputs/action-data/run1
 
-import { mkdirSync, appendFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, appendFileSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { chromium } from 'playwright-core'
 import { createConnection } from '@playwright/mcp'
@@ -14,7 +14,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { generatePage } from './page-gen.mjs'
 import { generateTask, correctActions, initialPlan, verdict, replan } from './tasks.mjs'
 import { FLOW_FAMILIES, generateFlow, flowPlan, flowVerdict, flowReplan, flowActions } from './flows.mjs'
-import { plannerRequest, plannerResponse, actorRequest, evaluatorRequest } from './contract.mjs'
+import { plannerRequest, plannerResponse, actorRequest, evaluatorRequest, obviousAction, evaluateCheck, viewportSnapshot, stripBoxes, findResult, findRefs, targetText } from './contract.mjs'
 import { createRng } from './rng.mjs'
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs, value, index, all) => {
@@ -41,7 +41,16 @@ const REF_LINE = /^(\s*)- (.*?)\s*\[ref=((?:f\d+)?e\d+)\]/
 // Roles a label can target. Wrappers, text and headings never carry a data-gen-id target.
 // Snapshot lines whose name has a colon are YAML-quoted: - 'checkbox "A: B" [ref=e1]'
 const TARGET_ROLES = /^'?(textbox|searchbox|combobox|checkbox|radio|button|link|row|group|spinbutton|slider|switch|tab|menuitem|option)\b/
+// On-policy mode: our actor (a llama.cpp server) picks the action on a share of steps; the label
+// script still labels the correct action for every state the model reaches.
+const POLICY = args.policy || null
+const POLICY_RATE = Number(args['policy-rate'] ?? 0.7)
+const FOLLOW_WRONG = Number(args['follow-wrong'] ?? 0.5)
 const VIEWPORTS = [[1280, 800], [1440, 900], [1024, 768], [1600, 1000]]
+// --view onscreen: contract v1. Actor and evaluator see viewportSnapshot (what is on screen plus one
+// screen below) and the label script writes find("text") when the correct target is not shown.
+// Default (no flag): contract v0, the 18k boundedSnapshot, unchanged.
+const VIEW = args.view === 'onscreen'
 
 mkdirSync(join(out, 'images'), { recursive: true })
 const files = {
@@ -144,14 +153,32 @@ async function runEpisode(seed) {
   let last = 'task started'
   let actions = 0
 
+  let skipEvaluator = false
+  // Refs named by the find results since the last other action: valid targets though not on screen.
+  let foundRefs = new Set()
+  const view = () => (VIEW ? { boxed: obs.boxed, ...obs.viewport } : undefined)
   while (actions < MAX_STEPS) {
+    // The harness moves on by itself after an obvious step whose check is now met.
+    if (skipEvaluator) {
+      skipEvaluator = false
+      const truth = L.verdict(plan, obs.state)
+      if (truth.verdict === `continue(${marker + 1})`) {
+        totals.skippedEvaluator = (totals.skippedEvaluator ?? 0) + 1
+        marker += 1
+        const genToRef = await resolveRefs(obs.snapshot, refCache)
+        const r = await actorTurn(genToRef, 'continue')
+        if (r) return r
+        continue
+      }
+      totals.skipDisagree = (totals.skipDisagree ?? 0) + 1
+    }
     // Evaluator: judge the current screen.
     const judged = L.verdict(plan, obs.state)
     const name = judged.verdict.split('(')[0]
     totals.verdicts[name] = (totals.verdicts[name] ?? 0) + 1
     write(files.evaluator, {
       id: `${seed}:e${step}`, seed, step, family: spec.family,
-      request: evaluatorRequest({ goal: task.goal, plan, current: marker, past, last, snapshot: obs.snapshot }),
+      request: evaluatorRequest({ goal: task.goal, plan, current: marker, past, last, snapshot: obs.snapshot, view: view() }),
       image: obs.image, response: judged.verdict
     })
     totals.evaluatorRows++
@@ -177,19 +204,47 @@ async function runEpisode(seed) {
       marker = judged.current
     }
 
-    // Actor: one action for the current screen.
     const genToRef = await resolveRefs(obs.snapshot, refCache)
+    const r = await actorTurn(genToRef, name, judged.verdict)
+    if (r) return r
+  }
+  return { family: spec.family, completed: false, reason: 'max-steps', actions }
+
+  // Actor (or the harness, for an obvious step): one action, run and checked. Returns an episode
+  // result when the episode must end, else nothing.
+  async function actorTurn(genToRef, name, verdictText = '') {
     const wanted = L.actions(obs.state)
-    const accepted = wanted.map((a) => toRefs(a, genToRef)).filter(Boolean)
-    if (!accepted.length) return { family: spec.family, completed: false, reason: wanted.length ? 'unresolved-target' : 'no-action', actions, wanted, verdict: judged.verdict }
-    const wrong = actions > 0 && name === 'continue' && rng.chance(NOISE) ? wrongAction(spec, task, genToRef, rng, accepted) : null
+    let accepted = wanted.map((a) => toRefs(a, genToRef)).filter(Boolean)
+    if (!accepted.length) return { family: spec.family, completed: false, reason: wanted.length ? 'unresolved-target' : 'no-action', actions, wanted, verdict: verdictText }
+    const auto = obviousAction(plan[marker - 1], obs.snapshot)
+    const autoOk = auto && accepted.some((a) => a.replace(/\*/g, '') === auto || a === auto)
+    if (auto && !autoOk) totals.autoDisagree = (totals.autoDisagree ?? 0) + 1
+    if (VIEW && !autoOk) accepted = onScreenLabels(accepted)
+    const wrong = !auto && actions > 0 && name === 'continue' && rng.chance(NOISE) ? wrongAction(spec, task, genToRef, rng, accepted) : null
     const noisy = Boolean(wrong)
-    const executed = wrong ?? chooseAction(accepted, rng)
-    if (!noisy) {
+    let executed = autoOk ? auto : wrong ?? chooseAction(accepted, rng)
+    if (autoOk) totals.skippedActor = (totals.skippedActor ?? 0) + 1
+    let policy = null
+    let followWrong = false
+    if (POLICY && !autoOk && !noisy && rng.chance(POLICY_RATE)) {
+      const request = actorRequest({ goal: task.goal, plan, current: marker, past, snapshot: obs.snapshot, view: view() })
+      const action = await policyAction(request, obs.image)
+      const right = matchesAccepted(action, accepted)
+      policy = { action, right }
+      totals.policySteps = (totals.policySteps ?? 0) + 1
+      if (right) { totals.policyRight = (totals.policyRight ?? 0) + 1; executed = action }
+      else if (/^\w+\((?:(?:f\d+)?e\d+)?.*\)$/.test(action) && obs.snapshot.includes(`[ref=${(action.match(/\(((?:f\d+)?e\d+)/) ?? [])[1]}]`) && rng.chance(FOLLOW_WRONG)) {
+        // Run the model's own mistake: the next states teach recovery from it.
+        followWrong = true
+        executed = action
+      }
+    }
+    if (!noisy && !autoOk) {
       write(files.actor, {
         id: `${seed}:a${step}`, seed, step, family: spec.family, viewport: [width, height],
-        request: actorRequest({ goal: task.goal, plan, current: marker, past, snapshot: obs.snapshot }),
-        image: obs.image, response: executed, accepted
+        request: actorRequest({ goal: task.goal, plan, current: marker, past, snapshot: obs.snapshot, view: view() }),
+        image: obs.image, response: followWrong ? chooseAction(accepted, rng) : executed, accepted,
+        ...(policy ? { policy_action: policy.action, policy_wrong: !policy.right } : {})
       })
       totals.actorRows++
     }
@@ -200,16 +255,41 @@ async function runEpisode(seed) {
     obs = await observe(seed, ++step)
     actions++
     totals.actions++
+    const isFind = executed.startsWith('find(')
+    foundRefs = isFind ? new Set([...foundRefs, ...findRefs(outcome.text)]) : new Set()
     const result = outcome.isError
       ? `${outcome.timeout ? 'timeout' : 'error'} ${compact(outcome.text)}`
+      : isFind ? outcome.text
       : obs.snapshot !== before.snapshot ? 'ok, page changed' : 'ok, no visible change'
-    if (!noisy && !checkEffect(executed, before.state, obs.state, genToRef)) {
+    if (!noisy && !followWrong && !checkEffect(executed, before.state, obs.state, genToRef)) {
       return { family: spec.family, completed: false, reason: `check-failed:${executed.split('(')[0]}`, actions, detail: compact(outcome.text) }
     }
     last = `${executed} -> ${result}`
     past.push(last)
+    // After a harness step whose check is now met, the harness skips the evaluator (not after the last step).
+    if (autoOk && marker < plan.length && evaluateCheck(plan[marker - 1].check, obs.snapshot) === true) skipEvaluator = true
+    return null
   }
-  return { family: spec.family, completed: false, reason: 'max-steps', actions }
+
+  // Contract v1 labels: keep the actions whose targets the actor can see (on screen, or named by a
+  // find). When none is shown, the label is find("<target name>") if that find returns the target,
+  // else a scroll toward it.
+  function onScreenLabels(accepted) {
+    const shown = viewportSnapshot(obs.boxed, obs.viewport, plan[marker - 1]?.title ?? '', task.goal)
+    const refsOf = (action) => action.match(/(?<=[(,])(?:f\d+)?e\d+(?=[,)])/g) ?? []
+    const seen = (ref) => foundRefs.has(ref) || shown.includes(`[ref=${ref}]`)
+    const visible = accepted.filter((a) => refsOf(a).every(seen))
+    if (visible.length) return visible
+    const ref = refsOf(accepted[0]).find((r) => !seen(r))
+    const name = targetText(obs.snapshot, ref)
+    if (name && findRefs(findResult(obs.snapshot, name)).includes(ref)) {
+      totals.findSteps = (totals.findSteps ?? 0) + 1
+      return [`find(${JSON.stringify(name)})`]
+    }
+    totals.scrollForView = (totals.scrollForView ?? 0) + 1
+    const y = Number((obs.boxed.split('\n').find((l) => l.includes(`[ref=${ref}]`))?.match(/\[box=-?[\d.]+,(-?[\d.]+),/) ?? [])[1] ?? 1)
+    return [y < 0 ? 'scroll_up()' : 'scroll_down()']
+  }
 }
 
 function pickFamily(rng) {
@@ -222,10 +302,35 @@ function pickFamily(rng) {
   return FAMILIES.at(-1).name
 }
 
+
+async function policyAction(request, imagePath) {
+  try {
+    const parts = request.split('<image>')
+    const image = readFileSync(join(out, imagePath)).toString('base64')
+    const content = [{ type: 'text', text: parts[0] }, { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image}` } }, { type: 'text', text: parts.slice(1).join('<image>') }]
+    const res = await fetch(`${POLICY}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content }], temperature: 0, max_tokens: 48, cache_prompt: true }) })
+    const body = await res.json()
+    const text = (body.choices?.[0]?.message?.content ?? '').replace(/<\/?think>/g, '').trim()
+    return text.split('\n').find((l) => l.trim())?.trim() ?? ''
+  } catch { return '' }
+}
+
+function matchesAccepted(action, accepted) {
+  return accepted.some((a) => {
+  const rx = new RegExp('^' + a.split('*').map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 's')
+  return rx.test(action)
+  })
+}
+
 async function observe(seed, step) {
   const state = await page.evaluate(() => window.__og.state())
-  const snapshot = (await tool('browser_snapshot', { boxes: false })).text
   const image = `images/${safe(seed)}-s${step}.jpg`
+  if (VIEW) {
+    const boxed = (await tool('browser_snapshot', { boxes: true })).text
+    await page.screenshot({ path: join(out, image), type: 'jpeg', quality: 70 })
+    return { state, snapshot: stripBoxes(boxed), boxed, viewport: page.viewportSize(), image }
+  }
+  const snapshot = (await tool('browser_snapshot', { boxes: false })).text
   await page.screenshot({ path: join(out, image), type: 'jpeg', quality: 70 })
   return { state, snapshot, image }
 }
@@ -314,6 +419,8 @@ async function execute(action, snapshot) {
       return tool('browser_type', { element: element(parts[0]), target: parts[0], text: '', submit: false, slowly: false })
     case 'select':
       return tool('browser_select_option', { element: element(parts[0]), target: parts[0], values: [parts[1]] })
+    case 'drag':
+      return tool('browser_drag', { startElement: element(parts[0]), startTarget: parts[0], endElement: element(parts[1]), endTarget: parts[1] })
     case 'press':
       return tool('browser_press_key', { key: parts[0] })
     case 'scroll_down':
@@ -321,6 +428,8 @@ async function execute(action, snapshot) {
       return tool('browser_evaluate', { function: `() => { window.scrollBy(0, ${name === 'scroll_up' ? '-' : ''}Math.round(innerHeight * 0.8)); return 'scrolled' }` })
     case 'back':
       return tool('browser_navigate_back', {})
+    case 'find':
+      return { text: findResult(snapshot, parts[0]), isError: false }
     case 'wait':
     case 'wait_idle': {
       try {
@@ -351,9 +460,10 @@ function checkEffect(action, before, after, genToRef) {
       if (gid && typeof after.values[gid] === 'boolean') return after.values[gid] !== before.values[gid]
       return changed
     }
-    case 'press': return changed
+    case 'press': case 'drag': return changed
     case 'scroll_down': case 'scroll_up': return after.scrollY !== before.scrollY || after.loaded !== before.loaded
     case 'back': return after.view !== before.view
+    case 'find': return true
     case 'wait': case 'wait_idle': return !after.saving
     default: return false
   }

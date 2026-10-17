@@ -8,12 +8,22 @@
 
 import { createRng } from './rng.mjs'
 import { DOMAINS, SITE_NAMES, FIRST_NAMES, LAST_NAMES } from './vocab-pools.mjs'
+import { bookingFlow } from './flows-booking.mjs'
+import { crmFlow } from './flows-crm.mjs'
+import { calendarFlow } from './flows-calendar.mjs'
+import { sheetFlow } from './flows-sheet.mjs'
+import { ticketsFlow } from './flows-tickets.mjs'
 
-const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+export const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
 const q = (t) => JSON.stringify(String(t))
 const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1)
 
-export const FLOW_FAMILIES = ['shop', 'flight', 'mail', 'feed', 'admin', 'research']
+export const FLOW_FAMILIES = ['shop', 'flight', 'mail', 'feed', 'admin', 'research', 'booking', 'crm', 'calendar', 'sheet', 'tickets']
+
+// Families in their own files (flows-<name>.mjs). Each gives spec, render, runtime and, where it
+// needs them, its own action kinds, step tests and gate reasons. Read lazily: the files import
+// helpers from here.
+const moreFlow = (family) => ({ booking: bookingFlow, crm: crmFlow, calendar: calendarFlow, sheet: sheetFlow, tickets: ticketsFlow })[family]
 
 const BRANDS = ['Nike', 'Puma', 'Adidas', 'Bata', 'Boat', 'Noise', 'Philips', 'Prestige', 'Milton', 'Wildcraft', 'Skybags', 'Titan']
 const PRODUCTS = [
@@ -40,7 +50,7 @@ export function generateFlow(seed, family) {
     cookie: rng.chance(0.45) ? { id: id('ck'), rejectId: id('ck'), acceptId: id('ck') } : null,
     loginWall: rng.chance(0.08) ? { id: id('lw') } : null
   }
-  const build = { shop: shopSpec, flight: flightSpec, mail: mailSpec, feed: feedSpec, admin: adminSpec, research: researchSpec }[family]
+  const build = { shop: shopSpec, flight: flightSpec, mail: mailSpec, feed: feedSpec, admin: adminSpec, research: researchSpec }[family] ?? moreFlow(family).spec
   const { spec, task } = build(rng, base, id)
   return { spec, task, html: render(spec) }
 }
@@ -296,7 +306,7 @@ export function flowStepDone(step, state) {
     case 'searched': return state.query === t.value.toLowerCase()
     case 'undo': return !state.effects[t.key]
     case 'dialogOrEffect': return state.dialogOpen || Boolean(state.effects[t.key])
-    default: return false
+    default: return moreFlow(state.family)?.done?.(t, state) ?? false
   }
 }
 
@@ -309,7 +319,7 @@ function goalDone(task, state) {
     case 'effects': return d.keys.every((k) => state.effects[k])
     case 'view': return state.view === d.view
     case 'gatePassed': return state.gatesPassed.includes(d.gate)
-    default: return false
+    default: return moreFlow(state.family)?.done?.(d, state) ?? false
   }
 }
 
@@ -326,8 +336,10 @@ function flowIssues(task, state) {
 }
 
 export function flowVerdict(task, plan, state) {
-  if (state.gate) return { verdict: `takeover(${q(GATE_REASON[state.gate] ?? 'the user must act')})` }
+  if (state.gate) return { verdict: `takeover(${q(GATE_REASON[state.gate] ?? moreFlow(state.family)?.gates?.[state.gate] ?? 'the user must act')})` }
   if (goalDone(task, state)) return { verdict: `success(${q(task.answer)})` }
+  // The goal cannot be met (the only time the user accepts is full): end once that is on screen.
+  if (task.failWhen && flowStepDone({ test: task.failWhen }, state)) return { verdict: `fail(${q(task.failReason)})` }
   const extra = flowIssues(task, state)
   if (extra.length && !plan.some((s) => s.title.startsWith('Undo'))) return { verdict: `replan(${q('acted on the wrong item')})`, reason: 'acted on the wrong item' }
   const current = plan.findIndex((s) => !flowStepDone(s, state)) + 1
@@ -377,7 +389,7 @@ export function flowActions(spec, task, state) {
     case 'type': return [`type(@${a.id},${q(a.value)})`]
     case 'reveal': return revealFirst() ?? []
     case 'click': return revealFirst() ?? [`click(@${a.id})`]
-    default: return []
+    default: return moreFlow(spec.family)?.actions?.(spec, a, state) ?? []
   }
 }
 
@@ -385,6 +397,7 @@ export function flowActions(spec, task, state) {
 
 function render(spec) {
   const t = spec.theme
+  const more = moreFlow(spec.family)
   const css = `
   body{margin:0;font-family:${t.font};background:#fff;color:#111}
   header{display:flex;gap:14px;align-items:center;padding:10px 18px;border-bottom:1px solid #ddd;position:sticky;top:0;background:#fff;z-index:2}
@@ -399,15 +412,15 @@ function render(spec) {
   .list{position:absolute;background:#fff;border:1px solid #ccc;z-index:4;display:flex;flex-direction:column}
   .cal{display:grid;grid-template-columns:repeat(7,40px);gap:4px;padding:8px;border:1px solid #ccc;background:#fff}
   .wall{position:fixed;inset:0;background:#fffe;display:flex;align-items:center;justify-content:center;z-index:9}
-  [hidden]{display:none!important}`
-  const body = { shop: renderShop, flight: renderFlight, mail: renderMail, feed: renderFeed, admin: renderAdmin, research: renderResearch }[spec.family](spec)
+  [hidden]{display:none!important}${more?.css ?? ''}`
+  const body = ({ shop: renderShop, flight: renderFlight, mail: renderMail, feed: renderFeed, admin: renderAdmin, research: renderResearch }[spec.family] ?? more.render)(spec)
   const cookie = spec.cookie ? `<div class="banner" role="dialog" aria-label="Cookie consent" data-cookie><span>We use cookies to improve your experience.</span><button class="ghost" data-gen-id="${spec.cookie.rejectId}" data-cookie-btn="rejected">Reject all</button><button data-gen-id="${spec.cookie.acceptId}" data-cookie-btn="accepted">Accept all</button></div>` : ''
   const wall = spec.loginWall ? `<div class="wall" data-wall><div><h2>Log in to continue</h2><label>Email <input type="email"></label> <label>Password <input type="password"></label> <button>Log in</button></div></div>` : ''
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(spec.heading)} – ${esc(spec.siteName)}</title><style>${css}</style></head><body>
 <header><strong>${esc(spec.siteName)}</strong>${spec.backId ? `<button class="ghost" data-gen-id="${spec.backId}" data-back aria-label="Back">←</button>` : ''}${body.header ?? ''}</header>
 <main>${body.views}</main>${cookie}${wall}
 <p role="status" id="status"></p>
-<script>window.__SPEC=${JSON.stringify(spec).replace(/</g, '\\u003c')};${RUNTIME}</script></body></html>`
+<script>window.__SPEC=${JSON.stringify(spec).replace(/</g, '\\u003c')};${RUNTIME}${more?.runtime ?? ''}</script></body></html>`
 }
 
 function renderShop(spec) {
@@ -503,8 +516,8 @@ const RUNTIME = String.raw`
   const spec = window.__SPEC
   const $ = (s, r = document) => r.querySelector(s)
   const $$ = (s, r = document) => [...r.querySelectorAll(s)]
-  const startView = { shop: 'home', flight: 'home', mail: 'inbox', feed: 'feed', admin: 'overview', research: 'home' }[spec.family]
-  const st = { view: startView, history: [startView], values: {}, picked: {}, effects: {}, effectTargets: {}, gate: spec.loginWall ? 'login' : null, gatesPassed: [], cookieOpen: !!spec.cookie, query: '', loaded: spec.pageStep, acOpen: null, acOptions: {}, dpOpen: false, dpMonth: 9 }
+  const startView = { shop: 'home', flight: 'home', mail: 'inbox', feed: 'feed', admin: 'overview', research: 'home' }[spec.family] ?? spec.start
+  const st = { family: spec.family, view: startView, history: [startView], values: {}, picked: {}, effects: {}, effectTargets: {}, gate: spec.loginWall ? 'login' : null, gatesPassed: [], cookieOpen: !!spec.cookie, query: '', loaded: spec.pageStep, acOpen: null, acOptions: {}, dpOpen: false, dpMonth: 9 }
   const status = (t) => { $('#status').textContent = t }
   function show(view, push = true) {
     for (const s of $$('[data-view]')) s.hidden = s.dataset.view !== view
@@ -602,9 +615,12 @@ const RUNTIME = String.raw`
       if (g === 'login') { const w = $('[data-wall]'); if (w) w.hidden = true; return 'signed in' }
       if (g === 'payment') { status('Order placed.'); return 'entered payment details and paid' }
       if (g === 'send') { status('Sent.'); return 'sent it' }
+      if (window.__ogxResolve) return window.__ogxResolve(g)
       return 'done'
     }
   }
+  // Families in flows-<name>.mjs add their own listeners after this runtime, on the same state.
+  window.__ogx = { st, show, status, $, $$ }
 })()`
 
-export { MONTHS }
+export { MONTHS, cookieSteps }

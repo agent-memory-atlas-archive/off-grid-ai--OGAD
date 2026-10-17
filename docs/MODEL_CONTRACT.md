@@ -67,6 +67,20 @@ Rules:
 7 Report the reference | check: text "REF-"
 ```
 
+### Answer request
+
+When the evaluator says `success`, the harness asks the planner once more for the answer.
+The evaluator decides when to stop; the planner writes what the user reads.
+
+```
+GOAL: <goal>
+TASK: write the complete answer to the goal from this page.
+AX:
+<boundedSnapshot of the final page>
+```
+
+Reply: the answer text only. Pure function: `answerRequest({ goal, snapshot })`.
+
 ---
 
 ## 2. Actor
@@ -228,12 +242,46 @@ repeat:
   harness runs action → result
   evaluator(after, plan, last) → verdict
   continue(n)  → mark plan, next actor call
-  success(...) → end
+  success(...) → planner writes the answer from the final page → end
   fail(...)    → end, tell the user
   replan(...)  → planner, then actor
   takeover(..) → pause; user acts; evaluator runs on the new screen
 user can take over at any time → same as takeover
 ```
+
+## On-screen AX (contract v1, candidate)
+
+Contract v0 cuts AX at 18,000 characters. Contract v1 shows what the screenshot shows, so AX and
+image agree and the size follows the screen, not the page. Same rule for actor and evaluator;
+the planner keeps the v0 AX. Pure function: `viewportSnapshot(snapshotWithBoxes, {width, height}, focus, goal)`
+in `scripts/action-data/contract.mjs`. The harness ports it byte for byte.
+
+Input: Playwright MCP `browser_snapshot {boxes: true}`. Each line has `[box=x,y,w,h]` in CSS
+pixels relative to the viewport top-left (Playwright MCP 0.0.79). Iframe content is relative to
+its frame; it is offset by the iframe line's box.
+
+A line stays when:
+
+1. it is the page header (before the YAML tree) or the closing fence;
+2. its box intersects the window `[0, width) x [0, 2 × height)` (the screen plus one screen
+   below). A line with no box takes the state of the nearest line above it with a box;
+3. it contains a word of the current plan step (focus terms, 4+ letters, minus step verbs such
+   as click, type, select, check), anywhere on the page;
+4. it is an ancestor of a kept line.
+
+Then the harness removes the `[box=…]` annotations, drops wrapper and URL lines (as in v0), and
+adds one line when controls are not shown:
+
+```
+[12 more controls below, 3 above. Use scroll_down(), scroll_up() or find("text").]
+```
+
+The v0 18k cut stays as a last safety limit only. The CHECKS block and `obviousAction` still
+use the full snapshot. The actor reaches off-screen targets with `scroll_down()` or
+`find("text")` (ACTION_VOCABULARY.md).
+
+Generator: `capture.mjs --view onscreen` (run.mjs passes `--view`). Without the flag, rows
+are contract v0, unchanged.
 
 ## Size targets
 
