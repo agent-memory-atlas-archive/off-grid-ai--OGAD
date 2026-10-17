@@ -81,7 +81,10 @@ export function SettingsSelect<T extends string>({
   }
 
   return (
+    // Not modal: a modal select locks page scroll while open (overflow hidden on the document and a
+    // resized body), which reflows the window under a side panel and makes the whole panel jump.
     <Select
+      modal={false}
       value={value}
       onValueChange={(next) => {
         if (next != null) onValueChange(next as T)
