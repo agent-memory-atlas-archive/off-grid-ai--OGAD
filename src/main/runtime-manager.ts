@@ -13,6 +13,7 @@
 //      through its warm server; an 'on-demand' engine uses its one-shot path and frees its
 //      memory after each job. Each engine reads getResidencyMode(modality).
 
+import { readFileSync } from 'node:fs'
 import os from 'node:os'
 import type { ResidentType } from '@offgrid/models'
 import { modalityQueue, type ModalityQueue } from './modality-queue/queue'
@@ -38,9 +39,20 @@ export interface ManagedRuntime {
   expectedMB?(): number
 }
 
+/** Linux MemAvailable in MB (free pages plus the cache the kernel can reclaim), or null. */
+function linuxAvailableMB(): number | null {
+  try {
+    const line = /^MemAvailable:\s+(\d+)\s+kB/m.exec(readFileSync('/proc/meminfo', 'utf8'))
+    return line ? Number(line[1]) / 1024 : null
+  } catch {
+    return null
+  }
+}
+
 /** Live memory the system can still give, in MB. macOS counts free, file-cache and purgeable pages
- *  (what Activity Monitor treats as available); elsewhere Node's free memory is already the
- *  available figure. Read at each job's admission, so it follows the person's other apps. */
+ *  (what Activity Monitor treats as available); Linux reads MemAvailable, since its free memory
+ *  leaves out the page cache; on Windows Node's free memory is already the available figure.
+ *  Read at each job's admission, so it follows the person's other apps. */
 export function liveMemory(): { availableMB: number; totalMB: number } {
   const totalMB = os.totalmem() / 1024 ** 2
   if (process.platform === 'darwin' && typeof process.getSystemMemoryInfo === 'function') {
@@ -54,7 +66,8 @@ export function liveMemory(): { availableMB: number; totalMB: number } {
       totalMB
     }
   }
-  return { availableMB: os.freemem() / 1024 ** 2, totalMB }
+  const linux = process.platform === 'linux' ? linuxAvailableMB() : null
+  return { availableMB: linux ?? os.freemem() / 1024 ** 2, totalMB }
 }
 
 /** Each modality's kind in the shared residency policy (text is kept longest). */

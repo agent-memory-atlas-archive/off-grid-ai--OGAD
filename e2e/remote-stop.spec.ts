@@ -166,6 +166,8 @@ test.describe('Stop on a remote model', () => {
     expect(streamClosedAt! - stoppedAt).toBeLessThan(2_000)
     await expect(stop).toBeHidden({ timeout: 5_000 })
     const frozen = await shownWords()
+    // Stop keeps what was shown; an emptied answer must not pass as "unchanged".
+    expect(frozen).toBeGreaterThan(0)
     await page.waitForTimeout(1_500)
     expect(await shownWords()).toBe(frozen)
   })

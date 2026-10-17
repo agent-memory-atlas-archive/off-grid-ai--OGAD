@@ -118,8 +118,10 @@ const openConnectorSettings = async (): Promise<void> => {
   await page.getByRole('radio', { name: /connectors/i }).click()
 }
 
+// At file scope, so a non-Pro checkout skips before the hooks run (afterEach reads profileDir).
+test.skip(!PRO_PRESENT, 'pro package not present — connectors are a Pro surface')
+
 test.beforeEach(async () => {
-  test.skip(!PRO_PRESENT, 'pro package not present — connectors are a Pro surface')
   profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-connectors-switch-'))
   modelLog = path.join(profileDir, 'model-requests.jsonl')
   const modelsDir = path.join(profileDir, 'models')

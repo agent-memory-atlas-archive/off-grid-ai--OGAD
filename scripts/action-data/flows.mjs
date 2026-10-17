@@ -133,11 +133,12 @@ function flightSpec(rng, base, id) {
   const best = [...pool].sort((a, b) => a.price - b.price)[0]
   const book = rng.chance(0.3)
   const goal = `${book ? 'Book' : 'Find'} the cheapest ${nonstop ? 'non-stop ' : ''}flight from ${from[0]} to ${to[0]} on ${day} ${MONTHS[month]}${book ? '' : ' and tell me the airline and price'}.`
+  // No non-stop flight in the pool: draw another spec before either branch reads `best`.
+  if (!best) return flightSpec(rng, base, id)
   if (book) {
     steps.push({ title: `Select the ${best.airline} ${best.dep} flight`, check: 'payment page', test: { type: 'gate', gate: 'payment' }, view: 'results', action: { kind: 'click', id: best.selectId, reveal: best.id } })
     return { spec, task: { family: 'flight', goal, steps, answer: 'Booked', done: { type: 'gatePassed', gate: 'payment' }, nonstop } }
   }
-  if (!best) return flightSpec(rng, base, id)
   return { spec, task: { family: 'flight', goal, steps, answer: `${best.airline} ₹${best.price}`, done: { type: 'sortedVisible', id: best.id }, nonstop } }
 }
 
@@ -274,7 +275,7 @@ function researchSpec(rng, base, id) {
   const three = pool.length >= 3 && rng.chance(0.4)
   const answer = three ? pool.slice(0, 3).map((p) => p.author).join(', ') : `${pool[0].author}`
   const goal = three
-    ? `List the authors of the top 3 posts about ${subject} from the ${window_[0].toLowerCase().replace('past ', 'past ')}.`
+    ? `List the authors of the top 3 posts about ${subject} from the ${window_[0].toLowerCase()}.`
     : rng.pick([`Find the most-liked post about ${subject} from the ${window_[0].toLowerCase()} and tell me who posted it.`, `Who wrote the top post on ${subject} in the ${window_[0].toLowerCase()}?`])
   return { spec, task: { family: 'research', goal, steps, answer, done: { type: 'sortedVisible', id: pool[0].id } } }
 }

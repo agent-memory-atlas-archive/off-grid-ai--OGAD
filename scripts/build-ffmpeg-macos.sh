@@ -8,7 +8,8 @@ set -euo pipefail
 FFMPEG_REF="${FFMPEG_REF:-n9.0.2}"
 OPUS_REF="${OPUS_REF:-v1.6.1}"
 TARGET="${MACOS_DEPLOYMENT_TARGET:-15.0}"
-WORK="${1:-${TMPDIR:-/tmp}/offgrid-ffmpeg-build}"
+# A dedicated folder under the given work dir: only it is wiped, never the caller's other files.
+WORK="${1:-${TMPDIR:-/tmp}}/offgrid-ffmpeg-build"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${OFFGRID_FFMPEG_OUT:-$ROOT/resources/bin}"
 JOBS="$(sysctl -n hw.ncpu)"

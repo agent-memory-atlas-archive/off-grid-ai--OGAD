@@ -17,9 +17,10 @@ const withoutScripts = (html) => {
   let previous
   do {
     previous = text
-    text = text.replace(/<script\b[\s\S]*?<\/script[^>]*>/gi, '')
+    text = text.replace(/<script\b[\s\S]*?<\/script\b[^>]*>/gi, '')
   } while (text !== previous)
-  return text
+  // An opener with no closing tag survives the loop; make it inert text.
+  return text.replace(/<script/gi, '&lt;script')
 }
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs, v, i, all) => {

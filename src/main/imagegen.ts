@@ -600,10 +600,12 @@ function imageMemoryGuard(model: string, coreml: boolean, totalGb: number): Memo
 export function expectedImageResidentMB(preferred?: string): number | undefined {
   const model = resolveModel(preferred)
   if (!model) return undefined
-  return (
+  const mb =
     imageMemoryGuard(model, isCoreMLModelDir(model), os.totalmem() / 1e9).modelGb *
     (1e9 / 1024 ** 2)
-  )
+  // No file to measure (an mlx/ ID is a virtual path): no estimate, so the job takes the
+  // unconditional eviction instead of being planned as if it needed no memory.
+  return mb > 0 ? mb : undefined
 }
 
 /**

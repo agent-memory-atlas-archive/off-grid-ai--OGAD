@@ -76,8 +76,10 @@ const generateImage = async (): Promise<void> => {
 
 test.describe.configure({ mode: 'serial', timeout: 150_000 })
 
+// At file scope, so a packaged run skips before the hooks run (afterEach reads profileDir).
+test.skip(targetIsPackaged(), 'This spec controls the source build native image boundary')
+
 test.beforeEach(async () => {
-  test.skip(targetIsPackaged(), 'This spec controls the source build native image boundary')
   profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-resident-image-'))
   binDir = path.join(profileDir, 'native-boundary')
   serverLog = path.join(profileDir, 'sd-server.jsonl')
