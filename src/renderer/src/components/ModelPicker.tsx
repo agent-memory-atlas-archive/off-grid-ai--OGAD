@@ -4,7 +4,7 @@ import {
   runtimeBackendLabel,
   type RuntimeId
 } from '../../../shared/runtime-backends'
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { Cpu, GearSix, X } from '@phosphor-icons/react'
 import { AnimatePresence, motion } from 'motion/react'
 import { ListRow } from '@offgrid/operator-ui/operator/list-row'
@@ -60,7 +60,6 @@ const MODE_TO_MODALITY: Record<PickerMode, string> = {
   speech: 'tts',
   transcription: 'stt'
 }
-
 
 function primaryFile(m: ModelEntry): string {
   return m.files?.find((f) => f.role === 'primary')?.name ?? m.files?.[0]?.name ?? m.id
@@ -227,29 +226,8 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
             </motion.div>
           )}
         </AnimatePresence>
-        <TaskLineups
-          view={taskRoles}
-          models={models}
-          installed={installed}
-          onChanged={async () => {
-            await reloadTaskRoles()
-            await load()
-          }}
-          localDetail={(slot) =>
-            backendFor(
-              slot.role === 'reasoner'
-                ? 'chat'
-                : slot.role === 'decision'
-                  ? 'decision'
-                  : 'grounding',
-              [
-                slot.modelId,
-                ...(models.find((m) => m.id === slot.modelId)?.files ?? []).map((f) => f.name)
-              ]
-            )
-          }
-        />
-        {MODALITIES.map(({ label, kinds, mode }) => {
+        {/* Same order as the Models screen's tabs: Text, Image, Tasks, Voice, Transcription. */}
+        {MODALITIES.flatMap(({ label, kinds, mode }) => {
           const list = models.filter((m) => kinds.includes(m.kind) && installed.includes(m.id))
           const duplicateNames = new Set(
             list
@@ -314,7 +292,39 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
               }}
             />
           )
-        })}
+        }).flatMap((slot, index) =>
+          index === 2
+            ? [
+                <Fragment key="tasks">
+                  <TaskLineups
+                    view={taskRoles}
+                    models={models}
+                    installed={installed}
+                    onChanged={async () => {
+                      await reloadTaskRoles()
+                      await load()
+                    }}
+                    localDetail={(slot) =>
+                      backendFor(
+                        slot.role === 'reasoner'
+                          ? 'chat'
+                          : slot.role === 'decision'
+                            ? 'decision'
+                            : 'grounding',
+                        [
+                          slot.modelId,
+                          ...(models.find((m) => m.id === slot.modelId)?.files ?? []).map(
+                            (f) => f.name
+                          )
+                        ]
+                      )
+                    }
+                  />
+                </Fragment>,
+                slot
+              ]
+            : [slot]
+        )}
         <section aria-label="Embeddings">
           <Section label="Embeddings">
             <ListRow
