@@ -2072,6 +2072,7 @@ export function MemoryChat({
             {
               id: `a-${Date.now()}`,
               role: 'assistant',
+              createdAt: Date.now(),
               ...completedImage,
               image: img.dataUrl,
               imagePath: img.path,
@@ -2121,6 +2122,7 @@ export function MemoryChat({
               {
                 id: `a-${Date.now()}`,
                 role: 'assistant',
+                createdAt: Date.now(),
                 content: errorContent,
                 imageMemoryRetry: memoryGuard
                   ? { request: imageRequest, prompt: trimmed, conversationId: convId, projectId }
@@ -2165,6 +2167,8 @@ export function MemoryChat({
         replacementMessageId: opts?.replacementMessageId,
         ...(opts?.versionOf ? { versionOf: opts.versionOf } : {}),
         role: 'assistant',
+        // Stamped when the reply starts, so its time shows the moment it finishes, not after a reload.
+        createdAt: Date.now(),
         content: '',
         reasoning: '',
         reasoningRequested: thinkingEnabled,
@@ -2573,6 +2577,7 @@ export function MemoryChat({
                   {
                     id: imageMessageId,
                     role: 'assistant',
+                    createdAt: Date.now(),
                     ...completedImage,
                     image: img.dataUrl,
                     imagePath: img.path,
@@ -3817,7 +3822,9 @@ export function MemoryChat({
         fileName: attachment.name,
         mimeType: (attachment as { mimeType?: string }).mimeType,
         path: attachment.path,
-        text: attachment.text
+        text: attachment.text,
+        // A recorded voice note is saved as .webm; its stored kind keeps it audio.
+        recordedKind: attachment.kind
       })
       if (!view.viewable) return
       closePanels()

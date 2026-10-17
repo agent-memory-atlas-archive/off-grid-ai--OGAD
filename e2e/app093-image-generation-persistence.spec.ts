@@ -51,9 +51,10 @@ const launch = async (): Promise<void> => {
   await page.getByRole('switch', { name: 'Image generation residency', exact: true }).uncheck()
   // Let this profile own its model port before image eviction. Another running
   // Desktop instance can keep its real model on the default port.
+  // Models load on first use (c6a2d9f72): a healthy app at launch is ready or idle.
   await expect
     .poll(() => page.evaluate(async () => (await window.api.chatHealth()).status))
-    .toBe('ready')
+    .toMatch(/^(ready|idle)$/)
 }
 
 const enterChat = async (newChat = false): Promise<void> => {

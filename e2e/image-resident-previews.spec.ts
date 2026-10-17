@@ -131,7 +131,7 @@ test.beforeEach(async () => {
   await expect(residency).toBeChecked()
   await expect
     .poll(() => page.evaluate(async () => (await window.api.chatHealth()).status))
-    .toBe('ready')
+    .toMatch(/^(ready|idle)$/)
 })
 
 test.afterEach(async () => {
