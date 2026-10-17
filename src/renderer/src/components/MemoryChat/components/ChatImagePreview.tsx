@@ -36,11 +36,14 @@ export const ChatImagePreview = memo(function ChatImagePreview({
 }>): React.JSX.Element {
   return (
     <div className={fill ? 'w-full' : undefined}>
+      {/* A surface like every card: the field's light and click waves trace its edge. An <img>
+          cannot draw them itself, so the button around it does, with the image's corners. */}
       <button
         type="button"
+        data-og-surface=""
         aria-label={`Open ${alt}`}
         onClick={() => onOpen({ url: src, path })}
-        className={fill ? 'block w-full max-w-full' : 'block max-w-full'}
+        className={`relative rounded-md ${fill ? 'block w-full max-w-full' : 'block max-w-full'}`}
       >
         <img
           src={src}

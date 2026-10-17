@@ -174,6 +174,11 @@ test('APP-093 generates one owned image and keeps it usable across a full relaun
     .filter(({ event }) => event.startsWith('progress:'))
     .map(({ event }) => event)
   expect(progressEvents).toEqual(['progress:1', 'progress:2', 'progress:3', 'progress:4'])
+  // The image is a surface like every card: a click beside it sends the wave around its edge.
+  const imageSurface = page.getByRole('button', { name: 'Open Generated', exact: true })
+  const box = (await imageSurface.boundingBox())!
+  await page.mouse.click(box.x + box.width + 24, box.y + box.height / 2)
+  await expect(imageSurface).toHaveAttribute('data-og-wave', /.*/, { timeout: 5_000 })
   await expect(
     page.locator('p').getByText(`Generated for: ${PROMPT}`, { exact: true }).last()
   ).toBeVisible()
