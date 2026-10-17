@@ -91,7 +91,7 @@ export function SettingsSelect<T extends string>({
     >
       <SelectTrigger id={id} size="sm" aria-label={label}>
         <SelectValue>
-          {() => selected?.label ?? (options.length === 0 ? placeholder : undefined) ?? value}
+          {() => selected?.label ?? (options.length === 0 || value === '' ? placeholder : undefined) ?? value}
         </SelectValue>
       </SelectTrigger>
       <SelectPopup portalProps={popupPortalProps}>

@@ -90,6 +90,7 @@ import {
   hasActiveFilters,
   initialFilterState,
   recommendedImageModelId,
+  collapseQuantizations,
   huggingFaceRepoFor,
   isOffGridHfRepo,
   type FilterState,
@@ -187,12 +188,17 @@ interface ModelEntry {
   tags?: string[]
   releaseDate?: string
   quant?: string
+  /** Another quantization of this catalog model (one card; the size is picked in the side panel). */
+  quantOf?: string
+  quantLabel?: string
   availability?: 'ready' | 'coming_soon'
   availabilityNote?: string
   grounder?: boolean
   remoteServerId?: string
   remoteModelId?: string
 }
+/** A card's model: one catalog entry, with every quantization of it when there is more than one. */
+type ShownModel = ModelEntry & { quantOptions?: ModelEntry[] }
 
 interface UseCase {
   id: string
@@ -437,7 +443,7 @@ export function ModelsScreen({
   useEffect(() => {
     setSelectedTags([])
   }, [activeKind])
-  const [detail, setDetail] = useState<ModelEntry | null>(null)
+  const [detail, setDetail] = useState<ShownModel | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [mtpDownloads, setMtpDownloads] = useState(false)
@@ -470,7 +476,7 @@ export function ModelsScreen({
   const [sizeBucket, setSizeBucket] = useState<number | null>(null)
   const SIZE_BUCKETS = [2, 4, 6, 8, 16] as const
 
-  const openDetail = useCallback((m: ModelEntry) => {
+  const openDetail = useCallback((m: ShownModel) => {
     setDetailFiles([])
     setDetailFilesError(null)
     setDetailFilesLoading(true)
@@ -819,6 +825,24 @@ export function ModelsScreen({
     ]
   )
 
+  // One card per model: its quantizations (Full quality, Light) are picked in the side panel. The card
+  // stands for the option sorted first (active, installed, recommended), or the one downloading when
+  // none is installed yet.
+  const displayedModels = useMemo(
+    () =>
+      collapseQuantizations(displayedCatalog, list, (option) => {
+        const p = progress[option.id]
+        const isDownloading = !!p && p.status !== 'completed' && p.status !== 'failed'
+        const familyInstalled = list.some(
+          (entry) =>
+            (entry.quantOf ?? entry.id) === (option.quantOf ?? option.id) &&
+            installed.includes(entry.id)
+        )
+        return isDownloading && !familyInstalled
+      }),
+    [displayedCatalog, list, progress, installed]
+  )
+
   const tabs = internalTabRoutes('models').filter(
     ({ id }) => id === 'storage' || kinds.includes(id)
   )
@@ -842,22 +866,35 @@ export function ModelsScreen({
   }
 
   const renderCard = (
-    m: ModelEntry & { credibility?: string; params?: number; org?: string },
+    m: ShownModel & { credibility?: string; params?: number; org?: string },
     isHf = false
   ): React.JSX.Element => {
+    // A model with several quantizations is one card, named for the model; the size is chosen in
+    // the side panel.
+    const choosesQuant = (m.quantOptions?.length ?? 0) > 1
     const useMtpDownloads = mtpDownloads && ['text', 'vision', 'computer_use'].includes(activeKind)
     const mtpRepository = MTP_DOWNLOAD_REPOS[m.id]
-    if (useMtpDownloads && !visionSt[m.id]?.mtpInstalled && mtpRepository) {
-      const mtpEntry = models.find((model) => model.id === mtpRepository)
+    const mtpEntry = mtpRepository ? models.find((model) => model.id === mtpRepository) : undefined
+    // "MTP downloads" changes what a NEW download fetches. An installed model keeps its own card (Use,
+    // Delete, active state), and a variant that is not ready yet is never offered in its place:
+    // swapping either in left an active model looking uninstalled, "coming soon", and unchangeable.
+    if (
+      useMtpDownloads &&
+      mtpEntry &&
+      mtpEntry.availability !== 'coming_soon' &&
+      !installed.includes(m.id) &&
+      !visionSt[m.id]?.mtpInstalled
+    ) {
       m = {
         ...m,
-        id: mtpRepository,
+        id: mtpEntry.id,
         name: `${m.name} MTP`,
-        files: mtpEntry?.files ?? [],
-        availability: mtpEntry?.availability ?? m.availability,
-        availabilityNote: mtpEntry?.availabilityNote ?? m.availabilityNote
+        files: mtpEntry.files,
+        availability: mtpEntry.availability ?? m.availability,
+        availabilityNote: mtpEntry.availabilityNote ?? m.availabilityNote
       }
     }
+    const displayName = choosesQuant ? m.quantOptions![0]!.name : m.name
     const isInstalled =
       installed.includes(m.id) &&
       (!useMtpDownloads || !m.id.endsWith('+MTP') || !!visionSt[m.id]?.mtpInstalled)
@@ -909,7 +946,7 @@ export function ModelsScreen({
           onClick={() => openDetail(m)}
           className="truncate text-left text-xs text-neutral-100 transition-colors duration-100 hover:text-emerald-500"
         >
-          {m.name}
+          {displayName}
         </button>
         {worksBest && (
           <span className="shrink-0 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
@@ -1121,7 +1158,13 @@ export function ModelsScreen({
               size="icon-xs"
               variant="ghost"
               aria-label={mtpUnavailable ? 'MTP unavailable' : 'Download'}
-              onClick={() => (isHf || useMtpDownloads ? void chooseVariant(m) : download(m.id))}
+              onClick={() =>
+                choosesQuant
+                  ? openDetail(m)
+                  : isHf || useMtpDownloads
+                    ? void chooseVariant(m)
+                    : download(m.id)
+              }
               disabled={mtpUnavailable}
               className="text-neutral-300 hover:text-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -1146,6 +1189,7 @@ export function ModelsScreen({
           <button
             onClick={() => removeModel(m.id, m.name)}
             disabled={deleting === m.id || active}
+            aria-label="Delete"
             title={active ? 'Switch to another model before deleting' : 'Delete from disk'}
             className="rounded p-1 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
           >
@@ -1768,12 +1812,12 @@ export function ModelsScreen({
                     )
                   })
                 }
-                if (activeKind !== 'computer_use') return <>{cardRows(displayedCatalog)}</>
+                if (activeKind !== 'computer_use') return <>{cardRows(displayedModels)}</>
                 // Tasks: grounding specialists and decision models are different jobs, run side by
                 // side, so they are listed apart.
                 const groups: Array<[string, ModelEntry[]]> = [
-                  ['Grounding specialists', displayedCatalog.filter((m) => !isDecisionModel(m))],
-                  ['Decision models', displayedCatalog.filter((m) => isDecisionModel(m))]
+                  ['Grounding specialists', displayedModels.filter((m) => !isDecisionModel(m))],
+                  ['Decision models', displayedModels.filter((m) => isDecisionModel(m))]
                 ]
                 return (
                   <>
@@ -1810,6 +1854,7 @@ export function ModelsScreen({
             const downloading = prog && prog.status !== 'completed' && prog.status !== 'failed'
             const comingSoon = m.availability === 'coming_soon'
             const downloadProgress = prog ? projectProgress(prog) : null
+            const quantChoices = (m.quantOptions?.length ?? 0) > 1 ? m.quantOptions! : null
             const rows: [string, string | null][] = [
               ['Source', m.org || (isLocal ? 'Imported' : '—')],
               ['Parameters', m.params ? formatParams(m.params) : null],
@@ -1828,7 +1873,9 @@ export function ModelsScreen({
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       {isOffGridModel(m.id) && <img src={offGridLogo} alt="Made by Off Grid AI" title="Made by Off Grid AI" className="size-3.5 shrink-0 rounded-[3px]" />}
-                      <h2 className="truncate text-sm text-white">{m.name}</h2>
+                      <h2 className="truncate text-sm text-white">
+                        {quantChoices ? quantChoices[0]!.name : m.name}
+                      </h2>
                       {m.kind === 'vision' && (
                         <span className="flex items-center gap-0.5 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
                           <IconEye className="h-2.5 w-2.5" /> Vision
@@ -1876,6 +1923,55 @@ export function ModelsScreen({
                         </div>
                       ))}
                   </dl>
+                  {quantChoices && (
+                    <section aria-label="Quantization" className="mt-3">
+                      <p className="text-[9px] uppercase tracking-wide text-neutral-600">
+                        Quantization
+                      </p>
+                      <div role="radiogroup" aria-label="Quantization" className="mt-1.5 space-y-1.5">
+                        {quantChoices.map((option) => {
+                          const chosen = option.id === m.id
+                          const optionState = isActive(option.id)
+                            ? 'Active'
+                            : installed.includes(option.id)
+                              ? 'Installed'
+                              : option.id === recommendedImageId
+                                ? 'Recommended for you'
+                                : null
+                          return (
+                            <button
+                              key={option.id}
+                              type="button"
+                              role="radio"
+                              aria-checked={chosen}
+                              onClick={() => setDetail({ ...option, quantOptions: quantChoices })}
+                              className={`flex w-full items-center justify-between gap-2 rounded border px-3 py-2 text-left transition-colors duration-150 ${
+                                chosen
+                                  ? 'border-green-500/60 bg-green-500/5'
+                                  : 'border-neutral-800 hover:border-neutral-600'
+                              }`}
+                            >
+                              <span className="min-w-0">
+                                <span className="block text-xs text-neutral-200">
+                                  {option.quantLabel ?? option.quant ?? option.name}
+                                </span>
+                                <span className="block text-[10px] text-neutral-500">
+                                  {[option.quant, formatSize(totalBytes(option))]
+                                    .filter(Boolean)
+                                    .join(' · ')}
+                                </span>
+                              </span>
+                              {optionState && (
+                                <span className="shrink-0 text-[9px] uppercase tracking-wide text-green-500">
+                                  {optionState}
+                                </span>
+                              )}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </section>
+                  )}
                   {ramGb && bytes > 0 && (
                     <p className="mt-3 text-[10px] text-neutral-500">
                       {fitLevel(bytes / 1e9, ramGb) === 'ok'

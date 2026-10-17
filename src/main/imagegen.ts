@@ -39,6 +39,7 @@ import { generateRemoteImage } from './remote-media-runtime'
 import { remoteVisionModelId } from '../shared/remote-vision-server'
 import { binRoots, dataDir, modelsDir, requireModelStorage, resourceDirs } from './runtime-env'
 import { modelEntryNames, resolveModelAsset } from './model-paths'
+import { readDownloaded } from './downloaded-models'
 import { sdServer, type SdServerContext } from './sd-server'
 import {
   findSdBinaries,
@@ -116,8 +117,16 @@ export function listImageModels(): string[] {
     .map((name) => ({ name, filePath: resolveModelAsset(name) }))
     .filter((entry): entry is { name: string; filePath: string } => entry.filePath !== null)
   const coreml = ownedEntries.filter((entry) => isCoreMLModelDir(entry.filePath)).map((e) => e.name)
+  // A download recorded as an image model counts even when its filename names no known diffusion
+  // family: a Hugging Face repo labelled text-to-image is recorded as image whatever its files are called.
+  const recordedImages = new Set(
+    readDownloaded(modelsDir())
+      .filter((model) => model.kind === 'image')
+      .map((model) => model.files[0])
+      .filter((name): name is string => !!name)
+  )
   const checkpoints = ownedEntries
-    .filter((entry) => isImageModelFile(entry.name))
+    .filter((entry) => isImageModelFile(entry.name) || recordedImages.has(entry.name))
     .map((e) => e.name)
   // MLX (mflux) models are virtual ids (mlx/…), not files in the models dir.
   // Appended last so the sd-cli default (Z-Image) stays the preferred pick.

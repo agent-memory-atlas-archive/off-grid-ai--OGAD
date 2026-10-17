@@ -1373,7 +1373,15 @@ export function setupIPC(): void {
   })
   // Unload one modality's model from memory now (the "free RAM" button). Goes through
   // the same evict() seam as residency/shutdown; the engine reloads on next use.
-  ipcMain.handle('runtime:unload', async (_e, modality: Modality) => {
+  ipcMain.handle('runtime:unload', async (_e, modality: Modality | 'decision' | 'grounding') => {
+    // Task models (the grounding specialist and the decision model) run their own servers; they
+    // unload through the same evictor the task memory policy uses.
+    if (modality === 'decision' || modality === 'grounding') {
+      const { unloadModelRole } = await import('./model-memory')
+      const freed = await unloadModelRole(modality)
+      console.log(`[runtime] unload ${modality}: ${freed ? 'freed' : 'nothing registered'}`)
+      return freed
+    }
     const { unloadRuntime } = await import('./runtime-manager')
     const freed = await unloadRuntime(modality)
     console.log(`[runtime] unload ${modality}: ${freed ? 'freed' : 'nothing registered'}`)
