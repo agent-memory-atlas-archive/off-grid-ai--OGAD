@@ -34,7 +34,7 @@ import {
   observeWithCurrentLease
 } from './browser-playwright-task-support'
 import { callBrowserAgentModel, type BrowserAgentRole } from './browser-agent-models'
-import { benchTrace } from './web-use-bench'
+import { benchTrace } from './web-use-bench-trace'
 import { scoreWebLines, webRankerInstalled } from './web-ranker'
 import { encodeTaskExecutionPlan, encodeTaskPhase } from '../../shared/task-execution-plan'
 

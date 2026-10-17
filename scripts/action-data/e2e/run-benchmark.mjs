@@ -246,7 +246,7 @@ const consentSeen = new Set()
 async function dismissConsent(obs, log) {
   if (!DISMISS_CONSENT || !/cookie|consent|gdpr|privacy preferences/i.test(obs.snapshot)) return false
   let origin = ''
-  try { origin = new URL(obs.url).origin } catch {}
+  try { origin = new URL(obs.url).origin } catch { /* no URL: one entry for every page without one */ }
   if (consentSeen.has(origin)) return false
   for (const [name, re] of [['reject', REJECT], ['accept', ACCEPT]]) {
     const button = page.getByRole('button', { name: re }).first()

@@ -146,7 +146,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
 // One action: record the screen it was taken on (evaluator continue + actor action), then run it.
 async function act(name, a) {
-  const text = (t) => ({ r: { content: [{ type: 'text', text: t }], isError: true } })
+  // The semicolon ends the arrow: without it the TypeScript parser (ESLint) reads the block below
+  // as part of it.
+  const text = (t) => ({ r: { content: [{ type: 'text', text: t }], isError: true } });
   {
     if (!planned) return text('Call ogad_plan first.')
     const obs = await observe()
