@@ -90,6 +90,8 @@ import {
   hasActiveFilters,
   initialFilterState,
   recommendedImageModelId,
+  huggingFaceRepoFor,
+  isOffGridHfRepo,
   type FilterState,
   type Credibility,
   type ModelKind
@@ -353,9 +355,9 @@ const ACTIVE_RING =
   'shadow-[inset_0_0_0_1px_rgb(var(--og-rgb-primary)/0.55),0_0_28px_-10px_rgb(var(--og-rgb-primary)/0.8)]'
 const MotionRow = motion.create(TableRow)
 
-/** Off Grid AI's own conversions (huggingface.co/offgrid-ai) carry its mark beside the name. */
+/** Off Grid AI's own conversions (huggingface.co/off-grid-ai) carry its mark beside the name. */
 function isOffGridModel(id: string): boolean {
-  return id.toLowerCase().startsWith('offgrid-ai/')
+  return isOffGridHfRepo(id)
 }
 
 export function ModelsScreen({
@@ -1798,7 +1800,7 @@ export function ModelsScreen({
           (() => {
             const m = detail
             const isLocal = m.id.startsWith('local:')
-            const hfRepo = m.sourceModelId ?? m.id
+            const hfRepo = huggingFaceRepoFor(m.sourceModelId ?? m.id)
             const hfUrl =
               !isLocal && hfRepo.includes('/') ? `https://huggingface.co/${hfRepo}` : null
             const bytes = totalBytes(m)
