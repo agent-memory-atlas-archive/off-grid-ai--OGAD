@@ -465,12 +465,7 @@ function MessageBubble({
     (attachment) => attachmentKindFor({ fileName: attachment.name }) !== 'audio'
   )
   return (
-    // Editing turns the bubble into a plain, square editor. A new element lets the field judge it
-    // afresh, so it does not keep the bubble's card edge (the field never re-checks a card).
-    <MessageContent
-      key={editing ? 'editing' : 'reading'}
-      className={messageContentClass(message, editing)}
-    >
+    <MessageContent className={messageContentClass(message, editing)}>
       {message.context?.taskGuidance ? (
         <div className="mb-2 flex items-center justify-between gap-3 border-b border-green-500/20 pb-2 text-[9px] uppercase tracking-wide text-green-600 dark:text-green-400">
           <span>Task guidance</span>
