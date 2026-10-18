@@ -6,6 +6,7 @@ import {
   parseGgufMetadata,
   parseGgufChatTemplate,
   chatTemplateDeclaresTools,
+  readGgufTemplateTraits,
   readGgufContextLength,
   GGUF_METADATA_PREFIX_BYTES
 } from '../gguf-metadata'
@@ -152,7 +153,7 @@ describe('readGgufContextLength (real temp file, real fs)', () => {
 
 describe('tool-calling detection from the chat template', () => {
   it('extracts the chat template, and returns null when it sits past the read window', () => {
-    const template = "{% for m in messages %}{{ m.content }}{% endfor %}"
+    const template = '{% for m in messages %}{{ m.content }}{% endfor %}'
     const found = buildGguf([
       kvString('general.architecture', 'qwen3'),
       kvString('tokenizer.chat_template', template)
@@ -168,10 +169,62 @@ describe('tool-calling detection from the chat template', () => {
 
   it('reads tools from templates that wire up tool calling, and not from plain ones', () => {
     const toolTemplate =
-      "{% if tools %}{% for t in tools %}{{ t.function.name }}{% endfor %}{% endif %}" +
-      "{% if message.tool_calls %}<tool_call>{% endif %}"
-    const plainTemplate = "{% for m in messages %}{{ m.role }}: {{ m.content }}{% endfor %}"
+      '{% if tools %}{% for t in tools %}{{ t.function.name }}{% endfor %}{% endif %}' +
+      '{% if message.tool_calls %}<tool_call>{% endif %}'
+    const plainTemplate = '{% for m in messages %}{{ m.role }}: {{ m.content }}{% endfor %}'
     expect(chatTemplateDeclaresTools(toolTemplate)).toBe(true)
     expect(chatTemplateDeclaresTools(plainTemplate)).toBe(false)
+  })
+})
+
+describe('readGgufTemplateTraits (real temp file, real fs)', () => {
+  const withFile = async (bytes: Buffer, run: (p: string) => Promise<void>): Promise<void> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gguf-traits-'))
+    const p = path.join(dir, 'model.gguf')
+    try {
+      fs.writeFileSync(p, bytes)
+      await run(p)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  it('reads tool calling and a thinking control off the template on disk', async () => {
+    const template =
+      '{% if enable_thinking %}<think>{% endif %}{% for t in tools %}{{ t.name }}{% endfor %}'
+    await withFile(buildGguf([kvString('tokenizer.chat_template', template)]), async (p) => {
+      expect(await readGgufTemplateTraits(p)).toEqual({ tools: true, reasoning: true })
+    })
+  })
+
+  it('reports neither trait for a plain chat template', async () => {
+    const template = '{% for m in messages %}{{ m.role }}: {{ m.content }}{% endfor %}'
+    await withFile(buildGguf([kvString('tokenizer.chat_template', template)]), async (p) => {
+      expect(await readGgufTemplateTraits(p)).toEqual({ tools: false, reasoning: false })
+    })
+  })
+
+  it('is unknown (null), not false, when there is no template or no file', async () => {
+    await withFile(buildGguf([kvString('general.architecture', 'llama')]), async (p) => {
+      expect(await readGgufTemplateTraits(p)).toBeNull()
+    })
+    expect(await readGgufTemplateTraits(path.join(os.tmpdir(), 'no-such-model.gguf'))).toBeNull()
+  })
+
+  it('reads a new file version again instead of serving the cached answer', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gguf-traits-'))
+    const p = path.join(dir, 'model.gguf')
+    try {
+      fs.writeFileSync(p, buildGguf([kvString('tokenizer.chat_template', '{{ m.content }}')]))
+      expect(await readGgufTemplateTraits(p)).toEqual({ tools: false, reasoning: false })
+      fs.writeFileSync(
+        p,
+        buildGguf([kvString('tokenizer.chat_template', '{% for t in tools %}{% endfor %}x')])
+      )
+      fs.utimesSync(p, new Date(), new Date(Date.now() + 5_000))
+      expect(await readGgufTemplateTraits(p)).toEqual({ tools: true, reasoning: false })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -9,7 +9,9 @@
 // v2+. We only need two scalar keys, both written before the big tokenizer arrays, so we walk the
 // KVs in order and stop as soon as both are known (never touching the huge token array).
 
+import { promises as fsp } from 'node:fs'
 import type { GgufFs } from './gguf'
+import { detectThinkingDialect } from '../llm/thinking-dialect'
 
 export interface GgufMetadata {
   architecture?: string
@@ -310,3 +312,47 @@ export function readGgufMtpSupport(
 /** How many leading bytes to read when hunting for the chat template: it can sit after the token
  *  arrays, so this is larger than the hyperparameter prefix, yet still cheap against a GB-scale model. */
 export const GGUF_TEMPLATE_PREFIX_BYTES = GGUF_METADATA_PREFIX_BYTES * 4
+
+/** What a model's chat template wires up: tool calling, and a thinking control (reasoning). */
+export interface ChatTemplateTraits {
+  tools: boolean
+  reasoning: boolean
+}
+
+const templateTraitsCache = new Map<string, ChatTemplateTraits | null>()
+
+/**
+ * Read a GGUF's chat template and report its traits, without blocking the event loop. The answer is
+ * fixed for one file version, so it is remembered per path, size and modification time. Null when
+ * the file has no template in the window we read (or cannot be read): unknown, never "false".
+ */
+export async function readGgufTemplateTraits(
+  p: string,
+  maxBytes = GGUF_TEMPLATE_PREFIX_BYTES
+): Promise<ChatTemplateTraits | null> {
+  try {
+    const { size, mtimeMs } = await fsp.stat(p)
+    const toRead = Math.min(size, maxBytes)
+    if (toRead <= 0) return null
+    const key = `${p}\0${size}\0${mtimeMs}\0${toRead}`
+    if (templateTraitsCache.has(key)) return templateTraitsCache.get(key) ?? null
+    const handle = await fsp.open(p, 'r')
+    const buf = Buffer.alloc(toRead)
+    try {
+      await handle.read(buf, 0, toRead, 0)
+    } finally {
+      await handle.close()
+    }
+    const template = parseGgufChatTemplate(buf)
+    const traits = template
+      ? {
+          tools: chatTemplateDeclaresTools(template),
+          reasoning: detectThinkingDialect(template) !== 'none'
+        }
+      : null
+    templateTraitsCache.set(key, traits)
+    return traits
+  } catch {
+    return null
+  }
+}

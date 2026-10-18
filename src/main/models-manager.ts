@@ -8,12 +8,7 @@ import fs from 'fs'
 import path from 'path'
 import { llm } from './llm'
 import { isValidGgufFile } from './models/gguf'
-import {
-  readGgufMtpSupport,
-  parseGgufChatTemplate,
-  chatTemplateDeclaresTools,
-  GGUF_TEMPLATE_PREFIX_BYTES
-} from './models/gguf-metadata'
+import { readGgufMtpSupport, readGgufTemplateTraits } from './models/gguf-metadata'
 import { pumpToFile } from './models/download-pump'
 import { downloadIntegrityError, sha256IntegrityError } from './models/download-verify'
 import { downloadFailureMessage, isStorageCapacityError } from './models/download-error'
@@ -294,13 +289,11 @@ export interface KevRuntimeArtifact {
 
 /** Resolve the packaged server runtime and the model downloaded from the Models screen. */
 export function resolveKevRuntimeArtifact(): KevRuntimeArtifact | null {
-  if (
-    !(
-      (process.platform === 'darwin' && process.arch === 'arm64') ||
-      process.platform === 'win32' ||
-      (process.platform === 'linux' && process.arch === 'x64')
-    )
-  ) {
+  if (!(
+    (process.platform === 'darwin' && process.arch === 'arm64') ||
+    process.platform === 'win32' ||
+    (process.platform === 'linux' && process.arch === 'x64')
+  )) {
     return null
   }
   const modelRoot = path.join(llm.getModelsDir(), 'kev-4b')
@@ -505,56 +498,27 @@ export async function getCatalog(): Promise<{ kinds: readonly string[]; models: 
     locals,
     remote: remoteNameSources(servers)
   }
-  // Tool calling is a chat trait the catalog does not record: it lives in the model's GGUF chat
-  // template. Read it for an installed chat model (the only kind the pickers list), honouring a
-  // curated flag when one is set. Unknown (not installed, not curated) stays undefined — no icon.
-  // The read is async and cached so a model list never blocks the main thread on file IO.
-  const toolEntries = await Promise.all(
-    (models as CatalogEntry[]).map(async (model): Promise<readonly [string, boolean | undefined]> => {
-      if ((model as { tools?: boolean }).tools === true) return [model.id, true]
-      if (model.kind !== 'text' && model.kind !== 'vision') return [model.id, undefined]
-      const name = primaryFileName(model)
-      if (!name || fileSizeOf(dir, name) <= 0) return [model.id, undefined]
-      return [model.id, await readToolSupport(modelFilePath(dir, name))]
-    })
-  )
-  const toolsById = new Map(toolEntries)
+  // Tool calling and a thinking control are chat traits the catalog does not record: they live in
+  // the model's GGUF chat template. Read them for an installed chat model (the only kind the pickers
+  // list). One file at a time, so a first read holds one template window in memory, not one per
+  // model; cached afterwards. Unknown (not installed, no template) stays undefined: no icon.
+  const traitsById = new Map<string, { tools?: boolean; reasoning?: boolean }>()
+  for (const model of models as CatalogEntry[]) {
+    if (model.kind !== 'text' && model.kind !== 'vision') continue
+    const name = primaryFileName(model)
+    if (!name || fileSizeOf(dir, name) <= 0) continue
+    const traits = await readGgufTemplateTraits(modelFilePath(dir, name))
+    if (traits) traitsById.set(model.id, traits)
+  }
   return {
     kinds: MODEL_KINDS,
     models: [
-      ...models.map((model) => ({ ...model, tools: toolsById.get((model as CatalogEntry).id) })),
+      ...models.map((model) => ({ ...model, ...traitsById.get((model as CatalogEntry).id) })),
       ...remoteModels
     ].map((model) => ({
       ...model,
       name: describeModel(model.id, sources).displayName
     }))
-  }
-}
-
-// Whether a model's GGUF chat template wires up tool calling, read without blocking the event loop
-// and remembered per path/size/mtime (the costly part is parsing tens of MiB of header metadata).
-const toolSupportCache = new Map<string, boolean>()
-async function readToolSupport(filePath: string): Promise<boolean> {
-  try {
-    const { size, mtimeMs } = await fs.promises.stat(filePath)
-    const toRead = Math.min(size, GGUF_TEMPLATE_PREFIX_BYTES)
-    if (toRead <= 0) return false
-    const key = `${filePath}\0${size}\0${mtimeMs}\0${toRead}`
-    const known = toolSupportCache.get(key)
-    if (known !== undefined) return known
-    const handle = await fs.promises.open(filePath, 'r')
-    const buf = Buffer.alloc(toRead)
-    try {
-      await handle.read(buf, 0, toRead, 0)
-    } finally {
-      await handle.close()
-    }
-    const template = parseGgufChatTemplate(buf)
-    const supported = template !== null && chatTemplateDeclaresTools(template)
-    toolSupportCache.set(key, supported)
-    return supported
-  } catch {
-    return false
   }
 }
 
@@ -727,7 +691,9 @@ export async function searchModels(query: string, kind?: string): Promise<unknow
   }
 }
 
-export async function getModelFiles(modelId: string): Promise<import('@offgrid/models').ModelFileVariant[]> {
+export async function getModelFiles(
+  modelId: string
+): Promise<import('@offgrid/models').ModelFileVariant[]> {
   const { getModelFiles: listFiles } = await import('@offgrid/models')
   const repo = modelId === 'bartowski/tencent_UI-Mate-9B-GGUF+MTP' ? modelId.slice(0, -4) : modelId
   return (await listFiles(repo)).filter(
@@ -860,7 +826,13 @@ async function downloadModelInner(
   // The registry is re-judged on every read, so it records the resolved kind, not this guess.
   const resolvedKind = entry.kind
   if (!inCatalog) {
-    entry = { ...entry, kind: downloadedModelKind(entry.kind, entry.files.map((file) => file.name)) }
+    entry = {
+      ...entry,
+      kind: downloadedModelKind(
+        entry.kind,
+        entry.files.map((file) => file.name)
+      )
+    }
   }
   if (inCatalog?.availability === 'coming_soon') {
     const error = inCatalog.availabilityNote ?? 'This model is coming soon.'
@@ -1105,7 +1077,7 @@ async function downloadModelInner(
         // vision on now (main-side, so it works even when no Models screen is open).
         await reconcileActiveModelProjector().catch(() => false)
         settingsChanged()
-          send({ percent: 100, status: 'completed' })
+        send({ percent: 100, status: 'completed' })
         return { success: true }
       } catch (err) {
         // A capacity failure cannot resume until space is reclaimed. A file that failed byte or
@@ -1227,16 +1199,24 @@ function deleteTransferredModel(context: TransferredDeletionContext): DeleteMode
  * between tags and tracked by manifests, so deleting one by hand breaks Ollama itself.
  */
 async function trashExternalModel(modelId: string, dir: string): Promise<DeleteModelResult> {
-  const found = discoverExternalModels(undefined, undefined, dir, readModelScanFolders(dataDir())).find(
-    (model) => model.id === modelId
-  )
+  const found = discoverExternalModels(
+    undefined,
+    undefined,
+    dir,
+    readModelScanFolders(dataDir())
+  ).find((model) => model.id === modelId)
   if (!found) return { success: false, error: 'This model is no longer in that folder.' }
   if (found.source === 'Ollama') {
-    return { success: false, error: `Ollama manages this model. Remove it with: ollama rm ${found.name}` }
+    return {
+      success: false,
+      error: `Ollama manages this model. Remove it with: ollama rm ${found.name}`
+    }
   }
   const { shell } = await import('electron')
   let freedFiles = 0
-  for (const file of [found.primary, found.mmproj].filter((value): value is string => Boolean(value))) {
+  for (const file of [found.primary, found.mmproj].filter((value): value is string =>
+    Boolean(value)
+  )) {
     await shell.trashItem(file)
     freedFiles++
   }
@@ -1309,7 +1289,8 @@ async function deleteModelFiles(modelId: string): Promise<DeleteModelResult> {
   ) {
     return {
       success: false,
-      error: 'This model uses files in another model folder. Remove the folder reference to hide it. Files are kept in place.'
+      error:
+        'This model uses files in another model folder. Remove the folder reference to hide it. Files are kept in place.'
     }
   }
   let freed = 0
@@ -1811,7 +1792,14 @@ export function getLocalModels(dir = llm.getModelsDir()): LocalModel[] {
 }
 function saveLocalModels(list: LocalModel[], dir = llm.getModelsDir()): void {
   try {
-    fs.writeFileSync(localRegistryFile(dir), JSON.stringify(list.filter((model) => !model.id.startsWith('external:')), null, 2))
+    fs.writeFileSync(
+      localRegistryFile(dir),
+      JSON.stringify(
+        list.filter((model) => !model.id.startsWith('external:')),
+        null,
+        2
+      )
+    )
   } catch {
     /* best effort */
   }
@@ -2136,26 +2124,28 @@ export async function getStorageInfo(): Promise<StorageInfo> {
   const downloaded = reconciledDownloaded
   const catalogIds = new Set(catalog.map((m) => m.id))
   const catalogById = (id: string): CatalogEntry | undefined => catalog.find((m) => m.id === id)
-  const models: ModelDiskEntry[] = installed.map((id) =>
-    buildDiskEntry({
-      id,
-      locals,
-      downloaded,
-      catalogById,
-      isCatalogId: (x) => catalogIds.has(x),
-      activeChatId: active,
-      modals,
-      sizeOf
-    })
-  ).map((entry) => ({
-    ...entry,
-    name: describeModel(entry.id, {
-      catalog,
-      downloaded,
-      locals,
-      remote: modelNameSources().remote
-    }).displayName
-  }))
+  const models: ModelDiskEntry[] = installed
+    .map((id) =>
+      buildDiskEntry({
+        id,
+        locals,
+        downloaded,
+        catalogById,
+        isCatalogId: (x) => catalogIds.has(x),
+        activeChatId: active,
+        modals,
+        sizeOf
+      })
+    )
+    .map((entry) => ({
+      ...entry,
+      name: describeModel(entry.id, {
+        catalog,
+        downloaded,
+        locals,
+        remote: modelNameSources().remote
+      }).displayName
+    }))
 
   let entries: string[] = []
   try {
