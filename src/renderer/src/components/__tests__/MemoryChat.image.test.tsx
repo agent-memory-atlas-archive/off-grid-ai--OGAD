@@ -579,7 +579,7 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
     const api = installApi({ active: FULL, models: [FULL], isPro: true })
     renderChat()
 
-    const trigger = await screen.findByTitle('Generated images')
+    const trigger = await screen.findByRole('button', { name: 'Gallery' })
     act(() => {
       api.emitIncomingFiles([
         {
@@ -615,7 +615,7 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
     installApi({ active: FULL, models: [FULL] })
     renderChat()
 
-    const trigger = await screen.findByTitle('Generated images')
+    const trigger = await screen.findByRole('button', { name: 'Gallery' })
     await user.click(trigger)
     expect(await screen.findByRole('dialog', { name: 'Gallery' })).toBeTruthy()
 

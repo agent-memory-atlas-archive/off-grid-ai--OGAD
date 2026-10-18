@@ -176,7 +176,10 @@ import {
   WarningCircle,
   DownloadSimple,
   Trash,
-  Stop
+  Stop,
+  SidebarSimple,
+  Gear,
+  Images
 } from '@phosphor-icons/react'
 import type { MemoryChatProps } from './interfaces'
 import { announceAssistantActivity, announceAssistantListening } from '../../lib/assistant-activity'
@@ -4060,32 +4063,19 @@ export function MemoryChat({
       >
         {/* Header */}
         <header className="flex items-center gap-3 border-b border-neutral-900 px-6 py-4">
-          <button
-            onClick={toggleConversationList}
-            className="rounded-md border border-neutral-800 p-1.5 text-neutral-500 transition-colors hover:border-green-500 hover:text-green-500"
-            title={conversationsToggleLabel}
-            aria-label={conversationsToggleLabel}
-          >
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <rect x="3" y="4" width="18" height="16" rx="2" strokeWidth={2} />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 4v16" />
-            </svg>
-          </button>
-          <div className="flex h-8 w-8 items-center justify-center rounded-md border border-neutral-800 bg-neutral-900">
-            <svg
-              className="h-4 w-4 text-green-500"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
-              />
-            </svg>
-          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={toggleConversationList}
+                className="rounded-md border border-neutral-800 p-1.5 text-neutral-500 transition-colors hover:border-green-500 hover:text-green-500"
+                aria-label={conversationsToggleLabel}
+              >
+                <SidebarSimple className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{conversationsToggleLabel}</TooltipContent>
+          </Tooltip>
+          {/* No decorative chat tile here: the sidebar already says where you are. */}
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-medium tracking-wide text-neutral-200">
               {god ? god.name : 'Off Grid AI'}
@@ -4105,81 +4095,62 @@ export function MemoryChat({
               </button>
             ) : (
               <p className="truncate text-xs text-neutral-500">
-                Private, on-device — chat, generate, and build
+                Private and on this device. Chat, generate, and build.
               </p>
             )}
           </div>
 
           {/* Active models and Settings: the same drawers in Chat and God (God runs tasks too). */}
           {/* Active models — pick the model per modality (text/image/voice/STT) */}
-          <button
-            onClick={() => {
-              closePanels()
-              setModelPickerOpen(true)
-            }}
-            className={`rounded-md border p-1.5 transition-colors ${modelPickerOpen ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-500 hover:text-neutral-300'}`}
-            title="Active models"
-          >
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <rect x="4" y="4" width="16" height="16" rx="2" strokeWidth={2} />
-              <path
-                strokeLinecap="round"
-                strokeWidth={2}
-                d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"
-              />
-            </svg>
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => {
+                  closePanels()
+                  setModelPickerOpen(true)
+                }}
+                className={`rounded-md border p-1.5 transition-colors ${modelPickerOpen ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-500 hover:text-neutral-300'}`}
+                aria-label="Active models"
+              >
+                <Cpu className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Active models</TooltipContent>
+          </Tooltip>
 
           {/* Keep the conversation in place while its model settings drawer is open. */}
-          <button
-            onClick={() => {
-              closePanels()
-              setSettingsInitialTab('model')
-              setSettingsOpen(true)
-            }}
-            className={`rounded-md border p-1.5 transition-colors ${settingsOpen ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-500 hover:text-neutral-300'}`}
-            title="Settings"
-          >
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-              />
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-              />
-            </svg>
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => {
+                  closePanels()
+                  setSettingsInitialTab('model')
+                  setSettingsOpen(true)
+                }}
+                className={`rounded-md border p-1.5 transition-colors ${settingsOpen ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-500 hover:text-neutral-300'}`}
+                aria-label="Settings"
+              >
+                <Gear className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Settings</TooltipContent>
+          </Tooltip>
           {/* God has no image gallery. */}
           {!god && (
             <>
-          <button
-            ref={galleryTriggerRef}
-            onClick={openGallery}
-            className={`rounded-md border p-1.5 transition-colors ${showGallery ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-500 hover:text-neutral-300'}`}
-            title="Generated images"
-          >
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 5a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5z"
-              />
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 15l4-4 4 4 3-3 5 5"
-              />
-              <circle cx="9" cy="9" r="1.5" fill="currentColor" />
-            </svg>
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                ref={galleryTriggerRef}
+                onClick={openGallery}
+                className={`rounded-md border p-1.5 transition-colors ${showGallery ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-500 hover:text-neutral-300'}`}
+                aria-label="Gallery"
+              >
+                <Images className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Gallery</TooltipContent>
+          </Tooltip>
             </>
           )}
           <TaskPanelTrigger conversationId={activeConversationId} />
