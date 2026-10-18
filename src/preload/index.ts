@@ -357,8 +357,11 @@ const offGridApi = {
     context?: unknown
   ): Promise<{ id: number; uuid: string } | null> =>
     ipcRenderer.invoke('rag:add-message-version', conversationId, ofUuid, role, content, context),
-  selectRagMessageVersion: (conversationId: string, uuid: string, direction: number): Promise<boolean> =>
-    ipcRenderer.invoke('rag:select-version', conversationId, uuid, direction),
+  selectRagMessageVersion: (
+    conversationId: string,
+    uuid: string,
+    direction: number
+  ): Promise<boolean> => ipcRenderer.invoke('rag:select-version', conversationId, uuid, direction),
   updateRagConversationTitle: (id: string, title: string) =>
     ipcRenderer.invoke('rag:update-conversation-title', id, title),
   deleteRagConversation: (id: string) => ipcRenderer.invoke('rag:delete-conversation', id),
@@ -861,6 +864,7 @@ const offGridApi = {
     language: string
     languages: { code: string; label: string }[]
     options: { id: string | null; name: string; active: boolean }[]
+    selectedId: string | null
   }> => ipcRenderer.invoke('transcription:active-info'),
 
   // --- Voice output (text-to-speech via Kokoro) ---
@@ -915,7 +919,14 @@ const offGridApi = {
     ipcRenderer.invoke('voice:save-recording', audio, extension),
 
   // --- On-device image generation (stable-diffusion.cpp) ---
-  imageGenStatus: () => ipcRenderer.invoke('imagegen:status'),
+  imageGenStatus: (): Promise<{
+    available: boolean
+    models: string[]
+    active: string | null
+    reason?: string
+    /** Display name per entry of `models`: screens show these, never the file names. */
+    modelNames: Record<string, string>
+  } | null> => ipcRenderer.invoke('imagegen:status'),
   imageGenJobStatus: () => ipcRenderer.invoke('imagegen:job-status'),
   cancelImageGen: () => ipcRenderer.invoke('imagegen:cancel'),
   imageGenConversationPersisted: (conversationId: string, messageId?: string) =>

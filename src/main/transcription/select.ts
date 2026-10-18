@@ -13,7 +13,7 @@ import { parakeetTranscription as parakeet } from './parakeet-cli'
 import { whisperServer } from './whisper-server'
 import { whisperServerTranscription as whisperResident } from './whisper-server-transcription'
 import { getActiveModal } from '../active-models'
-import { modelsByKind } from '@offgrid/models'
+import { modelDisplayName, modelsByKind } from '@offgrid/models'
 import { transcriptionLanguages, type SpeechLanguage } from '@offgrid/speech'
 import type { ManagedRuntime } from '../runtime-manager'
 import { getSetting } from '../database'
@@ -203,17 +203,25 @@ export function transcriptionActiveInfo(
   language: string
   languages: readonly SpeechLanguage[]
   options: ReturnType<typeof transcriptionModelOptions>
+  /** The option that is active, matched by id or file name, so a picker never compares raw ids. */
+  selectedId: string | null
 } {
   const activeEntry = installed.find((entry) => transcriptionEntryMatches(entry, info.modelId))
   const languages = transcriptionLanguages(
     info.engine === 'remote' ? 'whisper' : info.engine,
     activeEntry?.familyId ?? info.modelId
   )
+  const options = transcriptionModelOptions(info.modelId, installed)
   return {
     ...info,
+    // The installed entry carries the desktop catalog's name, which the shared catalog may lack.
+    ...(activeEntry?.name && info.engine !== 'remote'
+      ? { label: `${ENGINE_LABEL[info.engine]} · ${activeEntry.name}` }
+      : {}),
     language: resolveConfiguredTranscriptionLanguage(configuredLanguage, languages),
     languages,
-    options: transcriptionModelOptions(info.modelId, installed)
+    options,
+    selectedId: options.find((option) => option.active)?.id ?? null
   }
 }
 
@@ -251,7 +259,7 @@ export function transcriptionProvenance(
   const entry = active
     ? entries.find((e) => e.id === active || e.files.some((f) => f.name === active))
     : undefined
-  const modelLabel = entry?.name ?? active ?? 'built-in'
+  const modelLabel = entry?.name ?? modelDisplayName(active, { catalog: entries }) ?? 'built-in'
   return { engine, modelId: active, label: `${ENGINE_LABEL[engine]} · ${modelLabel}` }
 }
 
@@ -263,7 +271,9 @@ export function getActiveTranscriptionInfo(): ActiveTranscriptionInfo {
     return {
       engine: 'remote',
       modelId: remoteVisionModelId(remote.id, remote.selectedModel),
-      label: `Remote · ${remote.selectedModel}`
+      label: `Remote · ${modelDisplayName(remoteVisionModelId(remote.id, remote.selectedModel), {
+        remote: [{ serverId: remote.id, models: remote.modelCatalog ?? [] }]
+      })}`
     }
   const active = getActiveModal('transcription')
   const entries = modelsByKind('transcription')
@@ -310,7 +320,7 @@ export function transcriptionModelOptions(
     { id: null, name: 'Whisper (built-in)', active: active == null || !hasInstalledActive },
     ...installed.map((e) => ({
       id: e.id,
-      name: e.name ?? e.id,
+      name: e.name ?? modelDisplayName(e.id) ?? e.id,
       active: transcriptionEntryMatches(e, active)
     }))
   ]

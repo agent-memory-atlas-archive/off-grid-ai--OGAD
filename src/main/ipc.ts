@@ -4,6 +4,7 @@ import { moveModelStorage } from './model-storage-move'
 import { ipcMain, BrowserWindow, app, clipboard } from 'electron'
 import { listBridgeBrowsers, removeBridgeBrowser } from './extension-bridge/bridge-electron'
 import { setupAIRequestLogIPC } from './ai-request-log-ipc'
+import { modelDisplayName } from '@offgrid/models'
 import { setupChatNextActionIpc } from './chat-next-action'
 import { setupArtifactPreviewIpc } from './artifact-preview-ipc'
 import {
@@ -550,7 +551,12 @@ export function setupIPC(): void {
     engineUpdater.setEnabled(enabled !== false)
   )
   engineUpdater.start()
-  setupAIRequestLogIPC()
+  // Logged models are named with the desktop catalog and registries once models-manager is loaded.
+  let nameModel: ((ref: string) => string | null) | null = null
+  void import('./models-manager').then((models) => {
+    nameModel = models.displayModelName
+  })
+  setupAIRequestLogIPC((ref) => nameModel?.(ref) ?? modelDisplayName(ref) ?? ref)
   setupChatNextActionIpc()
   setupVoiceTranscriptionIpc()
   const db = getDB()
@@ -899,10 +905,9 @@ export function setupIPC(): void {
       summaryQuery += ` ORDER BY score ASC LIMIT 8`
       const summaries = ftsQuery
         ? db
-            .prepare<
-              unknown[],
-              { app_name: string | null; title: string | null; summary: string }
-            >(summaryQuery)
+            .prepare<unknown[], { app_name: string | null; title: string | null; summary: string }>(
+              summaryQuery
+            )
             .all(...summaryParams)
         : []
 
@@ -929,10 +934,9 @@ export function setupIPC(): void {
       entityQuery += ` ORDER BY score ASC LIMIT 8`
       const entities = ftsQuery
         ? db
-            .prepare<
-              unknown[],
-              { type: string | null; name: string; summary: string | null }
-            >(entityQuery)
+            .prepare<unknown[], { type: string | null; name: string; summary: string | null }>(
+              entityQuery
+            )
             .all(...entityParams)
         : []
 
@@ -1263,7 +1267,14 @@ export function setupIPC(): void {
       role: 'user' | 'assistant',
       content: string,
       context?: unknown
-    ) => (await import('./database')).addRagMessageVersion(conversationId, ofUuid, role, content, context)
+    ) =>
+      (await import('./database')).addRagMessageVersion(
+        conversationId,
+        ofUuid,
+        role,
+        content,
+        context
+      )
   )
   ipcMain.handle(
     'rag:select-version',
@@ -1867,7 +1878,7 @@ export function setupIPC(): void {
       m.removeModelScanFolder(app.getPath('userData'), directory)
     )
     BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('models:inventory-changed'))
-      settingsChanged()
+    settingsChanged()
     return folders
   })
   ipcMain.handle('models:delete-orphans', () =>
@@ -1995,8 +2006,16 @@ export function setupIPC(): void {
 
   // --- Image generation (stable-diffusion.cpp) ----------------------------
   ipcMain.handle('imagegen:status', async () => {
-    const { imageGenStatus } = await import('./imagegen')
-    return imageGenStatus()
+    const [{ imageGenStatus }, { displayModelName }] = await Promise.all([
+      import('./imagegen'),
+      import('./models-manager')
+    ])
+    const status = imageGenStatus()
+    // `models` are file names the runtime loads; screens show these names.
+    const modelNames: Record<string, string> = Object.fromEntries(
+      status.models.map((id) => [id, displayModelName(id) ?? id])
+    )
+    return { ...status, modelNames }
   })
 
   const imageJobPublisher = (
@@ -2364,7 +2383,10 @@ export function setupIPC(): void {
     const path = await import('path')
     if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('Invalid file.')
     const { processUploadPath } = await import('./files')
-    return processUploadPath(filePath, typeof name === 'string' && name ? name : path.basename(filePath))
+    return processUploadPath(
+      filePath,
+      typeof name === 'string' && name ? name : path.basename(filePath)
+    )
   })
 
   // --- Documents in a chat: what the conversation holds, and which ones answers may use ---

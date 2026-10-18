@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import AIArtifact from '@offgrid/operator-ui/operator/ai-artifact'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { ARTIFACT_KIND_LABELS, type ArtifactKind } from '@renderer/lib/artifact-labels'
-import { resolveModelName } from '@renderer/lib/model-summary'
+import { modelDisplayName } from '@offgrid/models'
 import { capturePathFromUrl } from '../../../shared/ogcapture-url'
 import { SidePanel } from './SidePanel'
 import { DownloadSimple, X } from '@phosphor-icons/react'
@@ -44,15 +44,21 @@ export function artifactSpeechModelName(
   activeModel: string | null | undefined,
   models: readonly ArtifactModelLabel[]
 ): string {
-  if (!activeModel) return 'Default'
-  const catalogModel = models.find(
-    (model) =>
-      model.id === activeModel ||
-      model.primary === activeModel ||
-      model.files?.some((file) => file.name === activeModel)
-  )
-  if (catalogModel?.name) return catalogModel.name
-  return resolveModelName([], activeModel) ?? activeModel
+  // The active speech pick is stored as an id or a file name: the shared resolver reads both.
+  const catalog = models
+    .flatMap((model) => (model.id ? [{ ...model, id: model.id }] : []))
+    .map((model) => ({
+      id: model.id,
+      name: model.name,
+      kind: model.kind,
+      files: [
+        ...(model.primary ? [{ name: model.primary }] : []),
+        ...(model.files ?? []).flatMap((file) =>
+          file.name ? [{ name: file.name, role: file.role }] : []
+        )
+      ]
+    }))
+  return modelDisplayName(activeModel, { catalog }) ?? 'Default'
 }
 
 // npm packages a React artifact imports beyond react/react-dom (loaded from esm.sh).

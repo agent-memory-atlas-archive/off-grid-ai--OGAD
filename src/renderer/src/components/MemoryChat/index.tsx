@@ -10,11 +10,7 @@ import {
   withAnswerVersions
 } from '@renderer/lib/chat-versions'
 import { replaceChatTurn, type ReplacementDependencies } from '@renderer/lib/chat-turn-replacement'
-import {
-  getChatQueueStore,
-  type ChatQueues,
-  type QueuedTurn
-} from '@renderer/lib/chat-queue-store'
+import { getChatQueueStore, type ChatQueues, type QueuedTurn } from '@renderer/lib/chat-queue-store'
 import {
   captureStopTarget,
   unownedTerminal,
@@ -46,6 +42,7 @@ import {
   type ProjectedSyncedTool
 } from '@offgrid/sync'
 import type { VoiceTurnMode } from '@offgrid/speech'
+import { modelDisplayName } from '@offgrid/models'
 import { getSlot, SLOTS } from '@/bootstrap/slotRegistry'
 import { callHook } from '@/bootstrap/hookRegistry'
 import { useRendererEntitlement } from '@/bootstrap/useRendererEntitlement'
@@ -577,6 +574,7 @@ export function MemoryChat({
   const [imgInit, setImgInit] = useState<string | null>(null)
   const [imgStrength, setImgStrength] = useState(0.6)
   const [imgModels, setImgModels] = useState<string[]>([])
+  const [imgModelNames, setImgModelNames] = useState<Record<string, string>>({})
   const [imgModel, setImgModel] = useState<string>('')
   // Per-model steps/size overrides. This is the ONE persisted owner of those two
   // params — the composer and (future) a Settings > Image section both read/write
@@ -1021,6 +1019,7 @@ export function MemoryChat({
         ? rawModels.filter((model: unknown): model is string => typeof model === 'string')
         : []
       setImgModels(models)
+      setImgModelNames(s.modelNames)
       // Skip the parked/slow Core ML directory when choosing a default.
       const preferred = preferredImageModel(models)
       setImgModel(s.active || preferred)
@@ -1780,8 +1779,7 @@ export function MemoryChat({
           if (sk) {
             const rest =
               `${typed.slice(0, skillMention!.index)}${skillMention![1]}${typed.slice(skillMention!.index + skillMention![0].length)}`.trim()
-            modelQuery =
-              `# Skill: ${sk.name}\n${sk.instructions}\n\n${rest}`.trim()
+            modelQuery = `# Skill: ${sk.name}\n${sk.instructions}\n\n${rest}`.trim()
           }
         } catch (e) {
           console.error('skill load failed', e)
@@ -2306,7 +2304,8 @@ export function MemoryChat({
             earlyComicCancelled ||
             cancelledRef.current.has(convId) ||
             earlyComicImages.has(request.prompt)
-          ) return
+          )
+            return
           const image = earlyComicChain.then(() =>
             earlyComicCancelled || cancelledRef.current.has(convId)
               ? Promise.reject(new Error('Image generation cancelled.'))
@@ -2321,20 +2320,20 @@ export function MemoryChat({
       }
       const tr = await window.api
         .toolChat(modelQuery, fullHistory.slice(0, -1), {
-        assistantOnly: assistantForTurn,
-        connectors: god ? true : connectorsOn,
-        conversationId: convId,
-        // Memory scope drives which memory tools the model gets: a project offers its
-        // knowledge base; "All memory" offers search_memory; "No memory" offers neither.
-        projectId: projectId ?? undefined,
-        allMemory: god ? true : !projectId && !noMemory,
-        // God is set up to do everything: every tool, and the selected model reasoning.
-        ...(god ? { context: god.context(), rules: god.rules?.(), allTools: true } : {}),
-        images: imagePaths,
-        ...(turnDocuments.length ? { documents: turnDocuments } : {}),
-        imageAvailable,
-        streamId: toolStreamId,
-        thinking: god ? true : thinkingEnabled
+          assistantOnly: assistantForTurn,
+          connectors: god ? true : connectorsOn,
+          conversationId: convId,
+          // Memory scope drives which memory tools the model gets: a project offers its
+          // knowledge base; "All memory" offers search_memory; "No memory" offers neither.
+          projectId: projectId ?? undefined,
+          allMemory: god ? true : !projectId && !noMemory,
+          // God is set up to do everything: every tool, and the selected model reasoning.
+          ...(god ? { context: god.context(), rules: god.rules?.(), allTools: true } : {}),
+          images: imagePaths,
+          ...(turnDocuments.length ? { documents: turnDocuments } : {}),
+          imageAvailable,
+          streamId: toolStreamId,
+          thinking: god ? true : thinkingEnabled
         })
         .catch(async (error) => {
           earlyComicCancelled = true
@@ -3783,7 +3782,8 @@ export function MemoryChat({
       },
       // A document citation opens the document at the page it cites.
       onOpenDocument: (documentId, page) => {
-        const conversation = messagesByConvRef.current[activeConversationId ?? NEW_CHAT] ?? EMPTY_MSGS
+        const conversation =
+          messagesByConvRef.current[activeConversationId ?? NEW_CHAT] ?? EMPTY_MSGS
         const attachment = conversation
           .flatMap((message) => message.attachments ?? [])
           .find((candidate) => candidate.documentId === documentId)
@@ -4609,7 +4609,7 @@ export function MemoryChat({
                                 value={imgModel}
                                 options={imgModels.map((m) => ({
                                   value: m,
-                                  label: m.replace(/\.gguf$/i, '').replace(/-Q\d.*$/i, '')
+                                  label: imgModelNames[m] ?? modelDisplayName(m) ?? m
                                 }))}
                                 onValueChange={chooseImageModel}
                               />

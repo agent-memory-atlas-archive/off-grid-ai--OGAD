@@ -23,6 +23,7 @@
 import { afterEach, describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
 import { render, screen, waitFor, cleanup, fireEvent, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { modelDisplayName } from '@offgrid/models'
 import { MemoryChat } from '../MemoryChat'
 import { TooltipProvider } from '../ui/tooltip'
 import { registerHook } from '../../bootstrap/hookRegistry'
@@ -225,7 +226,7 @@ function installApi(opts: InstallApiOptions): InstalledApi {
     })
     return result
   })
-  const setActiveModalModel = vi.fn<(kind: string, model: string) => Promise<void>>(async () => { })
+  const setActiveModalModel = vi.fn<(kind: string, model: string) => Promise<void>>(async () => {})
   // The agentic path's single entry point. Returns a benign text answer with no
   // imageRequest, so if the turn reaches the agent no generateImage call follows —
   // making "generateImage was/ wasn't called" an unambiguous terminal artifact.
@@ -235,14 +236,14 @@ function installApi(opts: InstallApiOptions): InstalledApi {
       : { answer: opts.ragAnswer ?? 'A red fox is standing in snow.', toolCalls: [], unified: [] }
   )
   const cancelImageGen = vi.fn<() => void>()
-  const exportGeneratedImage = vi.fn<(...args: unknown[]) => Promise<void>>(async () => { })
+  const exportGeneratedImage = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {})
   let nextStoredMessageId = 1
   const addRagMessage = vi.fn(async () => {
     const id = nextStoredMessageId++
     return { id, uuid: `stored-message-${id}` }
   })
   const updateRagMessage = vi.fn(async () => true)
-  const imageGenConversationPersisted = vi.fn(async () => { })
+  const imageGenConversationPersisted = vi.fn(async () => {})
   // Timestamps are filled in where a seed omitted one. The renderer projects each row through
   // projectSyncedMessageTurn, which returns null for a message it cannot order, so an untimestamped
   // row is silently dropped and the conversation renders empty. The table this stands for always has
@@ -281,7 +282,9 @@ function installApi(opts: InstallApiOptions): InstalledApi {
     imageGenStatus: vi.fn(async () => ({
       available: true,
       models: opts.models,
-      active: opts.active
+      active: opts.active,
+      // Main names each model file for display (ipc image:status); the screen shows these names.
+      modelNames: Object.fromEntries(opts.models.map((id) => [id, modelDisplayName(id) ?? id]))
     })),
     cancelImageGen,
     // --- main-owned image job (the reattach-on-remount path) ---
@@ -333,7 +336,7 @@ function installApi(opts: InstallApiOptions): InstalledApi {
     imageGenConversationPersisted,
     pickImageForGen: vi.fn(async () => '/uploads/reference.png'),
     keepInitImage: vi.fn(async () => ({ id: 'kept-init', path: '/kept/reference.png' })),
-    saveArtifact: vi.fn(async () => { }),
+    saveArtifact: vi.fn(async () => {}),
     exportGeneratedImage,
     // --- settings round-trip (per-model override persistence) ---
     getSettings: vi.fn(async () => settings),
@@ -344,7 +347,7 @@ function installApi(opts: InstallApiOptions): InstalledApi {
     listGeneratedImages,
     styleThumbs: vi.fn(async () => ({ ...(opts.styleThumbs ?? {}) })),
     listSkills: vi.fn(async () => []),
-    onRagStream: vi.fn(() => () => { }),
+    onRagStream: vi.fn(() => () => {}),
     // A file made in the page (jsdom) is an in-memory blob: the preload finds no path on disk for it.
     filePath: (): string => '',
     // Documents in a chat (preload `documents`): none attached.
@@ -358,7 +361,7 @@ function installApi(opts: InstallApiOptions): InstalledApi {
     ragChat,
     toolChat
   }
-    ; (globalThis as unknown as { window: { api: unknown } }).window.api = api
+  ;(globalThis as unknown as { window: { api: unknown } }).window.api = api
   return {
     generateImage,
     setActiveModalModel,
@@ -454,7 +457,7 @@ async function setSteps(user: ReturnType<typeof userEvent.setup>, value: number)
 
 async function sendPrompt(user: ReturnType<typeof userEvent.setup>, prompt: string): Promise<void> {
   const textarea = screen.getByPlaceholderText(/describe an image to generate/i)
-    ; (textarea as HTMLTextAreaElement).focus()
+  ;(textarea as HTMLTextAreaElement).focus()
   await user.type(textarea, prompt, { skipClick: true })
   await user.click(screen.getByRole('button', { name: /^send$/i }))
 }
@@ -463,14 +466,14 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
   beforeEach(() => {
     cleanup()
     vi.clearAllMocks()
-      // jsdom has no layout engine. Polyfill the layout APIs MemoryChat + Radix touch so
-      // an effect doesn't throw an async ResizeObserver/scroll error that taints the run.
-      ; (Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => { }
-      ; (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
-        observe(): void { }
-        unobserve(): void { }
-        disconnect(): void { }
-      }
+    // jsdom has no layout engine. Polyfill the layout APIs MemoryChat + Radix touch so
+    // an effect doesn't throw an async ResizeObserver/scroll error that taints the run.
+    ;(Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {}
+    ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
       value: vi.fn(() => 'blob:attachment-preview')
@@ -688,12 +691,8 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
 
     await openImageComposer(user)
     // Model select must be present (imgModels.length > 1) and reflect the active model.
-    const modelSelect = await screen.findByRole(
-      'combobox',
-      { name: 'Model' },
-      { timeout: 3000 }
-    )
-    expect(modelSelect.textContent).toMatch(/dreamlike-photoreal-v2/i)
+    const modelSelect = await screen.findByRole('combobox', { name: 'Model' }, { timeout: 3000 })
+    expect(modelSelect.textContent).toContain(modelDisplayName(FULL))
 
     // User overrides steps to 10 (the model's default is 28).
     await setSteps(user, 10)
@@ -1143,14 +1142,10 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
     renderChat()
     await openImageComposer(user)
 
-    const modelSelect = await screen.findByRole(
-      'combobox',
-      { name: 'Model' },
-      { timeout: 3000 }
-    )
-    expect(modelSelect.textContent).toMatch(/dreamlike-photoreal-v2/i)
+    const modelSelect = await screen.findByRole('combobox', { name: 'Model' }, { timeout: 3000 })
+    expect(modelSelect.textContent).toContain(modelDisplayName(FULL))
     // Switch to the few-step model through the real select, as a keyboard user would.
-    await chooseOption(user, modelSelect, 'sdxl-lightning')
+    await chooseOption(user, modelSelect, modelDisplayName('sdxl-lightning') ?? 'sdxl-lightning')
 
     // Divergence fix: the dropdown MUST write through the same owner as the
     // Active-models panel, or the two silently disagree on which model runs.
@@ -1178,8 +1173,9 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
 
     chat.unmount()
 
-    const api = (window as unknown as { api: { getSettings: () => Promise<Record<string, unknown>> } })
-      .api
+    const api = (
+      window as unknown as { api: { getSettings: () => Promise<Record<string, unknown>> } }
+    ).api
     await waitFor(async () => expect((await api.getSettings()).imgSeed).toBe('777'))
   })
 
@@ -1190,11 +1186,15 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
     await openImageComposer(firstUser)
 
     const modelSelect = screen.getByRole('combobox', { name: 'Model' })
-    await chooseOption(firstUser, modelSelect, 'sdxl-lightning')
+    await chooseOption(
+      firstUser,
+      modelSelect,
+      modelDisplayName('sdxl-lightning') ?? 'sdxl-lightning'
+    )
     await waitFor(() =>
       expect(boundary.setActiveModalModel).toHaveBeenLastCalledWith('image', FEW_STEP)
     )
-    await chooseOption(firstUser, modelSelect, 'dreamlike-photoreal-v2')
+    await chooseOption(firstUser, modelSelect, modelDisplayName(FULL) ?? FULL)
     await waitFor(() =>
       expect(boundary.setActiveModalModel).toHaveBeenLastCalledWith('image', FULL)
     )
@@ -1235,8 +1235,8 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
     renderChat()
     await openImageComposer(secondUser)
 
-    expect(screen.getByRole('combobox', { name: 'Model' }).textContent).toMatch(
-      /dreamlike-photoreal-v2/i
+    expect(screen.getByRole('combobox', { name: 'Model' }).textContent).toContain(
+      modelDisplayName(FULL)
     )
     expect(
       within(screen.getByRole('radiogroup', { name: 'Size' }))
@@ -1270,7 +1270,7 @@ describe('<MemoryChat/> image mode — the generateImage payload is the terminal
 // Send a message in the DEFAULT chat composer (not image mode).
 async function sendChat(user: ReturnType<typeof userEvent.setup>, text: string): Promise<void> {
   const textarea = await screen.findByPlaceholderText(/ask anything/i, {}, { timeout: 3000 })
-    ; (textarea as HTMLTextAreaElement).focus()
+  ;(textarea as HTMLTextAreaElement).focus()
   await user.type(textarea, text, { skipClick: true })
   await user.click(screen.getByRole('button', { name: /^send$/i }))
 }
@@ -1289,12 +1289,12 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
   beforeEach(() => {
     cleanup()
     vi.clearAllMocks()
-      ; (Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => { }
-      ; (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
-        observe(): void { }
-        unobserve(): void { }
-        disconnect(): void { }
-      }
+    ;(Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {}
+    ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
   })
 
   it('with tools ON, a "draw ..." turn goes to the agent (toolChat), NOT the renderer direct-generate', async () => {
@@ -1442,9 +1442,7 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
         expect.any(String),
         expect.stringContaining('Comic book reader: 1 of 10 pages ready.'),
         expect.objectContaining({
-          toolCalls: [
-            expect.objectContaining({ name: 'generate_image', status: 'completed' })
-          ]
+          toolCalls: [expect.objectContaining({ name: 'generate_image', status: 'completed' })]
         })
       )
     )
@@ -1519,8 +1517,8 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
     expect(
       screen.getAllByLabelText('Image generation metadata').map((metadata) => metadata.textContent)
     ).toEqual([
-      `768 × 768 · 17 steps · CFG 5.5 · seed 101 · ${FULL}`,
-      `768 × 768 · 17 steps · CFG 5.5 · seed 202 · ${FULL}`
+      `768 × 768 · 17 steps · CFG 5.5 · seed 101 · ${modelDisplayName(FULL)}`,
+      `768 × 768 · 17 steps · CFG 5.5 · seed 202 · ${modelDisplayName(FULL)}`
     ])
     expect(screen.getByText('चित्रण प्रक्रिया शुरू हो गई है – यह चैट में दिखाई देगा।')).toBeTruthy()
     const generationDetails = screen.getAllByRole('button', { name: 'Generation details' })
@@ -1585,7 +1583,7 @@ describe('<MemoryChat/> image and vision release journeys', () => {
   beforeEach(() => {
     cleanup()
     vi.clearAllMocks()
-      ; (Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => { }
+    ;(Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {}
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
       value: vi.fn(() => 'blob:attachment-preview')

@@ -3,7 +3,13 @@ import { getResidencyMode } from '../runtime-residency'
 import { recordAIRequest } from '../ai-request-log'
 import { getComputerUseSettings } from '../computer-use-settings'
 import { getWebUseSettings } from '../web-use-settings'
-import { DECIDER_2B, isKevModel, listInstalled, loadComputerUseModel } from '../models-manager'
+import {
+  DECIDER_2B,
+  displayModelName,
+  isKevModel,
+  listInstalled,
+  loadComputerUseModel
+} from '../models-manager'
 import { decisionRuntime, DecisionRuntimeError } from './decision-runtime'
 import { withExclusiveModelMemory } from '../model-memory'
 import { modalityQueue, CHAT_JOB } from '../modality-queue/queue'
@@ -66,7 +72,7 @@ async function runWithDecisionModel<T>(task: () => Promise<T>, modelId: string):
   if (remote) return task()
   if (!(await listInstalled()).includes(modelId)) {
     throw new Error(
-      `The selected Decision model is not downloaded: ${modelId}. Download it from the Computer Use catalog first.`
+      `The selected Decision model is not downloaded: ${displayModelName(modelId) ?? modelId}. Download it from the Computer Use catalog first.`
     )
   }
   if (dedicatedSession) {

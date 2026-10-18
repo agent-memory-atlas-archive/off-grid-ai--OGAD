@@ -95,14 +95,7 @@ export interface PermissionStatusContract {
  * usable thing "Running" made the panel claim idle helpers and permissions were
  * processes. */
 export type SystemHealthComponentStatusContract =
-  | 'ready'
-  | 'idle'
-  | 'starting'
-  | 'down'
-  | 'not_installed'
-  | 'installed'
-  | 'granted'
-  | 'denied'
+  'ready' | 'idle' | 'starting' | 'down' | 'not_installed' | 'installed' | 'granted' | 'denied'
 
 /** User-facing labels are part of the IPC contract so main and renderer cannot
  * independently reinterpret the same status record. */
@@ -130,6 +123,8 @@ export interface SystemHealthComponentContract {
 export interface SystemHealthContract {
   ramGb: number
   activeModel: string | null
+  /** The name a person reads for `activeModel`. Screens show this, never the id. */
+  activeModelName: string | null
   components: SystemHealthComponentContract[]
 }
 

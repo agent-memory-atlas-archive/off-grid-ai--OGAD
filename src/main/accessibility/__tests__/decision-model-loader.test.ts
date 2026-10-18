@@ -43,6 +43,7 @@ vi.mock('../../models-manager', () => ({
   DECIDER_2B: { id: 'offgrid/default-decider' },
   KEV_4B_ID: 'offgrid/kev-4b',
   isKevModel: (id: string | null | undefined) => id === 'offgrid/kev-4b' || id === 'offgrid/kev-9b',
+  displayModelName: (id: string) => (id === 'offgrid/selected-decider' ? 'Selected Decider' : id),
   listInstalled: mocks.installed,
   loadComputerUseModel: mocks.load
 }))
@@ -146,7 +147,9 @@ describe('decision model lifecycle', () => {
     expect(selectedDecisionModelId()).toBe('offgrid/default-decider')
 
     mocks.installed.mockResolvedValueOnce([])
-    await expect(withDecisionModel(async () => 'never')).rejects.toThrow('not downloaded')
+    await expect(withDecisionModel(async () => 'never')).rejects.toThrow(
+      'The selected Decision model is not downloaded: Selected Decider.'
+    )
   })
 
   it('keeps one dedicated runtime for nested decisions and shuts it down afterward', async () => {
