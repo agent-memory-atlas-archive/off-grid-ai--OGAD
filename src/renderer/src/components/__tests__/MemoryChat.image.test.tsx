@@ -1628,8 +1628,9 @@ describe('<MemoryChat/> image and vision release journeys', () => {
     expect(screen.queryByText('image')).toBeNull()
 
     await user.click(image)
-    expect(screen.getByRole('dialog', { name: 'Generated image preview' })).toBeTruthy()
-    expect(screen.getByAltText('Generated preview').getAttribute('src')).toBe(
+    // A picture the user sent is shown under its own name, not as one Off Grid generated.
+    const viewer = screen.getByRole('dialog', { name: 'dog.png' })
+    expect(within(viewer).getByAltText('dog.png').getAttribute('src')).toBe(
       'ogcapture:///received/dog.png'
     )
   })
@@ -1702,7 +1703,7 @@ describe('<MemoryChat/> image and vision release journeys', () => {
     )
 
     await user.click(generated)
-    expect(screen.getByRole('dialog', { name: 'Generated image preview' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'Generated image' })).toBeTruthy()
     expect(screen.getByTestId('side-panel-layer')).toBeTruthy()
     await user.click(screen.getByRole('button', { name: 'Download' }))
     await waitFor(() =>
@@ -1712,7 +1713,7 @@ describe('<MemoryChat/> image and vision release journeys', () => {
       )
     )
     await user.click(screen.getByRole('button', { name: 'Close' }))
-    expect(screen.queryByRole('dialog', { name: 'Generated image preview' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'Generated image' })).toBeNull()
   })
 
   it('runs the same refused request only after explicit RAM override without remounting (#66)', async () => {

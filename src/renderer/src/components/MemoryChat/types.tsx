@@ -209,7 +209,8 @@ export type ProjectedTurn = NonNullable<
   ReturnType<typeof import('@offgrid/sync').projectSyncedMessageTurn>
 >
 export type StoredMessageAttachment = NonNullable<ChatMessage['attachments']>[number]
-export type OpenImage = { url: string; path?: string }
+/** `title` names a picture the user shared; without it the image is one Off Grid generated. */
+export type OpenImage = { url: string; path?: string; title?: string }
 
 export type ContextNavigation = Readonly<{
   onNavigateToMemory?: (memoryId: number) => void

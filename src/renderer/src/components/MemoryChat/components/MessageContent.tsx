@@ -59,7 +59,9 @@ function MessageAttachmentsComponent({
               // Thumbnails in a row, the way a chat shows shared screenshots: a few files stay one
               // line high, and the whole picture is one click away.
               className="size-24 cursor-zoom-in rounded-md border border-neutral-800 object-cover object-top transition-opacity hover:opacity-90"
-              onOpen={onOpenImage}
+              onOpen={(image) =>
+                onOpenImage({ ...image, title: attachment.name || 'Shared image' })
+              }
             />
           )
         }

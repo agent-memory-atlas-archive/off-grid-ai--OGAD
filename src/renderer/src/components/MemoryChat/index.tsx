@@ -196,7 +196,8 @@ import type {
   ImageProgress,
   MessageRowActions,
   ProjectLite,
-  RagContext
+  RagContext,
+  StoredMessageAttachment
 } from './types'
 import {
   announceImageMessagePersisted,
@@ -206,6 +207,7 @@ import {
   mergeDurableAndStreaming,
   mergeRemotePreviewTools,
   queuedTurnId,
+  attachmentDisplayName,
   toProcessingAttachment,
   toQueuedMessage
 } from './helper'
@@ -856,7 +858,10 @@ export function MemoryChat({
   } | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [queueEdit, setQueueEdit] = useState<QueueEdit | null>(null)
-  const [lightbox, setLightbox] = useState<{ url: string; path?: string } | null>(null)
+  // `title` names a file the user brought (an upload); without it the picture is one Off Grid made.
+  const [lightbox, setLightbox] = useState<{ url: string; path?: string; title?: string } | null>(
+    null
+  )
   // Pro registers this slot after the core renderer starts. Resolve it on each render so an
   // execution-chat approval cannot stay hidden behind a value cached before Pro activation.
   const ChatMessagesFooter = isPro ? getSlot(SLOTS.chatMessagesFooter) : undefined
@@ -3667,7 +3672,7 @@ export function MemoryChat({
           ...prev,
           {
             id,
-            name: file.name,
+            name: attachmentDisplayName(file.name),
             kind: isImg ? 'image' : 'text',
             text: '',
             mimeType: file.type || undefined,
@@ -3832,7 +3837,11 @@ export function MemoryChat({
       if (!view.viewable) return
       closePanels()
       if (view.renderer === 'image' && attachment.path) {
-        setLightbox({ url: captureUrlForPath(attachment.path), path: attachment.path })
+        setLightbox({
+          url: captureUrlForPath(attachment.path),
+          path: attachment.path,
+          title: attachment.name
+        })
         return
       }
       setViewer({
@@ -4872,18 +4881,33 @@ export function MemoryChat({
                                     const url = a.preview || (a.path ? captureUrlForPath(a.path) : '')
                                     if (url) {
                                       closePanels()
-                                      setLightbox({ url, path: a.path })
+                                      setLightbox({ url, path: a.path, title: a.name })
                                     }
                                     return
                                   }
-                                  if (a.text || a.path) {
+                                  // The same viewer a sent message's attachment opens in: a PDF in
+                                  // the PDF viewer, audio in the player. Opening it as text drew an
+                                  // empty page for a PDF and a bare transcript for a recording.
+                                  const stored: StoredMessageAttachment & { mimeType?: string } = {
+                                    name: a.name,
+                                    kind: a.kind,
+                                    text: a.text,
+                                    path: a.path,
+                                    mimeType: a.mimeType
+                                  }
+                                  const view = describeAttachment({
+                                    fileName: a.name,
+                                    mimeType: a.mimeType,
+                                    path: a.path,
+                                    text: a.text,
+                                    recordedKind: a.kind
+                                  })
+                                  if (view.viewable) {
+                                    currentMessageActions.openAttachment(stored)
+                                  } else if (a.text) {
+                                    // Its file was not kept (only what was read from it): show that.
                                     closePanels()
-                                    setViewer({
-                                      title: a.kind === 'pasted' ? 'Pasted text' : a.name,
-                                      text: a.text || '',
-                                      path: a.path,
-                                      kind: a.kind
-                                    })
+                                    setViewer({ title: a.name, text: a.text, kind: a.kind })
                                   }
                                 }}
                               />
@@ -5616,8 +5640,8 @@ export function MemoryChat({
             lightbox
               ? {
                 url: lightbox.url,
-                alt: 'Generated preview',
-                dialogLabel: 'Generated image preview'
+                alt: lightbox.title ?? 'Generated image',
+                dialogLabel: lightbox.title ?? 'Generated image'
               }
               : null
           }
@@ -5640,6 +5664,8 @@ export function MemoryChat({
                   </TooltipTrigger>
                   <TooltipContent>Download</TooltipContent>
                 </Tooltip>
+                {/* Delete removes a picture Off Grid made; a file the user brought is not its to delete. */}
+                {lightbox.title ? null : (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -5655,6 +5681,7 @@ export function MemoryChat({
                   </TooltipTrigger>
                   <TooltipContent>Delete</TooltipContent>
                 </Tooltip>
+                )}
               </>
             ) : undefined
           }
