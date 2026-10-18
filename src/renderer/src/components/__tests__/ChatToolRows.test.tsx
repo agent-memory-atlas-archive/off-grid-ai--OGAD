@@ -60,6 +60,37 @@ describe('<ChatToolRows/> work disclosure', () => {
     expect(screen.queryByText('Compare the two flight options first.')).toBeNull()
   })
 
+  it('names a settled turn whose last step failed as failed work, even when the message is not flagged', () => {
+    render(
+      <ChatToolRows
+        settled
+        tools={[
+          { name: 'web_search', status: 'completed', result: 'Search results are ready.' },
+          {
+            name: 'web_use',
+            status: 'failed',
+            result: 'Web Use stopped: the decision model did not answer.'
+          }
+        ]}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Work failed' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Work done' })).toBeNull()
+  })
+
+  it('names the turn done when an earlier step failed but the last one finished', () => {
+    render(
+      <ChatToolRows
+        settled
+        tools={[
+          { name: 'web_search', status: 'failed', result: 'Error: offline' },
+          { name: 'web_search', status: 'completed', result: 'Search results are ready.' }
+        ]}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Work done' })).toBeTruthy()
+  })
+
   it('opens and folds the reasoning and steps on click', async () => {
     const user = userEvent.setup()
     render(completedTurn)
