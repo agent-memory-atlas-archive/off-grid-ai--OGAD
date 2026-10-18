@@ -1424,7 +1424,9 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
       '<!-- offgrid-action:comic-book -->\nQ: Story brief\nA: Mac builds local AI.\nQ: Story length\nA: 10 distinct images'
     )
 
-    expect(await screen.findByRole('button', { name: /HTML artifact/i })).toBeTruthy()
+    expect(
+      await screen.findByRole('button', { name: /^(Mac builds local AI|Local Light)$/ })
+    ).toBeTruthy()
     await waitFor(() => expect(boundary.generateImage).toHaveBeenCalledTimes(1))
     expect(boundary.generateImage.mock.calls[0]![0]).toMatchObject({
       prompt: 'Page 1, finished comic page.',
@@ -1555,8 +1557,8 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
       boundary.imageGenConversationPersisted.mock.calls.map(([, messageId]) => messageId)
     ).toEqual(['stored-message-2', 'stored-message-3'])
 
-    await user.click(screen.getByTitle('Generated images'))
-    expect(await screen.findByRole('button', { name: /images \(2\)/i })).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Gallery' }))
+    expect(await screen.findByRole('button', { name: /^images 2$/i })).toBeTruthy()
     expect(screen.getByAltText('first.png')).toBeTruthy()
     expect(screen.getByAltText('second.png')).toBeTruthy()
   })

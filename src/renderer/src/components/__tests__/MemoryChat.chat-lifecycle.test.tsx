@@ -52,9 +52,9 @@ function versionIs(label: string): (content: string, element: Element | null) =>
 
 /** Every saved answer of conversation-a, every version, in storage order. */
 function savedAnswers(boundary: ChatBoundary): string[] {
-  return boundary.messages['conversation-a']!
-    .filter((message) => message.role === 'assistant')
-    .map((message) => message.content)
+  return boundary.messages['conversation-a']!.filter((message) => message.role === 'assistant').map(
+    (message) => message.content
+  )
 }
 
 /** The answers conversation-a reads with: the chosen version of each. */
@@ -186,8 +186,7 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
     await send('670 Gateway Blvd, South San Francisco, CA 94080', user)
     await waitFor(() => expect(boundary.calls).toHaveLength(1))
     const history = vi.mocked(boundary.api.toolChat).mock.calls[0]?.[1] as
-      | { content: string }[]
-      | undefined
+      { content: string }[] | undefined
     expect(history?.[0]?.content).toContain('[Attached: Pasted text]')
     expect(history?.[0]?.content).toContain('(1 attachment)')
     expect(history?.[0]?.content).not.toContain('Find nearby beef ribs under $100')
@@ -763,7 +762,11 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
     await user.click(screen.getByRole('menuitem', { name: 'Speak' }))
 
     await waitFor(() => expect(boundary.speechTurns).toHaveLength(1))
-    expect(boundary.api.speak).toHaveBeenCalledWith('Read this answer.', undefined, expect.any(Function))
+    expect(boundary.api.speak).toHaveBeenCalledWith(
+      'Read this answer.',
+      undefined,
+      expect.any(Function)
+    )
   })
 
   it('streams and persists the first local reply in one assistant bubble (#32)', async () => {
@@ -1074,26 +1077,24 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
 
     await send('<!-- offgrid-action:comic-book -->\nQ: Story length\nA: 10 distinct images', user)
     await waitFor(() => expect(boundary.calls).toHaveLength(1))
-    expect(await screen.findByRole('button', { name: /click to open in the canvas/i })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Comic Book' })).toBeTruthy()
 
     view.rerender(
       <TooltipProvider>
         <MemoryChat openTarget={{ conversationId: 'conversation-b' }} />
       </TooltipProvider>
     )
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: /click to open in the canvas/i })).toBeNull()
-    )
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Comic Book' })).toBeNull())
     view.rerender(
       <TooltipProvider>
         <MemoryChat openTarget={{ conversationId: 'conversation-a' }} />
       </TooltipProvider>
     )
-    expect(await screen.findByRole('button', { name: /click to open in the canvas/i })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Comic Book' })).toBeTruthy()
 
     view.unmount()
     renderChat({ conversationId: 'conversation-a' })
-    await user.click(await screen.findByRole('button', { name: /click to open in the canvas/i }))
+    await user.click(await screen.findByRole('button', { name: 'Comic Book' }))
     expect(await screen.findByTitle('artifact')).toBeTruthy()
     expect(
       boundary.messages['conversation-a']!.filter((message) =>
@@ -1137,11 +1138,9 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
       renderChat({ conversationId: 'conversation-a' })
       if (failed) {
         expect(await screen.findByText('Comic response')).toBeTruthy()
-        expect(screen.queryByRole('button', { name: /click to open in the canvas/i })).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Comic Book' })).toBeNull()
       } else {
-        expect(
-          await screen.findByRole('button', { name: /click to open in the canvas/i })
-        ).toBeTruthy()
+        expect(await screen.findByRole('button', { name: 'Comic Book' })).toBeTruthy()
       }
     }
   )
@@ -1178,7 +1177,7 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
         code: '<div>Alpha artifact</div>'
       })
     )
-    expect(await screen.findByRole('button', { name: /HTML artifact/i })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'HTML page' })).toBeTruthy()
   })
 
   it('regenerates from the same user turn without duplicating it (#47)', async () => {
@@ -1224,7 +1223,10 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
       ])
     )
     expect(
-      (await boundary.api.getRagMessages('conversation-a')).map(({ role, content }) => [role, content])
+      (await boundary.api.getRagMessages('conversation-a')).map(({ role, content }) => [
+        role,
+        content
+      ])
     ).toEqual([
       ['user', 'Explain the release gate'],
       ['assistant', 'Updated explanation']
@@ -1540,7 +1542,9 @@ describe('<MemoryChat/> - chat lifecycle integration (#36-#42, #47-#48)', () => 
       expect(screen.queryByRole('button', { name: /stop generating/i })).toBeNull()
     )
     // Each answer is its own saved version; the partial one is shown.
-    await waitFor(() => expect(savedAnswers(boundary)).toEqual(['Earlier answer', 'Partial resend']))
+    await waitFor(() =>
+      expect(savedAnswers(boundary)).toEqual(['Earlier answer', 'Partial resend'])
+    )
     expect(await shownAnswers(boundary)).toEqual(['Partial resend'])
   })
 

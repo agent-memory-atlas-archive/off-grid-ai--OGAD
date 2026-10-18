@@ -264,7 +264,8 @@ export type MessageRowActions = Readonly<{
   saveEdit: (messageId: string, text: string) => void
   updateVoiceTranscript: (message: ChatMessage, text: string) => Promise<void>
   retryImageMemory: (retry: NonNullable<ChatMessage['imageMemoryRetry']>) => void
-  openArtifact: (artifact: Artifact) => void
+  /** `messageId`: the canvas follows that message, so a streaming artifact renders as it arrives. */
+  openArtifact: (artifact: Artifact, messageId?: string) => void
   selectAskOption: (selection: AskOptionSelection) => void
   submitAsk: (selected: readonly string[]) => void
   speak: (messageId: string, content: string) => void

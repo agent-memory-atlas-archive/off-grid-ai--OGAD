@@ -512,7 +512,11 @@ function MessageBubble({
           onRetry={actions.retryImageMemory}
         />
       ) : null}
-      <ArtifactCard artifact={artifact} onOpen={actions.openArtifact} />
+      <ArtifactCard
+        artifact={artifact}
+        building={Boolean(message.streaming && artifact?.partial)}
+        onOpen={(opened) => actions.openArtifact(opened, message.id)}
+      />
       {ask ? (
         <AskCard
           ask={ask}
@@ -672,7 +676,7 @@ function StandardMessageRow({
             speechError={speechError}
             speechEnabled={state.ttsEnabled}
             onCopy={() => actions.copy(message.content, message.id)}
-            onOpenArtifact={actions.openArtifact}
+            onOpenArtifact={(opened) => actions.openArtifact(opened, message.id)}
             onRegenerate={() => actions.regenerate(message.id)}
             onSelectVariant={(direction) => actions.selectVariant(message.id, direction)}
             onSpeak={() => actions.speak(message.id, message.content)}

@@ -240,7 +240,8 @@ import {
   clearStreamViewMessage,
   resetStreamViewMessage,
   seedStreamViewMessage,
-  streamViewMessage
+  streamViewMessage,
+  useStreamViewMessage
 } from './stream-view-store'
 
 import { stopLiveTask, stopLiveWebUseForConversation } from './helper'
@@ -256,6 +257,9 @@ import {
 } from './utlis'
 
 /** OGAD's names for the queue's rows and actions. */
+/** Stands in when no canvas follows a message, so the stream hook is always called. */
+const NO_FOLLOWED_MESSAGE: ChatMessage = { id: '', role: 'assistant', content: '' }
+
 const QUEUE_LABELS: MessageQueueLabels = {
   queue: 'Queued messages',
   section: 'queued',
@@ -880,9 +884,13 @@ export function MemoryChat({
     return () => window.removeEventListener('keydown', onKey)
   }, [viewer, lightbox])
   const [canvasArtifact, setCanvasArtifact] = useState<Artifact | null>(null)
+  /** The message the open canvas came from; while it streams, the canvas follows it. */
+  const [canvasMessageId, setCanvasMessageId] = useState<string | null>(null)
   const [skillsOpen, setSkillsOpen] = useState(false)
   const [selectedSkillName, setSelectedSkillName] = useState<string | undefined>()
   const [showGallery, setShowGallery] = useState(false)
+  /** The open artifact came from the Gallery, so its canvas offers a way back to it. */
+  const [canvasFromGallery, setCanvasFromGallery] = useState(false)
   // The canvas / text viewer / gallery belong to a specific message, so they must
   // not bleed across chats — close them whenever the active conversation changes
   // (switch tab, new chat, close-to-fallback, open-from-projects, delete).
@@ -3307,12 +3315,47 @@ export function MemoryChat({
     return () => window.removeEventListener(OPEN_ACTIVE_MODELS_PANEL_EVENT, openActiveModels)
   }, [closePanels])
   const openCanvas = useCallback(
-    (a: Artifact) => {
+    (a: Artifact, fromGallery = false) => {
       closePanels()
+      setCanvasFromGallery(fromGallery)
+      setCanvasMessageId(null)
       setCanvasArtifact(a)
     },
     [closePanels]
   )
+
+  // A canvas opened from a message follows it: while the answer streams, the artifact is re-read
+  // from its content at most twice a second, so the page renders as it is written; when the
+  // answer settles, the canvas shows its final artifact. A streaming reply's text lives in the
+  // stream view (the stored message stays empty until it is saved), so the canvas reads that.
+  const followedStoredMessage = canvasMessageId
+    ? messages.find((message) => message.id === canvasMessageId)
+    : undefined
+  const followedLiveMessage = useStreamViewMessage(followedStoredMessage ?? NO_FOLLOWED_MESSAGE)
+  const followedArtifactMessage = followedStoredMessage ? followedLiveMessage : undefined
+  const followedContent = followedArtifactMessage?.content ?? null
+  const followedStreaming = Boolean(followedArtifactMessage?.streaming)
+  const [liveCanvasArtifact, setLiveCanvasArtifact] = useState<Artifact | null>(null)
+  const lastCanvasReadRef = useRef(0)
+  useEffect(() => {
+    if (followedContent === null) {
+      setLiveCanvasArtifact(null)
+      return
+    }
+    const read = (): void => {
+      lastCanvasReadRef.current = Date.now()
+      setLiveCanvasArtifact(parseArtifact(followedContent))
+    }
+    const wait = followedStreaming ? 500 - (Date.now() - lastCanvasReadRef.current) : 0
+    if (wait <= 0) {
+      read()
+      return
+    }
+    // A throttle, not a debounce: a new token reschedules for the same moment, never later.
+    const timer = window.setTimeout(read, wait)
+    return () => window.clearTimeout(timer)
+  }, [followedContent, followedStreaming])
+  const shownCanvasArtifact = liveCanvasArtifact ?? canvasArtifact
 
   const openGallery = useCallback(() => {
     if (showGallery) {
@@ -3870,7 +3913,10 @@ export function MemoryChat({
         imageRequest: { ...retry.request, allowUnsafeMemoryOverride: true }
       })
     },
-    openArtifact: openCanvas,
+    openArtifact: (artifact, messageId) => {
+      openCanvas(artifact)
+      setCanvasMessageId(messageId ?? null)
+    },
     selectAskOption: ({ message, ask, option, selected }) => {
       if (!ask.multiSelect) {
         void sendMessage(option)
@@ -5555,8 +5601,16 @@ export function MemoryChat({
           {canvasArtifact && (
             <ArtifactCanvas
               key="artifact-canvas"
-              artifact={canvasArtifact}
+              artifact={shownCanvasArtifact ?? canvasArtifact}
               onClose={() => setCanvasArtifact(null)}
+              onBack={
+                canvasFromGallery
+                  ? () => {
+                      setCanvasArtifact(null)
+                      setShowGallery(true)
+                    }
+                  : undefined
+              }
               width={canvasWidth}
               onResize={setCanvasWidth}
             />
@@ -5717,8 +5771,36 @@ export function MemoryChat({
               className="w-[min(720px,92vw)] overflow-hidden text-white"
               restoreFocusRef={galleryTriggerRef}
             >
-              <header className="flex items-center justify-between border-b border-neutral-900 px-4 py-3 text-left">
+              {/* One header row: what you are looking at, where from, and close. Three stacked bars
+                  took a fifth of the panel before anything was shown. */}
+              <header className="flex items-center gap-3 border-b border-neutral-900 px-4 py-2.5 text-left">
                 <h2 className="text-sm font-normal text-neutral-200">Gallery</h2>
+                <div className="flex items-center gap-1">
+                  {(['images', 'artifacts'] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setGalleryTab(tab)}
+                      className={`rounded px-2.5 py-1 text-xs capitalize transition-colors ${galleryTab === tab ? 'bg-neutral-800 text-green-500' : 'text-neutral-500 hover:text-neutral-300'}`}
+                    >
+                      {tab}{' '}
+                      <span className="tabular-nums text-neutral-500">
+                        {tab === 'images' ? gallery.length : artifacts.length}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div className="ml-auto flex items-center gap-1">
+                  {(['chat', 'project', 'all'] as const).map((sc) => (
+                    <button
+                      key={sc}
+                      onClick={() => setGalleryScope(sc)}
+                      disabled={sc === 'project' && !activeProjectId}
+                      className={`rounded px-2 py-0.5 text-[11px] capitalize transition-colors disabled:opacity-30 ${galleryScope === sc ? 'bg-neutral-800 text-green-500' : 'text-neutral-500 hover:text-neutral-300'}`}
+                    >
+                      {sc === 'chat' ? 'This chat' : sc}
+                    </button>
+                  ))}
+                </div>
                 <button
                   type="button"
                   onClick={() => setShowGallery(false)}
@@ -5728,29 +5810,6 @@ export function MemoryChat({
                   <X className="h-4 w-4" />
                 </button>
               </header>
-              <div className="flex items-center gap-1 border-b border-neutral-900 px-3 py-2">
-                {(['images', 'artifacts'] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => setGalleryTab(tab)}
-                    className={`rounded px-3 py-1 text-xs capitalize transition-colors ${galleryTab === tab ? 'bg-neutral-800 text-green-500' : 'text-neutral-500 hover:text-neutral-300'}`}
-                  >
-                    {tab} {tab === 'images' ? `(${gallery.length})` : `(${artifacts.length})`}
-                  </button>
-                ))}
-              </div>
-              <div className="flex items-center gap-1 border-b border-neutral-900 px-3 py-1.5">
-                {(['chat', 'project', 'all'] as const).map((sc) => (
-                  <button
-                    key={sc}
-                    onClick={() => setGalleryScope(sc)}
-                    disabled={sc === 'project' && !activeProjectId}
-                    className={`rounded px-2 py-0.5 text-[10px] capitalize transition-colors disabled:opacity-30 ${galleryScope === sc ? 'bg-neutral-800 text-green-500' : 'text-neutral-500 hover:text-neutral-300'}`}
-                  >
-                    {sc === 'chat' ? 'This chat' : sc}
-                  </button>
-                ))}
-              </div>
               <div className="flex-1 overflow-y-auto p-3">
                 {galleryTab === 'images' ? (
                   gallery.length === 0 ? (
@@ -5783,35 +5842,43 @@ export function MemoryChat({
                         No artifacts in this {galleryScope === 'all' ? 'app' : galleryScope}.
                       </p>
                     ) : (
-                      <div className="flex flex-col divide-y divide-neutral-900 overflow-hidden rounded-md border border-neutral-800">
+                      <div className="grid grid-cols-2 gap-2">
                         {artifacts.map((a) => (
                           <div
                             key={a.id}
-                            className="group flex items-center gap-2 px-3 py-2 transition-colors hover:bg-neutral-900/60"
+                            className="group flex items-start gap-2 rounded-md border border-neutral-800 bg-neutral-900/30 p-3 transition-colors hover:border-green-500/50 hover:bg-neutral-900/60"
                           >
                             <button
                               onClick={() =>
                                 a.kind === 'image'
                                   ? (closePanels(),
-                                    setLightbox({ url: captureUrlForPath(a.code), path: a.code }))
+                                    setLightbox({
+                                      url: captureUrlForPath(a.code),
+                                      path: a.code,
+                                      title: a.title
+                                    }))
                                   : a.kind === 'text'
                                     ? (closePanels(), setViewer({ title: a.title, text: a.code }))
-                                    : openCanvas({ kind: a.kind, code: a.code, title: a.title })
+                                    : openCanvas({ kind: a.kind, code: a.code, title: a.title }, true)
                               }
-                              className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                              className="flex min-w-0 flex-1 flex-col items-start gap-2 text-left"
                             >
                               {a.kind === 'image' ? (
+                                // Big enough to tell the pictures apart: at 32px a screenshot read as an
+                                // empty square.
                                 <img
                                   src={captureUrlForPath(a.code)}
                                   alt=""
-                                  className="h-8 w-8 shrink-0 rounded-sm border border-neutral-800 object-cover"
+                                  loading="lazy"
+                                  decoding="async"
+                                  className="aspect-video w-full shrink-0 rounded-sm border border-neutral-800 bg-neutral-950 object-cover"
                                 />
                               ) : (
                                 <span className="rounded-sm bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-green-500">
                                   {a.kind === 'text' ? 'input' : a.kind}
                                 </span>
                               )}
-                              <span className="truncate text-xs text-neutral-200">{a.title}</span>
+                              <span className="line-clamp-2 text-sm text-neutral-200">{a.title}</span>
                             </button>
                             <Tooltip>
                               <TooltipTrigger asChild>
