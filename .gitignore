@@ -95,3 +95,7 @@ coverage-native-raw/
 coverage-native/
 coverage-native-desktop-raw/
 coverage-native-desktop/
+
+# Local scratch: generated PDFs and their helper scripts
+/output/
+/tmp/
