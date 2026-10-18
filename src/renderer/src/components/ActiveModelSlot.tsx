@@ -169,6 +169,7 @@ export function ActiveModelSlot(props: {
                   </span>
                   {active?.remote ? (
                     <span
+                      role="img"
                       title="Remote"
                       aria-label="Remote"
                       className="flex shrink-0 text-green-500 [&>svg]:h-3.5 [&>svg]:w-3.5"

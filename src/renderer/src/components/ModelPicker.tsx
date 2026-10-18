@@ -1,5 +1,12 @@
 import { useRuntimeBackends } from '../hooks/useRuntimeBackends'
-import { canonicalModelId } from '@offgrid/models'
+import {
+  canonicalModelId,
+  modelCapabilities,
+  modelSizeLabel,
+  MODEL_CAPABILITIES,
+  type ModelCapability,
+  type ModelFile as CatalogModelFile
+} from '@offgrid/models'
 import {
   modelRuntimeBackend,
   runtimeBackendLabel,
@@ -16,7 +23,7 @@ import { IconTip } from './IconTip'
 import { openModelSettingsPanel } from '@renderer/lib/model-settings-panel'
 import { TaskLineups } from './TaskLineups'
 import { ActiveModelSlot, type UnloadStatus } from './ActiveModelSlot'
-import { useTaskRoles } from '../lib/task-roles'
+import { isStagedDecisionModel, useTaskRoles } from '../lib/task-roles'
 import { resolveActiveTextModel } from '../lib/model-summary'
 import { invalidateLlmSettings } from '../lib/settings-invalidation'
 import { Field, FieldError } from '@offgrid/operator-ui/operator/coss/field'
@@ -26,7 +33,8 @@ const api = (): any => (window as any).api
 
 interface ModelFile {
   name: string
-  role?: string
+  role?: CatalogModelFile['role']
+  sizeBytes?: number
 }
 interface ModelEntry {
   id: string
@@ -37,6 +45,13 @@ interface ModelEntry {
   grounder?: boolean
   tags?: string[]
   availability?: 'ready' | 'coming_soon'
+  // Read by the shared capability rule (catalog fields, plus tools/reasoning from the template).
+  sourceModelId?: string
+  params?: number
+  imageModes?: string[]
+  engine?: string
+  tools?: boolean
+  reasoning?: boolean
 }
 
 // The text/vision LLM is selected by catalog id (it reloads llama-server); image
@@ -72,97 +87,36 @@ function primaryVariant(m: ModelEntry): string | null {
   return file.slice(0, -'.gguf'.length).split('-').at(-1) ?? null
 }
 
-// Vision is a derived capability: a model sees if it is a vision kind or ships a projector (mmproj).
-function hasVision(m: ModelEntry): boolean {
-  return m.kind === 'vision' || (m.files ?? []).some((f) => f.role === 'mmproj')
+// The glyph for each capability; the shared rule decides which apply and what they are called.
+const CAPABILITY_ICONS: Record<ModelCapability, React.ReactElement> = {
+  vision: <Eye />,
+  tools: <Wrench />,
+  reasoning: <Brain />,
+  multilingual: <Translate />,
+  image_edit: <PencilSimple />
 }
-
-// A decision model the user staged for evaluation lives in the decision-eval folder. It is a
-// specialist, not a chat model, so it does not belong in the Text & Vision list.
-function isDecisionEvalModel(m: ModelEntry): boolean {
-  return (m.files ?? []).some((f) => f.name.includes('/decision-eval/'))
-}
-
-// Short size read for a row: the parameter count when the catalog knows it, else the file weight.
-function sizeLabel(m: ModelEntry): string | null {
-  const params = (m as { params?: number }).params
-  if (typeof params === 'number' && params > 0) return `${params}B`
-  const bytes = (m.files?.find((f) => f.role === 'primary') ?? m.files?.[0]) as
-    | { sizeBytes?: number }
-    | undefined
-  if (bytes?.sizeBytes) return `${(bytes.sizeBytes / 1e9).toFixed(1)} GB`
-  return null
-}
-
-// Speech and transcription models carry their reach in the catalog tags or the source name: an
-// "English" tag or a Whisper `.en` build is English-only; a "Multilingual" tag, or any other
-// Whisper/Kokoro build, speaks many languages. We say so only when the signal is clear.
-function isMultilingual(m: ModelEntry): boolean {
-  const tags = (m.tags ?? []).map((t) => t.toLowerCase())
-  if (tags.includes('multilingual')) return true
-  if (tags.includes('english')) return false
-  const text = `${(m as { sourceModelId?: string }).sourceModelId ?? ''} ${m.name}`.toLowerCase()
-  if (/\.en\b|english/.test(text)) return false
-  if (m.kind === 'transcription') return /whisper|parakeet/.test(text)
-  if (m.kind === 'voice' || m.kind === 'speech') return /kokoro/.test(text)
-  return false
-}
-
-// Every image model does text-to-image, so saying so on each row only repeats. What differs, and so
-// earns an icon, is image-to-image: taking a picture in and editing it.
-function editsImages(m: ModelEntry): boolean {
-  const modes = (m as { imageModes?: unknown }).imageModes
-  if (Array.isArray(modes) && modes.includes('img2img')) return true
-  return (m.tags ?? []).some((t) => /editing/i.test(t))
-}
-
-function reasons(m: ModelEntry): boolean {
-  return /reasoning|thinking/i.test((m as { description?: string }).description ?? '')
-}
-
-interface Capability {
-  key: string
-  label: string
-  icon: React.ReactElement
-}
-
-// The capabilities a row can prove from catalog metadata alone, so the list helps you choose before
-// anything is downloaded. Each is an icon with its name as the tooltip; what cannot be proven from
-// metadata (tool calling, context window) is left off rather than guessed.
-function capabilities(m: ModelEntry): Capability[] {
-  const caps: Capability[] = []
-  // "Sees images" is about understanding an input image — a chat/vision trait. An image generator
-  // ships a projector too, but there the meaningful trait is editing, below, not seeing.
-  if (hasVision(m) && m.kind !== 'image')
-    caps.push({ key: 'vision', label: 'Sees images', icon: <Eye /> })
-  if ((m as { tools?: boolean }).tools === true)
-    caps.push({ key: 'tools', label: 'Calls tools', icon: <Wrench /> })
-  if (isMultilingual(m))
-    caps.push({ key: 'multilingual', label: 'Many languages', icon: <Translate /> })
-  if (editsImages(m)) caps.push({ key: 'edit', label: 'Image to image', icon: <PencilSimple /> })
-  if (reasons(m)) caps.push({ key: 'reasoning', label: 'Reasons step by step', icon: <Brain /> })
-  return caps
-}
+const CAPABILITY_LABELS = new Map(MODEL_CAPABILITIES.map(({ id, label }) => [id, label]))
 
 // Capability icons alone (no size): shown on the chosen model's card, next to its load state.
 function capabilityIcons(m: ModelEntry): React.ReactNode {
-  const caps = capabilities(m)
-  if (caps.length === 0) return null
-  return caps.map((cap) => (
+  const capabilities = modelCapabilities(m)
+  if (capabilities.length === 0) return null
+  return capabilities.map((capability) => (
     <span
-      key={cap.key}
-      title={cap.label}
-      aria-label={cap.label}
+      key={capability}
+      role="img"
+      title={CAPABILITY_LABELS.get(capability)}
+      aria-label={CAPABILITY_LABELS.get(capability)}
       className="flex text-green-500 [&>svg]:h-3.5 [&>svg]:w-3.5"
     >
-      {cap.icon}
+      {CAPABILITY_ICONS[capability]}
     </span>
   ))
 }
 
 // The right side of a dropdown row: capability icons, then the size. Undefined when nothing to say.
 function optionMeta(m: ModelEntry): React.ReactNode {
-  const size = sizeLabel(m)
+  const size = modelSizeLabel(m)
   const icons = capabilityIcons(m)
   if (!size && !icons) return undefined
   return (
@@ -331,7 +285,7 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
         {/* Same order as the Models screen's tabs: Text, Image, Tasks, Voice, Transcription. */}
         {MODALITIES.flatMap(({ label, kinds, mode }) => {
           const list = models.filter(
-            (m) => kinds.includes(m.kind) && installed.includes(m.id) && !isDecisionEvalModel(m)
+            (m) => kinds.includes(m.kind) && installed.includes(m.id) && !isStagedDecisionModel(m)
           )
           const duplicateNames = new Set(
             list
