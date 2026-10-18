@@ -207,7 +207,7 @@ test('holds a connector write until approval, then executes it once with visible
 
   await page.getByRole('button', { name: 'Actions', exact: true }).click()
   await page.getByRole('radio', { name: /^Approvals/ }).click()
-  await page.getByRole('radio', { name: 'history', exact: true }).click()
+  await page.getByRole('radio', { name: 'History', exact: true }).click()
 
   await expect(page.getByRole('paragraph').filter({ hasText: APPROVAL_TITLE })).toBeVisible()
   await expect(page.getByText('executed', { exact: true })).toBeVisible({ timeout: 10_000 })

@@ -172,7 +172,7 @@ test.describe('God routine approval', () => {
     )
     await page.waitForTimeout(1_000)
     expect(externalExecutions()).toEqual([EXTERNAL])
-    await page.getByRole('radio', { name: 'history', exact: true }).click()
+    await page.getByRole('radio', { name: 'History', exact: true }).click()
     await expect(page.getByText('executed', { exact: true }).first()).toBeVisible({
       timeout: 15_000
     })
