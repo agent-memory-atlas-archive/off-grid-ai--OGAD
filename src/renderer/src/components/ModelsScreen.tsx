@@ -254,7 +254,36 @@ function fmtReleaseDate(iso?: string): string {
 }
 
 const BONSAI_2_ID = 'prism-ml/Ternary-Bonsai-2-27B-gguf'
-const KEV_4B_ID = 'jaredpalmer/kev-4b'
+/** Kev releases (jaredpalmer/kev-4b, kev-9b): SafeTensors packages, not GGUF repositories. */
+const isKevModel = (id: string): boolean => id.startsWith('jaredpalmer/kev-')
+
+const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight']
+
+/** What a Kev release is made of, read from its own files: its base, how many shards, the sizes. */
+function kevFormat(m: { params?: number; files: ModelFile[] }): {
+  base: string
+  chat: string
+  shards: string
+  baseSize: string
+  adapterSize: string
+} {
+  const baseFiles = m.files.filter((file) => file.name.includes('/base/'))
+  const shards = baseFiles.filter((file) =>
+    /model\.safetensors-\d+-of-\d+\.safetensors$/.test(file.name)
+  ).length
+  const bytes = (files: ModelFile[]): number =>
+    files.reduce((sum, file) => sum + (file.sizeBytes ?? 0), 0)
+  const repo = baseFiles
+    .map((file) => /huggingface\.co\/[^/]+\/([^/]+)\/resolve\//.exec(file.url)?.[1])
+    .find(Boolean)
+  return {
+    base: repo ?? `Qwen3.5-${m.params ?? ''}B-Base`,
+    chat: `Qwen 3.5 ${m.params ?? ''}B`,
+    shards: `${COUNT_WORDS[shards] ?? shards} SafeTensors file${shards === 1 ? '' : 's'}`,
+    baseSize: `${(bytes(baseFiles) / 1e9).toFixed(2)} GB`,
+    adapterSize: `${Math.round(bytes(m.files.filter((file) => file.name.includes('/checkpoint-'))) / 1e6)} MB`
+  }
+}
 
 function featureRank(
   m: { id?: string; sourceModelId?: string; credibility?: string; tags?: string[] },
@@ -499,7 +528,7 @@ export function ModelsScreen({
   useEffect(() => {
     if (
       !detail ||
-      detail.id === KEV_4B_ID ||
+      isKevModel(detail.id) ||
       detail.id.startsWith('local:') ||
       !['text', 'vision', 'computer_use'].includes(detail.kind)
     ) {
@@ -2005,28 +2034,32 @@ export function ModelsScreen({
                       <IconExternalLink className="h-3 w-3" /> View on Hugging Face
                     </button>
                   )}
-                  {m.id === KEV_4B_ID && (
-                    <section
-                      aria-label="Kev model format"
-                      className="mt-3 border-t border-neutral-800 pt-3"
-                    >
-                      <h3 className="text-[10px] uppercase tracking-wide text-neutral-400">
-                        Model format
-                      </h3>
-                      <p className="mt-2 text-[10px] leading-relaxed text-neutral-400">
-                        Kev uses the original Qwen3.5-4B-Base SafeTensors weights. The Qwen 3.5 4B
-                        GGUF chat model cannot be reused. GGUF contains quantized weights for
-                        llama.cpp, while Kev loads SafeTensors through MLX or Torch.
-                      </p>
-                      <p className="mt-2 text-[10px] leading-relaxed text-neutral-500">
-                        One Qwen base: 9.34 GB across two SafeTensors files, plus a 135 MB Kev
-                        adapter. If the compatible SafeTensors base is already on this device, Off
-                        Grid AI reuses it.
-                      </p>
-                    </section>
-                  )}
+                  {isKevModel(m.id) &&
+                    (() => {
+                      const format = kevFormat(m)
+                      return (
+                        <section
+                          aria-label="Kev model format"
+                          className="mt-3 border-t border-neutral-800 pt-3"
+                        >
+                          <h3 className="text-[10px] uppercase tracking-wide text-neutral-400">
+                            Model format
+                          </h3>
+                          <p className="mt-2 text-[10px] leading-relaxed text-neutral-400">
+                            Kev uses the original {format.base} SafeTensors weights. The{' '}
+                            {format.chat} GGUF chat model cannot be reused. GGUF contains quantized
+                            weights for llama.cpp, while Kev loads SafeTensors through MLX or Torch.
+                          </p>
+                          <p className="mt-2 text-[10px] leading-relaxed text-neutral-500">
+                            One Qwen base: {format.baseSize} across {format.shards}, plus a{' '}
+                            {format.adapterSize} Kev adapter. If the compatible SafeTensors base is
+                            already on this device, Off Grid AI reuses it.
+                          </p>
+                        </section>
+                      )
+                    })()}
                   {hfUrl &&
-                    m.id !== KEV_4B_ID &&
+                    !isKevModel(m.id) &&
                     ['text', 'vision', 'computer_use'].includes(m.kind) && (
                       <section
                         aria-label="Available model files"
