@@ -6,7 +6,7 @@ import {
   type RuntimeId
 } from '../../../shared/runtime-backends'
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import { Brain, Cpu, Eye, GearSix, PencilSimple, Translate, X } from '@phosphor-icons/react'
+import { Brain, Cpu, Eye, GearSix, PencilSimple, Translate, Wrench, X } from '@phosphor-icons/react'
 import { AnimatePresence, motion } from 'motion/react'
 import { ListRow } from '@offgrid/operator-ui/operator/list-row'
 import { Section } from '@offgrid/operator-ui/operator/experience'
@@ -135,6 +135,8 @@ function capabilities(m: ModelEntry): Capability[] {
   // ships a projector too, but there the meaningful trait is editing, below, not seeing.
   if (hasVision(m) && m.kind !== 'image')
     caps.push({ key: 'vision', label: 'Sees images', icon: <Eye /> })
+  if ((m as { tools?: boolean }).tools === true)
+    caps.push({ key: 'tools', label: 'Calls tools', icon: <Wrench /> })
   if (isMultilingual(m))
     caps.push({ key: 'multilingual', label: 'Many languages', icon: <Translate /> })
   if (editsImages(m)) caps.push({ key: 'edit', label: 'Image to image', icon: <PencilSimple /> })

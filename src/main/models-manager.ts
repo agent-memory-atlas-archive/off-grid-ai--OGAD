@@ -1,4 +1,4 @@
-import { settingsChanged } from './settings-version'
+import { settingsChanged, settingsVersion } from './settings-version'
 import { withStorageDownload } from './model-storage-guard'
 // Central model management — the single source of truth for catalog, install
 // listing, download (pull), delete, and activation. Used by BOTH the desktop IPC
@@ -8,7 +8,12 @@ import fs from 'fs'
 import path from 'path'
 import { llm } from './llm'
 import { isValidGgufFile } from './models/gguf'
-import { readGgufMtpSupport } from './models/gguf-metadata'
+import {
+  readGgufMtpSupport,
+  parseGgufChatTemplate,
+  chatTemplateDeclaresTools,
+  GGUF_TEMPLATE_PREFIX_BYTES
+} from './models/gguf-metadata'
 import { pumpToFile } from './models/download-pump'
 import { downloadIntegrityError, sha256IntegrityError } from './models/download-verify'
 import { downloadFailureMessage, isStorageCapacityError } from './models/download-error'
@@ -61,7 +66,13 @@ import {
   type TransferredModelManifest
 } from '@offgrid/sync'
 import { sampleProgressRate, type ProgressRateSample } from '@offgrid/ui'
-import { CATALOG as BASE_CATALOG, type ModelEntry } from '@offgrid/models'
+import {
+  CATALOG as BASE_CATALOG,
+  describeModel,
+  modelDisplayName,
+  type ModelEntry,
+  type ModelNameSources
+} from '@offgrid/models'
 import {
   parseRemoteVisionModelId,
   remoteVisionInventoryModels,
@@ -368,6 +379,8 @@ export async function desktopCatalog(): Promise<ModelEntry[]> {
 
 export interface DownloadProgress {
   modelId: string
+  /** The name a person reads for `modelId`. Screens show this, never the id. */
+  modelName: string
   percent?: number
   status?: 'queued' | 'downloading' | 'completed' | 'failed' | 'cancelled'
   currentFile?: string
@@ -474,19 +487,113 @@ export async function getCatalog(): Promise<{ kinds: readonly string[]; models: 
   // injected as a closure so it stays pure.
   const present = (name: string): boolean => fileSizeOf(dir, name) > 0
   const downloaded = reconcileDownloadedModelRegistry(dir, CATALOG as unknown as CatalogEntry[])
+  const locals = getLocalModels()
   const models = mergeCatalog({
-    locals: getLocalModels(),
+    locals,
     downloaded,
     installedDownloadedIds: installedDownloadedIds(dir),
     catalog: CATALOG as unknown as CatalogEntry[],
     present,
     sizeOf: (name) => fileSizeOf(dir, name)
   })
-  const remoteModels = remoteVisionInventoryModels(getRemoteVisionServerSettings().servers)
+  const servers = getRemoteVisionServerSettings().servers
+  const remoteModels = remoteVisionInventoryModels(servers)
+  // Every row is named by the one shared resolver, so no screen ever shows a file or repo id.
+  const sources: ModelNameSources = {
+    catalog: CATALOG,
+    downloaded,
+    locals,
+    remote: remoteNameSources(servers)
+  }
+  // Tool calling is a chat trait the catalog does not record: it lives in the model's GGUF chat
+  // template. Read it for an installed chat model (the only kind the pickers list), honouring a
+  // curated flag when one is set. Unknown (not installed, not curated) stays undefined — no icon.
+  // The read is async and cached so a model list never blocks the main thread on file IO.
+  const toolEntries = await Promise.all(
+    (models as CatalogEntry[]).map(async (model): Promise<readonly [string, boolean | undefined]> => {
+      if ((model as { tools?: boolean }).tools === true) return [model.id, true]
+      if (model.kind !== 'text' && model.kind !== 'vision') return [model.id, undefined]
+      const name = primaryFileName(model)
+      if (!name || fileSizeOf(dir, name) <= 0) return [model.id, undefined]
+      return [model.id, await readToolSupport(modelFilePath(dir, name))]
+    })
+  )
+  const toolsById = new Map(toolEntries)
   return {
     kinds: MODEL_KINDS,
-    models: [...models, ...remoteModels]
+    models: [
+      ...models.map((model) => ({ ...model, tools: toolsById.get((model as CatalogEntry).id) })),
+      ...remoteModels
+    ].map((model) => ({
+      ...model,
+      name: describeModel(model.id, sources).displayName
+    }))
   }
+}
+
+// Whether a model's GGUF chat template wires up tool calling, read without blocking the event loop
+// and remembered per path/size/mtime (the costly part is parsing tens of MiB of header metadata).
+const toolSupportCache = new Map<string, boolean>()
+async function readToolSupport(filePath: string): Promise<boolean> {
+  try {
+    const { size, mtimeMs } = await fs.promises.stat(filePath)
+    const toRead = Math.min(size, GGUF_TEMPLATE_PREFIX_BYTES)
+    if (toRead <= 0) return false
+    const key = `${filePath}\0${size}\0${mtimeMs}\0${toRead}`
+    const known = toolSupportCache.get(key)
+    if (known !== undefined) return known
+    const handle = await fs.promises.open(filePath, 'r')
+    const buf = Buffer.alloc(toRead)
+    try {
+      await handle.read(buf, 0, toRead, 0)
+    } finally {
+      await handle.close()
+    }
+    const template = parseGgufChatTemplate(buf)
+    const supported = template !== null && chatTemplateDeclaresTools(template)
+    toolSupportCache.set(key, supported)
+    return supported
+  } catch {
+    return false
+  }
+}
+
+function remoteNameSources(
+  servers: ReturnType<typeof getRemoteVisionServerSettings>['servers']
+): NonNullable<ModelNameSources['remote']> {
+  return servers.map((server) => ({ serverId: server.id, models: server.modelCatalog ?? [] }))
+}
+
+let nameSourcesCache: { version: number; at: number; sources: ModelNameSources } | null = null
+
+/** What the shared name resolver matches a model reference against: the desktop catalog, the
+ * download and import registries, and each remote server's advertised models. Cached briefly:
+ * listing imported models walks the disk. */
+export function modelNameSources(): ModelNameSources {
+  const version = settingsVersion()
+  const now = Date.now()
+  if (nameSourcesCache && nameSourcesCache.version === version && now - nameSourcesCache.at < 3_000)
+    return nameSourcesCache.sources
+  const read = <T>(load: () => T[]): T[] => {
+    try {
+      return load()
+    } catch {
+      return []
+    }
+  }
+  const sources: ModelNameSources = {
+    catalog: DESKTOP_CATALOG,
+    downloaded: read(() => readDownloaded(llm.getModelsDir())),
+    locals: read(() => getLocalModels()),
+    remote: read(() => [...remoteNameSources(getRemoteVisionServerSettings().servers)])
+  }
+  nameSourcesCache = { version, at: now, sources }
+  return sources
+}
+
+/** The name a person reads for any model reference: an id, a file name, a path or a remote id. */
+export function displayModelName(ref: string | null | undefined): string | null {
+  return modelDisplayName(ref, modelNameSources())
 }
 
 export interface ModelIdentity {
@@ -497,27 +604,7 @@ export interface ModelIdentity {
 /** Resolve a captured model ID to its display name without consulting which
  * model is active now. Task runs use this once, then persist the result. */
 export async function resolveModelIdentity(modelId: string): Promise<ModelIdentity> {
-  const remoteReference = parseRemoteVisionModelId(modelId)
-  if (remoteReference) {
-    const server = getRemoteVisionServerSettings().servers.find(
-      (candidate) => candidate.id === remoteReference.serverId
-    )
-    const model = server?.modelCatalog?.find(
-      (candidate) => candidate.id === remoteReference.modelId
-    )
-    if (server && model) {
-      return { modelId, modelName: `${model.name} - ${server.name}` }
-    }
-  }
-  try {
-    const catalog = (await getCatalog()).models as Array<{ id: string; name?: string }>
-    return {
-      modelId,
-      modelName: catalog.find((model) => model.id === modelId)?.name?.trim() || modelId
-    }
-  } catch {
-    return { modelId, modelName: modelId }
-  }
+  return { modelId, modelName: displayModelName(modelId) ?? modelId }
 }
 
 /** Per-model optional companion status, keyed by id. The renderer uses this to repair
@@ -668,7 +755,13 @@ function publishRefusal(
   error: string,
   onProgress?: ProgressCb
 ): { success: false; error: string } {
-  const p: DownloadProgress = { modelId, status: 'failed', percent: 0, error }
+  const p: DownloadProgress = {
+    modelId,
+    modelName: displayModelName(modelId) ?? modelId,
+    status: 'failed',
+    percent: 0,
+    error
+  }
   lastProgress.set(modelId, p)
   onProgress?.(p)
   return { success: false, error }
@@ -800,8 +893,9 @@ async function downloadModelInner(
     return { success: false, error: 'already downloading' }
   }
   let loggedStatus: DownloadProgress['status'] | undefined
+  const modelName = displayModelName(modelId) ?? modelId
   const send = (data: Partial<DownloadProgress>): void => {
-    const p: DownloadProgress = { ...lastProgress.get(modelId), modelId, ...data }
+    const p: DownloadProgress = { ...lastProgress.get(modelId), modelId, modelName, ...data }
     lastProgress.set(modelId, p)
     onProgress?.(p)
     if (p.status && p.status !== loggedStatus) {
@@ -1126,6 +1220,33 @@ function deleteTransferredModel(context: TransferredDeletionContext): DeleteMode
   return { success: true, freedFiles }
 }
 
+/**
+ * Remove a model found in another app's folder (LM Studio, an added folder). Its files are still on
+ * this disk, so removing it frees that space; they go to the Trash rather than being erased, since
+ * the folder belongs to the user or another app. Ollama is the exception: its blobs are shared
+ * between tags and tracked by manifests, so deleting one by hand breaks Ollama itself.
+ */
+async function trashExternalModel(modelId: string, dir: string): Promise<DeleteModelResult> {
+  const found = discoverExternalModels(undefined, undefined, dir, readModelScanFolders(dataDir())).find(
+    (model) => model.id === modelId
+  )
+  if (!found) return { success: false, error: 'This model is no longer in that folder.' }
+  if (found.source === 'Ollama') {
+    return { success: false, error: `Ollama manages this model. Remove it with: ollama rm ${found.name}` }
+  }
+  const { shell } = await import('electron')
+  let freedFiles = 0
+  for (const file of [found.primary, found.mmproj].filter((value): value is string => Boolean(value))) {
+    await shell.trashItem(file)
+    freedFiles++
+  }
+  if (getActiveModel() === modelId) {
+    fs.rmSync(activeModelFile(), { force: true })
+    llm.reloadModel()
+  }
+  return { success: true, freedFiles }
+}
+
 /** Delete a model's files from disk. Clears it as active if it was selected. */
 export async function deleteModel(modelId: string): Promise<DeleteModelResult> {
   try {
@@ -1136,8 +1257,8 @@ export async function deleteModel(modelId: string): Promise<DeleteModelResult> {
 }
 
 async function deleteModelFiles(modelId: string): Promise<DeleteModelResult> {
-  if (modelId.startsWith('external:')) return { success: false, error: 'External models are read only.' }
   const dir = llm.getModelsDir()
+  if (modelId.startsWith('external:')) return trashExternalModel(modelId, dir)
   // Imported local model: remove its files + registry entry, clear if active.
   if (modelId.startsWith('local:')) {
     const list = getLocalModels()
@@ -1775,7 +1896,12 @@ export async function getTransferableModel(
     id: downloaded?.id ?? modelId,
     familyId: downloaded?.familyId ?? catalog?.id ?? local?.id ?? modelId,
     packageIdentity: downloaded?.packageIdentity,
-    name: local?.name ?? downloaded?.name ?? catalog?.name ?? modelId,
+    // Named from this model's own registry entry: the shared name cache may predate it.
+    name: describeModel(local?.id ?? downloaded?.id ?? modelId, {
+      catalog: DESKTOP_CATALOG,
+      downloaded: downloaded ? [downloaded] : [],
+      locals: local ? [local] : []
+    }).displayName,
     kind: local?.kind ?? downloaded?.kind ?? catalog?.kind ?? 'text',
     source,
     files
@@ -1904,8 +2030,9 @@ export async function importLocalModel(
   const dest = path.join(dir, fileName)
   const id = `local:${fileName}`
   const total = fs.statSync(srcPath).size
+  const name = describeModel(fileName, modelNameSources()).displayName
   const send = (data: Partial<DownloadProgress>): void => {
-    onProgress?.({ modelId: id, ...data })
+    onProgress?.({ modelId: id, modelName: name, ...data })
   }
 
   // Copy unless an identical-size file is already there.
@@ -1941,9 +2068,8 @@ export async function importLocalModel(
   }
 
   // Heuristic kind: a paired mmproj makes it vision; otherwise treat as text.
-  const base = fileName.replace(/\.gguf$/i, '')
   const list = getLocalModels().filter((m) => m.id !== id)
-  list.push({ id, name: base, primary: fileName, kind: 'text', sizeBytes: total })
+  list.push({ id, name, primary: fileName, kind: 'text', sizeBytes: total })
   saveLocalModels(list)
   settingsChanged()
   send({ status: 'completed', percent: 100 })
@@ -2021,7 +2147,15 @@ export async function getStorageInfo(): Promise<StorageInfo> {
       modals,
       sizeOf
     })
-  )
+  ).map((entry) => ({
+    ...entry,
+    name: describeModel(entry.id, {
+      catalog,
+      downloaded,
+      locals,
+      remote: modelNameSources().remote
+    }).displayName
+  }))
 
   let entries: string[] = []
   try {
@@ -2119,6 +2253,8 @@ function ensureRegistryLoaded(): void {
         p.status = 'failed'
         p.error = DOWNLOAD_INTERRUPTED_ERROR
       }
+      // Rows saved by earlier builds carry no name.
+      p.modelName = displayModelName(p.modelId) ?? p.modelId
       lastProgress.set(p.modelId, p)
     }
   } catch {

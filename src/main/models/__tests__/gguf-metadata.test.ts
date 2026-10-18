@@ -4,6 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   parseGgufMetadata,
+  parseGgufChatTemplate,
+  chatTemplateDeclaresTools,
   readGgufContextLength,
   GGUF_METADATA_PREFIX_BYTES
 } from '../gguf-metadata'
@@ -145,5 +147,31 @@ describe('readGgufContextLength (real temp file, real fs)', () => {
 
   it('exposes a multi-MB default prefix (cheap vs a multi-GB model, ample for the arch block)', () => {
     expect(GGUF_METADATA_PREFIX_BYTES).toBeGreaterThanOrEqual(1024 * 1024)
+  })
+})
+
+describe('tool-calling detection from the chat template', () => {
+  it('extracts the chat template, and returns null when it sits past the read window', () => {
+    const template = "{% for m in messages %}{{ m.content }}{% endfor %}"
+    const found = buildGguf([
+      kvString('general.architecture', 'qwen3'),
+      kvString('tokenizer.chat_template', template)
+    ])
+    expect(parseGgufChatTemplate(found)).toBe(template)
+    // A token array so large the walk runs off the buffer → null, never a crash.
+    const truncated = buildGguf([
+      kvOversizedStringArray('tokenizer.ggml.tokens'),
+      kvString('tokenizer.chat_template', template)
+    ])
+    expect(parseGgufChatTemplate(truncated)).toBeNull()
+  })
+
+  it('reads tools from templates that wire up tool calling, and not from plain ones', () => {
+    const toolTemplate =
+      "{% if tools %}{% for t in tools %}{{ t.function.name }}{% endfor %}{% endif %}" +
+      "{% if message.tool_calls %}<tool_call>{% endif %}"
+    const plainTemplate = "{% for m in messages %}{{ m.role }}: {{ m.content }}{% endfor %}"
+    expect(chatTemplateDeclaresTools(toolTemplate)).toBe(true)
+    expect(chatTemplateDeclaresTools(plainTemplate)).toBe(false)
   })
 })

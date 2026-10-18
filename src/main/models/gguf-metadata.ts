@@ -244,6 +244,32 @@ export function readGgufContextLength(
   }
 }
 
+/** The chat template string from the header, or null when absent or past the read window. */
+export function parseGgufChatTemplate(buf: Buffer): string | null {
+  if (buf.length < 8 || buf.subarray(0, 4).toString('ascii') !== 'GGUF') return null
+  const c = new Cursor(buf, 4)
+  try {
+    if (c.u32() < 2) return null
+    c.u64() // tensor_count
+    const kvCount = c.u64()
+    for (let i = 0; i < kvCount; i++) {
+      const key = c.str()
+      const type = c.u32()
+      if (key === 'tokenizer.chat_template' && type === T.STRING) return c.str()
+      readValue(c, type)
+    }
+  } catch {
+    // Truncated prefix or an unexpected type: the template sits past what we read.
+    return null
+  }
+  return null
+}
+
+/** Whether a chat template wires up tool/function calling (the model can be handed tools). */
+export function chatTemplateDeclaresTools(template: string): boolean {
+  return /tool_call|tool_calls|\btools\b|tool_calling/i.test(template)
+}
+
 // Parsing up to tens of MiB of metadata is the costly part, and the answer is fixed for
 // one file version. Callers ask on every model-list read, so remember it per path, size
 // and modification time.
@@ -280,3 +306,7 @@ export function readGgufMtpSupport(
     return false
   }
 }
+
+/** How many leading bytes to read when hunting for the chat template: it can sit after the token
+ *  arrays, so this is larger than the hyperparameter prefix, yet still cheap against a GB-scale model. */
+export const GGUF_TEMPLATE_PREFIX_BYTES = GGUF_METADATA_PREFIX_BYTES * 4
