@@ -187,97 +187,158 @@ export const DECIDER_2B_VISION: ModelEntry = {
 
 export const KEV_4B_ID = 'jaredpalmer/kev-4b'
 
-const KEV_4B: ModelEntry = {
+/** A pinned file of a Kev release: where it lives, and its exact bytes. */
+interface KevFile {
+  readonly file: string
+  readonly sizeBytes: number
+  readonly sha256: string
+  readonly role: 'primary' | 'aux' | 'tokenizer'
+}
+
+/**
+ * One Kev release: a LoRA checkpoint plus pointer head over a Qwen3.5 base in SafeTensors. Its files
+ * live under kev-<size>/checkpoint-v1.0/ and kev-<size>/base/ in the models folder.
+ */
+function kevEntry(spec: {
+  readonly size: string
+  readonly id: string
+  readonly revision: string
+  readonly baseRepo: string
+  readonly baseRevision: string
+  readonly params: number
+  readonly minRamGb: number
+  readonly tags: string[]
+  readonly releaseDate: string
+  readonly checkpoint: readonly KevFile[]
+  readonly base: readonly KevFile[]
+}): ModelEntry {
+  const pinned = (folder: string, repo: string, revision: string) => (file: KevFile) => ({
+    name: `kev-${spec.size}/${folder}/${file.file}`,
+    url: `https://huggingface.co/${repo}/resolve/${revision}/${file.file}`,
+    sizeBytes: file.sizeBytes,
+    sha256: file.sha256,
+    role: file.role
+  })
+  return {
+    id: spec.id,
+    name: `Kev ${spec.size.toUpperCase()}`,
+    kind: 'computer_use',
+    org: 'Jared Palmer',
+    description: 'Local pointer-head model for typed Computer Use decisions.',
+    params: spec.params,
+    minRamGb: spec.minRamGb,
+    tags: spec.tags,
+    grounder: false,
+    isNew: true,
+    releaseDate: spec.releaseDate,
+    files: [
+      ...spec.checkpoint.map(pinned('checkpoint-v1.0', spec.id, spec.revision)),
+      ...spec.base.map(pinned('base', spec.baseRepo, spec.baseRevision))
+    ]
+  }
+}
+
+/** The Qwen3.5 tokenizer files a Kev base ships. */
+const QWEN35_TOKENIZER: readonly KevFile[] = [
+  {
+    file: 'merges.txt',
+    sizeBytes: 3353259,
+    sha256: 'a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d',
+    role: 'tokenizer'
+  },
+  {
+    file: 'tokenizer.json',
+    sizeBytes: 12807196,
+    sha256: 'fe000e3ed39ed12b8d2481d527d44f93c65d37e87645d2dcc80d1bf9d50d2927',
+    role: 'tokenizer'
+  },
+  {
+    file: 'tokenizer_config.json',
+    sizeBytes: 16713,
+    sha256: '3891e840d7dc5fca0af33d3a25083a735e36fe06214e3f707024820cb6b9f89c',
+    role: 'tokenizer'
+  },
+  {
+    file: 'vocab.json',
+    sizeBytes: 6722759,
+    sha256: 'ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003',
+    role: 'tokenizer'
+  }
+]
+const tokenizer = (name: string): KevFile => QWEN35_TOKENIZER.find((file) => file.file === name)!
+
+const KEV_4B = kevEntry({
+  size: '4b',
   id: KEV_4B_ID,
-  name: 'Kev 4B',
-  kind: 'computer_use',
-  org: 'Jared Palmer',
-  description: 'Local pointer-head model for typed Computer Use decisions.',
+  revision: '591dcb5bd6d05eb0b5131ea6608f93f10243335c',
+  baseRepo: 'Qwen/Qwen3.5-4B-Base',
+  baseRevision: '1001bb4d826a52d1f399e183466143f4da7b741b',
   params: 4,
   minRamGb: 16,
   tags: ['Decision', 'Decider', 'Fast'],
-  grounder: false,
-  isNew: true,
   releaseDate: '2026-10-01',
-  files: [
+  checkpoint: [
     {
-      name: 'kev-4b/checkpoint-v1.0/head.pt',
-      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/591dcb5bd6d05eb0b5131ea6608f93f10243335c/head.pt',
+      file: 'head.pt',
       sizeBytes: 5249791,
       sha256: 'dd633435998ecc751ac538717a3742e32149500fabf7d7276287dbf0693f347c',
       role: 'primary'
     },
     {
-      name: 'kev-4b/checkpoint-v1.0/adapter_config.json',
-      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/591dcb5bd6d05eb0b5131ea6608f93f10243335c/adapter_config.json',
+      file: 'adapter_config.json',
       sizeBytes: 1271,
       sha256: '8a05dfd6c5e7f61a62e6db5d8de8093a8dbbd105aa7ee7b5e7b73f6249f45617',
       role: 'aux'
     },
     {
-      name: 'kev-4b/checkpoint-v1.0/adapter_model.safetensors',
-      url: 'https://huggingface.co/jaredpalmer/kev-4b/resolve/591dcb5bd6d05eb0b5131ea6608f93f10243335c/adapter_model.safetensors',
+      file: 'adapter_model.safetensors',
       sizeBytes: 129924032,
       sha256: '90e817356246e7f18bfa7ca3d31794cd4fbeb3332a66a84cb51d9ceae925f2b2',
       role: 'aux'
-    },
+    }
+  ],
+  base: [
     {
-      name: 'kev-4b/base/config.json',
-      url: 'https://huggingface.co/Qwen/Qwen3.5-4B-Base/resolve/1001bb4d826a52d1f399e183466143f4da7b741b/config.json',
+      file: 'config.json',
       sizeBytes: 3161,
       sha256: 'ddc63e1c717afa86c865bb5e01313d89d72bb53b97ad4a8a03ba8510c0621670',
       role: 'aux'
     },
+    tokenizer('merges.txt'),
     {
-      name: 'kev-4b/base/merges.txt',
-      url: 'https://huggingface.co/Qwen/Qwen3.5-4B-Base/resolve/1001bb4d826a52d1f399e183466143f4da7b741b/merges.txt',
-      sizeBytes: 3353259,
-      sha256: 'a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d',
-      role: 'tokenizer'
-    },
-    {
-      name: 'kev-4b/base/model.safetensors-00001-of-00002.safetensors',
-      url: 'https://huggingface.co/Qwen/Qwen3.5-4B-Base/resolve/1001bb4d826a52d1f399e183466143f4da7b741b/model.safetensors-00001-of-00002.safetensors',
+      file: 'model.safetensors-00001-of-00002.safetensors',
       sizeBytes: 5329398712,
       sha256: 'df547074dce70532a0493e5433152bd17a65efb89088cfabc2e7e2371a93d712',
       role: 'aux'
     },
     {
-      name: 'kev-4b/base/model.safetensors-00002-of-00002.safetensors',
-      url: 'https://huggingface.co/Qwen/Qwen3.5-4B-Base/resolve/1001bb4d826a52d1f399e183466143f4da7b741b/model.safetensors-00002-of-00002.safetensors',
+      file: 'model.safetensors-00002-of-00002.safetensors',
       sizeBytes: 3990429344,
       sha256: '590fbaac095dd31db886c322d9d2f7df47777966391acf306ddddc3e4e3a15ef',
       role: 'aux'
     },
     {
-      name: 'kev-4b/base/model.safetensors.index.json',
-      url: 'https://huggingface.co/Qwen/Qwen3.5-4B-Base/resolve/1001bb4d826a52d1f399e183466143f4da7b741b/model.safetensors.index.json',
+      file: 'model.safetensors.index.json',
       sizeBytes: 76196,
       sha256: 'eae340074abb0a5f31a6621f7ae8e8248a7c1790df04a722c4e4b70c2a6d1dbb',
       role: 'aux'
     },
-    {
-      name: 'kev-4b/base/tokenizer.json',
-      url: 'https://huggingface.co/Qwen/Qwen3.5-4B-Base/resolve/1001bb4d826a52d1f399e183466143f4da7b741b/tokenizer.json',
-      sizeBytes: 12807196,
-      sha256: 'fe000e3ed39ed12b8d2481d527d44f93c65d37e87645d2dcc80d1bf9d50d2927',
-      role: 'tokenizer'
-    },
-    {
-      name: 'kev-4b/base/tokenizer_config.json',
-      url: 'https://huggingface.co/Qwen/Qwen3.5-4B-Base/resolve/1001bb4d826a52d1f399e183466143f4da7b741b/tokenizer_config.json',
-      sizeBytes: 16713,
-      sha256: '3891e840d7dc5fca0af33d3a25083a735e36fe06214e3f707024820cb6b9f89c',
-      role: 'tokenizer'
-    },
-    {
-      name: 'kev-4b/base/vocab.json',
-      url: 'https://huggingface.co/Qwen/Qwen3.5-4B-Base/resolve/1001bb4d826a52d1f399e183466143f4da7b741b/vocab.json',
-      sizeBytes: 6722759,
-      sha256: 'ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003',
-      role: 'tokenizer'
-    }
+    tokenizer('tokenizer.json'),
+    tokenizer('tokenizer_config.json'),
+    tokenizer('vocab.json')
   ]
+})
+
+/** Every Kev release the app offers. */
+export const KEV_MODELS: readonly ModelEntry[] = [KEV_4B]
+
+export function isKevModel(modelId: string | null | undefined): boolean {
+  return KEV_MODELS.some((model) => model.id === modelId)
+}
+
+/** The folder a Kev release's files live under, e.g. "kev-4b". */
+function kevFolder(model: ModelEntry): string {
+  return model.files[0]!.name.split('/')[0]!
 }
 
 export interface KevRuntimeArtifact {
@@ -287,8 +348,20 @@ export interface KevRuntimeArtifact {
   script: string
 }
 
+/** The weight shards a SafeTensors index names. Empty when the index is missing or unreadable. */
+function indexedShards(base: string): string[] {
+  try {
+    const index = JSON.parse(
+      fs.readFileSync(path.join(base, 'model.safetensors.index.json'), 'utf8')
+    ) as { weight_map?: Record<string, string> }
+    return [...new Set(Object.values(index.weight_map ?? {}))]
+  } catch {
+    return []
+  }
+}
+
 /** Resolve the packaged server runtime and the model downloaded from the Models screen. */
-export function resolveKevRuntimeArtifact(): KevRuntimeArtifact | null {
+export function resolveKevRuntimeArtifact(modelId: string = KEV_4B_ID): KevRuntimeArtifact | null {
   if (!(
     (process.platform === 'darwin' && process.arch === 'arm64') ||
     process.platform === 'win32' ||
@@ -296,9 +369,15 @@ export function resolveKevRuntimeArtifact(): KevRuntimeArtifact | null {
   )) {
     return null
   }
-  const modelRoot = path.join(llm.getModelsDir(), 'kev-4b')
-  const checkpoint = path.join(llm.getModelsDir(), KEV_CHECKPOINT_PREFIX)
-  const base = reusableKevBaseDir(llm.getModelsDir()) ?? path.join(modelRoot, 'base')
+  const model = KEV_MODELS.find((entry) => entry.id === modelId)
+  if (!model) return null
+  const folder = kevFolder(model)
+  const modelRoot = path.join(llm.getModelsDir(), folder)
+  const checkpoint = path.join(modelRoot, 'checkpoint-v1.0') + path.sep
+  // Only 4B ever had a pre-catalog base outside the models folder.
+  const base =
+    (model.id === KEV_4B_ID ? reusableKevBaseDir(llm.getModelsDir()) : null) ??
+    path.join(modelRoot, 'base')
   const pythonRelative =
     process.platform === 'win32'
       ? path.join('kev-runtime', 'python', 'python.exe')
@@ -318,24 +397,26 @@ export function resolveKevRuntimeArtifact(): KevRuntimeArtifact | null {
   const script = binRoots()
     .map((directory) => path.join(directory, 'kev-local-server.py'))
     .find((candidate) => fs.existsSync(candidate))
+  // The index names the shards: 4B has two, 9B four. A base missing any shard is incomplete.
+  const shards = indexedShards(base)
   const required = [
     path.join(checkpoint, 'head.pt'),
     path.join(checkpoint, 'adapter_model.safetensors'),
     path.join(base, 'config.json'),
     path.join(base, 'model.safetensors.index.json'),
-    path.join(base, 'model.safetensors-00001-of-00002.safetensors'),
-    path.join(base, 'model.safetensors-00002-of-00002.safetensors'),
+    ...shards.map((shard) => path.join(base, shard)),
     path.join(base, 'tokenizer.json'),
     path.join(base, 'tokenizer_config.json')
   ]
   return python &&
     script &&
+    shards.length > 0 &&
     required.every((file) => fileSizeOf(path.dirname(file), path.basename(file)) > 0)
     ? { checkpoint, base, python, script }
     : null
 }
 
-const DESKTOP_CATALOG = [BONSAI_2, DECIDER_2B, DECIDER_2B_VISION, KEV_4B]
+const DESKTOP_CATALOG = [BONSAI_2, DECIDER_2B, DECIDER_2B_VISION, ...KEV_MODELS]
 
 export async function desktopCatalog(): Promise<ModelEntry[]> {
   const { CATALOG } = await import('@offgrid/models')
@@ -2165,7 +2246,7 @@ export async function getStorageInfo(): Promise<StorageInfo> {
   // The generic scanner predates directory-backed packages and scans root GGUF
   // files. Count managed Kev files here. A reused legacy base is outside this
   // models directory and is not app-managed storage.
-  const nestedModelBytes = KEV_4B.files.reduce((sum, file) => {
+  const nestedModelBytes = KEV_MODELS.flatMap((model) => model.files).reduce((sum, file) => {
     if (!file.name.includes('/')) return sum
     try {
       return sum + fs.statSync(path.join(dir, file.name)).size
