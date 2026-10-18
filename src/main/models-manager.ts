@@ -186,6 +186,7 @@ export const DECIDER_2B_VISION: ModelEntry = {
 }
 
 export const KEV_4B_ID = 'jaredpalmer/kev-4b'
+export const KEV_9B_ID = 'jaredpalmer/kev-9b'
 
 /** A pinned file of a Kev release: where it lives, and its exact bytes. */
 interface KevFile {
@@ -238,7 +239,7 @@ function kevEntry(spec: {
   }
 }
 
-/** The Qwen3.5 tokenizer files a Kev base ships. */
+/** The Qwen3.5 tokenizer, identical across the 4B and 9B bases. */
 const QWEN35_TOKENIZER: readonly KevFile[] = [
   {
     file: 'merges.txt',
@@ -329,8 +330,84 @@ const KEV_4B = kevEntry({
   ]
 })
 
+/** Kev on Qwen3.5-9B-Base (base revision pinned in the release's provenance.json). BF16 weights
+ *  are 19.3 GB, so it needs a machine with room for them beside the app. */
+const KEV_9B = kevEntry({
+  size: '9b',
+  id: KEV_9B_ID,
+  revision: 'db029f08b290afd9fee4aa4bbcd9ae48602d1eb0',
+  baseRepo: 'Qwen/Qwen3.5-9B-Base',
+  baseRevision: '68c46c4b3498877f3ef123c856ecfde50c39f404',
+  params: 9,
+  minRamGb: 32,
+  tags: ['Decision', 'Decider'],
+  releaseDate: '2026-10-18',
+  checkpoint: [
+    {
+      file: 'head.pt',
+      sizeBytes: 8395071,
+      sha256: '8e1dab2c8e3664f6fee843e0257d57946c25e0210c61901ea77e71761f4244e1',
+      role: 'primary'
+    },
+    {
+      file: 'adapter_config.json',
+      sizeBytes: 1271,
+      sha256: '2b2563a94d1bc1065653bec4d296f5a1a6287ab895b14d23e5997333503ecd97',
+      role: 'aux'
+    },
+    {
+      file: 'adapter_model.safetensors',
+      sizeBytes: 173178096,
+      sha256: '2b2a70cf4ef4440b6c22899e1f72c2f8ea5c6f65b19aa344539b4b8971d1f13d',
+      role: 'aux'
+    }
+  ],
+  base: [
+    {
+      file: 'config.json',
+      sizeBytes: 3126,
+      sha256: 'd0883072e01861ed0b2d47be3c16c36a8e81c224c7ffaa310c6558fb3f932b05',
+      role: 'aux'
+    },
+    tokenizer('merges.txt'),
+    {
+      file: 'model.safetensors-00001-of-00004.safetensors',
+      sizeBytes: 5276436216,
+      sha256: '862bf7bba8a50145d19d0ae463931fae515284024736592a73a336bc4dfa54ee',
+      role: 'aux'
+    },
+    {
+      file: 'model.safetensors-00002-of-00004.safetensors',
+      sizeBytes: 5335161576,
+      sha256: 'bace8e115e11ca93c22f0352a60d2fb0c76ac6d7d1c2993c143b7ad2b6c8868c',
+      role: 'aux'
+    },
+    {
+      file: 'model.safetensors-00003-of-00004.safetensors',
+      sizeBytes: 5368717376,
+      sha256: '63a021ac0011cbfc66166e77103327a8b45dee95832e36551f6b4c3337448959',
+      role: 'aux'
+    },
+    {
+      file: 'model.safetensors-00004-of-00004.safetensors',
+      sizeBytes: 3325995704,
+      sha256: '1a643bbed669266917b5058b5d3f660c03233599249ff7d8fd083decfe662ae0',
+      role: 'aux'
+    },
+    {
+      file: 'model.safetensors.index.json',
+      sizeBytes: 79657,
+      sha256: '026b9d9fe03f19fd065f2a2f56a332c67640878106c0ca6be2f60c655ed5a8c1',
+      role: 'aux'
+    },
+    tokenizer('tokenizer.json'),
+    tokenizer('tokenizer_config.json'),
+    tokenizer('vocab.json')
+  ]
+})
+
 /** Every Kev release the app offers. */
-export const KEV_MODELS: readonly ModelEntry[] = [KEV_4B]
+export const KEV_MODELS: readonly ModelEntry[] = [KEV_4B, KEV_9B]
 
 export function isKevModel(modelId: string | null | undefined): boolean {
   return KEV_MODELS.some((model) => model.id === modelId)
