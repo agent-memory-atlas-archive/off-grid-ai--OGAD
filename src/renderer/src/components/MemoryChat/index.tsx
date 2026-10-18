@@ -4195,9 +4195,11 @@ export function MemoryChat({
                 ref={historyPanelRef}
                 id="conversation-history"
                 order={1}
-                defaultSize={20}
-                minSize={14}
-                maxSize={40}
+                // God's chat column is narrow beside Ares and the rail: a fifth of it cut every
+                // title to two words and the search box to "Search con".
+                defaultSize={god ? 34 : 20}
+                minSize={god ? 28 : 14}
+                maxSize={god ? 50 : 40}
                 collapsible
                 collapsedSize={0}
                 onCollapse={() => setConversationsVisible(false)}
@@ -4287,7 +4289,13 @@ export function MemoryChat({
                   )}
                   {/* Messages */}
                   <div className="relative min-h-0 flex-1">
-                    <div ref={scrollRef} onScroll={onScrollFollow} className="h-full overflow-y-auto">
+                    {/* The top edge fades, so a line scrolled up to the tab strip leaves softly
+                        instead of being cut in half under the tabs. */}
+                    <div
+                      ref={scrollRef}
+                      onScroll={onScrollFollow}
+                      className="h-full overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,black_16px)]"
+                    >
                       {switchingConversationId !== null &&
                         switchingConversationId === activeConversationId ? (
                         <div
@@ -4867,7 +4875,10 @@ export function MemoryChat({
                         <AutoHeight>
                           {attachments.length > 0 ? (
                             <div
-                              className="px-3 pt-3"
+                              // A ready chip's name sits in its open button as an inline span, where
+                              // the library's max-width does not apply: a long name spanned the whole
+                              // composer and every chip reflowed when a file finished processing.
+                              className="px-3 pt-3 [&_[data-slot=attachment-chip]_button>span.truncate]:block"
                               aria-busy={attachments.some((a) => a.status === 'loading')}
                             >
                               <AttachmentList
@@ -4989,7 +5000,10 @@ export function MemoryChat({
                         <PromptInputFooter className="cursor-auto select-auto flex-wrap gap-x-2 gap-y-2 px-2.5 pb-2.5 pt-1 font-normal text-foreground">
                           {/* Chips wrap to a new line on narrow widths instead of overflowing the composer
                       (the Image chip used to clip off the right edge). */}
-                          <PromptInputTools className="flex-wrap gap-2">
+                          {/* The chips take the room left of mic and send and wrap inside it; sized to
+                              their content they took the whole row once the canvas narrowed it, and
+                              pushed mic and send onto a line of their own. */}
+                          <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-2">
                             {/* "+" menu — attach / image / project / tools */}
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
@@ -5184,25 +5198,29 @@ export function MemoryChat({
                                     <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
                                       Project memory
                                     </DropdownMenuLabel>
-                                    {projects.map((p) => (
-                                      <DropdownMenuItem
-                                        key={p.id}
-                                        onSelect={() => {
-                                          setNoMemory(false)
-                                          assignProject(p.id)
-                                        }}
-                                      >
-                                        <FolderOpen />
-                                        <span
-                                          className={`flex-1 truncate ${activeProjectId === p.id ? 'text-primary' : ''}`}
+                                    {/* About eight projects, then it scrolls: the choices above and
+                                        "New project" below stay in view however many there are. */}
+                                    <div className="max-h-64 overflow-y-auto overscroll-contain">
+                                      {projects.map((p) => (
+                                        <DropdownMenuItem
+                                          key={p.id}
+                                          onSelect={() => {
+                                            setNoMemory(false)
+                                            assignProject(p.id)
+                                          }}
                                         >
-                                          {p.name}
-                                        </span>
-                                        {activeProjectId === p.id && (
-                                          <Check className="h-3.5 w-3.5 text-primary" />
-                                        )}
-                                      </DropdownMenuItem>
-                                    ))}
+                                          <FolderOpen />
+                                          <span
+                                            className={`flex-1 truncate ${activeProjectId === p.id ? 'text-primary' : ''}`}
+                                          >
+                                            {p.name}
+                                          </span>
+                                          {activeProjectId === p.id && (
+                                            <Check className="h-3.5 w-3.5 text-primary" />
+                                          )}
+                                        </DropdownMenuItem>
+                                      ))}
+                                    </div>
                                   </>
                                 )}
                                 <DropdownMenuSeparator />
