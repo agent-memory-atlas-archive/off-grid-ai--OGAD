@@ -35,7 +35,14 @@ export interface SettingsSelectOption<T extends string> {
   value: T
   label: string
   disabled?: boolean
+  /** Capability meta shown muted on the right of the row, so the list helps you choose. */
+  meta?: React.ReactNode
 }
+
+// These option lists never contain the already-chosen model (the caller passes the others), so the
+// library's 1rem check column only pushed every label to the right. Collapse that column to zero:
+// labels then sit flush under the input text. Capabilities ride on the right, inside the label cell.
+const comboboxItemClassName = '!grid-cols-[0px_minmax(0,1fr)] !gap-0 ps-[calc(--spacing(2.5)-1px)] pe-2'
 
 // Every settings picker. A long list (installed models) is searchable, so it is a combobox you
 // type into; everything else is a plain select whose options roll open from the trigger.
@@ -83,8 +90,20 @@ export function SettingsSelect<T extends string>({
           <ComboboxEmpty>No matching models.</ComboboxEmpty>
           <ComboboxList>
             {(option: SettingsSelectOption<T>) => (
-              <ComboboxItem key={option.value} value={option} disabled={option.disabled}>
-                {option.label}
+              <ComboboxItem
+                key={option.value}
+                value={option}
+                disabled={option.disabled}
+                className={comboboxItemClassName}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="truncate">{option.label}</span>
+                  {option.meta ? (
+                    <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                      {option.meta}
+                    </span>
+                  ) : null}
+                </span>
               </ComboboxItem>
             )}
           </ComboboxList>

@@ -1,11 +1,12 @@
 import { useRuntimeBackends } from '../hooks/useRuntimeBackends'
+import { canonicalModelId } from '@offgrid/models'
 import {
   modelRuntimeBackend,
   runtimeBackendLabel,
   type RuntimeId
 } from '../../../shared/runtime-backends'
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import { Cpu, GearSix, X } from '@phosphor-icons/react'
+import { Brain, Cpu, Eye, GearSix, PencilSimple, Translate, X } from '@phosphor-icons/react'
 import { AnimatePresence, motion } from 'motion/react'
 import { ListRow } from '@offgrid/operator-ui/operator/list-row'
 import { Section } from '@offgrid/operator-ui/operator/experience'
@@ -69,6 +70,96 @@ function primaryVariant(m: ModelEntry): string | null {
   const file = primaryFile(m)
   if (!file.toLowerCase().endsWith('.gguf')) return null
   return file.slice(0, -'.gguf'.length).split('-').at(-1) ?? null
+}
+
+// Vision is a derived capability: a model sees if it is a vision kind or ships a projector (mmproj).
+function hasVision(m: ModelEntry): boolean {
+  return m.kind === 'vision' || (m.files ?? []).some((f) => f.role === 'mmproj')
+}
+
+// A decision model the user staged for evaluation lives in the decision-eval folder. It is a
+// specialist, not a chat model, so it does not belong in the Text & Vision list.
+function isDecisionEvalModel(m: ModelEntry): boolean {
+  return (m.files ?? []).some((f) => f.name.includes('/decision-eval/'))
+}
+
+// Short size read for a row: the parameter count when the catalog knows it, else the file weight.
+function sizeLabel(m: ModelEntry): string | null {
+  const params = (m as { params?: number }).params
+  if (typeof params === 'number' && params > 0) return `${params}B`
+  const bytes = (m.files?.find((f) => f.role === 'primary') ?? m.files?.[0]) as
+    | { sizeBytes?: number }
+    | undefined
+  if (bytes?.sizeBytes) return `${(bytes.sizeBytes / 1e9).toFixed(1)} GB`
+  return null
+}
+
+// Speech and transcription models carry their reach in the catalog tags or the source name: an
+// "English" tag or a Whisper `.en` build is English-only; a "Multilingual" tag, or any other
+// Whisper/Kokoro build, speaks many languages. We say so only when the signal is clear.
+function isMultilingual(m: ModelEntry): boolean {
+  const tags = (m.tags ?? []).map((t) => t.toLowerCase())
+  if (tags.includes('multilingual')) return true
+  if (tags.includes('english')) return false
+  const text = `${(m as { sourceModelId?: string }).sourceModelId ?? ''} ${m.name}`.toLowerCase()
+  if (/\.en\b|english/.test(text)) return false
+  if (m.kind === 'transcription') return /whisper|parakeet/.test(text)
+  if (m.kind === 'voice' || m.kind === 'speech') return /kokoro/.test(text)
+  return false
+}
+
+function editsImages(m: ModelEntry): boolean {
+  const modes = (m as { imageModes?: unknown }).imageModes
+  if (Array.isArray(modes) && modes.some((x) => /edit/i.test(String(x)))) return true
+  return (m.tags ?? []).some((t) => /editing/i.test(t))
+}
+
+function reasons(m: ModelEntry): boolean {
+  return /reasoning|thinking/i.test((m as { description?: string }).description ?? '')
+}
+
+interface Capability {
+  key: string
+  label: string
+  icon: React.ReactElement
+}
+
+// The capabilities a row can prove from catalog metadata alone, so the list helps you choose before
+// anything is downloaded. Each is an icon with its name as the tooltip; what cannot be proven from
+// metadata (tool calling, context window) is left off rather than guessed.
+function capabilities(m: ModelEntry): Capability[] {
+  const caps: Capability[] = []
+  // "Sees images" is about understanding an input image — a chat/vision trait. An image generator
+  // ships a projector too, but there the meaningful trait is editing, below, not seeing.
+  if (hasVision(m) && m.kind !== 'image')
+    caps.push({ key: 'vision', label: 'Sees images', icon: <Eye /> })
+  if (isMultilingual(m))
+    caps.push({ key: 'multilingual', label: 'Many languages', icon: <Translate /> })
+  if (editsImages(m)) caps.push({ key: 'edit', label: 'Edits images', icon: <PencilSimple /> })
+  if (reasons(m)) caps.push({ key: 'reasoning', label: 'Reasons step by step', icon: <Brain /> })
+  return caps
+}
+
+// The right side of a row: capability icons, then the size. Undefined when there is nothing to say.
+function optionMeta(m: ModelEntry): React.ReactNode {
+  const size = sizeLabel(m)
+  const caps = capabilities(m)
+  if (!size && caps.length === 0) return undefined
+  return (
+    <>
+      {caps.map((cap) => (
+        <span
+          key={cap.key}
+          title={cap.label}
+          aria-label={cap.label}
+          className="text-green-500 [&>svg]:h-3.5 [&>svg]:w-3.5"
+        >
+          {cap.icon}
+        </span>
+      ))}
+      {size ? <span className="tabular-nums">{size}</span> : null}
+    </>
+  )
 }
 
 function openSettings(onClose: () => void): void {
@@ -228,7 +319,9 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
         </AnimatePresence>
         {/* Same order as the Models screen's tabs: Text, Image, Tasks, Voice, Transcription. */}
         {MODALITIES.flatMap(({ label, kinds, mode }) => {
-          const list = models.filter((m) => kinds.includes(m.kind) && installed.includes(m.id))
+          const list = models.filter(
+            (m) => kinds.includes(m.kind) && installed.includes(m.id) && !isDecisionEvalModel(m)
+          )
           const duplicateNames = new Set(
             list
               .filter((m, index) =>
@@ -242,7 +335,10 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
               ? m.remoteServerId
                 ? activeIds.has(m.id)
                 : cur === m.id
-              : cur === primaryFile(m)
+              : // Media picks are saved as a file name or, from older builds, a catalog id.
+                cur === primaryFile(m) ||
+                cur === m.id ||
+                (!!cur && canonicalModelId(cur, { catalog: models }) === m.id)
           const current = list.find(isActive) ?? null
           const optionLabel = (m: ModelEntry): string =>
             [
@@ -284,7 +380,11 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                 label: `${label} model`,
                 value: current?.id ?? '',
                 disabled: busy !== null,
-                options: list.map((m) => ({ value: m.id, label: optionLabel(m) })),
+                options: list.map((m) => ({
+                  value: m.id,
+                  label: optionLabel(m),
+                  meta: optionMeta(m)
+                })),
                 onValueChange: (id) => {
                   const next = list.find((m) => m.id === id)
                   if (next && next.id !== current?.id) void choose(mode, next)
