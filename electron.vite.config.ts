@@ -82,8 +82,9 @@ const proRenderer = proExists ? resolve('pro/renderer/index.tsx') : stub
 const proDefine = { __OFFGRID_PRO__: JSON.stringify(proExists) }
 // The app's own version. An unpackaged launch that points Electron at a script rather than this
 // package (the e2e capture fixtures) gets Electron's version from app.getVersion().
-const appVersion = (JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as { version: string })
-  .version
+const appVersion = (
+  JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as { version: string }
+).version
 // App registrations for Connect with Off Grid AI (scripts/oauth-build-config.mjs). Only a Desktop
 // Google registration is accepted: a Web application's confidential secret must not enter an
 // installed app. A release build (OFFGRID_REQUIRE_OAUTH=1) fails rather than ship without them.
@@ -185,13 +186,15 @@ export default defineConfig({
         ...operatorUiAliases()
       ],
       // Linked library source imports these from its own node_modules: one copy each (two Reacts
-      // break hooks; two motions break shared animation context).
+      // break hooks; two motions break shared animation context; two Base UIs drop the CSP nonce
+      // that main.tsx's CSPProvider gives the library's selects and menus).
       dedupe: operatorUiRoot
         ? [
             'react',
             'react-dom',
             'motion',
             'radix-ui',
+            '@base-ui/react',
             '@phosphor-icons/react',
             'react-resizable-panels'
           ]
