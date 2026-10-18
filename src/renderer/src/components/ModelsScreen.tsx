@@ -684,10 +684,20 @@ export function ModelsScreen({
     }
   }
   const removeModel = async (id: string, label: string): Promise<void> => {
-    if (!window.confirm(`Delete "${label}"? This removes its files from disk.`)) return
+    const external = id.startsWith('external:')
+    if (
+      !window.confirm(
+        external
+          ? `Move "${label}" to the Trash? Its files are in another app's folder; you can restore them from the Trash.`
+          : `Delete "${label}"? This removes its files from disk.`
+      )
+    )
+      return
     setDeleting(id)
     try {
-      await api.deleteModel?.(id)
+      const result = (await api.deleteModel?.(id)) as
+        { success?: boolean; error?: string } | undefined
+      if (result && result.success === false && result.error) window.alert(result.error)
       setInstalled(await api.getInstalledModels?.())
       refreshActive()
     } finally {
@@ -1214,12 +1224,18 @@ export function ModelsScreen({
             </Button>
           </IconTip>
         )}
-        {isInstalled && !isRemote && !m.id.startsWith('external:') && (
+        {isInstalled && !isRemote && (
           <button
             onClick={() => removeModel(m.id, m.name)}
             disabled={deleting === m.id || active}
             aria-label="Delete"
-            title={active ? 'Switch to another model before deleting' : 'Delete from disk'}
+            title={
+              active
+                ? 'Switch to another model before deleting'
+                : m.id.startsWith('external:')
+                  ? 'Move to the Trash'
+                  : 'Delete from disk'
+            }
             className="rounded p-1 text-neutral-700 transition-all duration-150 hover:text-red-400 active:scale-90 disabled:opacity-30 group-hover:text-neutral-500"
           >
             {deleting === m.id ? (
