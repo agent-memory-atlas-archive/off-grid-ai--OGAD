@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-// A project's Artifacts tab lists what its chats made, not only the saved library.
-// Main is faked at the IPC line (window.api).
+// A project's Artifacts tab lists what its chats made, not only the saved library, and the
+// project list can be narrowed by name. Main is faked at the IPC line (window.api).
 
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { RendererEntitlementProvider } from '../../bootstrap/RendererEntitlementProvider'
@@ -69,5 +69,21 @@ describe('<ProjectsScreen/> artifacts', () => {
     expect(await screen.findByText('2 artifacts')).toBeTruthy()
     expect(screen.getByRole('button', { name: /Launch flow/ })).toBeTruthy()
     expect(screen.getAllByRole('button', { name: /Saved Orb/ })).toHaveLength(1)
+  })
+
+  it('finds a project by name', async () => {
+    const user = userEvent.setup()
+    await renderProjects()
+
+    const finder = await screen.findByRole('textbox', { name: 'Find a project' })
+    expect(await screen.findByRole('button', { name: 'Launch' })).toBeTruthy()
+    await user.type(finder, 'hir')
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Launch' })).toBeNull()
+      expect(screen.getAllByText('Hiring plan').length).toBeGreaterThan(0)
+    })
+    // Escape clears the search and the whole list is back.
+    await user.keyboard('{Escape}')
+    expect(await screen.findByRole('button', { name: 'Launch' })).toBeTruthy()
   })
 })

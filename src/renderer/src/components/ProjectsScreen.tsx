@@ -226,6 +226,10 @@ export function ProjectsScreen({
   const [localActiveId, setLocalActiveId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
+  const [projectQuery, setProjectQuery] = useState('')
+  const shownProjects = projectQuery.trim()
+    ? projects.filter((p) => p.name.toLowerCase().includes(projectQuery.trim().toLowerCase()))
+    : projects
   const [view, setView] = useState<'chat' | 'artifacts' | 'config'>('chat')
   const [deleteFailure, setDeleteFailure] = useState('')
 
@@ -307,6 +311,19 @@ export function ProjectsScreen({
             {deleteFailure}
           </p>
         ) : null}
+        {/* Outside the scrolling list, so finding a project never means scrolling back up. */}
+        <div className="px-3 pb-2">
+          <input
+            value={projectQuery}
+            onChange={(e) => setProjectQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setProjectQuery('')
+            }}
+            aria-label="Find a project"
+            placeholder="Find a project"
+            className="w-full rounded-md border border-neutral-800 bg-neutral-900/60 px-2.5 py-1.5 text-xs text-white placeholder-neutral-600 outline-none transition-colors focus:border-green-500"
+          />
+        </div>
         <div className="flex-1 overflow-y-auto px-2">
           {creating && (
             <input
@@ -331,7 +348,7 @@ export function ProjectsScreen({
             </p>
           )}
           <AnimatePresence initial={false}>
-            {projects.map((p) => (
+            {shownProjects.map((p) => (
               <motion.button
                 key={p.id}
                 layout
