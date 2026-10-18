@@ -205,6 +205,28 @@ describe('fuseHits — RRF fusion + dedupe by key', () => {
   })
 })
 
+describe('fuseHits — snippets read as prose', () => {
+  it('drops markdown, fences and tags from a stored chat or note', () => {
+    const fused = fuseHits([
+      [
+        hit({
+          key: 'chat:1',
+          snippet:
+            '## Plan\n**Ship** the `beta` on [Friday](https://x.test).\n```html\n<div class="a">Hi</div>\n```'
+        })
+      ]
+    ])
+    expect(fused.get('chat:1')!.snippet).toBe('Plan Ship the beta on Friday. Hi')
+  })
+
+  it('keeps snake_case words and caps the snippet at 280 characters', () => {
+    const fused = fuseHits([[hit({ key: 'a', snippet: `use search_messages ${'x'.repeat(400)}` })]])
+    const snippet = fused.get('a')!.snippet
+    expect(snippet.startsWith('use search_messages ')).toBe(true)
+    expect(snippet).toHaveLength(280)
+  })
+})
+
 describe('applyBoosts — recency + own-content nudge in place', () => {
   it('adds the recency and kind boosts to each result score', () => {
     const fused = fuseHits([[hit({ key: 'chat:1', kind: 'chat', ts: NOW - 1 * DAY })]])
