@@ -59,7 +59,7 @@ import { SettingsSelect } from './SettingsSelect'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 import { Checkbox } from '@offgrid/operator-ui/operator/animate/checkbox'
 import { CopyButton } from './ui/CopyButton'
-import { WaveformPlayer } from '@offgrid/operator-ui/operator/media/waveform-player'
+import { AudioClip } from './AudioClip'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -256,7 +256,7 @@ function Attachment({
             className="max-h-96 max-w-full rounded-md object-contain"
           />
         ) : (
-          <WaveformPlayer src={url} size="compact" />
+          <AudioClip src={url} />
         ))}
     </div>
   )
