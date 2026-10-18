@@ -34,9 +34,10 @@ import {
 } from '@offgrid/operator-ui/operator/coss/empty'
 import { Button } from './ui/button'
 import { GlyphSwap, IconTip } from './IconTip'
-import { ArtifactCanvas, type Artifact } from './ArtifactCanvas'
+import { ArtifactCanvas, parseArtifact, type Artifact } from './ArtifactCanvas'
 import { artifactKindLabel } from '@renderer/lib/artifact-labels'
-import { timeAgo } from '@renderer/lib/time'
+import { parseSqliteUtc, timeAgo } from '@renderer/lib/time'
+import { artifactTitle } from '../../../shared/artifact-title'
 import { useRendererEntitlement } from '@renderer/bootstrap/useRendererEntitlement'
 import {
   PROJECT_DELETE_FALLBACK_REASON,
@@ -52,20 +53,78 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (window as any).api
 
-// Artifacts saved within a project — listed (and openable) from the project view.
-function ProjectArtifacts({ projectId }: { projectId: string }): React.ReactElement {
-  const [items, setItems] = useState<(Artifact & { id: string; title: string; created: number })[]>(
-    []
+type ProjectArtifact = Artifact & { id: string; title: string; created: number }
+
+/** How many of the project's most recent chats are read for artifacts their replies hold. */
+const PROJECT_CHATS_READ = 50
+
+/**
+ * The artifacts the project's chats hold, read from their replies. The saved library only has what
+ * was made on this device while the chat was already in the project: a chat moved in later, synced
+ * from another device or restored brought its artifacts with it, and the tab still said 0.
+ */
+async function artifactsInProjectChats(projectId: string): Promise<ProjectArtifact[]> {
+  const conversations: { id: string }[] =
+    (await api.getRagConversations?.(projectId, { limit: PROJECT_CHATS_READ })) ?? []
+  const threads = await Promise.all(
+    conversations.map(async (conversation) => ({
+      conversation,
+      messages: ((await api.getRagMessages?.(conversation.id)) ?? []) as {
+        id: number
+        uuid?: string
+        role: string
+        content: string
+        created_at: string
+      }[]
+    }))
   )
+  return threads.flatMap(({ conversation, messages }) =>
+    messages.flatMap((message) => {
+      if (message.role !== 'assistant') return []
+      const artifact = parseArtifact(message.content)
+      if (!artifact || artifact.partial) return []
+      return [
+        {
+          kind: artifact.kind,
+          code: artifact.code,
+          id: `${conversation.id}:${message.uuid ?? message.id}`,
+          title: artifactTitle(artifact.kind, artifact.code),
+          created: parseSqliteUtc(message.created_at).getTime()
+        }
+      ]
+    })
+  )
+}
+
+// Artifacts made within a project — listed (and openable) from the project view.
+function ProjectArtifacts({ projectId }: { projectId: string }): React.ReactElement {
+  const [items, setItems] = useState<ProjectArtifact[]>([])
   const [open, setOpen] = useState<Artifact | null>(null)
   useEffect(() => {
+    const run = { live: true }
     ;(async () => {
       try {
-        setItems((await api.listArtifacts?.({ projectId })) || [])
+        const [saved, inChats] = await Promise.all([
+          api.listArtifacts?.({ projectId }) as Promise<ProjectArtifact[] | undefined>,
+          artifactsInProjectChats(projectId)
+        ])
+        // One entry per artifact: a saved copy and the reply it came from are the same thing.
+        const known = new Set((saved ?? []).map((a) => `${a.kind}\n${a.code}`))
+        const fresh = inChats.filter((a) => {
+          const key = `${a.kind}\n${a.code}`
+          if (known.has(key)) return false
+          known.add(key)
+          return true
+        })
+        const merged = [...(saved ?? []), ...fresh].sort((a, b) => b.created - a.created)
+        if (run.live) setItems(merged)
       } catch {
         /* ignore */
       }
     })()
+    return () => {
+      run.live = false
+    }
   }, [projectId])
   return (
     <div className="w-full px-8 py-6">
@@ -74,8 +133,7 @@ function ProjectArtifacts({ projectId }: { projectId: string }): React.ReactElem
       </div>
       {items.length === 0 ? (
         <p className="py-10 text-center text-sm text-neutral-600">
-          No artifacts yet — generate HTML, React, SVG, Mermaid, or docs in a chat scoped to this
-          project and they’ll appear here.
+          Pages, diagrams and documents made in this project&apos;s chats appear here.
         </p>
       ) : (
         <div className="divide-y divide-neutral-800/80 overflow-hidden rounded-lg border border-neutral-800/80 bg-neutral-900/30">
