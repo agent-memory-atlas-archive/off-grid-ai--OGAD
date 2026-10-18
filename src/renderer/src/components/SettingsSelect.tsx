@@ -39,10 +39,12 @@ export interface SettingsSelectOption<T extends string> {
   meta?: React.ReactNode
 }
 
-// These option lists never contain the already-chosen model (the caller passes the others), so the
-// library's 1rem check column only pushed every label to the right. Collapse that column to zero:
-// labels then sit flush under the input text. Capabilities ride on the right, inside the label cell.
-const comboboxItemClassName = '!grid-cols-[0px_minmax(0,1fr)] !gap-0 ps-[calc(--spacing(2.5)-1px)] pe-2'
+// The library keeps a 1rem column on every row for the selected item's check mark. A list with no
+// selected option (a model slot offers only the OTHER models) never draws that mark, so the empty
+// column only pushed every label right: collapse it there, and labels sit flush under the input.
+// A list that does show a selection keeps the column, so its check mark has room.
+const unselectableItemClassName =
+  '!grid-cols-[0px_minmax(0,1fr)] !gap-0 ps-[calc(--spacing(2.5)-1px)] pe-2'
 
 // Every settings picker. A long list (installed models) is searchable, so it is a combobox you
 // type into; everything else is a plain select whose options roll open from the trigger.
@@ -94,7 +96,7 @@ export function SettingsSelect<T extends string>({
                 key={option.value}
                 value={option}
                 disabled={option.disabled}
-                className={comboboxItemClassName}
+                className={selected ? undefined : unselectableItemClassName}
               >
                 <span className="flex min-w-0 items-center gap-2">
                   <span className="truncate">{option.label}</span>
