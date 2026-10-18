@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { TaskLineups } from '../TaskLineups'
 import type { TaskRolesView } from '../../../../shared/task-roles-view'
 
@@ -102,48 +102,55 @@ describe('<TaskLineups/>', () => {
   describe('fetching a specialist the device never downloaded', () => {
     // Main, faked at the IPC line: downloadModel starts the fetch; progress arrives on its channel.
     type FakeMain = {
-      downloadModel: ReturnType<typeof vi.fn>
+      downloads: string[]
       emit: (p: Record<string, unknown>) => void
     }
     const fakeMain = (
       result: { success: boolean; error?: string } = { success: true }
     ): FakeMain => {
       let progress: ((p: Record<string, unknown>) => void) | undefined
-      const downloadModel = vi.fn(async () => result)
+      const downloads: string[] = []
       ;(window as unknown as { api: unknown }).api = {
-        downloadModel,
+        downloadModel: async (id: string) => {
+          downloads.push(id)
+          return result
+        },
         onModelProgress: (listener: (p: Record<string, unknown>) => void) => {
           progress = listener
           return () => undefined
         }
       }
-      return { downloadModel, emit: (p: Record<string, unknown>) => act(() => progress?.(p)) }
+      return { downloads, emit: (p: Record<string, unknown>) => act(() => progress?.(p)) }
     }
-    const renderMissing = (onChanged = vi.fn()): ReturnType<typeof vi.fn> => {
+    // Counts how many times the card asked its parent to reload the lineups.
+    const renderMissing = (): { changes: number } => {
+      const changed = { changes: 0 }
       render(
         <TaskLineups
           view={view('ui-tars-1.5-7b', 'UI-TARS-1.5-7B')}
           models={models}
           installed={['ui-mate-9b']}
-          onChanged={onChanged}
+          onChanged={() => {
+            changed.changes += 1
+          }}
         />
       )
-      return onChanged
+      return changed
     }
 
     it('downloads from the card, shows progress, and reloads the lineups when it lands', async () => {
       const main = fakeMain()
-      const onChanged = renderMissing()
+      const changed = renderMissing()
       const user = userEvent.setup()
       await user.click(screen.getByRole('button', { name: 'Download UI-TARS-1.5-7B' }))
-      expect(main.downloadModel).toHaveBeenCalledWith('ui-tars-1.5-7b')
+      expect(main.downloads).toEqual(['ui-tars-1.5-7b'])
       main.emit({ modelId: 'ui-tars-1.5-7b', status: 'downloading', percent: 40 })
       expect(screen.getByText('Downloading…')).toBeTruthy()
       // Another model's progress is not this card's business.
       main.emit({ modelId: 'someone-else', status: 'completed' })
-      expect(onChanged).not.toHaveBeenCalled()
+      expect(changed.changes).toBe(0)
       main.emit({ modelId: 'ui-tars-1.5-7b', status: 'completed', percent: 100 })
-      await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(changed.changes).toBe(1))
     })
 
     it('keeps a failed download on the card and retries it from there', async () => {
@@ -155,7 +162,7 @@ describe('<TaskLineups/>', () => {
       const failed = await screen.findByText('Download failed')
       expect(failed.getAttribute('title')).toBe('Not enough disk space.')
       await user.click(screen.getByRole('button', { name: 'Download UI-TARS-1.5-7B' }))
-      expect(main.downloadModel).toHaveBeenCalledTimes(2)
+      expect(main.downloads).toHaveLength(2)
       expect(screen.queryByText('Download failed')).toBeNull()
     })
 

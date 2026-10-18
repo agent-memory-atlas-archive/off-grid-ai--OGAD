@@ -2,7 +2,7 @@
 // What each Active-models slot says a model can do. The real panel runs over the shared capability
 // rule; only Main is faked, at the IPC line, with catalog rows shaped like the ones it sends.
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ModelPicker } from '../ModelPicker'
@@ -10,7 +10,6 @@ import { withTaskRoles } from './harness/task-roles'
 
 afterEach(() => {
   cleanup()
-  vi.restoreAllMocks()
 })
 
 const MODELS = [
@@ -86,21 +85,22 @@ const MODELS = [
 
 function renderPicker(): void {
   ;(window as unknown as { api: Record<string, unknown> }).api = {
-    getModelCatalog: vi.fn().mockResolvedValue({ models: MODELS }),
-    getInstalledModels: vi.fn().mockResolvedValue(MODELS.map((model) => model.id)),
-    getActiveModel: vi.fn().mockResolvedValue('local/gemma'),
-    getActiveModalities: vi
-      .fn()
-      .mockResolvedValue({ image: 'qwen-image.gguf', transcription: 'ggml-small.bin' }),
-    getActiveModelIds: vi.fn().mockResolvedValue([]),
-    getComputerUseActiveModels: vi.fn().mockResolvedValue({
+    getModelCatalog: async () => ({ models: MODELS }),
+    getInstalledModels: async () => MODELS.map((model) => model.id),
+    getActiveModel: async () => 'local/gemma',
+    getActiveModalities: async () => ({
+      image: 'qwen-image.gguf',
+      transcription: 'ggml-small.bin'
+    }),
+    getActiveModelIds: async () => [],
+    getComputerUseActiveModels: async () => ({
       strategy: 'same_as_chat',
       strategyLabel: 'Same as Chat',
       models: []
     })
   }
   withTaskRoles((window as unknown as { api: Record<string, unknown> }).api)
-  render(<ModelPicker onClose={vi.fn()} />)
+  render(<ModelPicker onClose={() => {}} />)
 }
 
 const iconNames = (element: HTMLElement): string[] =>
