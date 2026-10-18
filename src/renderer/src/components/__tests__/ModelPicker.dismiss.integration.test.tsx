@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ModelPicker } from '../ModelPicker'
 import { withTaskRoles } from './harness/task-roles'
@@ -24,7 +24,7 @@ function renderPicker(onClose = vi.fn()): ReturnType<typeof vi.fn> {
         }
       ]
     }),
-    getInstalledModels: vi.fn().mockResolvedValue(['local/qwen']),
+    getInstalledModels: vi.fn().mockResolvedValue(['local/qwen', 'local/ui-tars']),
     getActiveModel: vi.fn().mockResolvedValue(null),
     getActiveModalities: vi.fn().mockResolvedValue({}),
     getActiveModelIds: vi.fn().mockResolvedValue([]),
@@ -146,12 +146,14 @@ describe('<ModelPicker/> dismissal', () => {
     const card = (): HTMLElement => screen.getByLabelText('Text & Vision active model')
     await waitFor(() => expect(card().textContent).toContain('None selected'))
     await user.click(screen.getByRole('combobox', { name: 'Text & Vision model' }))
-    await user.click(await screen.findByRole('option', { name: 'google/gemma-4 · Remote' }))
+    // The row now also carries capability icons, so match the model by name within the option.
+    await user.click(await screen.findByRole('option', { name: /google\/gemma-4 · Remote/ }))
     await waitFor(() =>
       expect(activateModel).toHaveBeenCalledWith('remote-vision:home:google%2Fgemma-4')
     )
     await waitFor(() => expect(card().textContent).toContain('google/gemma-4'))
-    expect(card().textContent).toContain('Remote')
+    // Remote now reads as a cloud icon, not the word — its accessible name still says "Remote".
+    expect(within(card()).getByLabelText('Remote')).toBeTruthy()
   })
 
   it('offers a remote voice model and activates it through the shared model seam', async () => {

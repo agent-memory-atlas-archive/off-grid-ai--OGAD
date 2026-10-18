@@ -4,7 +4,7 @@
 // installed model. Callers own the data and the actions; this only draws and asks.
 
 import type { ReactNode } from 'react'
-import { CircleNotch, DownloadSimple, Power } from '@phosphor-icons/react'
+import { CircleNotch, Cloud, DownloadSimple, Power } from '@phosphor-icons/react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
 import { Card } from '@offgrid/operator-ui/operator/coss/card'
@@ -71,6 +71,8 @@ export function ActiveModelSlot(props: {
     readonly name: string
     readonly detail?: ReactNode
     readonly remote?: boolean
+    /** Capability icons for the chosen model, shown the same way the dropdown rows show them. */
+    readonly capabilities?: ReactNode
     /**
      * The one step this card still owes — today, fetching a model the slot points at but has not
      * downloaded. Given, the whole card becomes the button for it (no state shown without its action).
@@ -166,12 +168,17 @@ export function ActiveModelSlot(props: {
                     {active ? active.name : 'None selected'}
                   </span>
                   {active?.remote ? (
-                    <Badge variant="success" size="sm" className="shrink-0">
-                      Remote
-                    </Badge>
+                    <span
+                      title="Remote"
+                      aria-label="Remote"
+                      className="flex shrink-0 text-green-500 [&>svg]:h-3.5 [&>svg]:w-3.5"
+                    >
+                      <Cloud />
+                    </span>
                   ) : null}
                 </span>
                 <span className="flex shrink-0 items-center gap-2 text-xs text-neutral-500">
+                  {active?.capabilities}
                   {active?.detail}
                   <AnimatePresence mode="popLayout" initial={false}>
                     {props.busy ? (

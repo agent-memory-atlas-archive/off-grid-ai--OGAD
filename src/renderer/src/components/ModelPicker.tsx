@@ -108,9 +108,11 @@ function isMultilingual(m: ModelEntry): boolean {
   return false
 }
 
+// Every image model does text-to-image, so saying so on each row only repeats. What differs, and so
+// earns an icon, is image-to-image: taking a picture in and editing it.
 function editsImages(m: ModelEntry): boolean {
   const modes = (m as { imageModes?: unknown }).imageModes
-  if (Array.isArray(modes) && modes.some((x) => /edit/i.test(String(x)))) return true
+  if (Array.isArray(modes) && modes.includes('img2img')) return true
   return (m.tags ?? []).some((t) => /editing/i.test(t))
 }
 
@@ -135,28 +137,35 @@ function capabilities(m: ModelEntry): Capability[] {
     caps.push({ key: 'vision', label: 'Sees images', icon: <Eye /> })
   if (isMultilingual(m))
     caps.push({ key: 'multilingual', label: 'Many languages', icon: <Translate /> })
-  if (editsImages(m)) caps.push({ key: 'edit', label: 'Edits images', icon: <PencilSimple /> })
+  if (editsImages(m)) caps.push({ key: 'edit', label: 'Image to image', icon: <PencilSimple /> })
   if (reasons(m)) caps.push({ key: 'reasoning', label: 'Reasons step by step', icon: <Brain /> })
   return caps
 }
 
-// The right side of a row: capability icons, then the size. Undefined when there is nothing to say.
+// Capability icons alone (no size): shown on the chosen model's card, next to its load state.
+function capabilityIcons(m: ModelEntry): React.ReactNode {
+  const caps = capabilities(m)
+  if (caps.length === 0) return null
+  return caps.map((cap) => (
+    <span
+      key={cap.key}
+      title={cap.label}
+      aria-label={cap.label}
+      className="flex text-green-500 [&>svg]:h-3.5 [&>svg]:w-3.5"
+    >
+      {cap.icon}
+    </span>
+  ))
+}
+
+// The right side of a dropdown row: capability icons, then the size. Undefined when nothing to say.
 function optionMeta(m: ModelEntry): React.ReactNode {
   const size = sizeLabel(m)
-  const caps = capabilities(m)
-  if (!size && caps.length === 0) return undefined
+  const icons = capabilityIcons(m)
+  if (!size && !icons) return undefined
   return (
     <>
-      {caps.map((cap) => (
-        <span
-          key={cap.key}
-          title={cap.label}
-          aria-label={cap.label}
-          className="text-green-500 [&>svg]:h-3.5 [&>svg]:w-3.5"
-        >
-          {cap.icon}
-        </span>
-      ))}
+      {icons}
       {size ? <span className="tabular-nums">{size}</span> : null}
     </>
   )
@@ -360,6 +369,7 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                   ? {
                       name: current.name,
                       remote: !!current.remoteServerId,
+                      capabilities: capabilityIcons(current),
                       detail: current.remoteServerId
                         ? null
                         : backendFor(mode === 'text' ? 'chat' : mode, [
