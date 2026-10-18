@@ -39,7 +39,12 @@ import {
 import { getDB } from '../database'
 import { registerTaskGuideHandler, TASK_GUIDANCE_TRACE } from '../tasks/task-guide'
 import { BrowserHistoryStore } from './browser-history-store'
-import { BrowserSessionStore, type BrowserSessionRecord } from './browser-session-store'
+import {
+  BrowserSessionStore,
+  historyViewSessionId,
+  isHistoryViewSession,
+  type BrowserSessionRecord
+} from './browser-session-store'
 import type {
   BrowserChromeState,
   BrowserControl,
@@ -239,16 +244,18 @@ class BrowserHost implements BrowserRailHost {
     const chrome = this.readChrome(record)
     this.sessions.updateChrome(sessionId, chrome)
     if (record.task) {
-      recordTaskRun({
-        taskId: record.task.taskId,
-        kind: 'web_use',
-        title: record.task.goal,
-        status: record.task.status,
-        summary: record.task.summary,
-        steps: record.task.steps,
-        lastUrl: chrome.url,
-        lastTitle: chrome.title
-      })
+      if (!isHistoryViewSession(record.sessionId)) {
+        recordTaskRun({
+          taskId: record.task.taskId,
+          kind: 'web_use',
+          title: record.task.goal,
+          status: record.task.status,
+          summary: record.task.summary,
+          steps: record.task.steps,
+          lastUrl: chrome.url,
+          lastTitle: chrome.title
+        })
+      }
     } else if (/^https?:\/\//i.test(chrome.url)) {
       this.history.upsert({
         historyId: record.historyId ?? record.sessionId,
@@ -669,7 +676,7 @@ class BrowserHost implements BrowserRailHost {
         steps: saved.steps
       }
       record = this.createSession({
-        sessionId: `history:${task.taskId}`,
+        sessionId: historyViewSessionId(task.taskId),
         kind: 'task',
         task
       })
