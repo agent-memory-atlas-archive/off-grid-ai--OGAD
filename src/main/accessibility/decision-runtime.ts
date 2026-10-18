@@ -18,7 +18,8 @@ import { getBackendPreference } from '../backend-preferences'
 import { isPortFree, pickFreePort } from '../free-port'
 import { reapOrphanProcessesOnPort } from '../kill-orphan-port'
 import {
-  KEV_4B_ID,
+  KEV_9B_ID,
+  isKevModel,
   resolveComputerUseModelArtifact,
   resolveKevRuntimeArtifact
 } from '../models-manager'
@@ -79,7 +80,7 @@ export class DecisionRuntime {
     await prepareModelMemory('decision')
     this.memoryEvicted = false
     await this.shutdown()
-    if (modelId === KEV_4B_ID) return this.startKev()
+    if (isKevModel(modelId)) return this.startKev(modelId)
     const artifact = await resolveComputerUseModelArtifact(modelId)
     if (!artifact)
       throw new DecisionRuntimeError('The selected Decision model is not installed.', 'missing')
@@ -164,15 +165,15 @@ export class DecisionRuntime {
     }
   }
 
-  private async startKev(): Promise<void> {
-    const artifact = resolveKevRuntimeArtifact()
+  private async startKev(modelId: string): Promise<void> {
+    const artifact = resolveKevRuntimeArtifact(modelId)
     if (!artifact)
       throw new DecisionRuntimeError('The local Kev model or runtime is missing.', 'missing')
     const port = await pickFreePort(DECIDER_PORT, isPortFree, 20)
     if (port === null)
       throw new DecisionRuntimeError('No private port is available for Kev.', 'startup')
     this.port = port
-    this.modelId = KEV_4B_ID
+    this.modelId = modelId
     this.stderr = ''
     this.backend = undefined
     const backendState = beginRuntimeBackend('decision', this.modelId!)
@@ -230,10 +231,11 @@ export class DecisionRuntime {
   private async waitUntilReady(startedAt: number): Promise<void> {
     for (;;) {
       if (!this.running) throw new Error('The Decision runtime stopped during startup.')
-      if (Date.now() - startedAt > 120_000)
+      // Kev 9B merges a 19 GB base before it answers: it gets twice as long.
+      if (Date.now() - startedAt > (this.modelId === KEV_9B_ID ? 240_000 : 120_000))
         throw new Error('The Decision runtime timed out during startup.')
       try {
-        const endpoint = this.modelId === KEV_4B_ID ? '/v1/models' : '/health'
+        const endpoint = isKevModel(this.modelId) ? '/v1/models' : '/health'
         const response = await fetch(`http://127.0.0.1:${this.port}${endpoint}`)
         if (response.ok) return
       } catch {
@@ -259,7 +261,7 @@ export class DecisionRuntime {
         backend: this.backend ?? 'Unknown',
         effectiveRequest: { context, question, options }
       })
-      if (this.modelId === KEV_4B_ID) {
+      if (isKevModel(this.modelId)) {
         const response = await fetch(`http://127.0.0.1:${this.port}/v1/systemone`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -314,7 +316,7 @@ export class DecisionRuntime {
   async health(): Promise<boolean> {
     if (!this.running) return false
     try {
-      const endpoint = this.modelId === KEV_4B_ID ? '/v1/models' : '/health'
+      const endpoint = isKevModel(this.modelId) ? '/v1/models' : '/health'
       return (await fetch(`http://127.0.0.1:${this.port}${endpoint}`)).ok
     } catch {
       return false

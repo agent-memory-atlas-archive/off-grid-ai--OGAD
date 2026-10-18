@@ -42,6 +42,7 @@ vi.mock('../../web-use-settings', () => ({ getWebUseSettings: mocks.webSettings 
 vi.mock('../../models-manager', () => ({
   DECIDER_2B: { id: 'offgrid/default-decider' },
   KEV_4B_ID: 'offgrid/kev-4b',
+  isKevModel: (id: string | null | undefined) => id === 'offgrid/kev-4b' || id === 'offgrid/kev-9b',
   listInstalled: mocks.installed,
   loadComputerUseModel: mocks.load
 }))
@@ -115,6 +116,20 @@ describe('decision model lifecycle', () => {
     expect(mocks.recordCall).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'offgrid/kev-4b' })
     )
+    expect(mocks.load).not.toHaveBeenCalled()
+  })
+
+  it('runs a selected Kev 9B on its own runtime, without the shared fallback', async () => {
+    mocks.settings.mockReturnValue({ decisionModelId: 'offgrid/kev-9b' })
+    mocks.installed.mockResolvedValue(['offgrid/kev-9b'])
+    await withDecisionModel(() => decideWithDecisionModel('page', 'next?', ['A', 'B']))
+    expect(mocks.runtime.start).toHaveBeenCalledWith('offgrid/kev-9b')
+    expect(mocks.load).not.toHaveBeenCalled()
+
+    mocks.runtime.start.mockRejectedValueOnce(
+      new mocks.DecisionRuntimeError('Kev 9B failed', 'out_of_memory')
+    )
+    await expect(withDecisionModel(async () => 'never')).rejects.toThrow('Kev 9B failed')
     expect(mocks.load).not.toHaveBeenCalled()
   })
 
