@@ -111,7 +111,7 @@ export function GatewayScreen(): React.ReactElement {
       <div className="flex w-full flex-col px-8 pt-8 pb-16">
         <PageHeader
           title="Gateway"
-          description="One OpenAI-compatible API for text, vision, image and voice. Local models process data on your device. If you select a remote model server, requests go to that server."
+          description="One OpenAI-compatible API for every model on this Mac."
           actions={
             <IconTip label="Interactive playground">
               <Button
@@ -126,71 +126,70 @@ export function GatewayScreen(): React.ReactElement {
           }
         />
 
-        <div className="space-y-12">
-          <Section
-            label="Base URL"
-            description="Point any OpenAI client here. Supply a key when authentication is enabled."
-          >
-            <InputGroup>
-              <InputGroupAddon>
-                <IconServer2 aria-hidden="true" />
-              </InputGroupAddon>
-              <InputGroupInput
-                readOnly
-                aria-label="Gateway base URL"
-                value={`${BASE}/v1`}
-                className="font-mono text-emerald-400"
+        {/* A landscape screen: how to connect on the left, who may connect on the right. */}
+        <div className="grid gap-x-10 gap-y-8 xl:grid-cols-2">
+          <div className="min-w-0 space-y-8">
+            <Section label="Base URL">
+              <InputGroup>
+                <InputGroupAddon>
+                  <IconServer2 aria-hidden="true" />
+                </InputGroupAddon>
+                <InputGroupInput
+                  readOnly
+                  aria-label="Gateway base URL"
+                  value={`${BASE}/v1`}
+                  className="font-mono text-emerald-400"
+                />
+                <InputGroupAddon align="inline-end">
+                  <CopyButton text={`${BASE}/v1`} />
+                </InputGroupAddon>
+              </InputGroup>
+              <p className="mt-2 text-[11px] text-neutral-500">
+                Headless: run with <code className="text-neutral-300">--server-only</code>.
+              </p>
+            </Section>
+
+            <Section label="Quick start" actions={<CopyButton text={active.code} />}>
+              <Segmented
+                label="Quick start language"
+                size="sm"
+                tone="quiet"
+                value={tab}
+                onValueChange={setTab}
+                options={SNIPPETS.map((s) => ({ id: s.id, label: s.label }))}
               />
-              <InputGroupAddon align="inline-end">
-                <CopyButton text={`${BASE}/v1`} />
-              </InputGroupAddon>
-            </InputGroup>
-            <p className="mt-3 text-xs leading-relaxed text-neutral-500">
-              Run it headless with <code className="text-neutral-300">--server-only</code> to deploy
-              just the gateway.
-            </p>
-          </Section>
+              <pre className="mt-3 overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-950 p-4 text-xs leading-relaxed text-neutral-200">
+                <code>{active.code}</code>
+              </pre>
+            </Section>
+          </div>
 
-          <Section label="API keys">
-            <section aria-label="API keys">
-              <GatewayApiKeysSettings />
-            </section>
-          </Section>
+          <div className="min-w-0 space-y-8">
+            <Section label="API keys">
+              <section aria-label="API keys">
+                <GatewayApiKeysSettings />
+              </section>
+            </Section>
 
-          <Section label="Quick start" actions={<CopyButton text={active.code} />}>
-            <Segmented
-              label="Quick start language"
-              size="sm"
-              tone="quiet"
-              value={tab}
-              onValueChange={setTab}
-              options={SNIPPETS.map((s) => ({ id: s.id, label: s.label }))}
-            />
-            <pre className="mt-3 overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-950 p-4 text-xs leading-relaxed text-neutral-200">
-              <code>{active.code}</code>
-            </pre>
-          </Section>
-
-          <Section label="Endpoints">
-            <AnimatedGroup preset="blur-slide" className="grid gap-2 sm:grid-cols-2">
-              {ENDPOINTS.map((e) => (
-                <button
-                  key={e.path}
-                  onClick={() => open(e.path)}
-                  className="flex h-full w-full flex-col gap-1 rounded-xl border border-neutral-800 bg-neutral-900/40 p-3 text-left transition-colors hover:border-green-500/40"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
+            <Section label="Endpoints">
+              <AnimatedGroup preset="blur-slide" className="grid gap-2 2xl:grid-cols-2">
+                {ENDPOINTS.map((e) => (
+                  <button
+                    key={e.path}
+                    onClick={() => open(e.path)}
+                    title={e.note}
+                    className="flex w-full min-w-0 items-center gap-2 rounded-lg border border-neutral-800 bg-neutral-900/40 px-3 py-2 text-left transition-colors hover:border-green-500/40"
+                  >
+                    <span className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
                       {e.method}
                     </span>
-                    <span className="text-sm text-neutral-200">{e.label}</span>
-                  </div>
-                  <code className="text-xs text-neutral-500">{e.path}</code>
-                  <span className="text-[11px] text-neutral-600">{e.note}</span>
-                </button>
-              ))}
-            </AnimatedGroup>
-          </Section>
+                    <span className="shrink-0 text-xs text-neutral-200">{e.label}</span>
+                    <code className="min-w-0 truncate text-[11px] text-neutral-500">{e.path}</code>
+                  </button>
+                ))}
+              </AnimatedGroup>
+            </Section>
+          </div>
         </div>
       </div>
     </div>
