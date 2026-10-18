@@ -35,7 +35,9 @@ afterEach(() => {
 })
 
 async function openCompletedWork(): Promise<void> {
-  await userEvent.click(screen.getByRole('button', { name: 'Work done' }))
+  // The disclosure names the turn's outcome — "Work done", or "Work failed" when the last step
+  // failed — so expand it by whichever work label it carries.
+  await userEvent.click(screen.getByRole('button', { name: /^Work (done|failed|stopped)/ }))
 }
 
 describe('<ChatToolRows/> work disclosure', () => {
