@@ -4,7 +4,7 @@
 // (models:task-roles, the same view a paired browser gets); a change goes through the one role
 // setter (models:set-task-role). This component only draws and asks.
 
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { TaskRoleSlot, TaskRolesView } from '../../../shared/task-roles-view'
 import { Section } from '@offgrid/operator-ui/operator/experience'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
@@ -26,12 +26,9 @@ function options(
     (slot.role === 'decision' ? isDecisionModel(m) : isGroundingSpecialist(m))
   const list = models.filter(fits).map((m) => ({ value: m.id, label: m.name }))
   if (list.some((o) => o.value === slot.modelId)) return list
-  // A role can still point at a model that is no longer on this device; say so.
-  const missing = !slot.remote && !installed.includes(slot.modelId)
-  return [
-    ...list,
-    { value: slot.modelId, label: missing ? `${slot.modelName} (not downloaded)` : slot.modelName }
-  ]
+  // A role can still point at a model that is no longer on this device. The card above the dropdown
+  // carries that status (and the button to fetch it), so the option itself is just the name.
+  return [...list, { value: slot.modelId, label: slot.modelName }]
 }
 
 export function TaskLineups(props: {
@@ -46,6 +43,37 @@ export function TaskLineups(props: {
   const [busy, setBusy] = useState<string | null>(null)
   // Per role, like every other slot: a grounding specialist unloaded for one task is unloaded for both.
   const [unload, setUnload] = useState<Partial<Record<'decision' | 'grounding', UnloadStatus>>>({})
+  // A role can point at a model this device never downloaded. The card for it is the Download button;
+  // we track only the fetches we started here, and reload the lineups once one lands.
+  const [downloads, setDownloads] = useState<Record<string, { percent?: number }>>({})
+  const onChangedRef = useRef(props.onChanged)
+  onChangedRef.current = props.onChanged
+  useEffect(() => {
+    return api()?.onModelProgress?.(
+      (p: { modelId: string; percent?: number; status?: string }) => {
+        setDownloads((current) => {
+          if (!(p.modelId in current)) return current
+          if (p.status === 'completed' || p.status === 'failed' || p.status === 'cancelled') {
+            const next = { ...current }
+            delete next[p.modelId]
+            if (p.status === 'completed') void onChangedRef.current?.()
+            return next
+          }
+          return { ...current, [p.modelId]: { percent: p.percent } }
+        })
+      }
+    )
+  }, [])
+  const download = (modelId: string): void => {
+    setDownloads((current) => ({ ...current, [modelId]: { percent: 0 } }))
+    void Promise.resolve(api()?.downloadModel?.(modelId)).catch(() => {
+      setDownloads((current) => {
+        const next = { ...current }
+        delete next[modelId]
+        return next
+      })
+    })
+  }
   if (!props.view) return null
   const choose = async (
     task: 'computer_use' | 'web_use',
@@ -98,6 +126,9 @@ export function TaskLineups(props: {
                   const role = slot.role === 'decision' ? 'decision' : 'grounding'
                   const onDevice = !slot.remote && props.installed.includes(slot.modelId)
                   const missing = !slot.remote && !props.installed.includes(slot.modelId)
+                  // Only a model the catalog knows can be fetched; a stale pointer offers the dropdown.
+                  const canDownload = missing && props.models.some((m) => m.id === slot.modelId)
+                  const downloading = downloads[slot.modelId]
                   return (
                     <ActiveModelSlot
                       key={slot.role}
@@ -106,14 +137,27 @@ export function TaskLineups(props: {
                       does={slot.does}
                       busy={busy !== null && slot.role !== 'reasoner'}
                       active={{
-                        name: missing ? `${slot.modelName} (not downloaded)` : slot.modelName,
+                        name: slot.modelName,
                         remote: slot.remote,
-                        detail:
-                          !slot.remote && props.localDetail ? (
-                            <>On device · {props.localDetail(slot)}</>
-                          ) : slot.remote ? null : (
-                            'On device'
-                          )
+                        detail: missing
+                          ? downloading
+                            ? 'Downloading…'
+                            : 'Not downloaded'
+                          : !slot.remote && props.localDetail ? (
+                              <>On device · {props.localDetail(slot)}</>
+                            ) : slot.remote ? null : (
+                              'On device'
+                            ),
+                        // A model the role points at but the device never fetched: the card is its
+                        // Download button — the one step this state owes.
+                        next: canDownload
+                          ? {
+                              label: `Download ${slot.modelName}`,
+                              onAct: () => download(slot.modelId),
+                              pending: !!downloading,
+                              percent: downloading?.percent
+                            }
+                          : undefined
                       }}
                       // The reasoner is the Text & Vision model: it is switched and unloaded there.
                       unload={

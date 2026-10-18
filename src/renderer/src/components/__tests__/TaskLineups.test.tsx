@@ -34,7 +34,7 @@ const models = [
 ]
 
 describe('<TaskLineups/>', () => {
-  it('says when the active grounding specialist is not on this device', () => {
+  it('names a not-downloaded specialist plainly and offers to fetch it', () => {
     render(
       <TaskLineups
         view={view('ui-tars-1.5-7b', 'UI-TARS-1.5-7B')}
@@ -42,7 +42,10 @@ describe('<TaskLineups/>', () => {
         installed={['ui-mate-9b']}
       />
     )
-    expect(screen.getByText('UI-TARS-1.5-7B (not downloaded)')).toBeTruthy()
+    // The name stays clean; the status says it is not here; the card is the button to fetch it.
+    expect(screen.getByText('UI-TARS-1.5-7B')).toBeTruthy()
+    expect(screen.getByText('Not downloaded')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Download UI-TARS-1.5-7B' })).toBeTruthy()
   })
 
   it('names a downloaded active model plainly', () => {

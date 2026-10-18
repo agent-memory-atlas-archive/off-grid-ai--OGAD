@@ -4,7 +4,7 @@
 // installed model. Callers own the data and the actions; this only draws and asks.
 
 import type { ReactNode } from 'react'
-import { CircleNotch, Power } from '@phosphor-icons/react'
+import { CircleNotch, DownloadSimple, Power } from '@phosphor-icons/react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
 import { Card } from '@offgrid/operator-ui/operator/coss/card'
@@ -71,6 +71,17 @@ export function ActiveModelSlot(props: {
     readonly name: string
     readonly detail?: ReactNode
     readonly remote?: boolean
+    /**
+     * The one step this card still owes — today, fetching a model the slot points at but has not
+     * downloaded. Given, the whole card becomes the button for it (no state shown without its action).
+     */
+    readonly next?: {
+      readonly label: string
+      readonly onAct: () => void
+      readonly pending?: boolean
+      /** 0–100 while the step runs; drives the hairline under the card. */
+      readonly percent?: number
+    }
   } | null
   /** Shown instead of the card and dropdown when no model of this kind is on the device. */
   readonly empty?: ReactNode
@@ -100,6 +111,8 @@ export function ActiveModelSlot(props: {
       }
   const { active, unload, select } = props
   const unloaded = unload?.status === 'unloaded'
+  const next = active?.next
+  const actionable = !!next && !next.pending
   // The dropdown offers the OTHER models: the active one is the card above it.
   const others = select ? select.options.filter((option) => option.value !== select.value) : []
   return (
@@ -126,9 +139,26 @@ export function ActiveModelSlot(props: {
           <div className="space-y-2">
             <motion.div layout={!reduceMotion} transition={{ duration: 0.4, ease: EASE }}>
               <Card
-                aria-label={`${props.ariaLabel} active model`}
-                className={`flex w-full min-w-0 flex-row items-center justify-between gap-3 border-l-2 px-3 py-2 text-xs ${
-                  active && !unloaded ? 'border-l-green-500 bg-green-500/5' : 'border-l-neutral-700'
+                aria-label={next ? next.label : `${props.ariaLabel} active model`}
+                role={actionable ? 'button' : undefined}
+                tabIndex={actionable ? 0 : undefined}
+                onClick={actionable ? next.onAct : undefined}
+                onKeyDown={
+                  actionable
+                    ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          next.onAct()
+                        }
+                      }
+                    : undefined
+                }
+                className={`relative flex w-full min-w-0 flex-row items-center justify-between gap-3 overflow-hidden border-l-2 px-3 py-2 text-xs transition-colors duration-200 ${
+                  next
+                    ? 'cursor-pointer border-l-amber-500/70 hover:bg-amber-500/5'
+                    : active && !unloaded
+                      ? 'border-l-green-500 bg-green-500/5'
+                      : 'border-l-neutral-700'
                 }`}
               >
                 <span className="flex min-w-0 items-center gap-2">
@@ -148,6 +178,14 @@ export function ActiveModelSlot(props: {
                       <motion.span key="busy" className="flex" {...markMotion}>
                         <CircleNotch className="h-3.5 w-3.5 animate-spin text-neutral-500" />
                       </motion.span>
+                    ) : next ? (
+                      <motion.span key="next" className="flex text-amber-400" {...markMotion}>
+                        {next.pending ? (
+                          <CircleNotch className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <DownloadSimple className="h-3.5 w-3.5" />
+                        )}
+                      </motion.span>
                     ) : active && unloaded ? (
                       <motion.span key="unloaded" className="flex" {...markMotion}>
                         <Badge variant="outline" size="sm">
@@ -157,6 +195,14 @@ export function ActiveModelSlot(props: {
                     ) : null}
                   </AnimatePresence>
                 </span>
+                {next?.pending && typeof next.percent === 'number' ? (
+                  <motion.span
+                    className="absolute inset-x-0 bottom-0 h-0.5 bg-amber-500/80"
+                    initial={false}
+                    animate={{ width: `${Math.max(2, Math.min(100, next.percent))}%` }}
+                    transition={{ duration: 0.3, ease: EASE }}
+                  />
+                ) : null}
               </Card>
             </motion.div>
             {/* Every model slot picks the same way, a list you can type into, however short. With
