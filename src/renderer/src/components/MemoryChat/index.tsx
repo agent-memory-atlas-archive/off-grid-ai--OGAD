@@ -1802,7 +1802,9 @@ export function MemoryChat({
     // Create new conversation if none active
     if (!convId) {
       convId = crypto.randomUUID()
-      const title = trimmed.length > 50 ? trimmed.slice(0, 47) + '...' : trimmed
+      // An action marker (<!-- offgrid-action:... -->) steers the run; it is not what the chat is about.
+      const named = trimmed.replace(/<!--[\s\S]*?-->/g, '').trim() || trimmed
+      const title = named.length > 50 ? named.slice(0, 47) + '...' : named
       try {
         await window.api.createRagConversation(convId, title, projectId, surface)
         const now = new Date().toISOString()

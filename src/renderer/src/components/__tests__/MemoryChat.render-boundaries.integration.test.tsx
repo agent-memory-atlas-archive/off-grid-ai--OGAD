@@ -231,3 +231,14 @@ it('switches between saved chats and shows a peer update to an inactive chat', a
   expect(screen.getAllByTitle('Close tab')).toHaveLength(1)
   expect(screen.getByTitle('Close tab').parentElement?.textContent).toContain('Conversation B')
 })
+
+it('names a new chat by what was asked, not by the action marker that steers it', async () => {
+  const boundary = new ChatBoundary()
+  installBoundary(boundary)
+  const user = userEvent.setup()
+  renderChat({})
+
+  await send('<!-- offgrid-action:comic-book -->Make a comic about the orb', user)
+  await waitFor(() => expect(boundary.calls).toHaveLength(1))
+  expect(boundary.conversations[0]!.title).toBe('Make a comic about the orb')
+})
