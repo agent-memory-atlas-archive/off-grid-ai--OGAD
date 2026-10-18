@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TaskLineups } from '../TaskLineups'
 import type { TaskRolesView } from '../../../../shared/task-roles-view'
 
@@ -91,9 +91,81 @@ describe('<TaskLineups/>', () => {
     expect(unloaded).toEqual(['grounding'])
 
     // The dropdown offers the other installed specialist, not the active one again.
-    await user.click(within(slot).getByRole('combobox', { name: 'Computer Use Grounding specialist' }))
+    await user.click(
+      within(slot).getByRole('combobox', { name: 'Computer Use Grounding specialist' })
+    )
     expect(screen.queryByRole('option', { name: 'UI-Mate-9B' })).toBeNull()
     await user.click(await screen.findByRole('option', { name: 'UI-TARS-1.5-7B' }))
     await waitFor(() => expect(picked).toEqual(['ui-tars-1.5-7b']))
+  })
+
+  describe('fetching a specialist the device never downloaded', () => {
+    // Main, faked at the IPC line: downloadModel starts the fetch; progress arrives on its channel.
+    type FakeMain = {
+      downloadModel: ReturnType<typeof vi.fn>
+      emit: (p: Record<string, unknown>) => void
+    }
+    const fakeMain = (
+      result: { success: boolean; error?: string } = { success: true }
+    ): FakeMain => {
+      let progress: ((p: Record<string, unknown>) => void) | undefined
+      const downloadModel = vi.fn(async () => result)
+      ;(window as unknown as { api: unknown }).api = {
+        downloadModel,
+        onModelProgress: (listener: (p: Record<string, unknown>) => void) => {
+          progress = listener
+          return () => undefined
+        }
+      }
+      return { downloadModel, emit: (p: Record<string, unknown>) => act(() => progress?.(p)) }
+    }
+    const renderMissing = (onChanged = vi.fn()): ReturnType<typeof vi.fn> => {
+      render(
+        <TaskLineups
+          view={view('ui-tars-1.5-7b', 'UI-TARS-1.5-7B')}
+          models={models}
+          installed={['ui-mate-9b']}
+          onChanged={onChanged}
+        />
+      )
+      return onChanged
+    }
+
+    it('downloads from the card, shows progress, and reloads the lineups when it lands', async () => {
+      const main = fakeMain()
+      const onChanged = renderMissing()
+      const user = userEvent.setup()
+      await user.click(screen.getByRole('button', { name: 'Download UI-TARS-1.5-7B' }))
+      expect(main.downloadModel).toHaveBeenCalledWith('ui-tars-1.5-7b')
+      main.emit({ modelId: 'ui-tars-1.5-7b', status: 'downloading', percent: 40 })
+      expect(screen.getByText('Downloading…')).toBeTruthy()
+      // Another model's progress is not this card's business.
+      main.emit({ modelId: 'someone-else', status: 'completed' })
+      expect(onChanged).not.toHaveBeenCalled()
+      main.emit({ modelId: 'ui-tars-1.5-7b', status: 'completed', percent: 100 })
+      await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    })
+
+    it('keeps a failed download on the card and retries it from there', async () => {
+      const main = fakeMain()
+      renderMissing()
+      const user = userEvent.setup()
+      await user.click(screen.getByRole('button', { name: 'Download UI-TARS-1.5-7B' }))
+      main.emit({ modelId: 'ui-tars-1.5-7b', status: 'failed', error: 'Not enough disk space.' })
+      const failed = await screen.findByText('Download failed')
+      expect(failed.getAttribute('title')).toBe('Not enough disk space.')
+      await user.click(screen.getByRole('button', { name: 'Download UI-TARS-1.5-7B' }))
+      expect(main.downloadModel).toHaveBeenCalledTimes(2)
+      expect(screen.queryByText('Download failed')).toBeNull()
+    })
+
+    it('says so when main refuses to start the download', async () => {
+      fakeMain({ success: false, error: 'This model is already downloading.' })
+      renderMissing()
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Download UI-TARS-1.5-7B' }))
+      expect((await screen.findByText('Download failed')).getAttribute('title')).toBe(
+        'This model is already downloading.'
+      )
+    })
   })
 })
