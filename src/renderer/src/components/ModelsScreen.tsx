@@ -980,7 +980,14 @@ export function ModelsScreen({
     // piece below, so a state (downloading, failed, active) reads the same in either view.
     const nameRow = (
       <div className="flex flex-wrap items-center gap-1">
-        {isOffGridModel(m.id) && <img src={offGridLogo} alt="Made by Off Grid AI" title="Made by Off Grid AI" className="size-3 shrink-0 rounded-[3px]" />}
+        {isOffGridModel(m.id) && (
+          <img
+            src={offGridLogo}
+            alt="Made by Off Grid AI"
+            title="Made by Off Grid AI"
+            className="size-3 shrink-0 rounded-[3px]"
+          />
+        )}
         <button
           onClick={() => openDetail(m)}
           className="truncate text-left text-xs text-neutral-100 transition-colors duration-100 hover:text-emerald-500"
@@ -1245,13 +1252,12 @@ export function ModelsScreen({
             )}
           </button>
         )}
+        {/* A table row keeps the delete slot when there is no delete, so "Use" lines up down
+            the column instead of shifting by one icon on rows that cannot be deleted. */}
+        {view === 'list' && !(isInstalled && !isRemote) ? (
+          <span aria-hidden="true" className="w-5" />
+        ) : null}
       </div>
-    )
-    const actionRow = (
-      <>
-        {statusNode ?? <span />}
-        {actionIcons}
-      </>
     )
     const repairActions = (
       <>
@@ -1317,27 +1323,29 @@ export function ModelsScreen({
           exit={{ opacity: 0, x: 8 }}
           transition={COLLECTION_SPRING}
           data-state={active ? 'selected' : undefined}
-          className="group align-top transition-colors"
+          className="group align-middle transition-colors"
         >
-          <TableCell className="whitespace-normal py-2">
+          <TableCell className="whitespace-normal py-1.5">
             {nameRow}
             {metaLine}
           </TableCell>
-          <TableCell className="whitespace-normal py-2">
+          {/* Labels, then whatever the model is doing (downloading, failed, needs a part): one
+              column, since a separate Status column stood empty on almost every row. */}
+          <TableCell className="whitespace-normal py-1.5">
             {badgeRow}
             {availabilityNote}
-          </TableCell>
-          <TableCell className="whitespace-normal py-2">
-            {/* Status, actions and any repair on one line; only a running download adds its bar. */}
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                {actionRow}
-              </div>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 empty:hidden">
+              {statusNode}
               {repairActions}
-              {downloading ? <div className="basis-full">{progressBar}</div> : null}
+            </div>
+            {downloading ? <div className="mt-1">{progressBar}</div> : null}
+          </TableCell>
+          <TableCell className="py-1.5">
+            <div className="flex items-center justify-end gap-1">
+              {actionIcons}
+              {detailsButton}
             </div>
           </TableCell>
-          <TableCell className="py-2">{detailsButton}</TableCell>
         </MotionRow>
       )
     }
@@ -1393,11 +1401,10 @@ export function ModelsScreen({
         <Table aria-label={label} className="table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[34%]">Model</TableHead>
-              <TableHead className="w-[24%]">Labels</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="w-10">
-                <span className="sr-only">Details</span>
+              <TableHead className="w-[40%]">Model</TableHead>
+              <TableHead>Labels</TableHead>
+              <TableHead className="w-48">
+                <span className="sr-only">Actions</span>
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -1917,7 +1924,14 @@ export function ModelsScreen({
                 <div className="flex items-start justify-between gap-3 border-b border-neutral-800 px-5 py-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      {isOffGridModel(m.id) && <img src={offGridLogo} alt="Made by Off Grid AI" title="Made by Off Grid AI" className="size-3.5 shrink-0 rounded-[3px]" />}
+                      {isOffGridModel(m.id) && (
+                        <img
+                          src={offGridLogo}
+                          alt="Made by Off Grid AI"
+                          title="Made by Off Grid AI"
+                          className="size-3.5 shrink-0 rounded-[3px]"
+                        />
+                      )}
                       <h2 className="truncate text-sm text-white">
                         {quantChoices ? quantChoices[0]!.name : m.name}
                       </h2>
@@ -1973,7 +1987,11 @@ export function ModelsScreen({
                       <p className="text-[9px] uppercase tracking-wide text-neutral-600">
                         Quantization
                       </p>
-                      <div role="radiogroup" aria-label="Quantization" className="mt-1.5 space-y-1.5">
+                      <div
+                        role="radiogroup"
+                        aria-label="Quantization"
+                        className="mt-1.5 space-y-1.5"
+                      >
                         {quantChoices.map((option) => {
                           const chosen = option.id === m.id
                           const optionState = isActive(option.id)
@@ -2305,7 +2323,7 @@ export function ModelsScreen({
                           download(variantModel.id, variant.fileName)
                           setVariantModel(null)
                         }}
-                        className="h-auto w-full flex-col items-start gap-1 whitespace-normal rounded px-3 py-2 text-left leading-normal shadow-none"
+                        className="h-auto w-full flex-col sm:h-auto items-start gap-1 whitespace-normal rounded px-3 py-2 text-left leading-normal shadow-none"
                       >
                         <span className="break-all text-[11px] text-neutral-200">
                           {variant.fileName}
