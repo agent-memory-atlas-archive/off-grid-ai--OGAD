@@ -666,8 +666,7 @@ export function checkMessageExists(hash: string, conversationId: string): boolea
 export function getMasterMemory(): { content: string | null; updated_at: string | null } {
   const db = getDB()
   const result = db.prepare('SELECT content, updated_at FROM master_memory WHERE id = 1').get() as
-    | { content: string; updated_at: string }
-    | undefined
+    { content: string; updated_at: string } | undefined
   return result || { content: null, updated_at: null }
 }
 
@@ -886,8 +885,7 @@ export function getEntities(appName?: string): EntityListRecord[] {
 export function getEntityDetails(entityId: number, appName?: string): EntityDetailsRecord {
   const db = getDB()
   const entity = db.prepare('SELECT * FROM entities WHERE id = ?').get(entityId) as
-    | (EntityRecord & Record<string, unknown>)
-    | undefined
+    (EntityRecord & Record<string, unknown>) | undefined
 
   let factsQuery = `
       SELECT f.id, f.fact, f.source_session_id, f.created_at
@@ -1173,8 +1171,7 @@ export type UserProfile = UserProfileContract
 export function getUserProfile(): UserProfile | null {
   const db = getDB()
   const row = db.prepare('SELECT data FROM user_profile WHERE id = 1').get() as
-    | { data: string }
-    | undefined
+    { data: string } | undefined
   if (!row) return null
   try {
     return JSON.parse(row.data) as UserProfile
@@ -1631,13 +1628,16 @@ export function addRagMessage(
   // starts a new turn, so no retry from before it can claim the next answer.
   const versionParent = role === 'assistant' ? pendingAnswerParents.get(conversationId) : undefined
   pendingAnswerParents.delete(conversationId)
-  const placed = withThreadPlace(conversationId, context, versionParent)
-  const contextJson = placed
-    ? JSON.stringify(placed)
-    : context
-      ? JSON.stringify(context)
-      : null
+  const placed = withThreadPlace(
+    conversationId,
+    context,
+    versionParent,
+    role === 'assistant' ? turnTails.get(conversationId) : undefined
+  )
+  const contextJson = placed ? JSON.stringify(placed) : context ? JSON.stringify(context) : null
   const uuid = knownUuid ?? crypto.randomUUID()
+  // The turn in progress ends here now: a question starts it, each reply to it extends it.
+  if (role === 'user' || turnTails.has(conversationId)) turnTails.set(conversationId, uuid)
 
   // uuid is the cross-device identity for sync (the autoincrement id is device-local).
   const info = db
@@ -1679,8 +1679,7 @@ export function updateRagMessage(
        WHERE conversation_id = ? AND (uuid = ? OR CAST(id AS TEXT) = ?)`
     )
     .get(conversationId, messageId, messageId) as
-    | { id: number; uuid: string; context: string | null }
-    | undefined
+    { id: number; uuid: string; context: string | null } | undefined
   if (!existing) return false
 
   // A rewrite of the message keeps its place in the thread: which message it follows, and when its
@@ -1759,7 +1758,10 @@ export function selectRagMessageVersion(
     .get(conversationId, target) as { id: number; context: string | null } | undefined
   if (!row) return false
   const context = { ...parsedContext(row.context), selectedAt: Date.now() }
-  db.prepare('UPDATE rag_messages SET context = ? WHERE id = ?').run(JSON.stringify(context), row.id)
+  db.prepare('UPDATE rag_messages SET context = ? WHERE id = ?').run(
+    JSON.stringify(context),
+    row.id
+  )
   emitSyncMutation({ entity: CORE_SYNC_ENTITIES.message, entityId: target, kind: 'put' })
   return true
 }
@@ -1815,6 +1817,14 @@ function threadRows(rows: RagMessage[]): Array<{ row: RagMessage; uuid: string }
 const pendingAnswerParents = new Map<string, string>()
 
 /**
+ * The last message of the turn in progress, per conversation: the question asked, then each reply
+ * saved for it. A reply follows its own turn, not whatever thread is on screen when it finishes:
+ * switching to another version while an answer streams used to file that answer under the version
+ * being looked at, so it showed up in a thread it never belonged to.
+ */
+const turnTails = new Map<string, string>()
+
+/**
  * The next answer saved in this conversation is a new version of answer `ofUuid`, beside it rather
  * than in its place: retrying an answer keeps the old one and the turns after it. The streamed
  * answer keeps the name it streamed under, so it is saved the usual way and takes its place here.
@@ -1852,7 +1862,8 @@ export function addRagMessageVersion(
 function withThreadPlace(
   conversationId: string,
   context: unknown,
-  versionParent?: string
+  versionParent?: string,
+  turnTail?: string
 ): Record<string, unknown> | null {
   const base = withoutInMessageVersions(context)
   if (typeof base.parent === 'string' || versionParent) {
@@ -1860,7 +1871,11 @@ function withThreadPlace(
     if (typeof base.selectedAt !== 'number') base.selectedAt = Date.now()
     return base
   }
-  const place = appendPlace(threadRows(storedRagMessages(conversationId)))
+  const rows = storedRagMessages(conversationId)
+  const place = appendPlace(threadRows(rows))
+  // In a chat with versions, a reply follows the turn it belongs to (see turnTails).
+  if (place.parent && turnTail && rows.some((row) => row.uuid === turnTail))
+    return { ...base, parent: turnTail }
   if (place.parent) return { ...base, parent: place.parent }
   return context && typeof context === 'object' && !Array.isArray(context) ? base : null
 }
