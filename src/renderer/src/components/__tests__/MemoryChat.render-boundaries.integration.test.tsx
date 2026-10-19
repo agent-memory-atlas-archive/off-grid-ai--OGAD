@@ -16,6 +16,9 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  // Chat remembers its open tabs and active chat in localStorage; without this a chat one test
+  // opened is still active in the next, and a first message goes to it instead of a new chat.
+  window.localStorage.clear()
   if (originalOffsetHeight) {
     Object.defineProperty(HTMLElement.prototype, 'offsetHeight', originalOffsetHeight)
   }
