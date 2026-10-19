@@ -213,10 +213,11 @@ test('a Chat request runs the hybrid reasoner and specialist through one Compute
   })
   await page.getByRole('button', { name: 'Work done', exact: true }).click()
   // The chat turn ends when the task starts; the task's own finished entry is in Task history.
+  // Every row there is a Computer Use task, so a row does not repeat its kind.
   await expect(
     page
       .getByRole('complementary', { name: 'Task history' })
-      .getByRole('button', { name: /^Click the center of this test window done Computer Use/ })
+      .getByRole('button', { name: /^Click the center of this test window done / })
   ).toBeVisible({
     timeout: 120_000
   })
@@ -258,10 +259,11 @@ for (const [strategy, counter] of [
     })
     await page.getByRole('button', { name: 'Work done', exact: true }).click()
     // The chat turn ends when the task starts; the task's own finished entry is in Task history.
+    // Every row there is a Computer Use task, so a row does not repeat its kind.
     await expect(
       page
         .getByRole('complementary', { name: 'Task history' })
-        .getByRole('button', { name: /^Click the center of this test window done Computer Use/ })
+        .getByRole('button', { name: /^Click the center of this test window done / })
     ).toBeVisible({
       timeout: 120_000
     })
