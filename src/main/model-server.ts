@@ -1525,7 +1525,7 @@ async function handleTranscription(
     return
   }
   const ext = path.extname(file.filename) || '.audio'
-  const tmp = path.join(os.tmpdir(), `offgrid-stt-${process.pid}-${body.length}${ext}`)
+  const tmp = path.join(os.tmpdir(), `offgrid-stt-${process.pid}-${rid}${ext}`)
   let transcriptionOptions: ReturnType<typeof transcriptionRequestOptions>
   try {
     transcriptionOptions = transcriptionRequestOptions(fields)
