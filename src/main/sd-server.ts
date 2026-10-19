@@ -112,7 +112,10 @@ export function contextKey(ctx: SdServerContext): string {
 /** Build the JSON body for POST /sdcpp/v1/img_gen. The steps/method/guidance
  *  live in a NESTED `sample_params` object — a top-level `sample_steps` is
  *  silently ignored by sd-server (it falls back to its 20-step default). Pure. */
-export function buildImgGenRequest(req: SdGenRequest): Record<string, unknown> {
+export function buildImgGenRequest(
+  req: SdGenRequest,
+  withPreview = false
+): Record<string, unknown> {
   const body: Record<string, unknown> = {
     prompt: req.prompt,
     negative_prompt: req.negativePrompt ?? '',
@@ -123,10 +126,13 @@ export function buildImgGenRequest(req: SdGenRequest): Record<string, unknown> {
       sample_method: req.sampleMethod ?? 'dpm++2m',
       scheduler: req.scheduler ?? 'karras',
       guidance: { txt_cfg: req.cfgScale ?? 2.0 }
-    },
-    // A rough frame every step ('proj' needs no extra model), so the image forms on screen.
-    preview: 'proj',
-    preview_interval: 1
+    }
+  }
+  // A rough frame every step ('proj' needs no extra model), so the image forms on screen.
+  // Only when a caller shows it; otherwise the server keeps its default of no previews.
+  if (withPreview) {
+    body.preview = 'proj'
+    body.preview_interval = 1
   }
   if (req.refImages?.length) body.ref_images = req.refImages
   if (typeof req.seed === 'number' && req.seed >= 0) body.seed = req.seed
@@ -206,8 +212,27 @@ export function describeSdFetchFailure(
 interface SdGenProgress {
   step: number
   total: number
-  /** data: URL of the latest step preview, when the server sent a new one. */
+  /** data: URL of the latest step preview, once the server has sent one. */
   preview?: string
+}
+
+/** The progress to report for one poll: the server's step when it sent a preview, else its
+ *  fractional progress over `total` steps, else nothing. Every event carries the latest frame
+ *  (`previewUrl`), because a consumer replaces its progress with each event and a step without a
+ *  new frame must not drop the picture from the screen. Pure. */
+export function stepProgress(
+  outcome: JobOutcome,
+  total: number,
+  previewUrl: string | undefined
+): SdGenProgress | null {
+  const frame = previewUrl ? { preview: previewUrl } : {}
+  if (outcome.preview) {
+    return { step: outcome.preview.step, total: outcome.preview.total, ...frame }
+  }
+  if (typeof outcome.progress === 'number') {
+    return { step: Math.min(total, Math.round(outcome.progress * total)), total, ...frame }
+  }
+  return null
 }
 
 /** The resident image server. One instance (the exported `sdServer`). */
@@ -400,7 +425,7 @@ class SdServerService {
       const submit = await this.sdFetch(`${this.base()}/sdcpp/v1/img_gen`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildImgGenRequest(req))
+        body: JSON.stringify(buildImgGenRequest(req, Boolean(onProgress)))
       })
       if (!submit.ok) throw new Error(`sd-server rejected the request (HTTP ${submit.status}).`)
       const job = (await submit.json()) as { id?: string; poll_url?: string }
@@ -418,20 +443,12 @@ class SdServerService {
         if (!res.ok) throw new Error(`job poll failed (HTTP ${res.status}).`)
         const status = await res.json()
         const outcome = parseJobResult(status)
-        if (onProgress && outcome.preview) {
-          const { pngBase64, step: previewStep, total: previewTotal } = outcome.preview
-          if (pngBase64 !== lastPreview) {
-            lastPreview = pngBase64
-            lastPreviewUrl = `data:image/png;base64,${pngBase64}`
-          }
-          onProgress({ step: previewStep, total: previewTotal, preview: lastPreviewUrl })
-        } else if (onProgress && typeof outcome.progress === 'number') {
-          onProgress({
-            step: Math.min(total, Math.round(outcome.progress * total)),
-            total,
-            ...(lastPreviewUrl ? { preview: lastPreviewUrl } : {})
-          })
+        if (outcome.preview && outcome.preview.pngBase64 !== lastPreview) {
+          lastPreview = outcome.preview.pngBase64
+          lastPreviewUrl = `data:image/png;base64,${lastPreview}`
         }
+        const progress = onProgress ? stepProgress(outcome, total, lastPreviewUrl) : null
+        if (progress) onProgress?.(progress)
         if (!outcome.done) continue
         if (!outcome.ok) throw new Error(outcome.error ?? 'image generation failed.')
         const png = Buffer.from(outcome.pngBase64!, 'base64')
