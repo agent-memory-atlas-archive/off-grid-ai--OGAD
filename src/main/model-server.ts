@@ -1701,6 +1701,12 @@ async function handleSpeech(
       : await tts.synthesize(input, voice)
     return { audio: dataUrl, format: 'wav' }
   }
+  // Team mode, `stream: true`: audio goes out sentence by sentence, so the first sound arrives
+  // after one sentence instead of after the whole reply.
+  if (teamMode() && payload.stream === true && !isAsync(req, payload)) {
+    await streamTeamSpeech(res, rid, input, voice)
+    return
+  }
   // OpenAI's /v1/audio/speech returns raw audio bytes; honor a JSON-ish
   // response_format with a data URL. (Async results are always the JSON form.)
   await serve(res, rid, 'speech', '/v1/audio/speech', isAsync(req, payload), run, (result) => {
@@ -1717,6 +1723,48 @@ async function handleSpeech(
       res.end(wav)
     }
   })
+}
+
+/** Team-mode streamed speech: a WAV whose first chunk is the first sentence (see
+ *  streamingWavChunk). A failure before any audio is a JSON error; after it, the stream is cut. */
+async function streamTeamSpeech(
+  res: http.ServerResponse,
+  rid: string,
+  input: string,
+  voice: string | undefined
+): Promise<void> {
+  const { streamingWavChunk } = await import('@offgrid/speech')
+  // An object, so the check after the await sees what the pass callbacks set.
+  const stream = { started: false }
+  const send = (dataUrl: string): void => {
+    if (res.destroyed) return
+    const wav = Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64')
+    const chunk = streamingWavChunk(wav, !stream.started)
+    if (!chunk) return
+    if (!stream.started) {
+      res.writeHead(200, { 'Content-Type': 'audio/wav', 'X-Request-Id': rid })
+      res.flushHeaders()
+      res.socket?.setNoDelay(true)
+      stream.started = true
+    }
+    res.write(chunk)
+  }
+  try {
+    const { dataUrl } = await onTeamTurn('speech', res, false, () =>
+      tts.synthesize(input, voice, undefined, {
+        parallel: { workers: teamConcurrency().speech },
+        onPass: (pass) => send(pass.dataUrl)
+      })
+    )()
+    // A reply of one sentence has no separate passes: send it whole.
+    if (!stream.started) send(dataUrl)
+    res.end()
+  } catch (error) {
+    if (!stream.started && !res.destroyed) {
+      const failure = errMeta(error)
+      json(res, failure.status, errBody(failure.message, failure.type))
+    } else res.destroy()
+  }
 }
 
 // ─── Text-to-image / image-to-image (diffusion) ──────────────────────────────
