@@ -79,6 +79,10 @@ mac:
     - dmg
     - zip
   category: public.app-category.productivity
+  # Squirrel.Mac reads the whole update zip into one growing buffer, and Electron's
+  # allocator refuses it past 1 GiB: the update crashes. Compress as hard as possible;
+  # release.yml fails the build if the zip still nears that limit.
+  compression: maximum
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist

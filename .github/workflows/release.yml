@@ -387,7 +387,7 @@ jobs:
           npm run prepare:speech-defaults
           # Build every artifact with publication disabled. The artifact hook verifies
           # both the updater ZIP and DMG before this command can complete.
-          npx electron-builder --mac \
+          npx electron-builder --mac --arm64 \
             -c.dmg.artifactName='OffGrid-${version}.${ext}' \
             --publish never
           # electron-builder notarizes the app before it creates the DMG. Submit the
@@ -418,6 +418,22 @@ jobs:
           test -n "$APP"
           test -s "$APP/Contents/Resources/performance-packs.json"
           node scripts/probe-packaged-tts.mjs "$APP" --synthesize
+      # Squirrel.Mac downloads the update zip into one buffer that doubles as it grows; past
+      # 1 GiB Electron's allocator refuses the next size and the installed app crashes mid-update.
+      # Keep a margin below that limit so a growing payload fails here, not on users' Macs.
+      - name: Check the Mac update zip stays under the updater limit
+        run: |
+          LIMIT=996147200 # 950 MiB
+          ZIPS=$(find dist -maxdepth 1 -name '*-mac.zip' -print)
+          test -n "$ZIPS"
+          for ZIP in $ZIPS; do
+            BYTES=$(stat -f %z "$ZIP")
+            echo "$ZIP: $BYTES bytes ($((BYTES / 1048576)) MiB); limit $LIMIT bytes (950 MiB)"
+            if [ "$BYTES" -gt "$LIMIT" ]; then
+              echo "::error::$ZIP is $BYTES bytes, over the 950 MiB limit. Squirrel.Mac crashes on update zips past 1 GiB."
+              exit 1
+            fi
+          done
       # Internal demo build: hand the signed+notarized DMG back as a run artifact and stop
       # (the publish steps below are all skipped). Repo-scoped, auto-expiring, no Release.
       - name: Upload signed DMG as a build artifact
