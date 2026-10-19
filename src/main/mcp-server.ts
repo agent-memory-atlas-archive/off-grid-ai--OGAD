@@ -12,6 +12,7 @@ import https from 'https'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { randomUUID } from 'crypto'
 import { z } from 'zod'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
@@ -48,7 +49,7 @@ async function materialize(ref: string, fallbackExt: string): Promise<string> {
   if (url.startsWith('data:')) {
     const { data, ext } = parseDataUrl(url, fallbackExt)
     // Team mode runs tools side by side: two in the same millisecond must not share a file.
-    const unique = teamMode() ? `-${Math.random().toString(36).slice(2)}` : ''
+    const unique = teamMode() ? `-${randomUUID()}` : ''
     const p = path.join(os.tmpdir(), `offgrid-mcp-${process.pid}-${Date.now()}${unique}.${ext}`)
     await fs.promises.writeFile(p, data)
     return p
@@ -71,7 +72,7 @@ async function materialize(ref: string, fallbackExt: string): Promise<string> {
     })
     const ext = path.extname(new URL(url).pathname).slice(1) || fallbackExt
     // Team mode runs tools side by side: two in the same millisecond must not share a file.
-    const unique = teamMode() ? `-${Math.random().toString(36).slice(2)}` : ''
+    const unique = teamMode() ? `-${randomUUID()}` : ''
     const p = path.join(os.tmpdir(), `offgrid-mcp-${process.pid}-${Date.now()}${unique}.${ext}`)
     await fs.promises.writeFile(p, data)
     return p
