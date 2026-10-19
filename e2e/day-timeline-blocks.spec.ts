@@ -116,6 +116,19 @@ test.describe('Day timeline', () => {
     ])
 
     await nav('Day').click()
+    // Reset layout sits in the header row beside the day stepper, not on a row of its own.
+    const header = page.locator('header[data-slot="page-header"]').filter({
+      has: page.getByRole('heading', { name: 'Today' })
+    })
+    const reset = header.getByRole('button', { name: 'Reset layout' })
+    await expect(reset).toBeVisible()
+    const stepper = header.getByRole('button', { name: /next day/i })
+    const [resetBox, stepperBox] = [await reset.boundingBox(), await stepper.boundingBox()]
+    expect(
+      Math.abs(resetBox!.y + resetBox!.height / 2 - (stepperBox!.y + stepperBox!.height / 2))
+    ).toBeLessThan(4)
+    expect(resetBox!.x).toBeGreaterThan(stepperBox!.x)
+    await header.screenshot({ path: test.info().outputPath('day-header.png') })
     for (const label of ['Quarterly budget', 'Harbour contract'])
       await expect(
         page.getByRole('button', { name: new RegExp(`^Open ${label} at .* in Replay$`) })
