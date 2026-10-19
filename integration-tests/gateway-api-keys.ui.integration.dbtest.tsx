@@ -227,10 +227,10 @@ it('creates, replaces, and revokes keys from Gateway with one-time disclosure', 
         ).status
     )
     .toBe(401)
-  await user.click(section.getByRole('button', { name: 'Turn off authentication' }))
+  await user.click(section.getByRole('switch', { name: /^Require an API key/ }))
   await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }))
   expect((await fetch(`${base}/v1/requests`)).status).toBe(401)
-  await user.click(section.getByRole('button', { name: 'Turn off authentication' }))
+  await user.click(section.getByRole('switch', { name: /^Require an API key/ }))
   await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Confirm' }))
   await section.findByText('API key not required')
   expect((await fetch(`${base}/v1/requests`)).status).toBe(200)
