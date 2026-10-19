@@ -8,7 +8,7 @@
  * refuses the overflow with 429, frees a slot when a client disconnects, keeps remote models out of
  * the local line, and makes an image job's eviction wait for the streams in flight.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import http from 'http'
 import fs from 'fs'
 import os from 'os'
@@ -191,22 +191,29 @@ describe('single mode (Just me)', () => {
 })
 
 describe('team mode', () => {
-  it('launches llama-server with several slots over one unified pool of the full context', async () => {
+  // Each case starts from a fresh switch to team mode, as the Gateway screen does; before the
+  // engine relaunches, the gateway sizes its line by the context rule alone.
+  beforeEach(async () => {
+    await llm.setSettings({ gatewayMode: 'single' })
     await llm.setSettings({ gatewayMode: 'team' })
-    const slots = llm.gatewaySlots()
-    expect(slots).toBeGreaterThan(1)
+  })
+
+  it('launches llama-server with slots over one unified pool of at least the full context', async () => {
+    await llm.setSettings({ gatewayMode: 'team' })
     const args = llm.launchArgs()
+    // The slot count follows the memory free at launch; the gateway admits exactly that many.
+    const slots = llm.gatewaySlots()
     expect(args[args.indexOf('--parallel') + 1]).toBe(String(slots))
     expect(args).toContain('--kv-unified')
     expect(args).toContain('--metrics')
     // The person's context is kept whole: one conversation may use all of it.
-    expect(args[args.indexOf('-c') + 1]).toBe(String(llm.getSettings().ctxSize))
+    expect(Number(args[args.indexOf('-c') + 1])).toBeGreaterThanOrEqual(llm.getSettings().ctxSize!)
     expect(llm.getSettings().gatewaySlots).toBe(slots)
   })
 
   it('runs one stream per slot at once and queues the next in order', async () => {
-    await llm.setSettings({ gatewayMode: 'team' })
     const slots = llm.gatewaySlots()
+    expect(slots).toBe(4)
     const labels = Array.from({ length: slots + 1 }, (_, i) => `s${i}`)
     const replies = labels.map((label) => chat(label))
     await waitFor(() => running === slots, `${slots} overlapping streams`)

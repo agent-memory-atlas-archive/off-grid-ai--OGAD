@@ -13,7 +13,13 @@ import {
 import { postCompletionOnce } from '../llm/http-post'
 import { buildLaunchArgs } from '../llm/settings-math'
 import { totalmem } from 'node:os'
-import { llm } from '../llm'
+import type { GatewayMode } from '@offgrid/models'
+
+/** Where the gateway mode is read from; the gateway sets it when it starts (single until then). */
+let gatewayModeSource: () => GatewayMode = () => 'single'
+export function setDecisionGatewayModeSource(source: () => GatewayMode): void {
+  gatewayModeSource = source
+}
 import { engineSpawnEnv } from '../llm/spawn-env'
 import { selectLocalEngine } from '../llm/select-local-engine'
 import { getBackendPreference } from '../backend-preferences'
@@ -123,7 +129,7 @@ export class DecisionRuntime {
       reportModelPlacement: true,
       // Team gateway mode opens slots here too, so several clients' decisions run at once.
       // (Single mode passes nothing new, so its argv is unchanged.)
-      ...(llm.gatewayMode() === 'team'
+      ...(gatewayModeSource() === 'team'
         ? { gatewayMode: 'team' as const, totalRamBytes: totalmem() }
         : {})
     })

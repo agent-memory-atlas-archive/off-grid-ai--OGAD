@@ -2033,6 +2033,10 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
   // An eviction of the chat model (an image job needs its memory) waits for team-mode streams to
   // finish and admits no new ones meanwhile. In single mode no stream holds the limiter.
   llm.setEvictionGate((evict) => chatLimiter().exclusive(evict))
+  // The Decider's llama-server opens slots in team mode too; it reads the mode from here.
+  void import('./accessibility/decision-runtime').then(({ setDecisionGatewayModeSource }) =>
+    setDecisionGatewayModeSource(() => llm.gatewayMode())
+  )
 
   server = http.createServer(async (req, res) => {
     const origin = req.headers.origin
