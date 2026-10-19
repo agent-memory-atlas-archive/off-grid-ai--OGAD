@@ -175,6 +175,8 @@ it('creates, replaces, and revokes keys from Gateway with one-time disclosure', 
   // secret storage, and HTTP gateway are real.
   ;(window as unknown as { api: Record<string, unknown> }).api = {
     gatewayApiKeys: async () => gatewayApiKeySettings(),
+    // The Gateway screen also reads who it serves; this journey runs it for one person.
+    getLlmSettings: async () => ({ gatewayMode: 'single' }),
     createGatewayApiKey: async (...args: Parameters<typeof createGatewayApiKey>) =>
       createGatewayApiKey(...args),
     revokeGatewayApiKey: async (id: string) => revokeGatewayApiKey(id),
@@ -247,7 +249,8 @@ it('creates, replaces, and revokes keys from Gateway with one-time disclosure', 
 
 it('keeps Gateway visible when API key storage is locked on entry', async () => {
   ;(window as unknown as { api: Record<string, unknown> }).api = {
-    gatewayApiKeys: async () => gatewayApiKeySettings()
+    gatewayApiKeys: async () => gatewayApiKeySettings(),
+    getLlmSettings: async () => ({ gatewayMode: 'single' })
   }
   keychainLocked = true
   try {
