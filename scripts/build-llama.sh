@@ -176,7 +176,7 @@ fi
 
 # Gate: a weak Accelerate import resolves to null on a macOS older than the symbol and crashes on
 # first use, although the engine launches.
-WEAK_NEW="$(for f in "$DEST"/llama-server "$DEST"/*.dylib; do nm -m "$f" 2>/dev/null | awk -v file="$f" '/weak external/ && /NEWLAPACK/ {print file ": " $NF}'; done | sort -u)"
+WEAK_NEW="$(for f in "$DEST"/llama-server "$DEST"/*.dylib; do { nm -m "$f" 2>/dev/null || true; } | awk -v file="$f" '/weak external/ && /NEWLAPACK/ {print file ": " $NF}'; done | sort -u)"
 if [ -n "$BLAS_FLAGS" ] && [ -n "$WEAK_NEW" ]; then
   echo "[build-llama] FATAL: engine weak-links Accelerate symbols newer than $TARGET:"; echo "$WEAK_NEW"; exit 1
 fi
