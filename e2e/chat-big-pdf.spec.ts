@@ -53,6 +53,11 @@ const requestsFor = (question: string): string[] =>
 const ask = async (question: string): Promise<string> => {
   const composer = page.getByRole('textbox', { name: 'Message', exact: true })
   await composer.fill(question)
+  // Enter sends only once the attachment has finished processing; until then the button reads
+  // "Waiting for attachment to finish processing…".
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({
+    timeout: 120_000
+  })
   await composer.press('Enter')
   await expect.poll(() => requestsFor(question).length, { timeout: 120_000 }).toBeGreaterThan(0)
   await expect(page.getByRole('button', { name: 'Stop generating', exact: true })).toBeHidden({
