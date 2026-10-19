@@ -169,14 +169,31 @@ describe('planBestSettings speculation and placement', () => {
       speculativeDecoding: 'mtp',
       speculativeDraftMax: 2
     })
-    // On a 12 GB card the experts spill to the CPU: the MTP head would cost VRAM and slow decoding.
+    // On a 12 GB card the experts spill to the CPU: the MTP head would cost VRAM and slow decoding,
+    // so the n-gram cache, which costs no VRAM, takes its place.
     expect(planBestSettings(cudaPc(12), moe).chat).toMatchObject({
       gpuPlacement: 'auto',
-      speculativeDecoding: 'off',
+      speculativeDecoding: 'ngram',
       speculativeDraftMax: 0
     })
     // VRAM the engine did not report never counts as fitting.
-    expect(planBestSettings(cudaPc(null), moe).chat.speculativeDecoding).toBe('off')
+    expect(planBestSettings(cudaPc(null), moe).chat.speculativeDecoding).toBe('ngram')
+  })
+
+  it('keeps MTP on a CPU-only machine, where no VRAM is shared with the head', () => {
+    const cpuPc: MachineProfile = {
+      platform: 'linux',
+      cpuModel: 'Intel Core i7',
+      performanceCores: 6,
+      totalRamGb: 32,
+      gpu: null
+    }
+    expect(planBestSettings(cpuPc, qwen9b).chat).toMatchObject({
+      gpuLayers: 0,
+      threads: 6,
+      speculativeDecoding: 'mtp',
+      speculativeDraftMax: 2
+    })
   })
 
   it('uses the n-gram cache for a model without an MTP head', () => {
