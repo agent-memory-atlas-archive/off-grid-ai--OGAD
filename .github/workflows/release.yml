@@ -136,8 +136,8 @@ jobs:
       - name: Stage pinned macOS native engines
         run: |
           curl -fL --retry 3 -o "$RUNNER_TEMP/mac-native.tar.gz" \
-            'https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/ogad-mac-native-2026-10-v1.tar.gz'
-          echo '6bf0aa4a93ad16d62eef7d4242043501fca0f885b467ed129ee4e4865153acbc  '"$RUNNER_TEMP/mac-native.tar.gz" | shasum -a 256 -c -
+            'https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/ogad-mac-native-2026-10-v2.tar.gz'
+          echo '50f13dc0b6318eb0c036ccd9ebe0f21d931912992bf828f1cd56de4113e9e48c  '"$RUNNER_TEMP/mac-native.tar.gz" | shasum -a 256 -c -
           tar -xzf "$RUNNER_TEMP/mac-native.tar.gz" -C resources/bin
       - name: Verify cached macOS engines
         run: |
@@ -145,7 +145,7 @@ jobs:
             test -x "resources/bin/$variant/llama-server"
             minos=$(otool -l "resources/bin/$variant/llama-server" | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print $2; exit}')
             test -n "$minos"
-            case "$minos" in 1[0-5].*|[1-9].*) ;; *) echo "Unsupported $variant minos $minos" >&2; exit 1 ;; esac
+            case "$minos" in 1[0-3].*|[1-9].*) ;; *) echo "Unsupported $variant minos $minos" >&2; exit 1 ;; esac
             DYLD_LIBRARY_PATH="resources/bin/$variant" "resources/bin/$variant/llama-server" --help >/dev/null
           done
           test -x resources/bin/whisper/whisper-cli
