@@ -111,7 +111,11 @@ test.describe('Gateway access', () => {
     test.setTimeout(5 * 60_000)
     await gotoScreen(page, 'Gateway')
     const keys = page.getByRole('region', { name: 'API keys' })
-    await expect(keys.getByText('API key not required')).toBeVisible()
+    // One switch is the setting and its state; its status line says it in words.
+    await expect(keys.getByRole('switch', { name: 'Require an API key' })).not.toBeChecked()
+    await expect(keys.getByRole('status').filter({ hasText: 'API key' })).toContainText(
+      'API key not required'
+    )
 
     await keys.getByLabel('Key name').fill(KEY_NAME)
     await keys.getByRole('combobox', { name: 'Expiry' }).click()
@@ -127,7 +131,10 @@ test.describe('Gateway access', () => {
     await keys.getByRole('button', { name: 'Copy key', exact: true }).click()
     await expect(keys.getByText('Key copied.')).toBeVisible()
     expect(await app!.evaluate(({ clipboard }) => clipboard.readText())).toBe(key)
-    await expect(keys.getByText('API key required')).toBeVisible()
+    await expect(keys.getByRole('switch', { name: 'Require an API key' })).toBeChecked()
+    await expect(keys.getByRole('status').filter({ hasText: 'API key' })).toContainText(
+      'API key required'
+    )
     await expect(keys.getByText(`${KEY_NAME} · Active`)).toBeVisible()
 
     const bearer = { authorization: `Bearer ${key}` }
