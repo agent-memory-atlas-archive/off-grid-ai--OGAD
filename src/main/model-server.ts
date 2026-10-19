@@ -83,6 +83,14 @@ import {
 } from './vision/remote-vision-server'
 import { REASONING_BUDGET_AUTO, REMOTE_TEAM_CONCURRENCY } from '@offgrid/models'
 import { LimiterFullError, UpstreamLimiter, type Release } from './model-server/upstream-limiter'
+import {
+  chatLimiter,
+  embedCoalesced,
+  teamConcurrency,
+  teamLimiter,
+  teamMode
+} from './model-server/team-runtimes'
+import type { GatewayRuntime } from '@offgrid/models'
 import { pipeline } from 'stream'
 import {
   remoteReasoningCapability,
@@ -104,9 +112,6 @@ let server: http.Server | null = null
 // app-wide chat job for its whole stream. 'team' serves several clients: a chat for the model that
 // is already loaded is admitted by a limiter sized to llama-server's slots, a remote model has its
 // own limiter, and only a model swap or load goes through the app-wide queue.
-const teamMode = (): boolean => llm.gatewayMode() === 'team'
-const localLimiter = new UpstreamLimiter('local model', 1)
-const remoteLimiter = new UpstreamLimiter('remote model', REMOTE_TEAM_CONCURRENCY)
 const localAgents = new Map<number, http.Agent>()
 /** One keep-alive pool per llama-server port, wide enough for every slot and its waiters. */
 function localAgent(port: number): http.Agent {
@@ -749,9 +754,11 @@ async function serve(
   run: (signal?: AbortSignal) => Promise<unknown>,
   syncRespond: (result: unknown) => void
 ): Promise<void> {
+  const teamRuntime = TEAM_SERVE_RUNTIME[kind]
+  const work = teamRuntime && teamMode() ? onTeamTurn(teamRuntime, res, asyncFlag, run) : run
   const r = createRequest(rid, kind, collection)
   if (asyncFlag) {
-    settle(r, run(r.controller?.signal)).catch(() => {}) // errors captured on the request resource
+    settle(r, work(r.controller?.signal)).catch(() => {}) // errors captured on the request resource
     dispatchAsync(res, r)
     return
   }
@@ -760,13 +767,52 @@ async function serve(
   }
   if (r.controller) res.once('close', cancelDisconnectedImage)
   try {
-    const result = await settle(r, run(r.controller?.signal))
+    const result = await settle(r, work(r.controller?.signal))
     syncRespond(result)
   } catch (e) {
     const { status, type, message } = errMeta(e)
     json(res, status, errBody(message, type))
   } finally {
     res.off('close', cancelDisconnectedImage)
+  }
+}
+
+/** The runtime each media kind takes its team-mode turn on (chat and embeddings admit themselves). */
+const TEAM_SERVE_RUNTIME: Record<string, GatewayRuntime | undefined> = {
+  image: 'image',
+  transcription: 'transcription',
+  speech: 'speech'
+}
+
+/** Team mode: `run` waits for a turn on the runtime first. A sync request whose client leaves
+ *  while waiting gives its place up; one refused past the line gets 429 with Retry-After. */
+function onTeamTurn<T>(
+  runtime: GatewayRuntime,
+  res: http.ServerResponse,
+  asyncFlag: boolean,
+  run: (signal?: AbortSignal) => Promise<T>
+): (signal?: AbortSignal) => Promise<T> {
+  return async (signal) => {
+    const gone = new AbortController()
+    const leave = (): void => {
+      if (!res.writableEnded) gone.abort(new Error('The client disconnected.'))
+    }
+    if (!asyncFlag) res.once('close', leave)
+    let release: Release
+    try {
+      release = await teamLimiter(runtime).acquire(gone.signal)
+    } catch (error) {
+      if (error instanceof LimiterFullError && !res.headersSent)
+        res.setHeader('Retry-After', String(error.retryAfterSeconds))
+      throw error
+    } finally {
+      res.off('close', leave)
+    }
+    try {
+      return await run(signal)
+    } finally {
+      release()
+    }
   }
 }
 
@@ -880,13 +926,11 @@ async function handleSpecialistChat(
       }
       const asyncRequest = isAsync(req, body)
       if (!asyncRequest) res.once('close', abort)
-      await serve(
-        res,
-        rid,
-        'chat',
-        '/v1/chat/completions',
-        asyncRequest,
-        async () => {
+      // Team mode: decisions take turns per runtime; a Decider llama-server with slots runs
+      // several at once, Kev one forward pass at a time.
+      const team = teamMode()
+      const { isKevModel } = await import('./models-manager')
+      const decide = async (): Promise<unknown> => {
           try {
             await decisionRuntime.start(model.id)
             if (controller.signal.aborted) throw new Error('Decision request cancelled.')
@@ -896,7 +940,8 @@ async function handleSpecialistChat(
               input.context,
               input.question,
               input.options,
-              controller.signal
+              controller.signal,
+              team
             )
             const result = {
               id: `chatcmpl-${rid}`,
@@ -919,7 +964,16 @@ async function handleSpecialistChat(
           } finally {
             res.off('close', abort)
           }
-        },
+        }
+      await serve(
+        res,
+        rid,
+        'chat',
+        '/v1/chat/completions',
+        asyncRequest,
+        team
+          ? onTeamTurn(isKevModel(model.id) ? 'kev' : 'decision', res, asyncRequest, decide)
+          : decide,
         (value) => {
           if (res.destroyed) return
           const result = value as {
@@ -953,24 +1007,39 @@ async function handleSpecialistChat(
       sanitizeChatMessages(body)
       activity.update({ backend: connection.computeBackend ?? 'Unknown', effectiveRequest: body })
       const port = Number(new URL(connection.endpoint).port)
+      const team = teamMode()
       if (isAsync(req, body)) {
-        await serve(
-          res,
-          rid,
-          'chat',
-          '/v1/chat/completions',
-          true,
-          async () => {
+        const ground = async (): Promise<unknown> => {
             try {
-              const result = await callLlamaJson(body, Date.now() + 45_000, port)
+              const result = await callLlamaJson(body, Date.now() + 45_000, port, team)
               activity.finish(result)
               return result
             } catch (error) {
               activity.finish(undefined, error)
               throw error
             }
-          },
+          }
+        await serve(
+          res,
+          rid,
+          'chat',
+          '/v1/chat/completions',
+          true,
+          team ? onTeamTurn('grounder', res, true, ground) : ground,
           () => {}
+        )
+      } else if (team) {
+        // Team mode: one turn per grounder slot, pooled connections, disconnect frees the slot.
+        const release = await admitTeamRequest(teamLimiter('grounder'), res)
+        if (!release) return true
+        proxyToLlama(
+          req,
+          res,
+          Buffer.from(JSON.stringify(body)),
+          Date.now() + 45_000,
+          activity,
+          port,
+          true
         )
       } else
         proxyToLlama(
@@ -1142,7 +1211,7 @@ async function prepareTeamChatModel(requested: string): Promise<string | null> {
   if (!swap && (llm.isReady() || !(selected || llm.modelsExist()))) return null
   let failure: string | null = null
   await modalityQueue.run(CHAT_JOB, () =>
-    localLimiter.exclusive(async () => {
+    chatLimiter().exclusive(async () => {
       if (swap && llm.activeModelInfo()?.id !== requested) {
         const { setActiveModel } = await import('./models-manager')
         const result = await setActiveModel(requested)
@@ -1214,7 +1283,7 @@ async function handleTeamChat(
       json(res, failure.status, errBody(failure.message, failure.type))
       return
     }
-    localLimiter.setCapacity(llm.gatewaySlots())
+    teamLimiter('chat')
   }
 
   let forward: Buffer = buf
@@ -1244,7 +1313,7 @@ async function handleTeamChat(
       '/v1/chat/completions',
       true,
       async () => {
-        const release = await localLimiter.acquire()
+        const release = await teamLimiter('chat').acquire()
         try {
           const result = await callLlamaJson(body, Date.now() + 45_000, undefined, true)
           activity.finish(result)
@@ -1261,7 +1330,7 @@ async function handleTeamChat(
     return
   }
 
-  const release = await admitTeamRequest(remote ? remoteLimiter : localLimiter, res)
+  const release = await admitTeamRequest(teamLimiter(remote ? 'remote' : 'chat'), res)
   if (!release) return
   const activity = new AIRequestHandle({
     modality: 'text',
@@ -1281,8 +1350,7 @@ async function handleTeamCompletion(
   bytes: Buffer,
   body: unknown
 ): Promise<void> {
-  localLimiter.setCapacity(llm.gatewaySlots())
-  const release = await admitTeamRequest(localLimiter, res)
+  const release = await admitTeamRequest(teamLimiter('chat'), res)
   if (!release) return
   const activity = new AIRequestHandle({ modality: 'text', source: 'API completion', request: body })
   activity.update({ backend: llm.activeAccelerator() ?? 'Unknown' })
@@ -1315,10 +1383,7 @@ async function handleEmbeddings(
     const data: { object: string; index: number; embedding: number[] }[] = []
     if (teamMode()) {
       // Team mode: the whole input in one forward pass, ahead of background indexing.
-      const vectors = await embeddings.embedDocumentTexts(inputs, {
-        interactive: true,
-        source: 'API embeddings'
-      })
+      const vectors = await embedCoalesced(inputs)
       vectors.forEach((embedding, index) => data.push({ object: 'embedding', index, embedding }))
     } else for (let i = 0; i < inputs.length; i++) {
       const embedding = await embeddings.generateEmbedding(inputs[i]!)
@@ -1612,7 +1677,12 @@ async function handleSpeech(
   const voice = typeof payload.voice === 'string' ? payload.voice : undefined
   const fmt = String(payload.response_format ?? '').toLowerCase()
   const run = async (): Promise<unknown> => {
-    const { dataUrl } = await tts.synthesize(input, voice)
+    // Team mode: several voices at once, one Kokoro worker each (the speech limiter bounds them).
+    const { dataUrl } = teamMode()
+      ? await tts.synthesize(input, voice, undefined, {
+          parallel: { workers: teamConcurrency().speech }
+        })
+      : await tts.synthesize(input, voice)
     return { audio: dataUrl, format: 'wav' }
   }
   // OpenAI's /v1/audio/speech returns raw audio bytes; honor a JSON-ish
@@ -1785,7 +1855,12 @@ async function handleImagesUnified(
     if (refUrl) {
       const { data, mime } = await fetchImage(refUrl)
       const ext = extForMime(mime)
-      tmp = path.join(os.tmpdir(), `offgrid-imgref-${process.pid}-${data.length}${ext}`)
+      tmp = path.join(
+        os.tmpdir(),
+        teamMode()
+          ? `offgrid-imgref-${process.pid}-${rid}${ext}`
+          : `offgrid-imgref-${process.pid}-${data.length}${ext}`
+      )
       await fs.promises.writeFile(tmp, data)
       params.initImage = tmp
     }
@@ -1842,7 +1917,12 @@ async function handleImageEdit(
     return
   }
   const ext = path.extname(image.filename) || '.png'
-  const tmp = path.join(os.tmpdir(), `offgrid-img2img-${process.pid}-${body.length}${ext}`)
+  const tmp = path.join(
+    os.tmpdir(),
+    teamMode()
+      ? `offgrid-img2img-${process.pid}-${rid}${ext}`
+      : `offgrid-img2img-${process.pid}-${body.length}${ext}`
+  )
   await fs.promises.writeFile(tmp, image.data)
   const { width, height } = resolveDims({
     width: fields.width ? parseInt(fields.width, 10) : undefined,
@@ -1952,7 +2032,7 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
 
   // An eviction of the chat model (an image job needs its memory) waits for team-mode streams to
   // finish and admits no new ones meanwhile. In single mode no stream holds the limiter.
-  llm.setEvictionGate((evict) => localLimiter.exclusive(evict))
+  llm.setEvictionGate((evict) => chatLimiter().exclusive(evict))
 
   server = http.createServer(async (req, res) => {
     const origin = req.headers.origin
