@@ -4,6 +4,7 @@
 // beyond the shared model-sizing types (which are themselves pure).
 
 import type { KvCacheType, PerformanceMode } from '../model-sizing'
+import { llmParallelFlags, type GatewayMode } from '@offgrid/models'
 
 export type SpeculativeDecodingMode = 'off' | 'ngram' | 'mtp' | 'draft' | 'dflash'
 
@@ -94,6 +95,7 @@ export interface LaunchState {
   speculativeDecoding?: SpeculativeDecodingMode
   speculativeDraftMax?: number
   draftModel?: string
+  gatewayMode?: GatewayMode
 }
 
 /** The fully-resolved launch inputs the arg-builder needs. `ctxSize` is already the
@@ -120,6 +122,8 @@ export interface LaunchArgsInput {
   reportModelPlacement?: boolean
   /** Machine RAM. Sizes the host prompt cache so it cannot crowd a small machine. */
   totalRamBytes?: number
+  /** Team mode opens several slots over one unified KV pool; single (the default) keeps one. */
+  gatewayMode?: GatewayMode
 }
 
 /**
@@ -148,8 +152,12 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
     String(i.port),
     '--host',
     '127.0.0.1',
-    '--parallel',
-    '1',
+    ...llmParallelFlags({
+      mode: i.gatewayMode ?? 'single',
+      ctxSize: i.effectiveCtxSize,
+      speculativeDecoding: i.speculativeDecoding,
+      totalRamGb: i.totalRamBytes ? i.totalRamBytes / 1024 ** 3 : undefined
+    }),
     '-c',
     String(i.effectiveCtxSize),
     '-ngl',
@@ -224,6 +232,7 @@ export function launchArgsChanged(
     speculativeDecoding?: SpeculativeDecodingMode
     speculativeDraftMax?: number
     draftModel?: string
+    gatewayMode?: GatewayMode
   },
   current: LaunchState,
   modeChanged: boolean
@@ -240,6 +249,8 @@ export function launchArgsChanged(
       patch.speculativeDecoding !== current.speculativeDecoding) ||
     (typeof patch.speculativeDraftMax === 'number' &&
       patch.speculativeDraftMax !== (current.speculativeDraftMax ?? 0)) ||
-    (typeof patch.draftModel === 'string' && patch.draftModel !== current.draftModel)
+    (typeof patch.draftModel === 'string' && patch.draftModel !== current.draftModel) ||
+    (patch.gatewayMode !== undefined &&
+      patch.gatewayMode !== (current.gatewayMode ?? 'single'))
   )
 }

@@ -29,7 +29,14 @@ import {
   DEFAULT_MAX_TOOL_CALLS,
   normalizeMaxToolCalls
 } from '../shared/llm-defaults'
-import { REASONING_BUDGET_AUTO, reasoningBudgetPayload } from '@offgrid/models'
+import {
+  REASONING_BUDGET_AUTO,
+  reasoningBudgetPayload,
+  isGatewayMode,
+  llmSlotCount,
+  llmExtraSlotMB,
+  type GatewayMode
+} from '@offgrid/models'
 import type { EngineAccelerator } from '../shared/engine-accelerator'
 import {
   applyModePreset,
@@ -106,6 +113,8 @@ export interface LlmSettings {
   speculativeDecoding?: SpeculativeDecodingMode
   speculativeDraftMax?: number // 0 = Auto, otherwise 1-16 draft tokens
   draftModel?: string // filename of an installed GGUF in the app's model directory
+  gatewayMode?: GatewayMode // 'single' (one slot, as always) or 'team' (several slots, queued)
+  gatewaySlots?: number // read-only: how many requests the engine serves at once
   supportsMtp?: boolean // read-only capability of the selected GGUF
   compatibleDraftModels?: string[] // read-only filenames with the same tokenizer/vocabulary
   compatibleDflashModels?: string[] // read-only compatible DFlash companions
@@ -305,6 +314,9 @@ export class LLMService {
   private speculativeDecoding: SpeculativeDecodingMode = 'off'
   private speculativeDraftMax = 0
   private draftModel = ''
+  private gatewayModeSetting: GatewayMode = 'single'
+  /** Set by the gateway: an eviction waits for its in-flight streams and admits no new ones. */
+  private evictionGate: ((evict: () => Promise<void>) => Promise<void>) | null = null
   // Crash recovery: distinguish an intentional kill (stop/reload/settings respawn)
   // from an unexpected crash so we only auto-restart on real crashes.
   private intentionalStop = false
@@ -389,6 +401,7 @@ export class LLMService {
       )
         this.speculativeDecoding = s.speculativeDecoding
       if (typeof s.draftModel === 'string') this.draftModel = path.basename(s.draftModel)
+      if (isGatewayMode(s.gatewayMode)) this.gatewayModeSetting = s.gatewayMode
       if (Number.isInteger(s.speculativeDraftMax) && s.speculativeDraftMax >= 0 && s.speculativeDraftMax <= 16)
         this.speculativeDraftMax = s.speculativeDraftMax
       if (
@@ -597,6 +610,8 @@ export class LLMService {
       speculativeDecoding: this.speculativeDecoding,
       speculativeDraftMax: this.speculativeDraftMax,
       draftModel: this.draftModel,
+      gatewayMode: this.gatewayModeSetting,
+      gatewaySlots: this.gatewaySlots(),
       supportsMtp: this.supportsMtp(),
       ...speculativeCapabilities,
       performanceMode: this.performanceMode,
@@ -650,8 +665,40 @@ export class LLMService {
           : undefined,
       imageMinTokens: this.imageMinTokensForModel(),
       reportModelPlacement: true,
-      totalRamBytes: totalmem()
+      totalRamBytes: totalmem(),
+      gatewayMode: this.gatewayModeSetting
     })
+  }
+
+  /** Whether the gateway serves one person ('single', as always) or several clients ('team'). */
+  gatewayMode(): GatewayMode {
+    this.ensureLoaded()
+    return this.gatewayModeSetting
+  }
+
+  /** How many requests the engine serves at once: its llama-server slot count. */
+  gatewaySlots(): number {
+    this.ensureLoaded()
+    return llmSlotCount({
+      mode: this.gatewayModeSetting,
+      ctxSize: this.ctxSize,
+      speculativeDecoding: this.effectiveSpeculativeDecoding(),
+      totalRamGb: totalmem() / 1024 ** 3
+    })
+  }
+
+  /** The speculative mode the launch args actually carry (see launchArgsFor). */
+  private effectiveSpeculativeDecoding(): SpeculativeDecodingMode {
+    if (this.runtimeModelOverride !== null)
+      return this.speculativeDecoding === 'mtp' && this.supportsMtp() ? 'mtp' : 'off'
+    return this.speculativeModeSupported(this.speculativeDecoding, this.draftModel)
+      ? this.speculativeDecoding
+      : 'off'
+  }
+
+  /** The gateway makes an eviction wait for its in-flight streams (team mode). */
+  setEvictionGate(gate: ((evict: () => Promise<void>) => Promise<void>) | null): void {
+    this.evictionGate = gate
   }
 
   private draftModelPath(): string | undefined {
@@ -769,7 +816,8 @@ export class LLMService {
         batchSize: this.batchSize,
         speculativeDecoding: this.speculativeDecoding,
         speculativeDraftMax: this.speculativeDraftMax,
-        draftModel: this.draftModel
+        draftModel: this.draftModel,
+        gatewayMode: this.gatewayModeSetting
       },
       modeChanged
     )
@@ -814,6 +862,8 @@ export class LLMService {
       this.draftModel = path.basename(compatibleSettings.draftModel)
     if (typeof compatibleSettings.speculativeDraftMax === 'number')
       this.speculativeDraftMax = compatibleSettings.speculativeDraftMax
+    if (isGatewayMode(compatibleSettings.gatewayMode))
+      this.gatewayModeSetting = compatibleSettings.gatewayMode
     const budgets = budgetChange(
       { ctxSize: this.ctxSize, maxTokens: this.maxTokens, reasoningBudget: this.reasoningBudget },
       {}
@@ -849,6 +899,7 @@ export class LLMService {
       this.speculativeDecoding = priorSettings.speculativeDecoding ?? this.speculativeDecoding
       this.speculativeDraftMax = priorSettings.speculativeDraftMax ?? 0
       this.draftModel = priorSettings.draftModel ?? this.draftModel
+      this.gatewayModeSetting = priorSettings.gatewayMode ?? this.gatewayModeSetting
       this.userExplicit.clear()
       priorExplicit.forEach((field) => this.userExplicit.add(field))
     }
@@ -2312,7 +2363,12 @@ export class LLMService {
    *  halves it, q4_0 quarters it) and the server's own buffers. */
   expectedResidentMB(): number {
     const kvScale = this.kvCacheType === 'q4_0' ? 0.25 : this.kvCacheType === 'q8_0' ? 0.5 : 1
-    return this.localWeightsGb() * 1024 + (this.ctxSize / 1024) * 64 * kvScale + 300
+    return (
+      this.localWeightsGb() * 1024 +
+      (this.ctxSize / 1024) * 64 * kvScale +
+      300 +
+      llmExtraSlotMB(this.gatewaySlots(), this.localWeightsGb())
+    )
   }
 
   get runtime(): ManagedRuntime {
@@ -2320,7 +2376,10 @@ export class LLMService {
       modality: 'llm',
       footprintMB: () => (this.server && this.initialized ? this.expectedResidentMB() : 0),
       expectedMB: () => this.expectedResidentMB(),
-      evict: () => this.pauseAndWait(),
+      evict: () =>
+        this.evictionGate
+          ? this.evictionGate(() => this.pauseAndWait())
+          : this.pauseAndWait(),
       release: () => {
         this.releasePause()
       }
