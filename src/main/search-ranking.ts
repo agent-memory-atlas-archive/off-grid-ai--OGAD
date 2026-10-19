@@ -109,6 +109,20 @@ export interface RawHit {
   ts: number
 }
 
+/** A snippet reads as prose: chat and notes are stored as markdown, and a result list that
+ *  shows `**bold**`, fences or `<html>` tags reads as source code. Capped at 280 chars. */
+export function plainSnippet(text: string): string {
+  return (text || '')
+    .replace(/```[\w-]*\n?/g, ' ')
+    .replace(/<\/?[a-z!][^<>\n]{0,200}>/gi, ' ')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}(?:#{1,6}|>|[-*+]|\d+\.)\s+/gm, '')
+    .replace(/(?<!\w)(\*\*|__|\*|_|~~|`)(?=\S)(.*?\S)\1(?!\w)/g, '$2')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 280)
+}
+
 const RRF_K = 60
 /** Reciprocal-rank-fusion weight for a 0-based rank. */
 export function rrf(rank: number): number {
@@ -132,7 +146,7 @@ export function fuseHits(lists: RawHit[][]): Map<string, SearchResult> {
         kind: hit.kind,
         refId: hit.refId,
         title: hit.title || hit.kind,
-        snippet: (hit.snippet || '').slice(0, 280),
+        snippet: plainSnippet(hit.snippet),
         surface: hit.surface || '',
         url: hit.url,
         ts: hit.ts || 0,

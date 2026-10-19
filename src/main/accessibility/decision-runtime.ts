@@ -12,13 +12,22 @@ import {
 } from '../llm'
 import { postCompletionOnce } from '../llm/http-post'
 import { buildLaunchArgs } from '../llm/settings-math'
+import { totalmem } from 'node:os'
+import type { GatewayMode } from '@offgrid/models'
+
+/** Where the gateway mode is read from; the gateway sets it when it starts (single until then). */
+let gatewayModeSource: () => GatewayMode = () => 'single'
+export function setDecisionGatewayModeSource(source: () => GatewayMode): void {
+  gatewayModeSource = source
+}
 import { engineSpawnEnv } from '../llm/spawn-env'
 import { selectLocalEngine } from '../llm/select-local-engine'
 import { getBackendPreference } from '../backend-preferences'
 import { isPortFree, pickFreePort } from '../free-port'
 import { reapOrphanProcessesOnPort } from '../kill-orphan-port'
 import {
-  KEV_4B_ID,
+  KEV_9B_ID,
+  isKevModel,
   resolveComputerUseModelArtifact,
   resolveKevRuntimeArtifact
 } from '../models-manager'
@@ -79,7 +88,7 @@ export class DecisionRuntime {
     await prepareModelMemory('decision')
     this.memoryEvicted = false
     await this.shutdown()
-    if (modelId === KEV_4B_ID) return this.startKev()
+    if (isKevModel(modelId)) return this.startKev(modelId)
     const artifact = await resolveComputerUseModelArtifact(modelId)
     if (!artifact)
       throw new DecisionRuntimeError('The selected Decision model is not installed.', 'missing')
@@ -117,7 +126,12 @@ export class DecisionRuntime {
       speculativeDecoding: 'off',
       threads: undefined,
       batchSize: 128,
-      reportModelPlacement: true
+      reportModelPlacement: true,
+      // Team gateway mode opens slots here too, so several clients' decisions run at once.
+      // (Single mode passes nothing new, so its argv is unchanged.)
+      ...(gatewayModeSource() === 'team'
+        ? { gatewayMode: 'team' as const, totalRamBytes: totalmem() }
+        : {})
     })
     const startedAt = Date.now()
     const process = spawn(serverPath, args, {
@@ -164,15 +178,15 @@ export class DecisionRuntime {
     }
   }
 
-  private async startKev(): Promise<void> {
-    const artifact = resolveKevRuntimeArtifact()
+  private async startKev(modelId: string): Promise<void> {
+    const artifact = resolveKevRuntimeArtifact(modelId)
     if (!artifact)
       throw new DecisionRuntimeError('The local Kev model or runtime is missing.', 'missing')
     const port = await pickFreePort(DECIDER_PORT, isPortFree, 20)
     if (port === null)
       throw new DecisionRuntimeError('No private port is available for Kev.', 'startup')
     this.port = port
-    this.modelId = KEV_4B_ID
+    this.modelId = modelId
     this.stderr = ''
     this.backend = undefined
     const backendState = beginRuntimeBackend('decision', this.modelId!)
@@ -230,10 +244,11 @@ export class DecisionRuntime {
   private async waitUntilReady(startedAt: number): Promise<void> {
     for (;;) {
       if (!this.running) throw new Error('The Decision runtime stopped during startup.')
-      if (Date.now() - startedAt > 120_000)
+      // Kev 9B merges a 19 GB base before it answers: it gets twice as long.
+      if (Date.now() - startedAt > (this.modelId === KEV_9B_ID ? 240_000 : 120_000))
         throw new Error('The Decision runtime timed out during startup.')
       try {
-        const endpoint = this.modelId === KEV_4B_ID ? '/v1/models' : '/health'
+        const endpoint = isKevModel(this.modelId) ? '/v1/models' : '/health'
         const response = await fetch(`http://127.0.0.1:${this.port}${endpoint}`)
         if (response.ok) return
       } catch {
@@ -247,11 +262,14 @@ export class DecisionRuntime {
     context: string,
     question: string,
     options: readonly string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /** Team gateway mode: the llama-server has slots, so decisions need not wait for each other.
+     *  Kev still runs one forward pass at a time. */
+    shared = false
   ): Promise<OptionDecision> {
     if (!this.running)
       throw new DecisionRuntimeError('The Decision runtime is not running.', 'startup')
-    return this.mutex.runExclusive(async () => {
+    const run = async (): Promise<OptionDecision> => {
       this.backendState?.recordRequest()
       const startedAt = Date.now()
       currentAIRequest()?.update({
@@ -259,7 +277,7 @@ export class DecisionRuntime {
         backend: this.backend ?? 'Unknown',
         effectiveRequest: { context, question, options }
       })
-      if (this.modelId === KEV_4B_ID) {
+      if (isKevModel(this.modelId)) {
         const response = await fetch(`http://127.0.0.1:${this.port}/v1/systemone`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -308,13 +326,14 @@ export class DecisionRuntime {
       this.timing.warmDecisionMs.push(Date.now() - startedAt)
       if (this.timing.warmDecisionMs.length > 200) this.timing.warmDecisionMs.shift()
       return parseOptionDecision(raw, options.length)
-    })
+    }
+    return shared && !isKevModel(this.modelId) ? run() : this.mutex.runExclusive(run)
   }
 
   async health(): Promise<boolean> {
     if (!this.running) return false
     try {
-      const endpoint = this.modelId === KEV_4B_ID ? '/v1/models' : '/health'
+      const endpoint = isKevModel(this.modelId) ? '/v1/models' : '/health'
       return (await fetch(`http://127.0.0.1:${this.port}${endpoint}`)).ok
     } catch {
       return false

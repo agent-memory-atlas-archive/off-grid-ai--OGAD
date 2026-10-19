@@ -12,7 +12,7 @@ interface NativeHelperOwner {
 // runtime facts a stable System Health identity and label.
 const NATIVE_HELPERS: readonly NativeHelperOwner[] = [
   { id: 'helper-ffmpeg', label: 'Audio decoder (ffmpeg)', resolve: ffmpegBin },
-  { id: 'helper-whisper', label: 'Speech-to-text helper (whisper)', resolve: whisperBin }
+  { id: 'helper-whisper', label: 'Speech to text helper', resolve: whisperBin }
 ]
 
 export function getNativeHelperHealth(): SystemHealthComponentContract[] {

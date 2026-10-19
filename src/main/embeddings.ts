@@ -270,7 +270,7 @@ class EmbeddingService {
    */
   async embedDocumentTexts(
     texts: string[],
-    opts: { interactive?: boolean } = {}
+    opts: { interactive?: boolean; source?: string } = {}
   ): Promise<number[][]> {
     if (!texts.length) return []
     return withStorageDownload(() =>
@@ -293,7 +293,7 @@ class EmbeddingService {
               ),
         opts.interactive === true,
         DOCUMENT_EMBEDDER,
-        texts.length === 1 ? 'Document question embedding' : 'Document indexing'
+        opts.source ?? (texts.length === 1 ? 'Document question embedding' : 'Document indexing')
       )
     )
   }

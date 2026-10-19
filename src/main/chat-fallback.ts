@@ -5,7 +5,7 @@
 
 import { nextChatFallbackStep, type ChatFailureKind } from '@offgrid/models'
 import { ModelServerError } from './llm/http-post'
-import { parseRemoteVisionModelId } from '../shared/remote-vision-server'
+import { parseRemoteVisionModelId, remoteVisionModelId } from '../shared/remote-vision-server'
 
 function failureKind(error: unknown): ChatFailureKind {
   if (error instanceof ModelServerError) return error.kind
@@ -27,7 +27,10 @@ async function selectedName(): Promise<string> {
   const { getRemoteVisionServerSettings } = await import('./vision/remote-vision-server')
   const remote = getRemoteVisionServerSettings()
   const selectedRemote = remote.servers.find((server) => server.id === remote.activeServerId)
-  return selectedRemote?.model ?? models.getActiveModel() ?? 'Selected model'
+  const selected = selectedRemote
+    ? remoteVisionModelId(selectedRemote.id, selectedRemote.model)
+    : models.getActiveModel()
+  return models.displayModelName(selected) ?? 'Selected model'
 }
 
 /** Retry a failed model round without re-running any tool call that already started. */
@@ -37,6 +40,7 @@ export async function runChatWithFallback<T>(
   options: {
     signal?: AbortSignal
     canRetry?: () => boolean
+    /** Both arguments are display names, never model ids. */
     onModelChanged?: (failed: string, next: string) => void
   } = {}
 ): Promise<{ result: T; modelName?: string }> {
@@ -71,8 +75,8 @@ export async function runChatWithFallback<T>(
         activated = false
       }
       if (!activated || options.signal?.aborted) throw error
-      options.onModelChanged?.(failed, step.to)
-      modelName = step.to
+      modelName = models.displayModelName(step.to) ?? step.to
+      options.onModelChanged?.(failed, modelName)
     }
   }
 }
