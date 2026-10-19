@@ -82,6 +82,8 @@ import {
   getActiveRemoteVisionServerForModality
 } from './vision/remote-vision-server'
 import {
+  GATEWAY_LOCAL_IDLE_TIMEOUT_MS,
+  GATEWAY_REMOTE_IDLE_TIMEOUT_MS,
   REASONING_BUDGET_AUTO,
   REMOTE_TEAM_CONCURRENCY,
   TEAM_DRAIN_TIMEOUT_MS,
@@ -506,6 +508,12 @@ function proxyToLlama(
         }
       )
       proxyReq.on('error', reject)
+      // Team mode: a request with no bytes either way for a long time is cut, so a wedged engine
+      // cannot hold a slot for ever. An idle limit: a long reply that keeps streaming is never cut.
+      if (pooled)
+        proxyReq.setTimeout(GATEWAY_LOCAL_IDLE_TIMEOUT_MS, () =>
+          proxyReq.destroy(new Error('llama-server went quiet.'))
+        )
       upstreamRequest = proxyReq
       if (bodyOverride) {
         proxyReq.end(bodyOverride)
@@ -602,6 +610,11 @@ async function forwardToRemote(
         : {})
     },
     (proxyRes) => {
+      // Team mode: the client left while the provider was thinking: drop the answer.
+      if (pooled && res.destroyed) {
+        proxyRes.destroy()
+        return
+      }
       observeAIResponse(proxyRes, res, activity, { deferred: pooled })
       const status = proxyRes.statusCode ?? 502
       let providerErrorBody = ''
@@ -629,11 +642,28 @@ async function forwardToRemote(
       const safeResponse = safeProxyResponse(proxyRes.statusCode, proxyRes.headers)
       res.writeHead(safeResponse.statusCode, safeResponse.headers)
       guardProxyStreams(proxyRes, res)
-      proxyRes.pipe(res)
+      if (pooled) {
+        // Team mode: tokens go out as they arrive, and a slow client slows its own stream only.
+        res.flushHeaders()
+        res.socket?.setNoDelay(true)
+        pipeline(proxyRes, res, () => {})
+      } else proxyRes.pipe(res)
     }
   )
+  if (pooled) {
+    // Team mode: a client that leaves cancels the provider request (it stops spending tokens and
+    // frees its pooled connection), and a provider silent for minutes is cut.
+    res.once('close', () => {
+      if (!res.writableEnded) proxyReq.destroy()
+    })
+    proxyReq.setTimeout(GATEWAY_REMOTE_IDLE_TIMEOUT_MS, () =>
+      proxyReq.destroy(new Error('The remote model went quiet.'))
+    )
+  }
   proxyReq.on('error', (error) => {
     activity?.finish(undefined, error)
+    // Team mode cancelled it because the client left: nothing failed and nobody is listening.
+    if (pooled && res.destroyed) return
     const errorCode = (error as NodeJS.ErrnoException).code
     writeDiagnosticLog(
       'gateway',
