@@ -123,6 +123,8 @@ export interface LlmSettings {
   draftModel?: string // filename of an installed GGUF in the app's model directory
   gatewayMode?: GatewayMode // 'single' (one slot, as always) or 'team' (several slots, queued)
   gatewaySlots?: number // read-only: how many requests the engine serves at once
+  gatewayClients?: number | null // team mode's "requests at once": null = Auto (the memory rule)
+  gatewaySlotsMax?: number // read-only: the memory rule's safe maximum ("Auto")
   supportsMtp?: boolean // read-only capability of the selected GGUF
   compatibleDraftModels?: string[] // read-only filenames with the same tokenizer/vocabulary
   compatibleDflashModels?: string[] // read-only compatible DFlash companions
@@ -323,6 +325,8 @@ export class LLMService {
   private speculativeDraftMax = 0
   private draftModel = ''
   private gatewayModeSetting: GatewayMode = 'single'
+  /** Team mode's manual "requests at once"; null = Auto. */
+  private gatewayClientsSetting: number | null = null
   /** The slots and pool the running (or next) team-mode launch was sized to. */
   private launchedSlotPlan: LlmSlotPlan | null = null
   /** The backend the last launch placed the model on, kept across restarts for slot sizing. */
@@ -414,6 +418,8 @@ export class LLMService {
         this.speculativeDecoding = s.speculativeDecoding
       if (typeof s.draftModel === 'string') this.draftModel = path.basename(s.draftModel)
       if (isGatewayMode(s.gatewayMode)) this.gatewayModeSetting = s.gatewayMode
+      if (Number.isInteger(s.gatewayClients) && s.gatewayClients >= 1)
+        this.gatewayClientsSetting = s.gatewayClients
       if (Number.isInteger(s.speculativeDraftMax) && s.speculativeDraftMax >= 0 && s.speculativeDraftMax <= 16)
         this.speculativeDraftMax = s.speculativeDraftMax
       if (
@@ -624,6 +630,8 @@ export class LLMService {
       draftModel: this.draftModel,
       gatewayMode: this.gatewayModeSetting,
       gatewaySlots: this.gatewaySlots(),
+      gatewayClients: this.gatewayClientsSetting,
+      gatewaySlotsMax: this.gatewaySlotsMax(),
       supportsMtp: this.supportsMtp(),
       ...speculativeCapabilities,
       performanceMode: this.performanceMode,
@@ -679,7 +687,14 @@ export class LLMService {
       reportModelPlacement: true,
       totalRamBytes: totalmem(),
       gatewayMode: this.gatewayModeSetting,
-      ...(this.gatewayModeSetting === 'team' ? this.slotLaunchInputs() : {})
+      ...(this.gatewayModeSetting === 'team'
+        ? {
+            ...this.slotLaunchInputs(),
+            ...(this.gatewayClientsSetting === null
+              ? {}
+              : { requestedSlots: this.gatewayClientsSetting })
+          }
+        : {})
     }
     if (this.gatewayModeSetting === 'team') this.launchedSlotPlan = llmSlotPlan(slotInput(input))
     return buildLaunchArgs(input)
@@ -741,14 +756,26 @@ export class LLMService {
     this.ensureLoaded()
     if (this.gatewayModeSetting !== 'team') return 1
     return (
-      this.launchedSlotPlan?.slots ??
-      llmSlotPlan({
-        mode: 'team',
-        ctxSize: this.ctxSize,
-        speculativeDecoding: this.effectiveSpeculativeDecoding(),
-        totalMemoryGb: totalmem() / 1024 ** 3
-      }).slots
+      this.launchedSlotPlan?.slots ?? this.unlaunchedSlotPlan().slots
     )
+  }
+
+  /** The memory rule's safe maximum for team mode ("Auto"); 1 in single mode. */
+  gatewaySlotsMax(): number {
+    this.ensureLoaded()
+    if (this.gatewayModeSetting !== 'team') return 1
+    return this.launchedSlotPlan?.maxSlots ?? this.unlaunchedSlotPlan().maxSlots
+  }
+
+  /** Before a team-mode launch: the context rule alone sizes the slots. */
+  private unlaunchedSlotPlan(): LlmSlotPlan {
+    return llmSlotPlan({
+      mode: 'team',
+      ctxSize: this.ctxSize,
+      speculativeDecoding: this.effectiveSpeculativeDecoding(),
+      totalMemoryGb: totalmem() / 1024 ** 3,
+      ...(this.gatewayClientsSetting === null ? {} : { requestedSlots: this.gatewayClientsSetting })
+    })
   }
 
   /** Team mode: the tokens the slots share (the unified KV pool). Undefined in single mode. */
@@ -888,7 +915,8 @@ export class LLMService {
         speculativeDecoding: this.speculativeDecoding,
         speculativeDraftMax: this.speculativeDraftMax,
         draftModel: this.draftModel,
-        gatewayMode: this.gatewayModeSetting
+        gatewayMode: this.gatewayModeSetting,
+        gatewayClients: this.gatewayClientsSetting
       },
       modeChanged
     )
@@ -935,6 +963,15 @@ export class LLMService {
       this.speculativeDraftMax = compatibleSettings.speculativeDraftMax
     if (isGatewayMode(compatibleSettings.gatewayMode))
       this.gatewayModeSetting = compatibleSettings.gatewayMode
+    // A manual "requests at once" (a whole number of 1 or more), or null for Auto. The memory
+    // rule clamps it at launch.
+    if (compatibleSettings.gatewayClients === null) this.gatewayClientsSetting = null
+    else if (
+      typeof compatibleSettings.gatewayClients === 'number' &&
+      Number.isInteger(compatibleSettings.gatewayClients) &&
+      compatibleSettings.gatewayClients >= 1
+    )
+      this.gatewayClientsSetting = compatibleSettings.gatewayClients
     // The next launch sizes the slots again (mode, context and cache type all change them).
     if (launchChanged) this.launchedSlotPlan = null
     const budgets = budgetChange(
@@ -973,6 +1010,7 @@ export class LLMService {
       this.speculativeDraftMax = priorSettings.speculativeDraftMax ?? 0
       this.draftModel = priorSettings.draftModel ?? this.draftModel
       this.gatewayModeSetting = priorSettings.gatewayMode ?? this.gatewayModeSetting
+      this.gatewayClientsSetting = priorSettings.gatewayClients ?? null
       this.userExplicit.clear()
       priorExplicit.forEach((field) => this.userExplicit.add(field))
     }

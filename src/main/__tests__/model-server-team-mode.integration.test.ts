@@ -195,8 +195,36 @@ describe('team mode', () => {
   // Each case starts from a fresh switch to team mode, as the Gateway screen does; before the
   // engine relaunches, the gateway sizes its line by the context rule alone.
   beforeEach(async () => {
-    await llm.setSettings({ gatewayMode: 'single' })
+    await llm.setSettings({ gatewayMode: 'single', gatewayClients: null })
     await llm.setSettings({ gatewayMode: 'team' })
+  })
+
+  it('serves a manual "requests at once" and clamps one above the safe maximum', async () => {
+    const max = llm.gatewaySlotsMax()
+    expect(llm.gatewaySlots()).toBe(max)
+    await llm.setSettings({ gatewayClients: 2 })
+    let args = llm.launchArgs()
+    expect(args[args.indexOf('--parallel') + 1]).toBe('2')
+    expect(llm.gatewaySlots()).toBe(2)
+    // The gateway's line follows it: two streams run, the third waits.
+    const replies = ['m0', 'm1', 'm2'].map((label) => chat(label))
+    await waitFor(() => running === 2, 'two streams')
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(running).toBe(2)
+    finishNext()
+    await waitFor(() => started.length === 3, 'the third stream')
+    finishNext()
+    finishNext()
+    expect((await Promise.all(replies)).every((r) => r.status === 200)).toBe(true)
+
+    await llm.setSettings({ gatewayClients: 99 })
+    args = llm.launchArgs()
+    expect(llm.gatewaySlots()).toBe(llm.gatewaySlotsMax())
+    expect(args[args.indexOf('--parallel') + 1]).toBe(String(llm.gatewaySlotsMax()))
+    expect(llm.getSettings()).toMatchObject({ gatewayClients: 99 })
+
+    await llm.setSettings({ gatewayClients: null })
+    expect(llm.getSettings()).toMatchObject({ gatewayClients: null })
   })
 
   it('launches llama-server with slots over one unified pool of at least the full context', async () => {

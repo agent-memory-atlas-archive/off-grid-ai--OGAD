@@ -760,6 +760,7 @@ const offGridApi = {
     draftModel?: string
     performanceMode?: 'conservative' | 'balanced' | 'extreme'
     gatewayMode?: 'single' | 'team'
+    gatewayClients?: number | null
   }) => ipcRenderer.invoke('llm:set-settings', s),
   getRemoteVisionServer: () => ipcRenderer.invoke('vision:remote-server:get'),
   setRemoteVisionServer: (update: RemoteVisionServerUpdate) =>

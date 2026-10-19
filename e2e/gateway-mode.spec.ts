@@ -18,19 +18,20 @@ let app: ElectronApplication | null = null
 let page: Page
 let profileDir: string
 
-/** The gateway's own view of the setting, as a script on this machine would read it. */
-const gatewayMode = (): Promise<string | undefined> =>
+/** The gateway's own view of the settings, as a script on this machine would read them. */
+const gatewaySettings = (): Promise<{ gatewayMode?: string; gatewayClients?: number | null }> =>
   new Promise((resolve, reject) => {
     const request = http.get(
       { host: '127.0.0.1', port: GATEWAY_PORT, path: '/v1/settings' },
       (response) => {
         let raw = ''
         response.on('data', (chunk) => (raw += chunk))
-        response.on('end', () => resolve((JSON.parse(raw) as { gatewayMode?: string }).gatewayMode))
+        response.on('end', () => resolve(JSON.parse(raw) as { gatewayMode?: string }))
       }
     )
     request.on('error', reject)
   })
+const gatewayMode = async (): Promise<string | undefined> => (await gatewaySettings()).gatewayMode
 
 const launch = async (): Promise<void> => {
   app = await launchOffGrid({
@@ -70,8 +71,14 @@ test.describe('Gateway mode', () => {
 
     await clients.getByRole('radio', { name: 'Team' }).click()
     await expect(clients.getByRole('radio', { name: 'Team' })).toBeChecked()
-    await expect(clients.getByRole('status')).toHaveText(/^\d+ at once$/)
+    await expect(clients.getByRole('status')).toHaveText(/^\d+ at once · max \d+$/)
     await expect.poll(gatewayMode).toBe('team')
+
+    // A manual "requests at once": one, the lowest any machine allows.
+    await clients.getByRole('combobox', { name: 'Requests at once' }).click()
+    await page.getByRole('option', { name: '1 at once', exact: true }).click()
+    await expect(clients.getByRole('status')).toHaveText(/^1 at once · max \d+$/)
+    await expect.poll(async () => (await gatewaySettings()).gatewayClients).toBe(1)
     await page.screenshot({ path: 'e2e/screenshots/gateway-mode.png' })
 
     await closeAndWait(app!)
@@ -79,6 +86,10 @@ test.describe('Gateway mode', () => {
     await gotoScreen(page, 'Gateway')
     const relaunched = page.getByRole('region', { name: 'Clients' })
     await expect(relaunched.getByRole('radio', { name: 'Team' })).toBeChecked()
+    await expect(relaunched.getByRole('combobox', { name: 'Requests at once' })).toContainText(
+      '1 at once'
+    )
     expect(await gatewayMode()).toBe('team')
+    expect((await gatewaySettings()).gatewayClients).toBe(1)
   })
 })

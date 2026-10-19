@@ -104,6 +104,7 @@ export interface LaunchState {
   speculativeDraftMax?: number
   draftModel?: string
   gatewayMode?: GatewayMode
+  gatewayClients?: number | null
 }
 
 /** The fully-resolved launch inputs the arg-builder needs. `ctxSize` is already the
@@ -143,6 +144,8 @@ export interface LaunchArgsInput {
   kvShape?: KvShape
   architecture?: string
   recurrentSlotMB?: number
+  /** The person's own "requests at once" (unset: Auto). */
+  requestedSlots?: number
 }
 
 /** The shared slot rule's input for these launch inputs. */
@@ -160,7 +163,8 @@ export function slotInput(i: LaunchArgsInput): LlmSlotInput {
     kvShape: i.kvShape,
     architecture: i.architecture,
     kvCacheType: i.kvCacheType,
-    recurrentSlotMB: i.recurrentSlotMB
+    recurrentSlotMB: i.recurrentSlotMB,
+    requestedSlots: i.requestedSlots
   }
 }
 
@@ -277,6 +281,7 @@ export function launchArgsChanged(
     speculativeDraftMax?: number
     draftModel?: string
     gatewayMode?: GatewayMode
+    gatewayClients?: number | null
   },
   current: LaunchState,
   modeChanged: boolean
@@ -295,6 +300,8 @@ export function launchArgsChanged(
       patch.speculativeDraftMax !== (current.speculativeDraftMax ?? 0)) ||
     (typeof patch.draftModel === 'string' && patch.draftModel !== current.draftModel) ||
     (patch.gatewayMode !== undefined &&
-      patch.gatewayMode !== (current.gatewayMode ?? 'single'))
+      patch.gatewayMode !== (current.gatewayMode ?? 'single')) ||
+    (patch.gatewayClients !== undefined &&
+      patch.gatewayClients !== (current.gatewayClients ?? null))
   )
 }

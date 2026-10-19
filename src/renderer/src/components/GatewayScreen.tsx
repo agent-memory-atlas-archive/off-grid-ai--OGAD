@@ -14,6 +14,7 @@ import {
 } from '@offgrid/operator-ui/operator/coss/input-group'
 import { Button } from './ui/button'
 import { IconTip } from './IconTip'
+import { SettingsSelect } from './SettingsSelect'
 
 // Explains the local OpenAI-compatible gateway with copyable quick-start snippets
 // and a link to the interactive playground the gateway serves. Core feature.
@@ -102,33 +103,36 @@ console.log(resp.choices[0].message.content);`
 
 type GatewayMode = 'single' | 'team'
 
-/** Who the gateway serves: one person at full speed, or several clients at once. Switching
+interface GatewaySettings {
+  gatewayMode?: GatewayMode
+  gatewaySlots?: number
+  gatewaySlotsMax?: number
+  gatewayClients?: number | null
+}
+
+/** Who the gateway serves: one person at full speed, or several clients at once. Team mode's
+ *  "at once" is Auto (the memory rule's value) or a number up to that safe maximum. Either change
  *  relaunches the chat engine with the new slot count; it applies to the next request. */
 function GatewayModeControl(): React.ReactElement | null {
-  const [mode, setMode] = useState<GatewayMode | null>(null)
-  const [slots, setSlots] = useState<number | null>(null)
+  const [settings, setSettings] = useState<GatewaySettings | null>(null)
   useEffect(() => {
     let mounted = true
-    void window.api.getLlmSettings().then((s: { gatewayMode?: GatewayMode; gatewaySlots?: number }) => {
-      if (!mounted) return
-      setMode(s.gatewayMode ?? 'single')
-      setSlots(s.gatewaySlots ?? null)
+    void window.api.getLlmSettings().then((s: GatewaySettings) => {
+      if (mounted) setSettings(s)
     })
     return () => {
       mounted = false
     }
   }, [])
-  if (!mode) return null
-  const choose = (next: GatewayMode): void => {
-    const previous = mode
-    setMode(next)
+  if (!settings) return null
+  const mode = settings.gatewayMode ?? 'single'
+  const save = (patch: { gatewayMode?: GatewayMode; gatewayClients?: number | null }): void => {
+    const previous = settings
+    setSettings({ ...settings, ...patch })
     void window.api
-      .setLlmSettings({ gatewayMode: next })
-      .then((s: { gatewayMode?: GatewayMode; gatewaySlots?: number }) => {
-        setMode(s.gatewayMode ?? next)
-        setSlots(s.gatewaySlots ?? null)
-      })
-      .catch(() => setMode(previous))
+      .setLlmSettings(patch)
+      .then((s: GatewaySettings) => setSettings(s))
+      .catch(() => setSettings(previous))
   }
   const option = (
     id: GatewayMode,
@@ -147,21 +151,52 @@ function GatewayModeControl(): React.ReactElement | null {
       </IconTip>
     )
   })
+  const max = Math.max(1, settings.gatewaySlotsMax ?? 1)
+  const clients = settings.gatewayClients ?? null
   return (
     <div className="flex flex-wrap items-center gap-3">
       <Segmented
         label="Who uses the gateway"
         size="sm"
         value={mode}
-        onValueChange={choose}
+        onValueChange={(next) => save({ gatewayMode: next })}
         options={[
-          option('single', 'Just me', 'One request at a time, full speed', <User aria-hidden="true" />),
-          option('team', 'Team', 'Several clients at once; extras wait their turn', <Users aria-hidden="true" />)
+          option(
+            'single',
+            'Just me',
+            'One request at a time, full speed',
+            <User aria-hidden="true" />
+          ),
+          option(
+            'team',
+            'Team',
+            'Several clients at once; extras wait their turn',
+            <Users aria-hidden="true" />
+          )
         ]}
       />
-      {mode === 'team' && slots !== null && (
+      {mode === 'team' && (
+        <div className="w-36">
+          <SettingsSelect
+            id="gateway-clients"
+            label="Requests at once"
+            value={clients === null ? 'auto' : String(Math.min(clients, max))}
+            onValueChange={(value) =>
+              save({ gatewayClients: value === 'auto' ? null : Number(value) })
+            }
+            options={[
+              { value: 'auto', label: `Auto (${max})` },
+              ...Array.from({ length: max }, (_, i) => ({
+                value: String(i + 1),
+                label: `${i + 1} at once`
+              }))
+            ]}
+          />
+        </div>
+      )}
+      {mode === 'team' && settings.gatewaySlots !== undefined && (
         <span role="status" className="text-[11px] text-neutral-500">
-          {slots} at once
+          {settings.gatewaySlots} at once · max {max}
         </span>
       )}
     </div>
