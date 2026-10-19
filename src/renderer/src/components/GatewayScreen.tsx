@@ -113,8 +113,16 @@ interface GatewaySettings {
 /** Who the gateway serves: one person at full speed, or several clients at once. Team mode's
  *  "at once" is Auto (the memory rule's value) or a number up to that safe maximum. Either change
  *  relaunches the chat engine with the new slot count; it applies to the next request. */
-function GatewayModeControl(): React.ReactElement | null {
-  const [settings, setSettings] = useState<GatewaySettings | null>(null)
+function GatewayModeControl({
+  onModeChange
+}: {
+  onModeChange: (mode: GatewayMode) => void
+}): React.ReactElement | null {
+  const [settings, setSettingsState] = useState<GatewaySettings | null>(null)
+  const setSettings = (next: GatewaySettings): void => {
+    setSettingsState(next)
+    onModeChange(next.gatewayMode ?? 'single')
+  }
   useEffect(() => {
     let mounted = true
     void window.api.getLlmSettings().then((s: GatewaySettings) => {
@@ -123,6 +131,7 @@ function GatewayModeControl(): React.ReactElement | null {
     return () => {
       mounted = false
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   if (!settings) return null
   const mode = settings.gatewayMode ?? 'single'
@@ -200,6 +209,18 @@ function GatewayModeControl(): React.ReactElement | null {
 
 export function GatewayScreen(): React.ReactElement {
   const [tab, setTab] = useState(SNIPPETS[0]!.id)
+  const [mode, setMode] = useState<GatewayMode>('single')
+  const [lanUrl, setLanUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (mode !== 'team') return
+    let mounted = true
+    void window.api.gatewayLanUrl().then((url) => {
+      if (mounted) setLanUrl(url)
+    })
+    return () => {
+      mounted = false
+    }
+  }, [mode])
   const open = (p: string): void => {
     window.open(BASE + p, '_blank')
   }
@@ -243,6 +264,23 @@ export function GatewayScreen(): React.ReactElement {
                   <CopyButton text={`${BASE}/v1`} />
                 </InputGroupAddon>
               </InputGroup>
+              {/* Team mode: the address teammates on this network use. */}
+              {mode === 'team' && lanUrl && (
+                <InputGroup className="mt-2">
+                  <InputGroupAddon>
+                    <UsersIcon aria-hidden="true" />
+                  </InputGroupAddon>
+                  <InputGroupInput
+                    readOnly
+                    aria-label="Gateway LAN base URL"
+                    value={lanUrl}
+                    className="font-mono text-emerald-400"
+                  />
+                  <InputGroupAddon align="inline-end">
+                    <CopyButton text={lanUrl} />
+                  </InputGroupAddon>
+                </InputGroup>
+              )}
               <p className="mt-2 text-[11px] text-neutral-500">
                 Headless: run with <code className="text-neutral-300">--server-only</code>.
               </p>
@@ -266,13 +304,13 @@ export function GatewayScreen(): React.ReactElement {
           <div className="min-w-0 space-y-8">
             <Section label="Clients">
               <section aria-label="Clients">
-                <GatewayModeControl />
+                <GatewayModeControl onModeChange={setMode} />
               </section>
             </Section>
 
             <Section label="API keys">
               <section aria-label="API keys">
-                <GatewayApiKeysSettings />
+                <GatewayApiKeysSettings lanNeedsKey={mode === 'team'} />
               </section>
             </Section>
 

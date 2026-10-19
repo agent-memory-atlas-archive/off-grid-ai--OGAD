@@ -49,7 +49,8 @@ import { modalityForKind } from './active-models-logic'
 import { embeddings } from './embeddings'
 import { docsText, docsHtml, openApiSpec } from './api-docs'
 import { handleMcpRequest } from './mcp-server'
-import { logActionTokenForDev } from './mcp-auth'
+import { authorizeActionRequest, logActionTokenForDev } from './mcp-auth'
+import { primaryLanAddress } from './lan-address'
 import { llm, type LlmSettings } from './llm'
 import { GATEWAY_HOST, GATEWAY_BIND_HOST, GATEWAY_PORT } from '../shared/ports'
 import { isPortFree, pickFreePort } from './free-port'
@@ -81,7 +82,12 @@ import {
   getActiveRemoteVisionServer,
   getActiveRemoteVisionServerForModality
 } from './vision/remote-vision-server'
-import { REASONING_BUDGET_AUTO, REMOTE_TEAM_CONCURRENCY, chatRequestTokens } from '@offgrid/models'
+import {
+  REASONING_BUDGET_AUTO,
+  REMOTE_TEAM_CONCURRENCY,
+  chatRequestTokens,
+  gatewayNeedsCredential
+} from '@offgrid/models'
 import { LimiterFullError, UpstreamLimiter, type Release } from './model-server/upstream-limiter'
 import {
   chatLimiter,
@@ -246,26 +252,24 @@ export function revokeGatewayApiKey(id: string): GatewayApiKeySettingsContract {
   return gatewayApiKeySettings()
 }
 
-function authorizeGateway(req: http.IncomingMessage): boolean {
-  let state: StoredGatewayKeys
-  try {
-    state = gatewayKeysForRequest()
-  } catch (error) {
-    // A locked keychain serves only when keys were last recorded as not required. A store from a
-    // build that never recorded it counts as required until it is next read.
-    if (
-      error instanceof Error &&
-      error.message === GATEWAY_KEYS_LOCKED &&
-      getSetting<boolean | null>(GATEWAY_KEYS_REQUIRED_SETTING, null) === false
-    )
-      return true
-    throw error
-  }
-  if (!state.enabled) return true
+/** Who a model-route request comes from: the API key's id and name, a paired device, this
+ *  machine, or an open LAN peer. Team mode shares its slots fairly across these and the request
+ *  log names the key. */
+interface GatewayCaller {
+  client: string
+  label?: string
+}
+const gatewayCallers = new WeakMap<http.ServerResponse, GatewayCaller>()
+
+/** The valid, unrevoked, unexpired API key the request carries, if any. */
+function matchApiKey(
+  req: http.IncomingMessage,
+  state: StoredGatewayKeys
+): StoredGatewayKeys['keys'][number] | undefined {
   const header = req.headers.authorization
   // Preserve the existing strict Bearer parser and constant-time comparison.
   const credential = header?.match(/^Bearer[ \t]+([^\s]+)$/i)?.[1]
-  if (!credential) return false
+  if (!credential) return undefined
   const digest = createHash('sha256').update(credential).digest('hex')
   const now = Date.now()
   let match: StoredGatewayKeys['keys'][number] | undefined
@@ -277,13 +281,56 @@ function authorizeGateway(req: http.IncomingMessage): boolean {
     )
       match = key
   }
-  if (!match) return false
+  if (!match) return undefined
   // Limit disk writes without caching credentials: revocation applies on the next request.
   if (match.lastUsedAt === null || now - match.lastUsedAt >= 60_000) {
     match.lastUsedAt = now
     writeGatewayKeys(state)
   }
-  return true
+  return match
+}
+
+/** Keys are off: single mode is open to every peer, as always. Team mode admits this machine, and
+ *  a LAN peer only with an API key or a paired device's own credential. */
+function keysOffCaller(
+  req: http.IncomingMessage,
+  state: StoredGatewayKeys | null
+): GatewayCaller | null {
+  const loopback = isLocalCaller(req)
+  if (!gatewayNeedsCredential({ mode: llm.gatewayMode(), keysRequired: false, loopback }))
+    return { client: loopback ? 'local' : `peer:${req.socket.remoteAddress ?? ''}` }
+  const key = state ? matchApiKey(req, state) : undefined
+  if (key) return { client: `key:${key.id}`, label: key.name }
+  const paired = authorizeActionRequest(req)
+  return paired.allowed
+    ? { client: `device:${paired.deviceId ?? 'paired'}`, label: 'Paired device' }
+    : null
+}
+
+function authorizeGateway(req: http.IncomingMessage): GatewayCaller | null {
+  let state: StoredGatewayKeys
+  try {
+    state = gatewayKeysForRequest()
+  } catch (error) {
+    // A locked keychain serves only when keys were last recorded as not required. A store from a
+    // build that never recorded it counts as required until it is next read.
+    if (
+      error instanceof Error &&
+      error.message === GATEWAY_KEYS_LOCKED &&
+      getSetting<boolean | null>(GATEWAY_KEYS_REQUIRED_SETTING, null) === false
+    )
+      return keysOffCaller(req, null)
+    throw error
+  }
+  if (!state.enabled) return keysOffCaller(req, state)
+  const key = matchApiKey(req, state)
+  return key ? { client: `key:${key.id}`, label: key.name } : null
+}
+
+/** The address teammates use to reach this gateway in team mode, or null without a LAN. */
+export function gatewayLanBaseUrl(): string | null {
+  const ip = primaryLanAddress()
+  return ip ? `http://${ip}:${boundGatewayPort}/v1` : null
 }
 
 async function liveGatewayModalities(imageAvailable: boolean): Promise<GatewayModalities> {
@@ -2146,11 +2193,13 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
       url.startsWith('/v1/extension/')
     if (!publicRoute) {
       try {
-        if (!authorizeGateway(req)) {
+        const caller = authorizeGateway(req)
+        if (!caller) {
           res.setHeader('WWW-Authenticate', 'Bearer realm="Off Grid AI API"')
           json(res, 401, errBody('A valid API key is required.', 'authentication_error'))
           return
         }
+        gatewayCallers.set(res, caller)
       } catch (error) {
         const locked = error instanceof Error && error.message === GATEWAY_KEYS_LOCKED
         json(

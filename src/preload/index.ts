@@ -391,6 +391,7 @@ const offGridApi = {
     ipcRenderer.invoke('gateway:keys:create', name, expiresAt, replaceId),
   revokeGatewayApiKey: (id: string): Promise<GatewayApiKeySettingsContract> =>
     ipcRenderer.invoke('gateway:keys:revoke', id),
+  gatewayLanUrl: (): Promise<string | null> => ipcRenderer.invoke('gateway:lan-url'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   aiLogsList: (
     query: import('../shared/ai-request-log').AILogQuery = {}
