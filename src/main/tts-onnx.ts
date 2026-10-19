@@ -125,6 +125,11 @@ export class OnnxSpeechRuntime {
     )
   }
 
+  /** Syntheses this worker is running now. */
+  get inFlight(): number {
+    return this.pending.size
+  }
+
   /** Whether the voice model is loaded (its worker holds it). */
   isLoaded(): boolean {
     return this.worker !== null

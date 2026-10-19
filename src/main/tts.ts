@@ -19,7 +19,7 @@ import {
   type RuntimeSpeechVoice
 } from '@offgrid/speech'
 import fs from 'fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { recordAIRequest } from './ai-request-log'
 import os from 'os'
 import path from 'path'
@@ -45,6 +45,23 @@ const ONNX_VOICES = new Set(
     .map(({ id }) => id)
 )
 const onnxSpeech = new OnnxSpeechRuntime()
+/** Extra Kokoro workers for team gateway mode, each its own ONNX session (330 MB each). */
+const teamOnnxSpeech: OnnxSpeechRuntime[] = []
+
+/** The least busy Kokoro worker, starting another while every one is busy and `workers` allows. */
+function onnxWorker(workers: number): OnnxSpeechRuntime {
+  const all = [onnxSpeech, ...teamOnnxSpeech]
+  const idle = all.reduce((best, worker) => (worker.inFlight < best.inFlight ? worker : best))
+  if (idle.inFlight === 0 || all.length >= workers) return idle
+  const added = new OnnxSpeechRuntime()
+  teamOnnxSpeech.push(added)
+  return added
+}
+
+async function closeTeamOnnxSpeech(): Promise<void> {
+  const workers = teamOnnxSpeech.splice(0)
+  await Promise.all(workers.map((worker) => worker.close()))
+}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -99,8 +116,12 @@ function runtime(voice: string): ExecutorchSpeechRuntime {
   )
 }
 
-async function synthesizeExecutorch(input: Parameters<ExecutorchSpeechRuntime['synthesize']>[0]): Promise<void> {
-  await onnxSpeech.close()
+async function synthesizeExecutorch(
+  input: Parameters<ExecutorchSpeechRuntime['synthesize']>[0],
+  keepOnnx = false
+): Promise<void> {
+  // Team mode runs syntheses side by side: another request may be using the ONNX worker.
+  if (!keepOnnx) await onnxSpeech.close()
   const status = beginRuntimeBackend('speech', 'Kokoro')
   try {
     // This bundled native target links the XNNPACK CPU backend only.
@@ -120,10 +141,17 @@ const KOKORO_MB = 330
 
 export const ttsRuntime: ManagedRuntime = {
   modality: 'tts',
-  footprintMB: () => (onnxSpeech.isLoaded() ? KOKORO_MB : 0),
+  footprintMB: () =>
+    [onnxSpeech, ...teamOnnxSpeech].filter((worker) => worker.isLoaded()).length * KOKORO_MB,
   expectedMB: () => KOKORO_MB,
-  evict: () => onnxSpeech.close(),
-  release: () => onnxSpeech.close()
+  evict: async () => {
+    await closeTeamOnnxSpeech()
+    await onnxSpeech.close()
+  },
+  release: async () => {
+    await closeTeamOnnxSpeech()
+    await onnxSpeech.close()
+  }
 }
 
 /** Runtime-owned catalogue. Listing it never downloads model assets. */
@@ -182,6 +210,9 @@ interface SynthesizeOptions {
   readonly local?: boolean
   /** Each local pass as it is ready, before the joined clip resolves. */
   readonly onPass?: (pass: SpeechPass) => void
+  /** Team gateway mode: run beside other syntheses on up to `workers` Kokoro workers or
+   *  ExecuTorch processes, instead of one at a time through the speech job. */
+  readonly parallel?: { readonly workers: number }
 }
 
 /** Synthesize speech for `text`; returns a WAV data URL. */
@@ -192,6 +223,9 @@ export async function synthesize(
   options: SynthesizeOptions = {}
 ): Promise<{ dataUrl: string }> {
   const requestedAt = Date.now()
+  // Team mode: the gateway's speech limiter already bounds how many run at once.
+  if (options.parallel)
+    return withStorageDownload(() => synthesizeInner(text, voice, onProgress, options, requestedAt))
   // First synthesis can download assets even without an explicit Prepare request. A queue job, so
   // no background model pass starts while the listener waits for this voice.
   return modalityQueue.run(SPEECH_JOB, () =>
@@ -214,6 +248,7 @@ async function synthesizeOnnxPasses(input: {
   readonly outputPath: string
   readonly onProgress?: (progress: DownloadProgress) => void
   readonly onPass?: (pass: SpeechPass) => void
+  readonly engine?: OnnxSpeechRuntime
 }): Promise<{ device: string; passes: number; firstPassAt: number }> {
   const passes = speechChunks(input.text)
   if (passes.length === 0) throw new Error('Nothing to speak.')
@@ -223,7 +258,7 @@ async function synthesizeOnnxPasses(input: {
   try {
     for (const [index, text] of passes.entries()) {
       const passPath = `${input.outputPath}.${index}.wav`
-      device = await onnxSpeech.synthesize({
+      device = await (input.engine ?? onnxSpeech).synthesize({
         text,
         voice: input.voice,
         outputPath: passPath,
@@ -281,10 +316,13 @@ async function synthesizeInner(
         model: selected ?? 'Kokoro',
         effectiveRequest: { text: input.slice(0, 2000), voice: chosenVoice }
       })
-      if (busy) throw new Error('Already generating speech. Please wait.')
+      const parallel = options.parallel
+      if (busy && !parallel) throw new Error('Already generating speech. Please wait.')
 
-      busy = true
-      const requestId = `speak-${process.pid}-${Date.now()}`
+      if (!parallel) busy = true
+      const requestId = parallel
+        ? `speak-${process.pid}-${Date.now()}-${randomUUID()}`
+        : `speak-${process.pid}-${Date.now()}`
       const outputPath = path.join(os.tmpdir(), `offgrid-tts-${requestId}.wav`)
       const startedAt = Date.now()
       writeDiagnosticLog('tts', 'request.started', {
@@ -315,7 +353,8 @@ async function synthesizeInner(
                   voice: chosenVoice,
                   outputPath,
                   onProgress,
-                  onPass: options.onPass
+                  onPass: options.onPass,
+                  ...(parallel ? { engine: onnxWorker(parallel.workers) } : {})
                 })
                 attempt.update({ backend: done.device })
                 return done
@@ -332,20 +371,26 @@ async function synthesizeInner(
               { requestId, error: messageOf(error) },
               'warn'
             )
-            await synthesizeExecutorch({
+            await synthesizeExecutorch(
+              {
+                text: input.slice(0, 2000),
+                voiceId: chosenVoice,
+                outputPath,
+                onDownloadProgress: onProgress
+              },
+              !!parallel
+            )
+          }
+        } else {
+          await synthesizeExecutorch(
+            {
               text: input.slice(0, 2000),
               voiceId: chosenVoice,
               outputPath,
               onDownloadProgress: onProgress
-            })
-          }
-        } else {
-          await synthesizeExecutorch({
-            text: input.slice(0, 2000),
-            voiceId: chosenVoice,
-            outputPath,
-            onDownloadProgress: onProgress
-          })
+            },
+            !!parallel
+          )
         }
         const wav = await fs.promises.readFile(outputPath)
         log.update({
@@ -374,7 +419,7 @@ async function synthesizeInner(
         )
         throw error
       } finally {
-        busy = false
+        if (!parallel) busy = false
         void fs.promises.unlink(outputPath).catch(() => {})
       }
     }
