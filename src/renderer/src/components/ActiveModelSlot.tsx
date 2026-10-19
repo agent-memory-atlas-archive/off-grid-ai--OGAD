@@ -155,12 +155,12 @@ export function ActiveModelSlot(props: {
                       }
                     : undefined
                 }
-                className={`relative flex w-full min-w-0 flex-row items-center justify-between gap-3 overflow-hidden border-l-2 px-3 py-2 text-xs transition-colors duration-200 ${
+                className={`relative flex w-full min-w-0 flex-row items-center justify-between gap-3 overflow-hidden rounded-md border px-3 py-2 text-xs transition-colors duration-200 ${
                   next
-                    ? 'cursor-pointer border-l-amber-500/70 hover:bg-amber-500/5'
+                    ? 'cursor-pointer border-amber-500/30 hover:bg-amber-500/5'
                     : active && !unloaded
-                      ? 'border-l-green-500 bg-green-500/5'
-                      : 'border-l-neutral-700'
+                      ? 'border-green-500/25 bg-green-500/5'
+                      : 'border-neutral-800'
                 }`}
               >
                 <span className="flex min-w-0 items-center gap-2">
