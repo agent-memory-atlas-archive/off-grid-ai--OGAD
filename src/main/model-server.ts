@@ -81,7 +81,9 @@ import {
   getActiveRemoteVisionServer,
   getActiveRemoteVisionServerForModality
 } from './vision/remote-vision-server'
-import { REASONING_BUDGET_AUTO } from '@offgrid/models'
+import { REASONING_BUDGET_AUTO, REMOTE_TEAM_CONCURRENCY } from '@offgrid/models'
+import { LimiterFullError, UpstreamLimiter, type Release } from './model-server/upstream-limiter'
+import { pipeline } from 'stream'
 import {
   remoteReasoningCapability,
   remoteReasoningFields,
@@ -96,6 +98,29 @@ const upstreamPort = (): number => llm.getPort()
 const MAX_UPLOAD = 200 * 1024 * 1024 // 200MB upload cap (audio / init image)
 
 let server: http.Server | null = null
+
+// ─── Team mode ───────────────────────────────────────────────────────────────
+// 'single' (the default) serves one person exactly as the gateway always has: every chat holds the
+// app-wide chat job for its whole stream. 'team' serves several clients: a chat for the model that
+// is already loaded is admitted by a limiter sized to llama-server's slots, a remote model has its
+// own limiter, and only a model swap or load goes through the app-wide queue.
+const teamMode = (): boolean => llm.gatewayMode() === 'team'
+const localLimiter = new UpstreamLimiter('local model', 1)
+const remoteLimiter = new UpstreamLimiter('remote model', REMOTE_TEAM_CONCURRENCY)
+const localAgents = new Map<number, http.Agent>()
+/** One keep-alive pool per llama-server port, wide enough for every slot and its waiters. */
+function localAgent(port: number): http.Agent {
+  let agent = localAgents.get(port)
+  if (!agent) {
+    agent = new http.Agent({ keepAlive: true, maxSockets: 32 })
+    localAgents.set(port, agent)
+  }
+  return agent
+}
+const remoteAgents = {
+  http: new http.Agent({ keepAlive: true, maxSockets: REMOTE_TEAM_CONCURRENCY }),
+  https: new https.Agent({ keepAlive: true, maxSockets: REMOTE_TEAM_CONCURRENCY })
+}
 
 // The gateway owns its credentials. Reuse the OS-encrypted secret store; do not
 // put credentials in generic settings, return stored hashes to IPC, or log them.
@@ -136,7 +161,20 @@ function readGatewayKeys(): StoredGatewayKeys {
   return value
 }
 
+// Team mode keeps the decrypted key digests in memory instead of reading the keychain on every
+// request. Every change to the keys goes through writeGatewayKeys, which drops the copy.
+let cachedGatewayKeys: StoredGatewayKeys | null = null
+
+function gatewayKeysForRequest(): StoredGatewayKeys {
+  if (!teamMode()) {
+    cachedGatewayKeys = null
+    return readGatewayKeys()
+  }
+  return (cachedGatewayKeys ??= readGatewayKeys())
+}
+
 function writeGatewayKeys(value: StoredGatewayKeys): void {
+  cachedGatewayKeys = null
   if (!setSecret(GATEWAY_KEYS_SECRET, JSON.stringify(value))) {
     throw new Error('API keys require system encryption. Unlock system key storage and try again.')
   }
@@ -203,7 +241,7 @@ export function revokeGatewayApiKey(id: string): GatewayApiKeySettingsContract {
 function authorizeGateway(req: http.IncomingMessage): boolean {
   let state: StoredGatewayKeys
   try {
-    state = readGatewayKeys()
+    state = gatewayKeysForRequest()
   } catch (error) {
     // A locked keychain serves only when keys were last recorded as not required. A store from a
     // build that never recorded it counts as required until it is next read.
@@ -398,7 +436,8 @@ function proxyToLlama(
   bodyOverride?: Buffer,
   retryUntil = 0,
   activity?: AIRequestHandle,
-  targetPort?: number
+  targetPort?: number,
+  pooled = false
 ): void {
   const headers = { ...req.headers, host: `${UPSTREAM_HOST}:${targetPort ?? upstreamPort()}` }
   delete headers.authorization
@@ -416,7 +455,8 @@ function proxyToLlama(
           port: targetPort ?? upstreamPort(),
           path: req.url,
           method: req.method,
-          headers
+          headers,
+          ...(pooled ? { agent: localAgent(targetPort ?? upstreamPort()) } : {})
         },
         (proxyRes) => {
           const safeResponse = safeProxyResponse(proxyRes.statusCode, proxyRes.headers)
@@ -426,12 +466,32 @@ function proxyToLlama(
           // uncaught exception that crashes the main process. Does not re-settle this promise —
           // it has already resolved once piping begins.
           guardProxyStreams(proxyRes, res)
-          observeAIResponse(proxyRes, res, activity)
-          proxyRes.pipe(res)
+          if (pooled) {
+            // The client left before llama-server answered: drop the answer, which frees the slot.
+            if (res.destroyed) {
+              proxyRes.destroy()
+              resolve()
+              return
+            }
+            // Team mode: tokens go out as they arrive, and a slow client slows its own stream only.
+            res.flushHeaders()
+            res.socket?.setNoDelay(true)
+            observeAIResponse(proxyRes, res, activity, { deferred: true })
+            pipeline(proxyRes, res, () => {})
+          } else {
+            observeAIResponse(proxyRes, res, activity)
+            proxyRes.pipe(res)
+          }
           resolve()
         }
       )
       proxyReq.on('error', reject)
+      // Team mode: a client that leaves while llama-server is still reading the prompt cancels
+      // the upstream request at once, so the slot goes to the next request in line.
+      if (pooled)
+        res.once('close', () => {
+          if (!res.writableEnded) proxyReq.destroy()
+        })
       if (bodyOverride) {
         proxyReq.end(bodyOverride)
       } else {
@@ -439,7 +499,12 @@ function proxyToLlama(
       }
     })
   // Piped requests aren't replayable, so they fail fast (replayable=false).
-  retryWithDeadline(attempt, { deadlineMs: retryUntil, replayable: !!bodyOverride }).catch(() => {
+  retryWithDeadline(attempt, {
+    deadlineMs: retryUntil,
+    replayable: !!bodyOverride,
+    // A client that has gone is not waited for (team mode cancels its upstream request).
+    ...(pooled ? { isTransient: () => !res.destroyed } : {})
+  }).catch(() => {
     activity?.finish(undefined, new Error('Local model not ready'))
     json(res, 502, errBody('Local model not ready (llama-server unavailable).', 'upstream_error'))
   })
@@ -450,7 +515,8 @@ function proxyToLlama(
 function proxyToSelectedRemote(
   res: http.ServerResponse,
   body: Record<string, unknown>,
-  activity?: AIRequestHandle
+  activity?: AIRequestHandle,
+  pooled = false
 ): boolean {
   const requested = typeof body.model === 'string' ? parseRemoteVisionModelId(body.model) : null
   if (!requested) return false
@@ -461,7 +527,7 @@ function proxyToSelectedRemote(
     return true
   }
 
-  void forwardToRemote(res, body, remote, activity)
+  void forwardToRemote(res, body, remote, activity, pooled)
   return true
 }
 
@@ -470,7 +536,8 @@ async function forwardToRemote(
   res: http.ServerResponse,
   body: Record<string, unknown>,
   remote: NonNullable<ReturnType<typeof getActiveRemoteVisionServer>>,
-  activity?: AIRequestHandle
+  activity?: AIRequestHandle,
+  pooled = false
 ): Promise<void> {
   const target = new URL(`${remote.endpoint.replace(/\/+$/, '')}/chat/completions`)
   const thinkingRequested = requestedThinking(body)
@@ -514,10 +581,13 @@ async function forwardToRemote(
         'content-type': 'application/json',
         'content-length': String(payload.length),
         ...(remote.apiKey ? { authorization: `Bearer ${remote.apiKey}` } : {})
-      }
+      },
+      ...(pooled
+        ? { agent: target.protocol === 'https:' ? remoteAgents.https : remoteAgents.http }
+        : {})
     },
     (proxyRes) => {
-      observeAIResponse(proxyRes, res, activity)
+      observeAIResponse(proxyRes, res, activity, { deferred: pooled })
       const status = proxyRes.statusCode ?? 502
       let providerErrorBody = ''
       if (status >= 400) {
@@ -713,7 +783,8 @@ function jsonWithId(res: http.ServerResponse, rid: string, result: unknown): voi
 function callLlamaJson(
   bodyObj: Record<string, unknown>,
   retryUntil: number,
-  targetPort?: number
+  targetPort?: number,
+  pooled = false
 ): Promise<unknown> {
   const payload = Buffer.from(JSON.stringify({ ...bodyObj, stream: false }))
   // One attempt. A connection ('error') rejection is left un-tagged (transient);
@@ -726,7 +797,8 @@ function callLlamaJson(
           port: targetPort ?? upstreamPort(),
           path: '/v1/chat/completions',
           method: 'POST',
-          headers: { 'content-type': 'application/json', 'content-length': String(payload.length) }
+          headers: { 'content-type': 'application/json', 'content-length': String(payload.length) },
+          ...(pooled ? { agent: localAgent(targetPort ?? upstreamPort()) } : {})
         },
         (resp) => {
           const chunks: Buffer[] = []
@@ -953,6 +1025,7 @@ async function handleChat(
     json(res, failure.status, errBody(failure.message, failure.type))
     return
   }
+  if (teamMode()) return handleTeamChat(req, res, rid, body, buf)
   await modalityQueue.run(CHAT_JOB, async () => {
     const requested = typeof body.model === 'string' ? body.model : ''
     if (requested && !parseRemoteVisionModelId(requested)) {
@@ -1035,6 +1108,187 @@ async function handleChat(
   })
 }
 
+// ─── Team-mode chat ──────────────────────────────────────────────────────────
+
+/** The installed local chat models, read at most every ten seconds instead of on every request. */
+let chatModelIdsCache: { at: number; ids: Set<string> } | null = null
+async function localChatModelIds(): Promise<Set<string>> {
+  if (chatModelIdsCache && Date.now() - chatModelIdsCache.at < 10_000) return chatModelIdsCache.ids
+  const { getCatalog, listInstalled } = await import('./models-manager')
+  const installed = new Set(await listInstalled())
+  const catalog = (await getCatalog()).models as { id: string; kind: string; remoteServerId?: string }[]
+  const ids = new Set(
+    catalog
+      .filter(
+        (model) =>
+          !model.remoteServerId &&
+          (model.kind === 'text' || model.kind === 'vision') &&
+          installed.has(model.id)
+      )
+      .map((model) => model.id)
+  )
+  chatModelIdsCache = { at: Date.now(), ids }
+  return ids
+}
+
+/** Load or swap the local chat model when this request needs it. Only that goes through the
+ *  app-wide queue, with the engine to itself: running streams finish first. Returns an error to
+ *  send, or null when the model is ready to take the request. */
+async function prepareTeamChatModel(requested: string): Promise<string | null> {
+  const active = llm.activeModelInfo()?.id
+  if (llm.isReady() && (!requested || requested === active)) return null
+  const selected = !!requested && (await localChatModelIds()).has(requested)
+  const swap = selected && requested !== active
+  if (!swap && (llm.isReady() || !(selected || llm.modelsExist()))) return null
+  let failure: string | null = null
+  await modalityQueue.run(CHAT_JOB, () =>
+    localLimiter.exclusive(async () => {
+      if (swap && llm.activeModelInfo()?.id !== requested) {
+        const { setActiveModel } = await import('./models-manager')
+        const result = await setActiveModel(requested)
+        if (!result.success) {
+          failure = result.error ?? 'Model could not be selected.'
+          return
+        }
+      }
+      await llm.init()
+    })
+  )
+  return failure
+}
+
+/** The client waited too long in line: tell it when to come back. */
+function sendLimiterFull(res: http.ServerResponse, error: LimiterFullError): void {
+  res.setHeader('Retry-After', String(error.retryAfterSeconds))
+  json(res, 429, errBody(error.message, 'rate_limit_error'))
+}
+
+/** Wait for a turn on `limiter`; a client that disconnects while waiting leaves the line. Null when
+ *  the request was answered (429, or the client is gone). */
+async function admitTeamRequest(
+  limiter: UpstreamLimiter,
+  res: http.ServerResponse
+): Promise<Release | null> {
+  const gone = new AbortController()
+  const onClose = (): void => gone.abort()
+  res.once('close', onClose)
+  try {
+    const release = await limiter.acquire(gone.signal)
+    if (res.destroyed) {
+      release()
+      return null
+    }
+    res.once('close', release)
+    return release
+  } catch (error) {
+    if (gone.signal.aborted) return null
+    if (error instanceof LimiterFullError) sendLimiterFull(res, error)
+    else {
+      const failure = errMeta(error)
+      json(res, failure.status, errBody(failure.message, failure.type))
+    }
+    return null
+  } finally {
+    res.off('close', onClose)
+  }
+}
+
+async function handleTeamChat(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  rid: string,
+  body: Record<string, unknown>,
+  buf: Buffer
+): Promise<void> {
+  const requested = typeof body.model === 'string' ? body.model : ''
+  const remote = !!requested && !!parseRemoteVisionModelId(requested)
+  if (!remote) {
+    try {
+      const failure = await prepareTeamChatModel(requested)
+      if (failure) {
+        json(res, 400, errBody(failure))
+        return
+      }
+    } catch (error) {
+      const failure = errMeta(error)
+      json(res, failure.status, errBody(failure.message, failure.type))
+      return
+    }
+    localLimiter.setCapacity(llm.gatewaySlots())
+  }
+
+  let forward: Buffer = buf
+  try {
+    let changed = await inlineChatImages(body)
+    if (sanitizeChatMessages(body)) changed = true
+    if (applyThinkingPayload(body, llm.currentThinkingDialect)) changed = true
+    if (changed) forward = Buffer.from(JSON.stringify(body))
+  } catch {
+    // Image fetch failed — forward the original request so the model returns its own error.
+  }
+  res.setHeader('X-Request-Id', rid)
+
+  // Async chat answers 202 at once and takes its turn in the background.
+  if (!remote && isAsync(req, body)) {
+    const activity = new AIRequestHandle({
+      modality: 'text',
+      source: 'API chat',
+      model: requested || undefined,
+      request: body
+    })
+    activity.update({ effectiveRequest: body, backend: llm.activeAccelerator() ?? 'Unknown' })
+    await serve(
+      res,
+      rid,
+      'chat',
+      '/v1/chat/completions',
+      true,
+      async () => {
+        const release = await localLimiter.acquire()
+        try {
+          const result = await callLlamaJson(body, Date.now() + 45_000, undefined, true)
+          activity.finish(result)
+          return result
+        } catch (error) {
+          activity.finish(undefined, error)
+          throw error
+        } finally {
+          release()
+        }
+      },
+      () => {}
+    )
+    return
+  }
+
+  const release = await admitTeamRequest(remote ? remoteLimiter : localLimiter, res)
+  if (!release) return
+  const activity = new AIRequestHandle({
+    modality: 'text',
+    source: 'API chat',
+    model: requested || undefined,
+    request: body
+  })
+  activity.update({ effectiveRequest: body, backend: llm.activeAccelerator() ?? 'Unknown' })
+  if (proxyToSelectedRemote(res, body, activity, true)) return
+  proxyToLlama(req, res, forward, Date.now() + 45_000, activity, undefined, true)
+}
+
+/** /v1/completions in team mode: a turn on the local limiter, the chat retry window, pooled. */
+async function handleTeamCompletion(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  bytes: Buffer,
+  body: unknown
+): Promise<void> {
+  localLimiter.setCapacity(llm.gatewaySlots())
+  const release = await admitTeamRequest(localLimiter, res)
+  if (!release) return
+  const activity = new AIRequestHandle({ modality: 'text', source: 'API completion', request: body })
+  activity.update({ backend: llm.activeAccelerator() ?? 'Unknown' })
+  proxyToLlama(req, res, bytes, Date.now() + 45_000, activity, undefined, true)
+}
+
 // ─── Embeddings (local MiniLM) ───────────────────────────────────────────────
 // Served by the in-app embedder (all-MiniLM-L6-v2) rather than proxied to
 // llama-server, which isn't started with --embeddings. Same model the RAG/memory
@@ -1059,7 +1313,14 @@ async function handleEmbeddings(
   }
   const run = async (): Promise<unknown> => {
     const data: { object: string; index: number; embedding: number[] }[] = []
-    for (let i = 0; i < inputs.length; i++) {
+    if (teamMode()) {
+      // Team mode: the whole input in one forward pass, ahead of background indexing.
+      const vectors = await embeddings.embedDocumentTexts(inputs, {
+        interactive: true,
+        source: 'API embeddings'
+      })
+      vectors.forEach((embedding, index) => data.push({ object: 'embedding', index, embedding }))
+    } else for (let i = 0; i < inputs.length; i++) {
       const embedding = await embeddings.generateEmbedding(inputs[i]!)
       data.push({ object: 'embedding', index: i, embedding })
     }
@@ -1689,6 +1950,10 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
     throw error
   }
 
+  // An eviction of the chat model (an image job needs its memory) waits for team-mode streams to
+  // finish and admits no new ones meanwhile. In single mode no stream holds the limiter.
+  llm.setEvictionGate((evict) => localLimiter.exclusive(evict))
+
   server = http.createServer(async (req, res) => {
     const origin = req.headers.origin
     if (origin !== undefined) {
@@ -2039,6 +2304,7 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
         try {
           const bytes = await readBody(req, MAX_UPLOAD)
           const body: unknown = JSON.parse(bytes.toString('utf8'))
+          if (teamMode()) return void (await handleTeamCompletion(req, res, bytes, body))
           const activity = new AIRequestHandle({
             modality: 'text',
             source: 'API completion',

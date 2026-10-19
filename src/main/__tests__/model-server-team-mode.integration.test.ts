@@ -1,0 +1,326 @@
+/**
+ * The gateway's two modes over real HTTP. The only fake is llama-server itself: a loopback server
+ * on the production port that streams slowly and holds each stream until the test lets it finish,
+ * so the test sees exactly how many streams the gateway lets run at once.
+ *
+ * Single mode ("Just me") must behave as it always has: one stream at a time, `--parallel 1`.
+ * Team mode opens llama-server slots, admits that many streams at once, queues the rest in order,
+ * refuses the overflow with 429, frees a slot when a client disconnects, keeps remote models out of
+ * the local line, and makes an image job's eviction wait for the streams in flight.
+ */
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import http from 'http'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
+import type { AddressInfo } from 'net'
+import { LLAMA_SERVER_PORT } from '../../shared/ports'
+
+const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-gateway-team-'))
+
+vi.mock('electron', () => ({
+  app: {
+    getPath: () => TMP_DIR,
+    isPackaged: false,
+    getAppPath: () => process.cwd(),
+    getVersion: () => 'test'
+  },
+  safeStorage: {
+    isEncryptionAvailable: () => true,
+    encryptString: (value: string) => Buffer.from(value),
+    decryptString: (value: Buffer) => value.toString()
+  }
+}))
+
+interface HeldStream {
+  label: string
+  finish: () => void
+  closed: boolean
+}
+
+let upstream: http.Server
+let gatewayPort: number
+let held: HeldStream[] = []
+let running = 0
+let peak = 0
+const started: string[] = []
+const disconnected: string[] = []
+const previousDataDir = process.env.OFFGRID_DATA_DIR
+let llm: typeof import('../llm').llm
+let stopModelServer: typeof import('../model-server').stopModelServer
+
+async function waitFor(check: () => boolean, what: string, ms = 3_000): Promise<void> {
+  const deadline = Date.now() + ms
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+async function unusedPort(): Promise<number> {
+  const probe = http.createServer()
+  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve))
+  const port = (probe.address() as AddressInfo).port
+  await new Promise<void>((resolve) => probe.close(() => resolve()))
+  return port
+}
+
+/** A streamed chat through the gateway. Resolves with the status and the full reply text. */
+function chat(
+  label: string,
+  init: { model?: string; signal?: AbortSignal } = {}
+): Promise<{ status: number; text: string; retryAfter: string | null }> {
+  return fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: init.signal,
+    body: JSON.stringify({
+      ...(init.model ? { model: init.model } : {}),
+      stream: true,
+      messages: [{ role: 'user', content: label }]
+    })
+  }).then(async (response) => ({
+    status: response.status,
+    text: await response.text(),
+    retryAfter: response.headers.get('retry-after')
+  }))
+}
+
+function finishNext(): void {
+  const stream = held.find((entry) => !entry.closed)
+  stream?.finish()
+}
+
+beforeAll(async () => {
+  process.env.OFFGRID_DATA_DIR = TMP_DIR
+  ;({ llm } = await import('../llm'))
+  const gateway = await import('../model-server')
+  stopModelServer = gateway.stopModelServer
+  upstream = http.createServer((req, res) => {
+    if (req.method !== 'POST' || req.url !== '/v1/chat/completions') {
+      res.writeHead(404)
+      res.end()
+      return
+    }
+    let raw = ''
+    req.setEncoding('utf8')
+    req.on('data', (chunk) => (raw += chunk))
+    req.on('end', () => {
+      const body = JSON.parse(raw) as { messages: { content: string }[] }
+      const label = body.messages[0]!.content
+      running += 1
+      peak = Math.max(peak, running)
+      started.push(label)
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      // Slow tokens while held: a real stream, not one burst.
+      const tick = setInterval(
+        () => res.write(`data: {"choices":[{"delta":{"content":"."}}]}\n\n`),
+        25
+      )
+      const entry: HeldStream = {
+        label,
+        closed: false,
+        finish: () => {
+          if (entry.closed) return
+          entry.closed = true
+          clearInterval(tick)
+          running -= 1
+          res.write(`data: {"choices":[{"delta":{"content":"${label} done"}}]}\n\n`)
+          res.end('data: [DONE]\n\n')
+        }
+      }
+      res.on('close', () => {
+        if (entry.closed) return
+        entry.closed = true
+        clearInterval(tick)
+        running -= 1
+        disconnected.push(label)
+      })
+      held.push(entry)
+    })
+  })
+  await new Promise<void>((resolve, reject) => {
+    upstream.once('error', reject)
+    upstream.listen(LLAMA_SERVER_PORT, '127.0.0.1', () => resolve())
+  })
+  gatewayPort = await unusedPort()
+  await gateway.startModelServer(gatewayPort)
+})
+
+afterEach(async () => {
+  for (const stream of held) stream.finish()
+  await waitFor(() => running === 0, 'streams to end')
+  held = []
+  peak = 0
+  started.length = 0
+  disconnected.length = 0
+})
+
+afterAll(async () => {
+  stopModelServer()
+  await new Promise<void>((resolve) => upstream.close(() => resolve()))
+  fs.rmSync(TMP_DIR, { recursive: true, force: true })
+  if (previousDataDir === undefined) delete process.env.OFFGRID_DATA_DIR
+  else process.env.OFFGRID_DATA_DIR = previousDataDir
+})
+
+describe('single mode (Just me)', () => {
+  it('launches llama-server with one slot and the person’s full context', async () => {
+    await llm.setSettings({ gatewayMode: 'single' })
+    const args = llm.launchArgs()
+    expect(args[args.indexOf('--parallel') + 1]).toBe('1')
+    expect(args).not.toContain('--kv-unified')
+    expect(args).not.toContain('--metrics')
+    expect(args[args.indexOf('-c') + 1]).toBe(String(llm.getSettings().ctxSize))
+  })
+
+  it('serves one stream at a time, as it always has', async () => {
+    await llm.setSettings({ gatewayMode: 'single' })
+    const replies = [chat('a'), chat('b')]
+    await waitFor(() => started.length === 1, 'the first stream')
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(running).toBe(1)
+    finishNext()
+    await waitFor(() => started.length === 2, 'the second stream')
+    finishNext()
+    const results = await Promise.all(replies)
+    expect(results.map((r) => r.status)).toEqual([200, 200])
+    expect(results[0]!.text).toContain('a done')
+    expect(peak).toBe(1)
+  })
+})
+
+describe('team mode', () => {
+  it('launches llama-server with several slots over one unified pool of the full context', async () => {
+    await llm.setSettings({ gatewayMode: 'team' })
+    const slots = llm.gatewaySlots()
+    expect(slots).toBeGreaterThan(1)
+    const args = llm.launchArgs()
+    expect(args[args.indexOf('--parallel') + 1]).toBe(String(slots))
+    expect(args).toContain('--kv-unified')
+    expect(args).toContain('--metrics')
+    // The person's context is kept whole: one conversation may use all of it.
+    expect(args[args.indexOf('-c') + 1]).toBe(String(llm.getSettings().ctxSize))
+    expect(llm.getSettings().gatewaySlots).toBe(slots)
+  })
+
+  it('runs one stream per slot at once and queues the next in order', async () => {
+    await llm.setSettings({ gatewayMode: 'team' })
+    const slots = llm.gatewaySlots()
+    const labels = Array.from({ length: slots + 1 }, (_, i) => `s${i}`)
+    const replies = labels.map((label) => chat(label))
+    await waitFor(() => running === slots, `${slots} overlapping streams`)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    // The extra request waits its turn instead of starting a stream.
+    expect(running).toBe(slots)
+    expect(started).toHaveLength(slots)
+    finishNext()
+    await waitFor(() => started.length === slots + 1, 'the queued stream')
+    for (let i = 0; i < slots; i++) finishNext()
+    const results = await Promise.all(replies)
+    expect(results.every((r) => r.status === 200)).toBe(true)
+    expect(results[slots]!.text).toContain(`s${slots} done`)
+    expect(peak).toBe(slots)
+  })
+
+  it('refuses requests past the bounded queue with 429 and Retry-After', async () => {
+    await llm.setSettings({ gatewayMode: 'team' })
+    const slots = llm.gatewaySlots()
+    const queueDepth = slots * 4
+    const admitted = Array.from({ length: slots + queueDepth }, (_, i) => chat(`q${i}`))
+    await waitFor(() => running === slots, 'the slots to fill')
+    // Let the queued requests reach the gateway's line.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const refused = await chat('overflow')
+    expect(refused.status).toBe(429)
+    expect(refused.retryAfter).toBe('2')
+    expect(JSON.parse(refused.text)).toMatchObject({ error: { type: 'rate_limit_error' } })
+    // Drain everything that was admitted.
+    while (started.length < slots + queueDepth || running > 0) {
+      finishNext()
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    const results = await Promise.all(admitted)
+    expect(results.every((r) => r.status === 200)).toBe(true)
+  })
+
+  it('frees the slot when a client disconnects, so a waiting request starts', async () => {
+    await llm.setSettings({ gatewayMode: 'team' })
+    const slots = llm.gatewaySlots()
+    const leaving = new AbortController()
+    const first = chat('leaver', { signal: leaving.signal }).catch((error: unknown) => error)
+    await waitFor(() => started.includes('leaver'), 'the leaving stream')
+    const others = Array.from({ length: slots }, (_, i) => chat(`w${i}`))
+    await waitFor(() => running === slots, 'the slots to fill')
+    expect(started).not.toContain(`w${slots - 1}`)
+    leaving.abort()
+    // llama-server sees the disconnect, and the waiter takes the freed slot.
+    await waitFor(() => disconnected.includes('leaver'), 'llama-server to see the disconnect')
+    await waitFor(() => started.includes(`w${slots - 1}`), 'the waiter to start')
+    await first
+    for (let i = 0; i < slots; i++) finishNext()
+    expect((await Promise.all(others)).every((r) => r.status === 200)).toBe(true)
+  })
+
+  it('serves a remote model while every local slot is busy', async () => {
+    await llm.setSettings({ gatewayMode: 'team' })
+    const slots = llm.gatewaySlots()
+    const remote = await import('../vision/remote-vision-server')
+    const codec = await import('../../shared/remote-vision-server')
+    const provider = http.createServer((request, response) => {
+      request.resume()
+      request.on('end', () => {
+        response.writeHead(200, { 'Content-Type': 'application/json' })
+        response.end(JSON.stringify({ choices: [{ message: { content: 'remote answer' } }] }))
+      })
+    })
+    await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve))
+    const serverId = 'team-remote'
+    try {
+      remote.setRemoteVisionServerSettings({
+        provider: 'custom',
+        endpoint: `http://127.0.0.1:${(provider.address() as AddressInfo).port}/v1`,
+        model: 'remote-model',
+        serverId,
+        name: 'Remote'
+      })
+      const local = Array.from({ length: slots + 2 }, (_, i) => chat(`l${i}`))
+      await waitFor(() => running === slots, 'the local slots to fill')
+      const answer = await chat('remote', {
+        model: codec.remoteVisionModelId(serverId, 'remote-model')
+      })
+      expect(answer.status).toBe(200)
+      expect(answer.text).toContain('remote answer')
+      // Every local stream is still running: the remote request did not wait behind them.
+      expect(running).toBe(slots)
+      while (started.length < slots + 2 || running > 0) {
+        finishNext()
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+      await Promise.all(local)
+    } finally {
+      remote.removeRemoteVisionServer(serverId)
+      await new Promise<void>((resolve) => provider.close(() => resolve()))
+    }
+  })
+
+  it('makes an image job wait for the streams in flight before it evicts the chat model', async () => {
+    await llm.setSettings({ gatewayMode: 'team' })
+    const { modalityQueue, IMAGE_JOB } = await import('../modality-queue/queue')
+    const { registerRuntime } = await import('../runtime-manager')
+    registerRuntime(llm.runtime)
+    const reply = chat('in-flight')
+    await waitFor(() => running === 1, 'the stream')
+    let imageStartedAt = 0
+    const image = modalityQueue.run(IMAGE_JOB, async () => {
+      imageStartedAt = Date.now()
+    })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(imageStartedAt).toBe(0)
+    const finishedAt = Date.now()
+    finishNext()
+    expect((await reply).text).toContain('in-flight done')
+    await image
+    expect(imageStartedAt).toBeGreaterThanOrEqual(finishedAt)
+  })
+})
