@@ -68,7 +68,7 @@ async function unusedPort(): Promise<number> {
 /** A streamed chat through the gateway. Resolves with the status and the full reply text. */
 function chat(
   label: string,
-  init: { model?: string; signal?: AbortSignal } = {}
+  init: { model?: string; signal?: AbortSignal; maxTokens?: number } = {}
 ): Promise<{ status: number; text: string; retryAfter: string | null }> {
   return fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
     method: 'POST',
@@ -76,6 +76,7 @@ function chat(
     signal: init.signal,
     body: JSON.stringify({
       ...(init.model ? { model: init.model } : {}),
+      ...(init.maxTokens ? { max_tokens: init.maxTokens } : {}),
       stream: true,
       messages: [{ role: 'user', content: label }]
     })
@@ -228,6 +229,22 @@ describe('team mode', () => {
     expect(results.every((r) => r.status === 200)).toBe(true)
     expect(results[slots]!.text).toContain(`s${slots} done`)
     expect(peak).toBe(slots)
+  })
+
+  it('admits by tokens too: long replies that would overflow the shared pool wait', async () => {
+    const pool = llm.gatewayPoolTokens()!
+    // Each reply may take ~40% of the pool, so two fit beside each other and the third waits.
+    const maxTokens = Math.floor(pool * 0.4)
+    const replies = ['t0', 't1', 't2'].map((label) => chat(label, { maxTokens }))
+    await waitFor(() => running === 2, 'two streams')
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(running).toBe(2)
+    expect(llm.gatewaySlots()).toBeGreaterThan(2)
+    finishNext()
+    await waitFor(() => started.length === 3, 'the third stream')
+    finishNext()
+    finishNext()
+    expect((await Promise.all(replies)).every((r) => r.status === 200)).toBe(true)
   })
 
   it('refuses requests past the bounded queue with 429 and Retry-After', async () => {
