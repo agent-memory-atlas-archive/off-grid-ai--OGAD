@@ -67,7 +67,11 @@ import {
 import { errBody, errMeta } from './model-server/errors'
 import { handleExtensionBridge, handleExtensionUpgrade } from './extension-bridge/bridge-http'
 import { isAsync, matchPollRoute } from './model-server/async-request'
-import { sanitizeChatMessages, parseDecisionChatMessages } from './model-server/chat-messages'
+import {
+  chatPromptShape,
+  sanitizeChatMessages,
+  parseDecisionChatMessages
+} from './model-server/chat-messages'
 import { applyThinkingPayload, requestedThinking } from './llm/chat-payload'
 import { parseMultipart } from './model-server/multipart'
 import { tagLlmEntries, modelEntry, ollamaMirror, specialistModelEntries, installedTextModelEntries, installedImageModelEntries, leadWithActiveChatModel, liveChatCapabilities } from './model-server/models-list'
@@ -1266,6 +1270,35 @@ async function prepareTeamChatModel(requested: string): Promise<string | null> {
   return failure
 }
 
+/** Whether the loaded chat model is not the installed local model this request named. */
+async function onOtherModel(requested: string): Promise<boolean> {
+  if (!requested || llm.activeModelInfo()?.id === requested) return false
+  return (await localChatModelIds()).has(requested)
+}
+
+/**
+ * A turn on the chat limiter for the model the request named. Another client's request may swap
+ * the model while this one waits in line; then it gives the turn back, loads its model again (the
+ * swap waits for the streams in flight) and takes a new turn, so it never gets another model's
+ * reply. Null when the request was answered (refused, gone, or its model could not be loaded).
+ */
+async function admitOnRequestedModel(
+  requested: string,
+  admit: () => Promise<Release | null>,
+  res?: http.ServerResponse
+): Promise<Release | null> {
+  for (;;) {
+    const release = await admit()
+    if (!release || !(await onOtherModel(requested))) return release
+    release()
+    const failure = await prepareTeamChatModel(requested)
+    if (failure) {
+      if (res && !res.headersSent) json(res, 400, errBody(failure))
+      return null
+    }
+  }
+}
+
 /** The client waited too long in line: tell it when to come back. */
 function sendLimiterFull(res: http.ServerResponse, error: LimiterFullError): void {
   res.setHeader('Retry-After', String(error.retryAfterSeconds))
@@ -1337,12 +1370,15 @@ async function handleTeamChat(
     // Image fetch failed — forward the original request so the model returns its own error.
   }
   res.setHeader('X-Request-Id', rid)
-  // What this request may take from the shared KV pool: its prompt and its reply cap.
+  // What this request may take from the shared KV pool: its prompt (images by their token cost,
+  // not their encoded size) and its reply cap, which thinking makes longer when none is set.
   const maxTokens = body.max_tokens ?? body.max_completion_tokens
+  const prompt = chatPromptShape(body)
   const tokens = chatRequestTokens(
-    forward.length,
+    prompt.chars,
     typeof maxTokens === 'number' ? maxTokens : undefined,
-    llm.effectiveContextSize()
+    llm.effectiveContextSize(),
+    { images: prompt.images, thinking: requestedThinking(body) === true }
   )
 
   // Async chat answers 202 at once and takes its turn in the background.
@@ -1361,7 +1397,10 @@ async function handleTeamChat(
       '/v1/chat/completions',
       true,
       async () => {
-        const release = await teamLimiter('chat').acquire(undefined, tokens)
+        const release = await admitOnRequestedModel(requested, () =>
+          teamLimiter('chat').acquire(undefined, tokens)
+        )
+        if (!release) throw new Error('Model could not be selected.')
         try {
           const result = await callLlamaJson(body, Date.now() + 45_000, undefined, true)
           activity.finish(result)
@@ -1380,7 +1419,7 @@ async function handleTeamChat(
 
   const release = remote
     ? await admitTeamRequest(teamLimiter('remote'), res)
-    : await admitTeamRequest(teamLimiter('chat'), res, tokens)
+    : await admitOnRequestedModel(requested, () => admitTeamRequest(teamLimiter('chat'), res, tokens), res)
   if (!release) return
   const activity = new AIRequestHandle({
     modality: 'text',
