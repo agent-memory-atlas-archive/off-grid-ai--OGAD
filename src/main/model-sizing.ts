@@ -158,14 +158,15 @@ export function checkOverrideSurvival(opts: { availGb: number; incomingWeightsGb
 
 export interface LoadAttempt {
   ctxSize: number
-  gpuLayers: number
+  /** 'auto': llama-server's `--fit` places the layers. */
+  gpuLayers: number | 'auto'
   reason: string
 }
 
 /** Try GPU, then CPU at the selected context. Never reduce the selected value. */
-export function loadAttempts(requestedCtx: number, gpuLayers: number): LoadAttempt[] {
+export function loadAttempts(requestedCtx: number, gpuLayers: number | 'auto'): LoadAttempt[] {
   const out: LoadAttempt[] = [{ ctxSize: requestedCtx, gpuLayers, reason: 'requested' }]
-  if (gpuLayers > 0) {
+  if (gpuLayers === 'auto' || gpuLayers > 0) {
     out.push({ ctxSize: requestedCtx, gpuLayers: 0, reason: 'CPU-only' })
   }
   return out

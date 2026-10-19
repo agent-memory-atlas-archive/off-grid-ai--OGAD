@@ -309,6 +309,57 @@ export function readGgufMtpSupport(
   }
 }
 
+const expertCountCache = new Map<string, number>()
+
+/** The GGUF's `<arch>.expert_count`: above zero for a mixture-of-experts model, 0 for a dense one
+ *  or an unreadable file. Remembered per path, size and modification time. Never throws. */
+export function readGgufExpertCount(
+  p: string,
+  fs: GgufFs,
+  maxBytes = GGUF_METADATA_PREFIX_BYTES
+): number {
+  try {
+    const { size, mtimeMs } = fs.statSync(p)
+    const toRead = Math.min(size, maxBytes)
+    if (toRead <= 0) return 0
+    const key = mtimeMs === undefined ? null : `${p}\0${size}\0${mtimeMs}`
+    const known = key === null ? undefined : expertCountCache.get(key)
+    if (known !== undefined) return known
+    const fd = fs.openSync(p, 'r')
+    const buf = Buffer.alloc(toRead)
+    try {
+      fs.readSync(fd, buf, 0, toRead, 0)
+    } finally {
+      fs.closeSync(fd)
+    }
+    let experts = 0
+    if (buf.subarray(0, 4).toString('ascii') === 'GGUF') {
+      const c = new Cursor(buf, 4)
+      if (c.u32() >= 2) {
+        c.u64()
+        const kvCount = c.u64()
+        let arch: string | undefined
+        for (let i = 0; i < kvCount; i++) {
+          const k = c.str()
+          const type = c.u32()
+          // The hyperparameters sit before the tokenizer arrays.
+          if (k.startsWith('tokenizer.')) break
+          const value = readValue(c, type)
+          if (k === 'general.architecture' && typeof value === 'string') arch = value
+          if (arch && k === `${arch}.expert_count` && typeof value === 'number') {
+            experts = value
+            break
+          }
+        }
+      }
+    }
+    if (key !== null) expertCountCache.set(key, experts)
+    return experts
+  } catch {
+    return 0
+  }
+}
+
 /** How many leading bytes to read when hunting for the chat template: it can sit after the token
  *  arrays, so this is larger than the hyperparameter prefix, yet still cheap against a GB-scale model. */
 export const GGUF_TEMPLATE_PREFIX_BYTES = GGUF_METADATA_PREFIX_BYTES * 4

@@ -753,6 +753,7 @@ const offGridApi = {
     kvCacheType?: 'f16' | 'q8_0' | 'q4_0'
     flashAttn?: boolean
     gpuLayers?: number
+    gpuPlacement?: 'auto' | 'manual'
     threads?: number
     batchSize?: number
     speculativeDecoding?: 'off' | 'ngram' | 'mtp' | 'draft' | 'dflash'

@@ -34,9 +34,14 @@ import {
   reasoningBudgetPayload,
   isGatewayMode,
   llmSlotPlan,
+  modelFitsGpu,
   mtpHeadForPrimaryFile,
+  spillBatchSize,
+  METAL_WORKING_SET_SHARE,
   type GatewayMode,
-  type LlmSlotPlan
+  type GpuPlacement,
+  type LlmSlotPlan,
+  type SpeedDeviceClass
 } from '@offgrid/models'
 import { liveMemory } from './runtime-manager'
 import { filesMB } from './model-footprint'
@@ -59,6 +64,7 @@ import { CATALOG, isGrounderModel } from '@offgrid/models'
 import {
   parseGgufMetadata,
   readGgufContextLength,
+  readGgufExpertCount,
   readGgufKvShape,
   readGgufMtpSupport
 } from './models/gguf-metadata'
@@ -71,7 +77,11 @@ import { pickFreePort, isPortFree } from './free-port'
 import { postCompletionOnce } from './llm/http-post'
 import { modalityQueue } from './modality-queue/queue'
 import { engineSpawnEnv } from './llm/spawn-env'
-import { gpuDeviceAvailable } from './llm/gpu-device-probe'
+import {
+  gpuDeviceAvailable,
+  offloadedLayerShare,
+  probedGpuMemoryMB
+} from './llm/gpu-device-probe'
 import { shouldAutoRecover } from './llm/crash-policy'
 import { enginePriority } from './llm/engine-priority'
 import { modelStartupQuietLimit, startupStalled } from './llm/startup-timeout'
@@ -116,7 +126,9 @@ export interface LlmSettings {
   // Launch-time (require a server respawn to take effect):
   kvCacheType?: KvCacheType // quantize the KV cache to cut memory (needs flash-attn)
   flashAttn?: boolean // FlashAttention: faster + lower memory; required for quantized KV
-  gpuLayers?: number // -ngl: layers offloaded to the GPU. 99 = all.
+  gpuLayers?: number // -ngl: layers offloaded to the GPU. 99 = all. Used when gpuPlacement is 'manual'.
+  gpuPlacement?: GpuPlacement // 'auto': no -ngl, llama-server's --fit places layers and MoE experts
+  gpuOffload?: { layers: number; total: number } | null // read-only: what the running engine placed
   threads?: number // CPU threads for inference
   batchSize?: number // -b: prompt batch size
   speculativeDecoding?: SpeculativeDecodingMode
@@ -320,6 +332,9 @@ export class LLMService {
   // values so a plain restart keeps the pin.
   private readonly userExplicit = new Set<PresetField>()
   private gpuLayers = 99
+  private gpuPlacement: GpuPlacement = 'auto'
+  /** Layers the running engine put on the GPU, from its load log. */
+  private gpuOffload: { layers: number; total: number } | null = null
   private threads: number | undefined
   private batchSize: number | undefined
   private speculativeDecoding: SpeculativeDecodingMode = 'off'
@@ -414,6 +429,10 @@ export class LLMService {
         this.kvCacheType = s.kvCacheType
       if (typeof s.flashAttn === 'boolean') this.flashAttn = s.flashAttn
       if (typeof s.gpuLayers === 'number') this.gpuLayers = s.gpuLayers
+      // Settings saved before GPU placement existed: a layer count other than "all" was the
+      // person's own choice, so it stays manual. Everything else starts on Auto.
+      if (s.gpuPlacement === 'auto' || s.gpuPlacement === 'manual') this.gpuPlacement = s.gpuPlacement
+      else if (typeof s.gpuLayers === 'number' && s.gpuLayers !== 99) this.gpuPlacement = 'manual'
       if (typeof s.threads === 'number') this.threads = s.threads
       if (typeof s.batchSize === 'number') this.batchSize = s.batchSize
       if (
@@ -622,6 +641,8 @@ export class LLMService {
       kvCacheType: this.kvCacheType,
       flashAttn: this.flashAttn,
       gpuLayers: this.gpuLayers,
+      gpuPlacement: this.gpuPlacement,
+      gpuOffload: this.initialized ? this.gpuOffload : null,
       threads: this.threads,
       batchSize: this.batchSize,
       speculativeDecoding: this.speculativeDecoding,
@@ -651,11 +672,63 @@ export class LLMService {
    *  Both `_doInit` and tests use the same `buildLaunchArgs` path. */
   launchArgs(): string[] {
     this.ensureLoaded()
-    return this.launchArgsFor(this.ctxSize, this.gpuLayers)
+    return this.launchArgsFor(this.ctxSize, this.placedGpuLayers())
   }
 
-  /** Build argv for the selected context and a GPU-layer count. */
-  private launchArgsFor(effectiveCtxSize: number, gpuLayers: number): string[] {
+  /** The GPU layers a GPU launch asks for: 'auto' leaves placement to llama-server's --fit. */
+  private placedGpuLayers(): number | 'auto' {
+    return this.gpuPlacement === 'auto' ? 'auto' : this.gpuLayers
+  }
+
+  /** The device class of the engine at this path, for the shared fastest-settings table. */
+  private speedDevice(serverPath?: string): SpeedDeviceClass {
+    if (process.platform === 'darwin') return 'mac'
+    const engineDir = serverPath ? path.basename(path.dirname(serverPath)) : ''
+    if (engineDir.endsWith('-cpu')) return 'cpu'
+    if (engineDir.endsWith('-cuda')) return 'cuda'
+    if (engineDir) return 'vulkan'
+    return this.lastPlacedBackend?.includes('CUDA') ? 'cuda' : 'vulkan'
+  }
+
+  /** GPU memory the model may use, in GB: the Metal working set on a Mac, the card's VRAM
+   *  elsewhere, null when the engine did not report it. */
+  private gpuMemoryGb(device: SpeedDeviceClass, serverPath?: string): number | null {
+    if (device === 'mac') return (totalmem() / 1024 ** 3) * METAL_WORKING_SET_SHARE
+    if (device === 'cpu') return null
+    const backend = device === 'cuda' ? 'CUDA' : 'Vulkan'
+    const listedMB = serverPath ? probedGpuMemoryMB(serverPath, backend) : null
+    const totalMB = listedMB ?? (device === 'cuda' ? (cudaVramMB()?.totalMB ?? null) : null)
+    return totalMB === null ? null : totalMB / 1024
+  }
+
+  /** Under Auto, an MoE whose experts will not fit the GPU gets a wide batch (see spillBatchSize). */
+  private spillBatchFor(effectiveCtxSize: number, gpuLayers: number | 'auto', serverPath?: string): number | null {
+    if (gpuLayers !== 'auto' || !this.modelPath) return null
+    if (readGgufExpertCount(this.modelPath, fs) <= 0) return null
+    const device = this.speedDevice(serverPath)
+    const gpuMemoryGb = this.gpuMemoryGb(device, serverPath)
+    return spillBatchSize({
+      device,
+      gpuPlacement: 'auto',
+      isMoe: true,
+      fitsGpu:
+        gpuMemoryGb === null
+          ? null
+          : modelFitsGpu({
+              gpuMemoryGb,
+              weightsGb: this.localWeightsGb(),
+              ctxSize: effectiveCtxSize,
+              kvCacheType: this.kvCacheType
+            })
+    })
+  }
+
+  /** Build argv for the selected context and GPU layers ('auto': llama-server places them). */
+  private launchArgsFor(
+    effectiveCtxSize: number,
+    gpuLayers: number | 'auto',
+    serverPath?: string
+  ): string[] {
     const useSelectedModelSpeculation =
       this.runtimeModelOverride === null &&
       this.speculativeModeSupported(this.speculativeDecoding, this.draftModel)
@@ -667,6 +740,7 @@ export class LLMService {
       port: this.port,
       effectiveCtxSize,
       gpuLayers,
+      spillBatch: this.spillBatchFor(effectiveCtxSize, gpuLayers, serverPath),
       flashAttn: this.flashAttn,
       kvCacheType: this.kvCacheType,
       threads: this.threads,
@@ -964,6 +1038,7 @@ export class LLMService {
         kvCacheType: this.kvCacheType,
         flashAttn: this.flashAttn,
         gpuLayers: this.gpuLayers,
+        gpuPlacement: this.gpuPlacement,
         threads: this.threads,
         batchSize: this.batchSize,
         speculativeDecoding: this.speculativeDecoding,
@@ -1000,6 +1075,8 @@ export class LLMService {
       this.flashAttn = compatibleSettings.flashAttn
     if (typeof compatibleSettings.gpuLayers === 'number')
       this.gpuLayers = compatibleSettings.gpuLayers
+    if (compatibleSettings.gpuPlacement === 'auto' || compatibleSettings.gpuPlacement === 'manual')
+      this.gpuPlacement = compatibleSettings.gpuPlacement
     if (typeof compatibleSettings.threads === 'number') this.threads = compatibleSettings.threads
     if (typeof compatibleSettings.batchSize === 'number')
       this.batchSize = compatibleSettings.batchSize
@@ -1064,6 +1141,7 @@ export class LLMService {
       this.kvCacheType = priorSettings.kvCacheType ?? this.kvCacheType
       this.flashAttn = priorSettings.flashAttn ?? this.flashAttn
       this.gpuLayers = priorSettings.gpuLayers ?? this.gpuLayers
+      this.gpuPlacement = priorSettings.gpuPlacement ?? this.gpuPlacement
       this.threads = priorSettings.threads
       this.batchSize = priorSettings.batchSize
       this.speculativeDecoding = priorSettings.speculativeDecoding ?? this.speculativeDecoding
@@ -1500,7 +1578,7 @@ export class LLMService {
           ? 'Vulkan'
           : null
       if (!cpuOnly && (process.platform === 'win32' || process.platform === 'linux') && backend) {
-        if (this.gpuLayers === 0) continue
+        if (this.placedGpuLayers() === 0) continue
         if (!(await gpuDeviceAvailable(serverPath, backend, process.platform))) {
           this.backendFallbackReason = `${backend} did not report a usable device. Another engine was selected.`
           console.warn(
@@ -1513,7 +1591,7 @@ export class LLMService {
       // during the probe cannot leave the checkpoint and the arguments describing different launches.
       const attempts = loadAttempts(
         this.ctxSize,
-        cpuOnly || enginePriority(serverPath) === 2 ? 0 : this.gpuLayers
+        cpuOnly || enginePriority(serverPath) === 2 ? 0 : this.placedGpuLayers()
       ).slice(0, 1)
       for (let a = 0; a < attempts.length; a++) {
         if (generation !== this.launchGeneration) return false
@@ -1522,7 +1600,7 @@ export class LLMService {
         if (a > 0) {
           console.warn(`[LLMService] out of memory — retrying load at ${at.reason}`)
         }
-        const args = this.launchArgsFor(at.ctxSize, at.gpuLayers)
+        const args = this.launchArgsFor(at.ctxSize, at.gpuLayers, serverPath)
         // The six-token Qwen3.5 9B gain was measured with stock llama.cpp on
         // Metal. Preserve the existing limit for other engines and backends.
         const draftMaxIndex = args.indexOf('--spec-draft-n-max')
@@ -1557,7 +1635,8 @@ export class LLMService {
           if (generation !== this.launchGeneration) return false
           const retryArgs = this.launchArgsFor(
             this.ctxSize,
-            cpuOnly || enginePriority(serverPath) === 2 ? 0 : this.gpuLayers
+            cpuOnly || enginePriority(serverPath) === 2 ? 0 : this.placedGpuLayers(),
+            serverPath
           )
           const retriedWith = { settings: this.getSettings(), explicit: new Set(this.userExplicit) }
           if (await this.launchServer(serverPath, retryArgs)) {
@@ -1696,6 +1775,7 @@ export class LLMService {
       console.log('[LLMService] Vision server ready!')
       const engineDir = path.basename(binDir)
       this.backendPlacement = parseNativeBackend(this.backendOutput)
+      this.gpuOffload = offloadedLayerShare(this.backendOutput)
       this.lastPlacedBackend = this.backendPlacement?.backend ?? this.lastPlacedBackend
       console.log(
         `[LLMService] model ready: engine=${engineDir}, backend=${this.backendPlacement?.backend ?? 'unconfirmed'}`

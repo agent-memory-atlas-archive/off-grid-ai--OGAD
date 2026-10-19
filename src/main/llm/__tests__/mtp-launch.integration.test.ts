@@ -91,7 +91,8 @@ describe('MTP installation and persisted launch contract', () => {
       expect.arrayContaining(['--spec-type', 'draft-mtp', '--spec-draft-model', sidecar])
     )
     expect(args[args.indexOf('--spec-draft-n-max') + 1]).toBe('2')
-    expect(args[args.indexOf('--spec-draft-ngl') + 1]).toBe('99')
+    // Auto GPU placement (the default) leaves the head's placement to llama-server's --fit too.
+    expect(args).not.toContain('--spec-draft-ngl')
     expect(args).not.toContain('unrelated.gguf')
   })
 
