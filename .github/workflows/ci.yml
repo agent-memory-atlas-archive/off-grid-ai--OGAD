@@ -277,7 +277,7 @@ jobs:
           npm explore better-sqlite3-multiple-ciphers -- npm run build-release
           # Measured too: the gateway, Team mode and model-port seams are tested here, against a fake
           # engine on the real port, and nowhere else.
-          npm run test:heavy -- --coverage --coverage.reportsDirectory=coverage-heavy
+          OFFGRID_AGGREGATE_COVERAGE=1 npm run test:heavy -- --coverage --coverage.reportsDirectory=coverage-heavy
       # Architecture-boundary gate (hygiene §A/§H): walks the import graph and fails
       # on a forbidden edge — core->pro (open-core), a pure-logic module gaining an
       # IO import, renderer->main, circular deps. Fast (graph-only, ~2s), so unlike
