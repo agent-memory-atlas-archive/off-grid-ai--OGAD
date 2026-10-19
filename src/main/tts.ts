@@ -33,6 +33,8 @@ import type { ManagedRuntime } from './runtime-manager'
 import { modalityQueue, SPEECH_JOB } from './modality-queue/queue'
 import { chooseVoice, DEFAULT_VOICE } from './tts-logic'
 import { OnnxSpeechRuntime } from './tts-onnx'
+import { MEDIA_WORKER_IDLE_MS, mayStartMediaWorker } from '@offgrid/models'
+import { liveMemory } from './runtime-manager'
 
 const LANGUAGE_TAGS: Readonly<Record<string, string>> = {
   'en-us': 'en-US',
@@ -48,14 +50,40 @@ const onnxSpeech = new OnnxSpeechRuntime()
 /** Extra Kokoro workers for team gateway mode, each its own ONNX session (330 MB each). */
 const teamOnnxSpeech: OnnxSpeechRuntime[] = []
 
-/** The least busy Kokoro worker, starting another while every one is busy and `workers` allows. */
+/** The least busy Kokoro worker, starting another while every one is busy, `workers` allows and
+ *  live memory holds one more voice model; otherwise the request shares the least busy worker. */
 function onnxWorker(workers: number): OnnxSpeechRuntime {
   const all = [onnxSpeech, ...teamOnnxSpeech]
   const idle = all.reduce((best, worker) => (worker.inFlight < best.inFlight ? worker : best))
   if (idle.inFlight === 0 || all.length >= workers) return idle
+  if (!mayStartMediaWorker(liveMemory().availableMB, KOKORO_MB)) return idle
   const added = new OnnxSpeechRuntime()
   teamOnnxSpeech.push(added)
+  scheduleTeamWorkerTrim()
   return added
+}
+
+/** Last time each extra worker finished a synthesis. */
+const teamWorkerUsedAt = new WeakMap<OnnxSpeechRuntime, number>()
+let teamWorkerTrim: ReturnType<typeof setTimeout> | null = null
+
+/** Close extra Kokoro workers that sat idle for MEDIA_WORKER_IDLE_MS, freeing their memory; the
+ *  first worker keeps the app's own lifecycle. Re-arms while extra workers remain. */
+function scheduleTeamWorkerTrim(): void {
+  if (teamWorkerTrim) return
+  teamWorkerTrim = setTimeout(() => {
+    teamWorkerTrim = null
+    const now = Date.now()
+    for (const worker of [...teamOnnxSpeech]) {
+      const usedAt = teamWorkerUsedAt.get(worker) ?? 0
+      if (worker.inFlight === 0 && now - usedAt >= MEDIA_WORKER_IDLE_MS) {
+        teamOnnxSpeech.splice(teamOnnxSpeech.indexOf(worker), 1)
+        void worker.close()
+      }
+    }
+    if (teamOnnxSpeech.length > 0) scheduleTeamWorkerTrim()
+  }, MEDIA_WORKER_IDLE_MS)
+  ;(teamWorkerTrim as { unref?: () => void }).unref?.()
 }
 
 async function closeTeamOnnxSpeech(): Promise<void> {
@@ -262,7 +290,9 @@ async function synthesizeOnnxPasses(input: {
     for (const [index, text] of passes.entries()) {
       input.signal?.throwIfAborted()
       const passPath = `${input.outputPath}.${index}.wav`
-      device = await (input.engine ?? onnxSpeech).synthesize({
+      const engine = input.engine ?? onnxSpeech
+      teamWorkerUsedAt.set(engine, Date.now())
+      device = await engine.synthesize({
         text,
         voice: input.voice,
         outputPath: passPath,

@@ -377,13 +377,28 @@ export function residentWhisperAvailable(): boolean {
  *  via ensureUp on the next resident transcription. */
 export const sttRuntime: ManagedRuntime = {
   modality: 'stt',
-  footprintMB: () => whisperServer.residentMB(),
+  // Team mode's extra whisper-server lanes hold a model copy each: counted and freed with it.
+  footprintMB: () => whisperServer.residentMB() + (extraLanes?.residentMB() ?? 0),
   evict: () => {
+    extraLanes?.stop()
     whisperServer.stop()
   },
   release: () => {
+    extraLanes?.stop()
     whisperServer.stop()
   }
+}
+
+/** Team mode's extra transcription lanes, as the memory planner sees them. */
+export interface ExtraTranscriptionLanes {
+  residentMB(): number
+  stop(): void
+}
+let extraLanes: ExtraTranscriptionLanes | null = null
+
+/** The team-mode lanes register here, so the residency seam counts and frees them. */
+export function registerExtraTranscriptionLanes(lanes: ExtraTranscriptionLanes | null): void {
+  extraLanes = lanes
 }
 
 /** The Transcription settings tab's view: active model, language, and choices. Shared by the

@@ -4,10 +4,14 @@
 // to the count the RAM rule allows (mediaWorkerCount in @offgrid/models). Each lane stops itself
 // after five idle minutes, as the resident server always has.
 
+import { mayStartMediaWorker } from '@offgrid/models'
 import { isPortFree, pickFreePort } from '../free-port'
+import { liveMemory } from '../runtime-manager'
+import { filesMB } from '../model-footprint'
 import { WhisperServerService, whisperServer } from './whisper-server'
 import { WhisperServerTranscription } from './whisper-server-transcription'
-import { getTeamLaneTranscription } from './select'
+import { whisperModel } from './whisper-cli'
+import { getTeamLaneTranscription, registerExtraTranscriptionLanes } from './select'
 import type { Transcript, TranscribeOptions } from './types'
 
 /** Where extra lanes look for a free port (past the fixed engine ports). */
@@ -33,10 +37,17 @@ async function addLane(): Promise<Lane> {
   return lane
 }
 
-/** The least busy lane, opening another while every lane is busy and `wanted` allows. */
+/** What one more lane would hold: the model it loads and a small decode allowance, in MB. */
+function laneMB(): number {
+  return whisperServer.residentMB() || filesMB([whisperModel()]) + 200
+}
+
+/** The least busy lane, opening another while every lane is busy, `wanted` allows and live memory
+ *  holds one more model copy; otherwise the request shares the least busy lane. */
 async function pickLane(wanted: number): Promise<Lane> {
   const idle = lanes.reduce((best, lane) => (lane.inFlight < best.inFlight ? lane : best))
   if (idle.inFlight === 0 || lanes.length >= wanted) return idle
+  if (!adding && !mayStartMediaWorker(liveMemory().availableMB, laneMB())) return idle
   adding ??= addLane().finally(() => {
     adding = null
   })
@@ -69,3 +80,10 @@ export async function transcribeOnTeamLane(
 export function stopTeamLanes(): void {
   for (const lane of lanes.splice(1)) lane.server.stop()
 }
+
+// The memory planner counts the extra lanes with the resident server and frees them with it. Each
+// lane also stops itself after five idle minutes, as the resident server does.
+registerExtraTranscriptionLanes({
+  residentMB: () => lanes.slice(1).reduce((sum, lane) => sum + lane.server.residentMB(), 0),
+  stop: stopTeamLanes
+})
