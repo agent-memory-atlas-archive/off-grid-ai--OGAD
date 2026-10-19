@@ -26,6 +26,7 @@ const MCP_SERVER = path.resolve('e2e/fixtures/app143-approval-connector.mjs')
 const CONNECTOR = 'APP-143 guarded connector'
 const ASK = 'File the guarded release task in Desktop P0.'
 const HELD_WRITE = `create_external_task via ${CONNECTOR}`
+const HELD_WRITE_IN_WORDS = `Create external task in ${CONNECTOR}`
 const EXTERNAL = { title: 'Ship guarded approval journey', project: 'Desktop P0' }
 
 interface ApprovalRow {
@@ -166,14 +167,24 @@ test.describe('Paired-browser write approval', () => {
 
     await gotoScreen(page, 'Actions')
     await page.getByRole('radio', { name: /^Approvals/ }).click()
-    const row = page.getByRole('listitem').filter({ hasText: HELD_WRITE })
+    // Listed as the action in words, in the app it acts in; the tool id stays internal.
+    const row = page
+      .getByRole('table', { name: 'Approvals', exact: true })
+      .getByRole('row')
+      .filter({ hasText: HELD_WRITE_IN_WORDS })
     await expect(row).toBeVisible()
+    await expect(row.getByRole('cell', { name: CONNECTOR, exact: true })).toBeVisible()
+    await expect(row).not.toContainText('create_external_task')
     await page.waitForTimeout(1_000)
     expect(externalExecutions()).toEqual([])
 
     // Reject: it never runs.
     await row.getByRole('button', { name: 'Reject', exact: true }).click()
-    await row.getByRole('button', { name: 'Dismiss', exact: true }).click()
+    // The reason form sits in the row beneath the request.
+    await row
+      .locator('xpath=following-sibling::tr[1]')
+      .getByRole('button', { name: 'Dismiss', exact: true })
+      .click()
     await expect
       .poll(async () => (await heldWrites('rejected')).length, { timeout: 15_000 })
       .toBe(1)

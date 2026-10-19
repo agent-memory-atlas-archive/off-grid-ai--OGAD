@@ -23,6 +23,8 @@ const INSTRUCTION = 'File the guarded release task in Desktop P0.'
 const EXTERNAL = { title: 'Ship guarded approval journey', project: 'Desktop P0' }
 /** How the action engine names a held connector write. */
 const HELD_WRITE = `create_external_task via ${CONNECTOR}`
+/** How Approvals lists it: the action in words, in the app it acts in. */
+const HELD_WRITE_IN_WORDS = `Create external task in ${CONNECTOR}`
 
 interface ApprovalRow {
   id: number
@@ -155,7 +157,7 @@ test.describe('God routine approval', () => {
     await page.getByRole('button', { name: 'Close God settings', exact: true }).click()
     await gotoScreen(page, 'Actions')
     await page.getByRole('radio', { name: /^Approvals/ }).click()
-    await expect(page.getByRole('paragraph').filter({ hasText: HELD_WRITE })).toBeVisible()
+    await expect(page.getByRole('paragraph').filter({ hasText: HELD_WRITE_IN_WORDS })).toBeVisible()
     await page.waitForTimeout(1_000)
     expect(externalExecutions()).toEqual([])
 
