@@ -45,11 +45,12 @@ import { setupDesktopBackupIPC } from './backup/ipc'
 import { preloadPath } from './preload-path'
 import { rendererHtmlPath } from './renderer-path'
 import { setMainWindow } from './main-window'
-import { startModelServer, stopModelServer } from './model-server'
+import { setGatewayPowerBlocker, startModelServer, stopModelServer } from './model-server'
+import { parseGatewayLaunchOverride } from '@offgrid/models'
 import { startMediaServer, stopMediaServer, mediaUrlFor } from './media-server'
 import { capturePathFromUrl, serveCaptureFile } from './ogcapture-serve'
 import { serveArtifactPreview } from './artifact-preview'
-import { ipcMain } from 'electron'
+import { ipcMain, powerSaveBlocker } from 'electron'
 import { loadProEntitlementProvider, loadProFeaturesMain } from './bootstrap/loadProFeaturesMain'
 import { resolveWindowPresentation } from './bootstrap/window-presentation'
 import { callHook, HOOKS } from './bootstrap/hookRegistry'
@@ -334,6 +335,11 @@ if (!windowPresentation.showWindow) {
 
 function startServerOnlyMode(): void {
   writeDiagnosticLog('gateway', 'server-only.started', { port: 7878 })
+  // This run's own gateway mode and requests at once (--gateway-mode / --gateway-clients, or
+  // OFFGRID_GATEWAY_MODE / OFFGRID_GATEWAY_CLIENTS). Used for this run; saved settings are kept.
+  const override = parseGatewayLaunchOverride(process.argv, process.env)
+  for (const value of override.invalid)
+    writeDiagnosticLog('gateway', 'server-only.flag_ignored', { value }, 'warn')
   if (process.platform === 'darwin' && app.dock) {
     try {
       app.dock.hide()
@@ -343,12 +349,24 @@ function startServerOnlyMode(): void {
   }
   // These asynchronous starts report failures through their promises.
   startModelServer().catch((e) => console.error('[gateway] start failed', e))
-  void import('./llm').then(({ llm }) =>
-    llm.init().catch((err) => console.error('[gateway] LLM init failed', err))
-  )
+  void import('./llm').then(({ llm }) => {
+    if (override.mode !== undefined || override.clients !== undefined) {
+      llm.setGatewayLaunchOverride({
+        ...(override.mode !== undefined ? { mode: override.mode } : {}),
+        ...(override.clients !== undefined ? { clients: override.clients } : {})
+      })
+      writeDiagnosticLog('gateway', 'server-only.gateway_mode', {
+        mode: llm.gatewayMode(),
+        clients: llm.gatewayClients() ?? 'auto'
+      })
+    }
+    return llm.init().catch((err) => console.error('[gateway] LLM init failed', err))
+  })
 }
 
 app.whenReady().then(async () => {
+  // A Team-mode gateway keeps the machine awake while it serves clients.
+  setGatewayPowerBlocker(powerSaveBlocker)
   // glibc reads LD_LIBRARY_PATH when Electron starts, before an ONNX worker runs.
   // Restart once with the verified optional libraries if this launch lacks them.
   if (app.isPackaged && prepareInstalledOnnxCudaLibraries()) {

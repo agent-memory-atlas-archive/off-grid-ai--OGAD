@@ -328,6 +328,11 @@ export class LLMService {
   private gatewayModeSetting: GatewayMode = 'single'
   /** Team mode's manual "requests at once"; null = Auto. */
   private gatewayClientsSetting: number | null = null
+  /** A headless launch's own gateway mode and "requests at once" (--gateway-mode, OFFGRID_GATEWAY_MODE
+   *  ...): used for this run only, never saved over the person's settings. */
+  private gatewayLaunchOverride: { mode?: GatewayMode; clients?: number | null } = {}
+  /** Hears when the gateway mode in effect changes (the gateway keeps a Team server awake). */
+  private gatewayModeListener: ((mode: GatewayMode) => void) | null = null
   /** The slots and pool the running (or next) team-mode launch was sized to. */
   private launchedSlotPlan: LlmSlotPlan | null = null
   /** The backend the last launch placed the model on, kept across restarts for slot sizing. */
@@ -689,17 +694,15 @@ export class LLMService {
       imageMinTokens: this.imageMinTokensForModel(),
       reportModelPlacement: true,
       totalRamBytes: totalmem(),
-      gatewayMode: this.gatewayModeSetting,
-      ...(this.gatewayModeSetting === 'team'
+      gatewayMode: this.effectiveGatewayMode(),
+      ...(this.effectiveGatewayMode() === 'team'
         ? {
             ...this.slotLaunchInputs(),
-            ...(this.gatewayClientsSetting === null
-              ? {}
-              : { requestedSlots: this.gatewayClientsSetting })
+            ...this.requestedSlotsInput()
           }
         : {})
     }
-    if (this.gatewayModeSetting === 'team') {
+    if (this.effectiveGatewayMode() === 'team') {
       this.launchedSlotPlan = llmSlotPlan(slotInput(input))
       // Say when team mode changes the person's cache type, and why.
       if (this.launchedSlotPlan.kvNote) console.log(`[LLMService] ${this.launchedSlotPlan.kvNote}`)
@@ -763,16 +766,52 @@ export class LLMService {
     }
   }
 
+  /** Use this gateway mode and "requests at once" for this run without saving them (a headless
+   *  launch's flags). A later settings change of either takes over from it. */
+  setGatewayLaunchOverride(override: { mode?: GatewayMode; clients?: number | null }): void {
+    const before = this.effectiveGatewayMode()
+    this.gatewayLaunchOverride = { ...override }
+    this.launchedSlotPlan = null
+    if (this.effectiveGatewayMode() !== before) this.gatewayModeListener?.(this.effectiveGatewayMode())
+  }
+
+  /** Hear when the gateway mode in effect changes. */
+  onGatewayModeChange(listener: ((mode: GatewayMode) => void) | null): void {
+    this.gatewayModeListener = listener
+  }
+
+  private effectiveGatewayMode(): GatewayMode {
+    return this.gatewayLaunchOverride.mode ?? this.gatewayModeSetting
+  }
+
+  /** The slot rule's requestedSlots for the "requests at once" in effect (none for Auto). */
+  private requestedSlotsInput(): { requestedSlots?: number } {
+    const clients = this.effectiveGatewayClients()
+    return clients === null ? {} : { requestedSlots: clients }
+  }
+
+  private effectiveGatewayClients(): number | null {
+    return this.gatewayLaunchOverride.clients !== undefined
+      ? this.gatewayLaunchOverride.clients
+      : this.gatewayClientsSetting
+  }
+
+  /** The "requests at once" in effect: a number, or null for Auto. */
+  gatewayClients(): number | null {
+    this.ensureLoaded()
+    return this.effectiveGatewayClients()
+  }
+
   /** Whether the gateway serves one person ('single', as always) or several clients ('team'). */
   gatewayMode(): GatewayMode {
     this.ensureLoaded()
-    return this.gatewayModeSetting
+    return this.effectiveGatewayMode()
   }
 
   /** How many requests the engine serves at once: its llama-server slot count. */
   gatewaySlots(): number {
     this.ensureLoaded()
-    if (this.gatewayModeSetting !== 'team') return 1
+    if (this.effectiveGatewayMode() !== 'team') return 1
     return (
       this.launchedSlotPlan?.slots ?? this.unlaunchedSlotPlan().slots
     )
@@ -781,7 +820,7 @@ export class LLMService {
   /** The memory rule's safe maximum for team mode ("Auto"); 1 in single mode. */
   gatewaySlotsMax(): number {
     this.ensureLoaded()
-    if (this.gatewayModeSetting !== 'team') return 1
+    if (this.effectiveGatewayMode() !== 'team') return 1
     return this.launchedSlotPlan?.maxSlots ?? this.unlaunchedSlotPlan().maxSlots
   }
 
@@ -792,14 +831,14 @@ export class LLMService {
       ctxSize: this.ctxSize,
       speculativeDecoding: this.effectiveSpeculativeDecoding(),
       totalMemoryGb: totalmem() / 1024 ** 3,
-      ...(this.gatewayClientsSetting === null ? {} : { requestedSlots: this.gatewayClientsSetting })
+...this.requestedSlotsInput()
     })
   }
 
   /** Team mode: the tokens the slots share (the unified KV pool). Undefined in single mode. */
   gatewayPoolTokens(): number | undefined {
     this.ensureLoaded()
-    if (this.gatewayModeSetting !== 'team') return undefined
+    if (this.effectiveGatewayMode() !== 'team') return undefined
     return this.launchedSlotPlan?.poolCtx ?? this.ctxSize
   }
 
@@ -939,8 +978,8 @@ export class LLMService {
         speculativeDecoding: this.speculativeDecoding,
         speculativeDraftMax: this.speculativeDraftMax,
         draftModel: this.draftModel,
-        gatewayMode: this.gatewayModeSetting,
-        gatewayClients: this.gatewayClientsSetting
+        gatewayMode: this.effectiveGatewayMode(),
+        gatewayClients: this.effectiveGatewayClients()
       },
       modeChanged
     )
@@ -985,6 +1024,10 @@ export class LLMService {
       this.draftModel = path.basename(compatibleSettings.draftModel)
     if (typeof compatibleSettings.speculativeDraftMax === 'number')
       this.speculativeDraftMax = compatibleSettings.speculativeDraftMax
+    const modeBefore = this.effectiveGatewayMode()
+    // A setting the person changes now takes over from a headless launch's flag for it.
+    if (compatibleSettings.gatewayMode !== undefined) delete this.gatewayLaunchOverride.mode
+    if (compatibleSettings.gatewayClients !== undefined) delete this.gatewayLaunchOverride.clients
     if (isGatewayMode(compatibleSettings.gatewayMode))
       this.gatewayModeSetting = compatibleSettings.gatewayMode
     // A manual "requests at once" (a whole number of 1 or more), or null for Auto. The memory
@@ -998,6 +1041,8 @@ export class LLMService {
       this.gatewayClientsSetting = compatibleSettings.gatewayClients
     // The next launch sizes the slots again (mode, context and cache type all change them).
     if (launchChanged) this.launchedSlotPlan = null
+    if (this.effectiveGatewayMode() !== modeBefore)
+      this.gatewayModeListener?.(this.effectiveGatewayMode())
     const budgets = budgetChange(
       { ctxSize: this.ctxSize, maxTokens: this.maxTokens, reasoningBudget: this.reasoningBudget },
       {}
