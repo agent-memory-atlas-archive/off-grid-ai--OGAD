@@ -34,6 +34,7 @@ import {
   reasoningBudgetPayload,
   isGatewayMode,
   llmSlotPlan,
+  mtpHeadForPrimaryFile,
   type GatewayMode,
   type LlmSlotPlan
 } from '@offgrid/models'
@@ -62,7 +63,6 @@ import {
   readGgufMtpSupport
 } from './models/gguf-metadata'
 import {
-  MTP_COMPANIONS,
   dflashFileName,
   primaryFileName,
   type CatalogEntry
@@ -530,16 +530,7 @@ export class LLMService {
   }
 
   private mtpModelPath(): string | undefined {
-    const selected = path.basename(this.modelPath)
-    const companion = /^Qwen3\.8-27B-(?:UD-)?(?:Q|IQ)[A-Z0-9_]+\.gguf$/i.test(selected)
-      ? MTP_COMPANIONS['unsloth/Qwen3.8-27B-GGUF']
-      : /^tencent_UI-Mate-9B-(?:Q|IQ)[A-Z0-9_]+(?:\+MTP)?\.gguf$/i.test(selected)
-        ? MTP_COMPANIONS['bartowski/tencent_UI-Mate-9B-GGUF+MTP']
-        : /^gemma-4-E4B-it-(?:UD-)?(?:Q|IQ)[A-Z0-9_]+\.gguf$/i.test(selected)
-          ? MTP_COMPANIONS['unsloth/gemma-4-E4B-it-GGUF']
-          : /^gemma-4-12b-it-(?:UD-)?(?:Q|IQ)[A-Z0-9_]+\.gguf$/i.test(selected)
-            ? MTP_COMPANIONS['unsloth/gemma-4-12b-it-GGUF']
-            : undefined
+    const companion = mtpHeadForPrimaryFile(path.basename(this.modelPath))
     if (!companion) return undefined
     const candidate = resolveModelReference(companion.name, [path.dirname(this.modelPath)])
     return readGgufMtpSupport(candidate, fs, undefined, companion.sizeBytes) ? candidate : undefined
