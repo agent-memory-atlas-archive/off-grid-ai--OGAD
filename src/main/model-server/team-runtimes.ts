@@ -40,7 +40,11 @@ export function teamConcurrency(): Record<GatewayRuntime, number> {
   const totalRamGb = totalmem() / 1024 ** 3
   const table = gatewayRuntimeTable({
     chatSlots: llm.gatewaySlots(),
-    specialistSlots: llmSlotCount({ mode: 'team', ctxSize: SPECIALIST_CONTEXT, totalRamGb }),
+    specialistSlots: llmSlotCount({
+      mode: 'team',
+      ctxSize: SPECIALIST_CONTEXT,
+      totalMemoryGb: totalRamGb
+    }),
     totalRamGb
   })
   return Object.fromEntries(

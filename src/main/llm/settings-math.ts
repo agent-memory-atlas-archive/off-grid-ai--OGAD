@@ -7,7 +7,9 @@ import type { KvCacheType, PerformanceMode } from '../model-sizing'
 import {
   llmParallelFlags,
   llmSlotPlan,
+  teamBatchFlags,
   type GatewayMode,
+  type KvShape,
   type LlmSlotInput,
   type SlotPlatform
 } from '@offgrid/models'
@@ -130,10 +132,17 @@ export interface LaunchArgsInput {
   totalRamBytes?: number
   /** Team mode opens several slots over one unified KV pool; single (the default) keeps one. */
   gatewayMode?: GatewayMode
-  /** Team mode's slot inputs: where the model runs, memory free beside it, and its size. */
+  /** Team mode's slot inputs: where the model runs, the memory it may use, its sizes and KV
+   *  shape (see llmSlotPlan in @offgrid/models). */
   slotPlatform?: SlotPlatform
+  /** RAM on a Mac, VRAM on CUDA, in GB. Defaults to totalRamBytes. */
+  slotTotalMemoryGb?: number
   slotFreeMemoryMB?: number
-  weightsGb?: number
+  weightsMB?: number
+  mmprojMB?: number
+  kvShape?: KvShape
+  architecture?: string
+  recurrentSlotMB?: number
 }
 
 /** The shared slot rule's input for these launch inputs. */
@@ -142,11 +151,16 @@ export function slotInput(i: LaunchArgsInput): LlmSlotInput {
     mode: i.gatewayMode ?? 'single',
     ctxSize: i.effectiveCtxSize,
     speculativeDecoding: i.speculativeDecoding,
-    totalRamGb: i.totalRamBytes ? i.totalRamBytes / 1024 ** 3 : undefined,
     platform: i.slotPlatform,
+    totalMemoryGb:
+      i.slotTotalMemoryGb ?? (i.totalRamBytes ? i.totalRamBytes / 1024 ** 3 : undefined),
     freeMemoryMB: i.slotFreeMemoryMB,
-    weightsGb: i.weightsGb,
-    kvMBPer1kTokens: i.kvCacheType === 'q4_0' ? 16 : i.kvCacheType === 'q8_0' ? 32 : 64
+    weightsMB: i.weightsMB,
+    mmprojMB: i.mmprojMB,
+    kvShape: i.kvShape,
+    architecture: i.architecture,
+    kvCacheType: i.kvCacheType,
+    recurrentSlotMB: i.recurrentSlotMB
   }
 }
 
@@ -193,20 +207,29 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
   if (cacheMiB !== undefined) args.push('--cache-ram', String(cacheMiB))
   // llama.cpp maps its model-allocation INFO messages to verbosity 4.
   if (i.reportModelPlacement) args.push('-lv', '4')
+  // Team mode picks the cache types with the slots (q8_0 when memory is tight, V never q4_0,
+  // Gemma f16); single mode uses the person's choice for both.
+  const team = (i.gatewayMode ?? 'single') === 'team'
+  const kv = team
+    ? llmSlotPlan(slotInput(i)).kv
+    : { k: i.kvCacheType, v: i.kvCacheType }
   // FlashAttention: faster + lower memory. Required for a quantized KV cache.
-  if (i.flashAttn || i.kvCacheType !== 'f16') {
+  if (i.flashAttn || kv.k !== 'f16' || kv.v !== 'f16') {
     args.push('--flash-attn', 'on')
   }
   // Quantized KV cache (q8_0/q4_0) shrinks the per-token memory footprint — the single
   // biggest lever against memory-overcommit freezes on big contexts.
-  if (i.kvCacheType !== 'f16') {
-    args.push('--cache-type-k', i.kvCacheType, '--cache-type-v', i.kvCacheType)
+  if (kv.k !== 'f16' || kv.v !== 'f16') {
+    args.push('--cache-type-k', kv.k, '--cache-type-v', kv.v)
   }
   if (typeof i.threads === 'number') {
     args.push('-t', String(i.threads))
   }
   if (typeof i.batchSize === 'number') {
     args.push('-b', String(i.batchSize))
+  } else if (team) {
+    // Team mode on CUDA batches wider prefill; the person's own batch size always wins.
+    args.push(...(teamBatchFlags(i.slotPlatform) ?? []))
   }
   if (i.speculativeDecoding === 'ngram') {
     args.push('--spec-type', 'ngram-cache')

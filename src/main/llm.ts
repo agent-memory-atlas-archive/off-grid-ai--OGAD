@@ -35,11 +35,10 @@ import {
   isGatewayMode,
   llmSlotPlan,
   type GatewayMode,
-  type LlmSlotPlan,
-  type SlotPlatform
+  type LlmSlotPlan
 } from '@offgrid/models'
 import { liveMemory } from './runtime-manager'
-import { cudaFreeVramMB } from './llm/vram-probe'
+import { cudaVramMB } from './llm/vram-probe'
 import { slotInput } from './llm/settings-math'
 import type { EngineAccelerator } from '../shared/engine-accelerator'
 import {
@@ -55,7 +54,12 @@ import { readImages } from './llm/read-images'
 import { detectThinkingDialect, type ThinkingDialect } from './llm/thinking-dialect'
 import { isValidGgufFile } from './models/gguf'
 import { CATALOG, isGrounderModel } from '@offgrid/models'
-import { readGgufContextLength, readGgufMtpSupport } from './models/gguf-metadata'
+import {
+  parseGgufMetadata,
+  readGgufContextLength,
+  readGgufKvShape,
+  readGgufMtpSupport
+} from './models/gguf-metadata'
 import {
   MTP_COMPANIONS,
   dflashFileName,
@@ -683,27 +687,46 @@ export class LLMService {
 
   /** Team mode's slot inputs: the platform, the memory free beside this model and its pool of the
    *  person's context, and the model's size. Read once per launch. */
-  private slotLaunchInputs(): {
-    slotPlatform: SlotPlatform
-    slotFreeMemoryMB?: number
-    weightsGb: number
-  } {
-    const weightsGb = this.localWeightsGb()
-    const engineDown = !this.initialized
-    const modelMB = engineDown ? this.baseResidentMB() : 0
+  private slotLaunchInputs(): Partial<Parameters<typeof buildLaunchArgs>[0]> {
+    const weightsMB = this.localWeightsGb() * 1024
+    // The memory this engine may use counts its own model when it is loaded.
+    const ownMB = this.initialized ? this.baseResidentMB() : 0
+    const shape = { kvShape: readGgufKvShape(this.modelPath, fs) ?? undefined, architecture: this.modelArchitecture() }
+    const common = { weightsMB, mmprojMB: 0, recurrentSlotMB: 64, ...shape }
     if (process.platform !== 'darwin' && this.lastPlacedBackend?.includes('CUDA')) {
-      const vram = cudaFreeVramMB()
+      const vram = cudaVramMB()
       return {
         slotPlatform: 'cuda',
-        weightsGb,
-        ...(vram === null ? {} : { slotFreeMemoryMB: Math.max(0, vram - modelMB - 1024) })
+        ...common,
+        ...(vram
+          ? { slotTotalMemoryGb: vram.totalMB / 1024, slotFreeMemoryMB: vram.freeMB + ownMB }
+          : {})
       }
     }
     const { availableMB, totalMB } = liveMemory()
+    // Metal's recommended working set is about three quarters of unified memory.
+    const usable =
+      process.platform === 'darwin' ? Math.min(totalMB * 0.75, availableMB + ownMB) : availableMB + ownMB
     return {
       slotPlatform: process.platform === 'darwin' ? 'apple-unified' : 'other',
-      weightsGb,
-      slotFreeMemoryMB: Math.max(0, availableMB - modelMB - Math.max(3072, totalMB * 0.1))
+      ...common,
+      slotFreeMemoryMB: Math.max(0, usable)
+    }
+  }
+
+  /** The GGUF architecture of the selected model (Gemma keeps an f16 cache in team mode). */
+  private modelArchitecture(): string | undefined {
+    try {
+      const fd = fs.openSync(this.modelPath, 'r')
+      const buf = Buffer.alloc(64 * 1024)
+      try {
+        fs.readSync(fd, buf, 0, buf.length, 0)
+      } finally {
+        fs.closeSync(fd)
+      }
+      return parseGgufMetadata(buf).architecture
+    } catch {
+      return undefined
     }
   }
 
@@ -723,7 +746,7 @@ export class LLMService {
         mode: 'team',
         ctxSize: this.ctxSize,
         speculativeDecoding: this.effectiveSpeculativeDecoding(),
-        totalRamGb: totalmem() / 1024 ** 3
+        totalMemoryGb: totalmem() / 1024 ** 3
       }).slots
     )
   }

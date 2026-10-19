@@ -356,3 +356,86 @@ export async function readGgufTemplateTraits(
     return null
   }
 }
+
+/** A numeric array value (head counts per layer, a sliding-window pattern), else skipped. */
+function readNumberArray(c: Cursor): number[] | undefined {
+  const elemType = c.u32()
+  const len = c.u64()
+  const numeric = elemType !== T.STRING && elemType !== T.ARRAY && SCALAR_BYTES[elemType] != null
+  if (!numeric || len > 4096) {
+    // Rewind the header so skipArray reads it again.
+    c.off -= 12
+    skipArray(c)
+    return undefined
+  }
+  const values: number[] = []
+  for (let i = 0; i < len; i++) values.push(Number(readValue(c, elemType)))
+  return values
+}
+
+/**
+ * The attention shape that sets a model's KV cache size per token, from its GGUF header: layers that
+ * keep a KV cache (only the full-attention ones in a hybrid such as Qwen3.5, only the non-sliding
+ * layers that own their cache in Gemma 4), KV heads, and K/V head dims. Null when unreadable.
+ * Never throws.
+ */
+export function readGgufKvShape(
+  p: string,
+  fs: GgufFs,
+  maxBytes = GGUF_METADATA_PREFIX_BYTES
+): { attentionLayers: number; kvHeads: number; keyDim: number; valueDim: number } | null {
+  try {
+    const size = fs.statSync(p).size
+    const toRead = Math.min(size, maxBytes)
+    if (toRead <= 0) return null
+    const fd = fs.openSync(p, 'r')
+    const buf = Buffer.alloc(toRead)
+    try {
+      fs.readSync(fd, buf, 0, toRead, 0)
+    } finally {
+      fs.closeSync(fd)
+    }
+    if (buf.subarray(0, 4).toString('ascii') !== 'GGUF') return null
+    const c = new Cursor(buf, 4)
+    if (c.u32() < 2) return null
+    c.u64()
+    const kvCount = c.u64()
+    const values = new Map<string, number | string | boolean | number[]>()
+    for (let i = 0; i < kvCount; i++) {
+      const key = c.str()
+      const type = c.u32()
+      if (key.startsWith('tokenizer.')) break
+      const value = type === T.ARRAY ? readNumberArray(c) : readValue(c, type)
+      if (value !== undefined) values.set(key, value)
+    }
+    const arch = values.get('general.architecture')
+    if (typeof arch !== 'string') return null
+    const num = (key: string): number | undefined => {
+      const v = values.get(`${arch}.${key}`)
+      if (typeof v === 'number') return v
+      if (Array.isArray(v) && v.length) return Math.max(...v)
+      return undefined
+    }
+    const blocks = num('block_count')
+    const heads = num('attention.head_count')
+    const kvHeads = num('attention.head_count_kv') ?? heads
+    const embedding = num('embedding_length')
+    const keyDim = num('attention.key_length') ?? (embedding && heads ? embedding / heads : undefined)
+    const valueDim = num('attention.value_length') ?? keyDim
+    if (!blocks || !kvHeads || !keyDim || !valueDim) return null
+    let attentionLayers = blocks
+    const pattern = values.get(`${arch}.attention.sliding_window_pattern`)
+    const interval = num('full_attention_interval')
+    if (Array.isArray(pattern)) {
+      // Sliding layers keep only a window; layers past the shared ones reuse an earlier cache.
+      const owning = blocks - (num('attention.shared_kv_layers') ?? 0)
+      attentionLayers = pattern.slice(0, owning).filter((sliding) => sliding === 0).length || 1
+    } else if (interval && interval > 1) {
+      // Every interval-th layer is full attention (llama.cpp counts (i + 1) % interval === 0).
+      attentionLayers = Math.floor(blocks / interval)
+    }
+    return { attentionLayers, kvHeads, keyDim, valueDim }
+  } catch {
+    return null
+  }
+}
