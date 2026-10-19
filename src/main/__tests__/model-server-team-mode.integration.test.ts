@@ -482,3 +482,79 @@ describe('team mode', () => {
     expect(imageStartedAt).toBeGreaterThanOrEqual(finishedAt)
   })
 })
+
+describe('a headless Team server', () => {
+  it('serves the launch flags for this run and keeps the saved settings', async () => {
+    const { parseGatewayLaunchOverride } = await import('@offgrid/models')
+    await llm.setSettings({ gatewayMode: 'single', gatewayClients: null })
+    const { invalid, ...chosen } = parseGatewayLaunchOverride(['--gateway-mode', 'team'], {
+      OFFGRID_GATEWAY_CLIENTS: '2'
+    })
+    expect(invalid).toEqual([])
+    llm.setGatewayLaunchOverride(chosen)
+    expect(llm.gatewayMode()).toBe('team')
+    const args = llm.launchArgs()
+    expect(args[args.indexOf('--parallel') + 1]).toBe('2')
+    // Saved settings are the person's, not this run's.
+    expect(llm.getSettings()).toMatchObject({ gatewayMode: 'single', gatewayClients: null })
+    // The gateway serves two at once, as the flags asked.
+    const replies = ['h0', 'h1', 'h2'].map((label) => chat(label))
+    await waitFor(() => running === 2, 'two streams')
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(running).toBe(2)
+    while (started.length < 3 || running > 0) {
+      finishNext()
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    expect((await Promise.all(replies)).every((r) => r.status === 200)).toBe(true)
+    // A setting the person changes takes over from the flag.
+    await llm.setSettings({ gatewayMode: 'single' })
+    expect(llm.gatewayMode()).toBe('single')
+    expect(llm.gatewayClients()).toBe(2)
+    await llm.setSettings({ gatewayClients: null })
+    expect(llm.gatewayClients()).toBeNull()
+  })
+
+  it('keeps the machine awake while it serves, and lets it sleep in single mode and when it stops', async () => {
+    const gateway = await import('../model-server')
+    const events: string[] = []
+    let next = 0
+    gateway.setGatewayPowerBlocker({
+      start: (type) => {
+        events.push(`start ${type}`)
+        return ++next
+      },
+      stop: (id) => events.push(`stop ${id}`)
+    })
+    try {
+      await llm.setSettings({ gatewayMode: 'team' })
+      const first = chat('awake')
+      await waitFor(() => running === 1, 'the stream')
+      expect(events).toEqual(['start prevent-app-suspension'])
+      finishNext()
+      await first
+      // Still awake for a grace period after the last request.
+      expect(events).toEqual(['start prevent-app-suspension'])
+      await llm.setSettings({ gatewayMode: 'single' })
+      expect(events).toEqual(['start prevent-app-suspension', 'stop 1'])
+      // Single mode never holds it.
+      const single = chat('single')
+      await waitFor(() => running === 1, 'the single stream')
+      finishNext()
+      await single
+      expect(events).toHaveLength(2)
+      // Team again, and the gateway stops while serving.
+      await llm.setSettings({ gatewayMode: 'team' })
+      const last = chat('stopping').catch(() => null)
+      await waitFor(() => running === 1, 'the last stream')
+      expect(events.at(-1)).toBe('start prevent-app-suspension')
+      gateway.stopModelServer()
+      expect(events.at(-1)).toBe('stop 2')
+      finishNext()
+      await last
+    } finally {
+      gateway.setGatewayPowerBlocker(null)
+      await llm.setSettings({ gatewayMode: 'single' })
+    }
+  })
+})
