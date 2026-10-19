@@ -213,6 +213,8 @@ interface SynthesizeOptions {
   /** Team gateway mode: run beside other syntheses on up to `workers` Kokoro workers or
    *  ExecuTorch processes, instead of one at a time through the speech job. */
   readonly parallel?: { readonly workers: number }
+  /** Stops before the next sentence (team mode: the client left). */
+  readonly signal?: AbortSignal
 }
 
 /** Synthesize speech for `text`; returns a WAV data URL. */
@@ -249,6 +251,7 @@ async function synthesizeOnnxPasses(input: {
   readonly onProgress?: (progress: DownloadProgress) => void
   readonly onPass?: (pass: SpeechPass) => void
   readonly engine?: OnnxSpeechRuntime
+  readonly signal?: AbortSignal
 }): Promise<{ device: string; passes: number; firstPassAt: number }> {
   const passes = speechChunks(input.text)
   if (passes.length === 0) throw new Error('Nothing to speak.')
@@ -257,6 +260,7 @@ async function synthesizeOnnxPasses(input: {
   let firstPassAt = 0
   try {
     for (const [index, text] of passes.entries()) {
+      input.signal?.throwIfAborted()
       const passPath = `${input.outputPath}.${index}.wav`
       device = await (input.engine ?? onnxSpeech).synthesize({
         text,
@@ -354,6 +358,7 @@ async function synthesizeInner(
                   outputPath,
                   onProgress,
                   onPass: options.onPass,
+                  signal: options.signal,
                   ...(parallel ? { engine: onnxWorker(parallel.workers) } : {})
                 })
                 attempt.update({ backend: done.device })
@@ -365,6 +370,8 @@ async function synthesizeInner(
             firstPassAt = result.firstPassAt
             engine = 'onnxruntime'
           } catch (error) {
+            // A request whose client left is over: it does not fall back to another engine.
+            options.signal?.throwIfAborted()
             writeDiagnosticLog(
               'tts',
               'onnx.fallback',

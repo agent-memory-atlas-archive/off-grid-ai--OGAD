@@ -806,12 +806,17 @@ async function serve(
     dispatchAsync(res, r)
     return
   }
+  // Team mode: a client that leaves stops its transcription or speech too, so the lane or voice
+  // worker goes to the next request (images already stop through their own controller).
+  const gone = teamRuntime && teamMode() && !r.controller ? new AbortController() : undefined
   const cancelDisconnectedImage = (): void => {
-    if (!res.writableEnded) r.controller?.abort()
+    if (res.writableEnded) return
+    r.controller?.abort()
+    gone?.abort(new Error('The client disconnected.'))
   }
-  if (r.controller) res.once('close', cancelDisconnectedImage)
+  if (r.controller || gone) res.once('close', cancelDisconnectedImage)
   try {
-    const result = await settle(r, work(r.controller?.signal))
+    const result = await settle(r, work(r.controller?.signal ?? gone?.signal))
     syncRespond(result)
   } catch (e) {
     const { status, type, message } = errMeta(e)
@@ -1692,17 +1697,19 @@ async function handleTranscription(
     return
   }
   await selectRequestedModal('transcription', fields.model)
-  const run = async (): Promise<unknown> => {
+  const run = async (signal?: AbortSignal): Promise<unknown> => {
     try {
       await fs.promises.writeFile(tmp, file.data)
+      // Team mode: the client leaving (signal) stops the transcription.
+      const options = signal ? { ...transcriptionOptions, signal } : transcriptionOptions
       // Team mode: a resident whisper-server lane (model already loaded) when Whisper is active.
       const onLane = teamMode()
         ? await (
             await import('./transcription/team-lanes')
-          ).transcribeOnTeamLane({ path: tmp }, transcriptionOptions, teamConcurrency().transcription)
+          ).transcribeOnTeamLane({ path: tmp }, options, teamConcurrency().transcription)
         : null
       const text = (
-        onLane ?? (await getActiveTranscription().transcribe({ path: tmp }, transcriptionOptions))
+        onLane ?? (await getActiveTranscription().transcribe({ path: tmp }, options))
       ).text.trim()
       return { text }
     } finally {
@@ -1771,11 +1778,13 @@ async function handleSpeech(
   await selectRequestedModal('speech', payload.model)
   const voice = typeof payload.voice === 'string' ? payload.voice : undefined
   const fmt = String(payload.response_format ?? '').toLowerCase()
-  const run = async (): Promise<unknown> => {
-    // Team mode: several voices at once, one Kokoro worker each (the speech limiter bounds them).
+  const run = async (signal?: AbortSignal): Promise<unknown> => {
+    // Team mode: several voices at once, one Kokoro worker each (the speech limiter bounds them);
+    // the client leaving (signal) stops before the next sentence.
     const { dataUrl } = teamMode()
       ? await tts.synthesize(input, voice, undefined, {
-          parallel: { workers: teamConcurrency().speech }
+          parallel: { workers: teamConcurrency().speech },
+          signal
         })
       : await tts.synthesize(input, voice)
     return { audio: dataUrl, format: 'wav' }
@@ -1828,11 +1837,18 @@ async function streamTeamSpeech(
     }
     res.write(chunk)
   }
+  // The client leaving stops the voice before its next sentence, freeing the worker.
+  const gone = new AbortController()
+  const leave = (): void => {
+    if (!res.writableEnded) gone.abort(new Error('The client disconnected.'))
+  }
+  res.once('close', leave)
   try {
     const { dataUrl } = await onTeamTurn('speech', res, false, () =>
       tts.synthesize(input, voice, undefined, {
         parallel: { workers: teamConcurrency().speech },
-        onPass: (pass) => send(pass.dataUrl)
+        onPass: (pass) => send(pass.dataUrl),
+        signal: gone.signal
       })
     )()
     // A reply of one sentence has no separate passes: send it whole.
@@ -1843,6 +1859,8 @@ async function streamTeamSpeech(
       const failure = errMeta(error)
       json(res, failure.status, errBody(failure.message, failure.type))
     } else res.destroy()
+  } finally {
+    res.off('close', leave)
   }
 }
 
