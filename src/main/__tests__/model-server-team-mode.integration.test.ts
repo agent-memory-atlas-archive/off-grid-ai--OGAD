@@ -483,6 +483,58 @@ describe('team mode', () => {
   })
 })
 
+describe('GET /v1/gateway/status', () => {
+  type Line = { capacity: number | null; running: number | null; waiting: number | null; refused: number }
+  async function status(): Promise<{ mode: string; slots: number; runtimes: Record<string, Line> }> {
+    const response = await fetch(`http://127.0.0.1:${gatewayPort}/v1/gateway/status`)
+    expect(response.status).toBe(200)
+    return (await response.json()) as { mode: string; slots: number; runtimes: Record<string, Line> }
+  }
+
+  it('in team mode, counts running, waiting and refused requests, and returns to zero after they drain', async () => {
+    await llm.setSettings({ gatewayMode: 'single', gatewayClients: null })
+    await llm.setSettings({ gatewayMode: 'team' })
+    const slots = llm.gatewaySlots()
+    const before = (await status()).runtimes.chat!.refused
+    const admitted = Array.from({ length: slots + slots * 4 }, (_, i) => chat(`st${i}`))
+    await waitFor(() => running === slots, 'the slots to fill')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const busy = await status()
+    expect(busy).toMatchObject({ mode: 'team', slots })
+    expect(busy.runtimes.chat).toMatchObject({ capacity: slots, running: slots, waiting: slots * 4 })
+    // Every runtime has a line.
+    for (const runtime of ['remote', 'grounder', 'decision', 'kev', 'image', 'transcription', 'speech', 'embeddings'])
+      expect(busy.runtimes[runtime]).toBeDefined()
+    expect((await chat('one too many')).status).toBe(429)
+    expect((await status()).runtimes.chat!.refused).toBe(before + 1)
+    while (started.length < slots + slots * 4 || running > 0) {
+      finishNext()
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    await Promise.all(admitted)
+    await waitFor(() => running === 0, 'the engine to be idle')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect((await status()).runtimes.chat).toMatchObject({ running: 0, waiting: 0, refused: before + 1 })
+  })
+
+  it('in single mode, shows chat taking its one turn at a time', async () => {
+    await llm.setSettings({ gatewayMode: 'single' })
+    const replies = [chat('sa'), chat('sb')]
+    await waitFor(() => started.length === 1, 'the first stream')
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    const busy = await status()
+    expect(busy).toMatchObject({ mode: 'single', slots: 1 })
+    expect(busy.runtimes.chat).toMatchObject({ capacity: 1, running: 1, waiting: 1, refused: 0 })
+    expect(busy.runtimes.transcription).toMatchObject({ capacity: null })
+    finishNext()
+    await waitFor(() => started.length === 2, 'the second stream')
+    finishNext()
+    await Promise.all(replies)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect((await status()).runtimes.chat).toMatchObject({ running: 0, waiting: 0 })
+  })
+})
+
 describe('a headless Team server', () => {
   it('serves the launch flags for this run and keeps the saved settings', async () => {
     const { parseGatewayLaunchOverride } = await import('@offgrid/models')
