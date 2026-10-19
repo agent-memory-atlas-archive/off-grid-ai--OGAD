@@ -1842,6 +1842,8 @@ export class LLMService {
       disableThinking?: boolean
       separateReasoning?: boolean
       signal?: AbortSignal
+      /** Team gateway mode: the engine has slots, so this call need not wait for another. */
+      shared?: boolean
     } = {}
   ): Promise<string> {
     const messages = buildMessages(message, readImages(images), this.systemPrompt)
@@ -1953,10 +1955,13 @@ export class LLMService {
       disableThinking?: boolean
       separateReasoning?: boolean
       signal?: AbortSignal
+      shared?: boolean
     }
   ): Promise<string> {
     await this.ensureReady()
-    return this.chatMutex.runExclusive(async () => {
+    const exclusive = <T>(fn: () => Promise<T>): Promise<T> =>
+      opts.shared ? fn() : this.chatMutex.runExclusive(fn)
+    return exclusive(async () => {
       try {
         const payload: Record<string, unknown> = {
           messages: messages,

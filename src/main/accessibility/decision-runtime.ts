@@ -12,6 +12,8 @@ import {
 } from '../llm'
 import { postCompletionOnce } from '../llm/http-post'
 import { buildLaunchArgs } from '../llm/settings-math'
+import { totalmem } from 'node:os'
+import { llm } from '../llm'
 import { engineSpawnEnv } from '../llm/spawn-env'
 import { selectLocalEngine } from '../llm/select-local-engine'
 import { getBackendPreference } from '../backend-preferences'
@@ -118,7 +120,12 @@ export class DecisionRuntime {
       speculativeDecoding: 'off',
       threads: undefined,
       batchSize: 128,
-      reportModelPlacement: true
+      reportModelPlacement: true,
+      // Team gateway mode opens slots here too, so several clients' decisions run at once.
+      // (Single mode passes nothing new, so its argv is unchanged.)
+      ...(llm.gatewayMode() === 'team'
+        ? { gatewayMode: 'team' as const, totalRamBytes: totalmem() }
+        : {})
     })
     const startedAt = Date.now()
     const process = spawn(serverPath, args, {
@@ -249,11 +256,14 @@ export class DecisionRuntime {
     context: string,
     question: string,
     options: readonly string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /** Team gateway mode: the llama-server has slots, so decisions need not wait for each other.
+     *  Kev still runs one forward pass at a time. */
+    shared = false
   ): Promise<OptionDecision> {
     if (!this.running)
       throw new DecisionRuntimeError('The Decision runtime is not running.', 'startup')
-    return this.mutex.runExclusive(async () => {
+    const run = async (): Promise<OptionDecision> => {
       this.backendState?.recordRequest()
       const startedAt = Date.now()
       currentAIRequest()?.update({
@@ -310,7 +320,8 @@ export class DecisionRuntime {
       this.timing.warmDecisionMs.push(Date.now() - startedAt)
       if (this.timing.warmDecisionMs.length > 200) this.timing.warmDecisionMs.shift()
       return parseOptionDecision(raw, options.length)
-    })
+    }
+    return shared && !isKevModel(this.modelId) ? run() : this.mutex.runExclusive(run)
   }
 
   async health(): Promise<boolean> {
