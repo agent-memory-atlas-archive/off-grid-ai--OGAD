@@ -1084,7 +1084,7 @@ function AppContent(): React.JSX.Element {
         <NavHighlight
           active={active}
           group="sidebar"
-          className="bg-[linear-gradient(90deg,rgb(var(--og-rgb-primary)/0.18),rgb(var(--og-rgb-primary)/0.04)_75%)] shadow-[inset_2px_0_0_rgb(var(--og-rgb-primary)),inset_0_0_0_1px_rgb(var(--og-rgb-primary)/0.18),0_0_18px_-4px_rgb(var(--og-rgb-primary)/0.55)]"
+          className="bg-[rgb(var(--og-rgb-primary)/0.12)] shadow-[inset_0_0_0_1px_rgb(var(--og-rgb-primary)/0.16)]"
         />
         <span
           className={cn(
