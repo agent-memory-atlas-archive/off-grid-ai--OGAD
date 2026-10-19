@@ -269,13 +269,15 @@ jobs:
       # native boundaries, and failures block this job.
       - name: Heavy integration (build/native/port)
         if: ${{ !cancelled() }}
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: |
           # The preceding DB journey restores Electron's SQLite ABI. These
           # tests run in Node; restore Electron again before the worker test.
           trap 'npx electron-rebuild -f -w better-sqlite3-multiple-ciphers' EXIT
           npm explore better-sqlite3-multiple-ciphers -- npm run build-release
-          npm run test:heavy
+          # Measured too: the gateway, Team mode and model-port seams are tested here, against a fake
+          # engine on the real port, and nowhere else.
+          npm run test:heavy -- --coverage --coverage.reportsDirectory=coverage-heavy
       # Architecture-boundary gate (hygiene §A/§H): walks the import graph and fails
       # on a forbidden edge — core->pro (open-core), a pure-logic module gaining an
       # IO import, renderer->main, circular deps. Fast (graph-only, ~2s), so unlike
@@ -394,7 +396,7 @@ jobs:
       - name: Coverage gate (new code across all suites)
         if: ${{ !cancelled() }}
         run: |
-          reports="coverage/coverage-final.json coverage-db/coverage-final.json coverage-native-desktop/native-desktop-coverage-ubuntu-latest/coverage-final.json coverage-native-desktop/native-desktop-coverage-windows-2022/coverage-final.json"
+          reports="coverage/coverage-final.json coverage-db/coverage-final.json coverage-heavy/coverage-final.json coverage-native-desktop/native-desktop-coverage-ubuntu-latest/coverage-final.json coverage-native-desktop/native-desktop-coverage-windows-2022/coverage-final.json"
           for report in $reports; do
             if [ ! -f "$report" ]; then
               echo "::error::required coverage report is missing: $report"
