@@ -513,7 +513,9 @@ export function resolveKevRuntimeArtifact(modelId: string = KEV_4B_ID): KevRunti
 
 /** The runtime archive a Kev model still needs on this machine, or null when it has one
  *  (downloaded, bundled, or the legacy source checkout) or this platform bundles its own. */
-export function kevRuntimeToDownload(modelId: string = KEV_4B_ID): ReturnType<typeof kevRuntimeAsset> {
+export function kevRuntimeToDownload(
+  modelId: string = KEV_4B_ID
+): ReturnType<typeof kevRuntimeAsset> {
   const asset = kevRuntimeAsset()
   if (!asset || !isKevModel(modelId)) return null
   return resolveKevRuntimeParts(modelId)?.python ? null : asset
@@ -924,6 +926,20 @@ function publishRefusal(
   return { success: false, error }
 }
 
+async function installKevRuntimeInJob(
+  modelId: string,
+  asset: NonNullable<ReturnType<typeof kevRuntimeAsset>>,
+  signal: AbortSignal,
+  onBytes: (downloadedBytes: number) => void
+): Promise<void> {
+  writeDiagnosticLog('models.download', 'kev-runtime.started', { modelId, version: asset.version })
+  await installKevRuntime(asset, { signal, onBytes })
+  writeDiagnosticLog('models.download', 'kev-runtime.completed', {
+    modelId,
+    version: asset.version
+  })
+}
+
 /** Download a catalog entry or any Hugging Face repo id. Progress via callback
  *  AND a status registry (so a headless poller can read it). */
 export async function downloadModel(
@@ -1242,21 +1258,9 @@ async function downloadModelInner(
         }
         if (signal.aborted) return interruptedResult(signal, activePartPath)
         if (kevRuntime) {
-          writeDiagnosticLog('models.download', 'kev-runtime.started', {
-            modelId,
-            version: kevRuntime.version
-          })
-          const fileIndex = pending.length
-          await installKevRuntime(kevRuntime, {
-            signal,
-            onBytes: (written) =>
-              reportTransfer('Kev runtime', fileIndex, written, kevRuntime.bytes)
-          })
-          jobDoneBytes += kevRuntime.bytes
-          writeDiagnosticLog('models.download', 'kev-runtime.completed', {
-            modelId,
-            version: kevRuntime.version
-          })
+          await installKevRuntimeInJob(modelId, kevRuntime, signal, (written) =>
+            reportTransfer('Kev runtime', pending.length, written, kevRuntime.bytes)
+          )
         }
         // An alternate file from a cataloged repository is a separate installed
         // package. Keep it alongside the catalog default and protect its files.

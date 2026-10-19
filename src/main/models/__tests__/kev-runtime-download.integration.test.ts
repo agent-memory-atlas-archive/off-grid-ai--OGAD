@@ -10,7 +10,10 @@ import {
   type DownloadProgress
 } from '../../models-manager'
 import { installedKevRuntimeRoot } from '../../kev-runtime-pack'
-import { startKevRuntimeStore, type KevRuntimeStore } from '../../__tests__/kev-runtime-store-fixture'
+import {
+  startKevRuntimeStore,
+  type KevRuntimeStore
+} from '../../__tests__/kev-runtime-store-fixture'
 
 // The Mac app downloads Kev's Python runtime from the runtime store with the Kev model.
 let store: KevRuntimeStore
@@ -74,7 +77,7 @@ describe.runIf(process.platform === 'darwin' && process.arch === 'arm64')(
 
     it('rejects an archive that does not match the pinned SHA-256 and installs nothing', async () => {
       const corrupt = Buffer.from(store.archive)
-      corrupt[corrupt.length - 1] ^= 0xff
+      corrupt.writeUInt8(corrupt.readUInt8(corrupt.length - 1) ^ 0xff, corrupt.length - 1)
       store.serve(corrupt)
       const progress: DownloadProgress[] = []
 

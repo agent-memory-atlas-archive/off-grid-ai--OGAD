@@ -98,81 +98,100 @@ export interface KevRuntimeInstallOptions {
   onBytes?: (downloadedBytes: number) => void
 }
 
-/** Download (resuming a partial archive), verify and atomically install the pinned runtime. */
-export async function installKevRuntime(
+/** Fetch the archive into `archive`, resuming a partial file. Returns the bytes on disk. */
+async function downloadArchive(
   asset: KevRuntimeAsset,
+  archive: string,
   { signal, onBytes }: KevRuntimeInstallOptions
-): Promise<void> {
-  const root = installRoot(asset)
-  fs.mkdirSync(path.dirname(root), { recursive: true })
-  const archive = `${root}.tar.gz.part`
+): Promise<number> {
   const existing = fs.existsSync(archive) ? fs.statSync(archive).size : 0
   if (existing > asset.bytes) fs.rmSync(archive, { force: true })
   const resumeFrom = existing > asset.bytes ? 0 : existing
-  let downloaded = resumeFrom
-  if (resumeFrom < asset.bytes) {
-    const response = await fetch(asset.url, {
-      signal,
-      headers: resumeFrom > 0 ? { Range: `bytes=${resumeFrom}-` } : undefined
-    })
-    if (!response.ok || !response.body) {
-      throw new Error(`The Kev runtime download failed: HTTP ${response.status}`)
-    }
-    const append = resumeFrom > 0 && response.status === 206
-    if (append && !response.headers.get('content-range')?.startsWith(`bytes ${resumeFrom}-`)) {
-      throw new Error('The Kev runtime server returned an invalid resume range.')
-    }
-    downloaded = append ? resumeFrom : 0
-    onBytes?.(downloaded)
-    const stream = fs.createWriteStream(archive, { flags: append ? 'a' : 'w' })
-    try {
-      const reader = response.body.getReader()
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (signal.aborted) throw signal.reason
-        if (!stream.write(value)) {
-          await new Promise<void>((resolve, reject) => {
-            stream.once('drain', resolve)
-            stream.once('error', reject)
-          })
-        }
-        downloaded += value.byteLength
-        if (downloaded > asset.bytes) throw new Error('The Kev runtime download is larger than expected.')
-        onBytes?.(downloaded)
+  if (resumeFrom === asset.bytes) return resumeFrom
+  const response = await fetch(asset.url, {
+    signal,
+    headers: resumeFrom > 0 ? { Range: `bytes=${resumeFrom}-` } : undefined
+  })
+  if (!response.ok || !response.body) {
+    throw new Error(`The Kev runtime download failed: HTTP ${response.status}`)
+  }
+  const append = resumeFrom > 0 && response.status === 206
+  if (append && !response.headers.get('content-range')?.startsWith(`bytes ${resumeFrom}-`)) {
+    throw new Error('The Kev runtime server returned an invalid resume range.')
+  }
+  let downloaded = append ? resumeFrom : 0
+  onBytes?.(downloaded)
+  const stream = fs.createWriteStream(archive, { flags: append ? 'a' : 'w' })
+  try {
+    const reader = response.body.getReader()
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (signal.aborted) throw signal.reason
+      if (!stream.write(value)) {
+        await new Promise<void>((resolve, reject) => {
+          stream.once('drain', resolve)
+          stream.once('error', reject)
+        })
       }
-      await new Promise<void>((resolve, reject) => {
-        stream.once('error', reject)
-        stream.end(resolve)
-      })
-    } catch (error) {
-      stream.destroy()
-      // A larger-than-pinned file can never verify; an interrupted one resumes next time.
-      if (downloaded > asset.bytes) fs.rmSync(archive, { force: true })
-      throw error
+      downloaded += value.byteLength
+      if (downloaded > asset.bytes) {
+        throw new Error('The Kev runtime download is larger than expected.')
+      }
+      onBytes?.(downloaded)
     }
+    await new Promise<void>((resolve, reject) => {
+      stream.once('error', reject)
+      stream.end(resolve)
+    })
+  } catch (error) {
+    stream.destroy()
+    // A larger-than-pinned file can never verify; an interrupted one resumes next time.
+    if (downloaded > asset.bytes) fs.rmSync(archive, { force: true })
+    throw error
   }
-  if (downloaded !== asset.bytes || (await sha256Of(archive)) !== asset.sha256.toLowerCase()) {
-    fs.rmSync(archive, { force: true })
-    throw new Error('The Kev runtime download failed its size or SHA-256 check.')
-  }
+  return downloaded
+}
+
+/** Unpack a verified archive beside `root`, then swap it into place in one rename. */
+async function installArchive(
+  asset: KevRuntimeAsset,
+  archive: string,
+  root: string
+): Promise<void> {
   const staging = `${root}.staging`
   fs.rmSync(staging, { recursive: true, force: true })
   fs.mkdirSync(staging, { recursive: true })
   try {
     await execFileAsync('tar', ['-xzf', archive, '-C', staging], { timeout: 600_000 })
     const python = path.join(staging, 'kev-runtime', 'python', 'bin', 'python3')
-    if (!fs.statSync(python).isFile()) throw new Error('The Kev runtime archive has no Python.')
+    if (!fs.existsSync(python) || !fs.statSync(python).isFile()) {
+      throw new Error('The Kev runtime archive has no Python.')
+    }
     fs.writeFileSync(path.join(staging, 'verified.sha256'), `${asset.sha256.toLowerCase()}\n`)
     fs.rmSync(root, { recursive: true, force: true })
     fs.renameSync(staging, root)
     fs.rmSync(archive, { force: true })
   } catch (error) {
     fs.rmSync(staging, { recursive: true, force: true })
-    throw error instanceof Error && 'code' in error && error.code === 'ENOENT'
-      ? new Error('The Kev runtime archive has no Python.')
-      : error
+    throw error
   }
+}
+
+/** Download (resuming a partial archive), verify and atomically install the pinned runtime. */
+export async function installKevRuntime(
+  asset: KevRuntimeAsset,
+  options: KevRuntimeInstallOptions
+): Promise<void> {
+  const root = installRoot(asset)
+  fs.mkdirSync(path.dirname(root), { recursive: true })
+  const archive = `${root}.tar.gz.part`
+  const downloaded = await downloadArchive(asset, archive, options)
+  if (downloaded !== asset.bytes || (await sha256Of(archive)) !== asset.sha256.toLowerCase()) {
+    fs.rmSync(archive, { force: true })
+    throw new Error('The Kev runtime download failed its size or SHA-256 check.')
+  }
+  await installArchive(asset, archive, root)
   // Older pinned runtimes are unreachable now; keep only the one this app version uses.
   for (const entry of fs.readdirSync(path.dirname(root))) {
     const candidate = path.join(path.dirname(root), entry)
