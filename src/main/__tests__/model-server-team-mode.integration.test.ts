@@ -535,6 +535,46 @@ describe('GET /v1/gateway/status', () => {
   })
 })
 
+describe('the request log names the API key that sent each request', () => {
+  it('records the key\'s name with a key, and nothing without one', async () => {
+    await llm.setSettings({ gatewayMode: 'single' })
+    const store = await import('../ai-request-log-store')
+    const gateway = await import('../model-server')
+    store.initializeAIRequestLogs()
+    const send = async (label: string, key?: string): Promise<number> => {
+      const reply = fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(key ? { Authorization: `Bearer ${key}` } : {})
+        },
+        body: JSON.stringify({ stream: true, messages: [{ role: 'user', content: label }] })
+      })
+      await waitFor(() => started.includes(label), `the ${label} stream`)
+      finishNext()
+      const response = await reply
+      await response.text()
+      return response.status
+    }
+    const logged = async (label: string): Promise<{ keyName?: string }> => {
+      await store.flushAIRequestLogs()
+      const row = store.listAIRequestLogs({ search: label }).rows.find((r) => r.preview.includes(label))
+      expect(row).toBeDefined()
+      return row!
+    }
+    const { key } = gateway.createGatewayApiKey('laptop', null)
+    try {
+      expect(await send('keyed-request', key)).toBe(200)
+      expect((await logged('keyed-request')).keyName).toBe('laptop')
+      gateway.setGatewayApiKeyRequired(false)
+      expect(await send('open-request')).toBe(200)
+      expect(await logged('open-request')).not.toHaveProperty('keyName')
+    } finally {
+      gateway.setGatewayApiKeyRequired(false)
+    }
+  })
+})
+
 describe('a headless Team server', () => {
   it('serves the launch flags for this run and keeps the saved settings', async () => {
     const { parseGatewayLaunchOverride } = await import('@offgrid/models')
