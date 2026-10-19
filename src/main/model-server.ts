@@ -113,11 +113,14 @@ let server: http.Server | null = null
 // is already loaded is admitted by a limiter sized to llama-server's slots, a remote model has its
 // own limiter, and only a model swap or load goes through the app-wide queue.
 const localAgents = new Map<number, http.Agent>()
-/** One keep-alive pool per llama-server port, wide enough for every slot and its waiters. */
+/** One connection pool per llama-server port, wide enough for every slot and its waiters. Not
+ *  keep-alive: llama-server closes the connection after a streamed reply, so a reused socket fails
+ *  with ECONNRESET and the request waits out a one-second retry (measured 2026-10-19: every
+ *  other sequential request). A new loopback connection costs well under a millisecond. */
 function localAgent(port: number): http.Agent {
   let agent = localAgents.get(port)
   if (!agent) {
-    agent = new http.Agent({ keepAlive: true, maxSockets: 32 })
+    agent = new http.Agent({ keepAlive: false, maxSockets: 64 })
     localAgents.set(port, agent)
   }
   return agent
@@ -450,6 +453,13 @@ function proxyToLlama(
     headers['content-length'] = String(bodyOverride.length)
     delete headers['transfer-encoding']
   }
+  // Team mode: a client that leaves while llama-server is still reading the prompt cancels the
+  // upstream request at once, so the slot goes to the next request in line.
+  let upstreamRequest: http.ClientRequest | null = null
+  if (pooled)
+    res.once('close', () => {
+      if (!res.writableEnded) upstreamRequest?.destroy()
+    })
   // One attempt: resolves once the upstream response is piped through, rejects
   // on a connection error (the only transient failure this proxy retries).
   const attempt = (): Promise<void> =>
@@ -491,12 +501,7 @@ function proxyToLlama(
         }
       )
       proxyReq.on('error', reject)
-      // Team mode: a client that leaves while llama-server is still reading the prompt cancels
-      // the upstream request at once, so the slot goes to the next request in line.
-      if (pooled)
-        res.once('close', () => {
-          if (!res.writableEnded) proxyReq.destroy()
-        })
+      upstreamRequest = proxyReq
       if (bodyOverride) {
         proxyReq.end(bodyOverride)
       } else {
