@@ -84,7 +84,7 @@ const todosIn = async (status: string): Promise<ReturnType<Page['getByRole']>> =
     .getByRole('radiogroup', { name: 'To-do status' })
     .getByRole('radio', { name: new RegExp(`^${status}`) })
     .click()
-  return page.getByRole('list', { name: 'To-dos', exact: true })
+  return page.getByRole('table', { name: 'To-dos', exact: true })
 }
 
 test.describe('Tidy up', () => {

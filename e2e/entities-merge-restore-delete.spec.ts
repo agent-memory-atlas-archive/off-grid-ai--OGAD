@@ -84,8 +84,8 @@ const nav = (name: string): ReturnType<Page['getByRole']> =>
 
 const row = (name: string): ReturnType<Page['getByRole']> =>
   page
-    .getByRole('list', { name: 'Person entities' })
-    .getByRole('listitem')
+    .getByRole('table', { name: 'Person entities' })
+    .getByRole('row')
     .filter({
       has: page.getByRole('button', { name: `Open ${name}` })
     })

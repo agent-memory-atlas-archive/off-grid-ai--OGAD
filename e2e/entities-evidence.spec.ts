@@ -73,7 +73,7 @@ const nav = (name: string): ReturnType<Page['getByRole']> =>
     .getByRole('button', { name, exact: true })
 
 const people = (): ReturnType<Page['getByRole']> =>
-  page.getByRole('list', { name: 'Person entities' })
+  page.getByRole('table', { name: 'Person entities' })
 
 test.describe('People with evidence', () => {
   test.skip(targetIsPackaged(), 'Source build with a seeded Pro profile')
@@ -108,7 +108,7 @@ test.describe('People with evidence', () => {
     const suggested = page.getByRole('button', { name: /^Suggested \(\d+\)$/ })
     await suggested.click()
     await expect(suggested).toHaveAttribute('aria-pressed', 'true')
-    const avery = people().getByRole('listitem').filter({ hasText: 'Avery Quinn' })
+    const avery = people().getByRole('row').filter({ hasText: 'Avery Quinn' })
     await expect(avery).toBeVisible()
     await expect(page.getByRole('button', { name: 'Open Bea Moreno' })).toHaveCount(0)
     await avery.getByRole('button', { name: 'Confirm', exact: true }).click()

@@ -76,11 +76,15 @@ const todos = async (status: string): Promise<Locator> => {
     .getByRole('radiogroup', { name: 'To-do status' })
     .getByRole('radio', { name: new RegExp(`^${status}`) })
     .click()
-  return page.getByRole('list', { name: 'To-dos', exact: true })
+  return page.getByRole('table', { name: 'To-dos', exact: true })
 }
 
+/** A to-do's own row in the To-dos table. */
 const card = (list: Locator, text: string): Locator =>
-  list.getByRole('listitem').filter({ hasText: text })
+  list.getByRole('row').filter({ hasText: text })
+
+/** The row beneath a to-do, which holds its citation and its dismiss form. */
+const details = (row: Locator): Locator => row.locator('xpath=following-sibling::tr[1]')
 
 const captureSettings = async (): Promise<void> => {
   await page.getByRole('button', { name: 'Settings', exact: true }).first().click()
@@ -150,7 +154,7 @@ test.describe('Suggested to-dos', () => {
     await card(suggested, 'Send the Q3 deck')
       .getByRole('button', { name: 'Send the Q3 deck', exact: true })
       .click()
-    await expect(card(suggested, 'Send the Q3 deck')).toContainText(DECK)
+    await expect(details(card(suggested, 'Send the Q3 deck'))).toContainText(DECK)
     await card(suggested, 'Send the Q3 deck').getByRole('button', { name: 'Accept' }).click()
     await expect(card(await todos('open'), 'Send the Q3 deck')).toBeVisible()
 
@@ -160,8 +164,8 @@ test.describe('Suggested to-dos', () => {
     suggested = await todos('suggested')
     await expect(card(suggested, 'Book the client dinner')).toBeVisible({ timeout: 120_000 })
     const dinner = card(suggested, 'Book the client dinner')
-    await dinner.getByRole('button', { name: 'Dismiss', exact: true }).first().click()
-    await dinner.getByRole('button', { name: 'Dismiss', exact: true }).last().click()
+    await dinner.getByRole('button', { name: 'Dismiss', exact: true }).click()
+    await details(dinner).getByRole('button', { name: 'Dismiss', exact: true }).click()
     await expect(card(await todos('dismissed'), 'Book the client dinner')).toBeVisible()
 
     // Re-process today reads the day again: the accepted to-do stays open, the dismissed one stays
