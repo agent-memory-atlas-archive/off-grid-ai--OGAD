@@ -42,6 +42,11 @@ const fs = require('node:fs')
 const http = require('node:http')
 const args = process.argv.slice(2)
 const valueAfter = (flag) => args[args.indexOf(flag) + 1]
+// A device probe (the app asks which GPUs the engine sees on Linux and Windows) is not a launch.
+if (args.includes('--list-devices')) {
+  console.log('Available devices:')
+  process.exit(0)
+}
 fs.appendFileSync(${JSON.stringify(LAUNCH_LOG)}, 'launch ' + valueAfter('--parallel') + '\\n')
 const held = []
 const server = http.createServer((req, res) => {
