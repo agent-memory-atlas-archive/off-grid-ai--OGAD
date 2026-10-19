@@ -11,7 +11,7 @@ set -euo pipefail
 # official llama.cpp release binaries are now minos 26. The only reliable fix is
 # to build it ourselves with the target pinned. Run in CI before packaging.
 #
-#   LLAMA_REF=<tag> MACOS_DEPLOYMENT_TARGET=15.0 scripts/build-llama.sh   (override; default is package.json offgrid.llamaRef)
+#   LLAMA_REF=<tag> MACOS_DEPLOYMENT_TARGET=13.0 scripts/build-llama.sh   (override; default is package.json offgrid.llamaRef)
 
 # ONE owner for the version: package.json, where every other version in this repo already lives. It was
 # hardcoded here AND in fetch-win-binaries.ps1 AND passed again by two callers - one fact with four homes.
@@ -29,7 +29,7 @@ elif [ "$LLAMA_VARIANT" = standard ]; then
 else
   echo "[build-llama] unknown variant: $LLAMA_VARIANT" >&2; exit 1
 fi
-TARGET="${MACOS_DEPLOYMENT_TARGET:-15.0}"             # runs on macOS 15+
+TARGET="${MACOS_DEPLOYMENT_TARGET:-13.0}"             # runs on macOS 13+
 # Universal (arm64 + x86_64) by default, like build-sd-macos.sh: one engine for Apple Silicon and
 # Intel Macs. LLAMA_ARCH=arm64 (or x86_64) builds a single slice. GGML_NATIVE stays OFF so the CPU
 # code is generic and portable across every supported Mac rather than tuned to this build host.
@@ -51,7 +51,16 @@ cd "$WORK/src"
 # models itself, so we don't need TLS — and linking Homebrew's OpenSSL would
 # bake in an absolute /opt/homebrew path that doesn't exist on users' Macs.
 # The desktop app also supplies its own UI, so do not build or download llama.cpp's UI.
+# ggml-blas asks Accelerate for its new LAPACK interface, which exists only on macOS 13.3+. Below
+# that target the symbol is weak-linked: the engine launches on 13.0, then calls a null sgemm on
+# the first CPU matrix multiply. The classic interface exists on every supported macOS; the -U
+# flags come after ggml's -D definitions on the compile line, so they win.
+BLAS_FLAGS=""
+if awk -v t="$TARGET" 'BEGIN { split(t, p, "."); exit !((p[1] + 0) < 13 || ((p[1] + 0) == 13 && (p[2] + 0) < 3)) }'; then
+  BLAS_FLAGS="-UACCELERATE_NEW_LAPACK -UACCELERATE_LAPACK_ILP64"
+fi
 cmake -B build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_FLAGS="$BLAS_FLAGS" -DCMAKE_CXX_FLAGS="$BLAS_FLAGS" \
   -DCMAKE_OSX_DEPLOYMENT_TARGET="$TARGET" \
   -DCMAKE_OSX_ARCHITECTURES="$LLAMA_ARCH" \
   -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON \
@@ -163,6 +172,13 @@ done
 MISSING="$(echo "$MISSING" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//')"
 if [ -n "$MISSING" ]; then
   echo "[build-llama] FATAL: engine references @rpath libs missing or not staged as real files: $MISSING"; exit 1
+fi
+
+# Gate: a weak Accelerate import resolves to null on a macOS older than the symbol and crashes on
+# first use, although the engine launches.
+WEAK_NEW="$(for f in "$DEST"/llama-server "$DEST"/*.dylib; do nm -m "$f" 2>/dev/null | awk -v file="$f" '/weak external/ && /NEWLAPACK/ {print file ": " $NF}'; done | sort -u)"
+if [ -n "$BLAS_FLAGS" ] && [ -n "$WEAK_NEW" ]; then
+  echo "[build-llama] FATAL: engine weak-links Accelerate symbols newer than $TARGET:"; echo "$WEAK_NEW"; exit 1
 fi
 
 echo "[build-llama] done — $LLAMA_VARIANT engine, minos=$MINOS, @loader_path only, no foreign deps, all @rpath libs present"

@@ -7,7 +7,7 @@ set -euo pipefail
 # payload is not trusted as a release input.
 
 WHISPER_REF="${WHISPER_REF:-v1.9.5}"
-TARGET="${MACOS_DEPLOYMENT_TARGET:-15.0}"
+TARGET="${MACOS_DEPLOYMENT_TARGET:-13.0}"
 # Universal (arm64 + x86_64), like build-sd-macos.sh and build-llama.sh.
 WHISPER_ARCH="${WHISPER_ARCH:-arm64;x86_64}"
 ROOT="${OFFGRID_BUILD_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"

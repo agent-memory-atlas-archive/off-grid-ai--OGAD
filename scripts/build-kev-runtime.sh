@@ -33,8 +33,8 @@ PYTHON="$DEST/python/bin/python3"
 "$PYTHON" -m pip install --disable-pip-version-check \
   "kev[serve] @ git+https://github.com/jaredpalmer/kev.git@$KEV_REF"
 # pip otherwise prefers a wheel built for the build host's macOS release. Pin
-# the macOS 15 wheel, the app's minimum, so release builds made on macOS 26 still
-# run on macOS 15 and newer.
+# the macOS 15 wheel, the oldest MLX publishes, so release builds made on macOS 26
+# still run on macOS 15 and newer. Kev on a Mac needs macOS 15 although the app runs from 13.
 curl -fsSL "$MLX_URL" -o "$TMP/mlx-0.32.4-cp312-cp312-macosx_15_0_arm64.whl"
 curl -fsSL "$MLX_METAL_URL" -o "$TMP/mlx_metal-0.32.4-py3-none-macosx_15_0_arm64.whl"
 echo "$MLX_SHA256  $TMP/mlx-0.32.4-cp312-cp312-macosx_15_0_arm64.whl" | shasum -a 256 -c -

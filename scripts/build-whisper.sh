@@ -20,10 +20,10 @@ set -euo pipefail
 # Reuses the existing ggml whisper models the app already downloads - this builds
 # ONLY the server binary, no new model download.
 #
-#   WHISPER_REF=v1.9.5 MACOS_DEPLOYMENT_TARGET=15.0 scripts/build-whisper.sh
+#   WHISPER_REF=v1.9.5 MACOS_DEPLOYMENT_TARGET=13.0 scripts/build-whisper.sh
 
 WHISPER_REF="${WHISPER_REF:-v1.9.5}"                  # whisper.cpp tag with examples/server
-TARGET="${MACOS_DEPLOYMENT_TARGET:-15.0}"             # runs on macOS 15+
+TARGET="${MACOS_DEPLOYMENT_TARGET:-13.0}"             # runs on macOS 13+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="$ROOT/resources/bin/whisper-server"
 WORK="$(mktemp -d)"

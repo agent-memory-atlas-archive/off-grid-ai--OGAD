@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Builds the macOS ffmpeg the app ships (resources/bin/ffmpeg): a universal (arm64 + x86_64), static,
-# LGPL build for macOS 15+, from pinned FFmpeg and libopus sources. It replaces a third-party binary of
+# LGPL build for macOS 13+, from pinned FFmpeg and libopus sources. It replaces a third-party binary of
 # unknown provenance. The app uses ffmpeg to decode audio to 16 kHz WAV, sample video frames to JPEG,
 # and remux or transcode meeting recordings (Opus in WebM, AAC in MP4, VideoToolbox H.264).
 #   scripts/build-ffmpeg-macos.sh [work-dir]
 set -euo pipefail
 FFMPEG_REF="${FFMPEG_REF:-n9.0.2}"
 OPUS_REF="${OPUS_REF:-v1.6.1}"
-TARGET="${MACOS_DEPLOYMENT_TARGET:-15.0}"
+TARGET="${MACOS_DEPLOYMENT_TARGET:-13.0}"
 # A dedicated folder under the given work dir: only it is wiped, never the caller's other files.
 WORK="${1:-${TMPDIR:-/tmp}}/offgrid-ffmpeg-build"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
