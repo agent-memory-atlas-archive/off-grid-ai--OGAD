@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { User, Users } from '@phosphor-icons/react'
+import { UserIcon, UsersIcon } from '@phosphor-icons/react'
 import { IconExternalLink, IconServer2 } from '@tabler/icons-react'
 import { GATEWAY_HOST, GATEWAY_PORT } from '@offgrid/core/shared/ports'
 import { CopyButton } from './ui/CopyButton'
@@ -165,13 +165,13 @@ function GatewayModeControl(): React.ReactElement | null {
             'single',
             'Just me',
             'One request at a time, full speed',
-            <User aria-hidden="true" />
+            <UserIcon aria-hidden="true" />
           ),
           option(
             'team',
             'Team',
             'Several clients at once; extras wait their turn',
-            <Users aria-hidden="true" />
+            <UsersIcon aria-hidden="true" />
           )
         ]}
       />
@@ -193,11 +193,6 @@ function GatewayModeControl(): React.ReactElement | null {
             ]}
           />
         </div>
-      )}
-      {mode === 'team' && settings.gatewaySlots !== undefined && (
-        <span role="status" className="text-[11px] text-neutral-500">
-          {settings.gatewaySlots} at once · max {max}
-        </span>
       )}
     </div>
   )

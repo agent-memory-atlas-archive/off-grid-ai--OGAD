@@ -71,13 +71,14 @@ test.describe('Gateway mode', () => {
 
     await clients.getByRole('radio', { name: 'Team' }).click()
     await expect(clients.getByRole('radio', { name: 'Team' })).toBeChecked()
-    await expect(clients.getByRole('status')).toHaveText(/^\d+ at once · max \d+$/)
+    const requests = clients.getByRole('combobox', { name: 'Requests at once' })
+    await expect(requests).toContainText(/^Auto \(\d+\)$/)
     await expect.poll(gatewayMode).toBe('team')
 
     // A manual "requests at once": one, the lowest any machine allows.
-    await clients.getByRole('combobox', { name: 'Requests at once' }).click()
+    await requests.click()
     await page.getByRole('option', { name: '1 at once', exact: true }).click()
-    await expect(clients.getByRole('status')).toHaveText(/^1 at once · max \d+$/)
+    await expect(requests).toContainText('1 at once')
     await expect.poll(async () => (await gatewaySettings()).gatewayClients).toBe(1)
     await page.screenshot({ path: 'e2e/screenshots/gateway-mode.png' })
 
