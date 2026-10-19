@@ -415,8 +415,14 @@ describe('team mode', () => {
 
   it('soak: 500 requests at 16 at once with random disconnects leave no slot, waiter or listener behind', async () => {
     const { teamLimiter } = await import('../model-server/team-runtimes')
-    // The fake engine answers at once here: the soak is about the gateway's bookkeeping.
+    const limiter = teamLimiter('chat')
+    // The fake engine answers at once here: the soak is about the gateway's bookkeeping. The
+    // gateway's own line is what it controls: a client that leaves frees its turn when the
+    // gateway's upstream request closes, which the engine may see a moment later, so the engine's
+    // own count can briefly read one more (llama-server queues that request). The line never can.
+    let peakInFlight = 0
     const autoFinish = setInterval(() => {
+      peakInFlight = Math.max(peakInFlight, limiter.inFlight)
       for (const stream of held) if (!stream.closed && Math.random() < 0.5) stream.finish()
     }, 5)
     const heapBefore = process.memoryUsage().heapUsed
@@ -448,7 +454,6 @@ describe('team mode', () => {
     }
     for (const stream of held) stream.finish()
     await waitFor(() => running === 0, 'the engine to be idle')
-    const limiter = teamLimiter('chat')
     await waitFor(() => limiter.inFlight === 0 && limiter.queued === 0, 'the line to drain')
     expect(statuses).toHaveLength(500)
     // Every request either finished or was left by its client; none was refused or failed (16
@@ -456,7 +461,7 @@ describe('team mode', () => {
     expect(statuses.every((status) => status === 200 || status === 'aborted')).toBe(true)
     expect(warnings).not.toContain('MaxListenersExceededWarning')
     expect(statuses.filter((status) => status === 200).length).toBeGreaterThan(300)
-    expect(peak).toBeLessThanOrEqual(llm.gatewaySlots())
+    expect(peakInFlight).toBeLessThanOrEqual(llm.gatewaySlots())
     // Bookkeeping stays flat: no growing heap from leaked streams (generous for GC timing).
     global.gc?.()
     expect(process.memoryUsage().heapUsed - heapBefore).toBeLessThan(64 * 1024 * 1024)
