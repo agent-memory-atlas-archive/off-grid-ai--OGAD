@@ -456,9 +456,13 @@ function proxyToLlama(
   retryUntil = 0,
   activity?: AIRequestHandle,
   targetPort?: number,
-  pooled = false
+  pooled = false,
+  /** Team mode: the slot's turn, ended once llama-server has finished with the request (not as
+   *  soon as the client leaves, while the engine may still hold the slot). */
+  release?: Release
 ): void {
   const headers = { ...req.headers, host: `${UPSTREAM_HOST}:${targetPort ?? upstreamPort()}` }
+  let responded = false
   delete headers.authorization
   if (bodyOverride) {
     headers['content-length'] = String(bodyOverride.length)
@@ -467,6 +471,10 @@ function proxyToLlama(
   // Team mode: a client that leaves while llama-server is still reading the prompt cancels the
   // upstream request at once, so the slot goes to the next request in line.
   let upstreamRequest: http.ClientRequest | null = null
+  // A team-mode stream carries about a dozen 'close' listeners, each its own: the request log,
+  // the slot's release, the upstream cancel, the stream guards and the pipeline's own. Bounded per
+  // response, so the default warning at eleven would only be noise.
+  if (pooled) res.setMaxListeners(20)
   if (pooled)
     res.once('close', () => {
       if (!res.writableEnded) upstreamRequest?.destroy()
@@ -485,6 +493,7 @@ function proxyToLlama(
           ...(pooled ? { agent: localAgent(targetPort ?? upstreamPort()) } : {})
         },
         (proxyRes) => {
+          responded = true
           const safeResponse = safeProxyResponse(proxyRes.statusCode, proxyRes.headers)
           res.writeHead(safeResponse.statusCode, safeResponse.headers)
           // Guard both ends BEFORE piping: a mid-stream reset from llama-server (or a client
@@ -512,6 +521,12 @@ function proxyToLlama(
         }
       )
       proxyReq.on('error', reject)
+      // The engine is done with this request (answered, or cancelled with its client): the slot
+      // is free. A connection error before any answer is retried and keeps the turn.
+      if (release)
+        proxyReq.once('close', () => {
+          if (responded || res.destroyed) release()
+        })
       // Team mode: a request with no bytes either way for a long time is cut, so a wedged engine
       // cannot hold a slot for ever. An idle limit: a long reply that keeps streaming is never cut.
       if (pooled)
@@ -532,6 +547,7 @@ function proxyToLlama(
     // A client that has gone is not waited for (team mode cancels its upstream request).
     ...(pooled ? { isTransient: () => !res.destroyed } : {})
   }).catch(() => {
+    release?.()
     activity?.finish(undefined, new Error('Local model not ready'))
     json(res, 502, errBody('Local model not ready (llama-server unavailable).', 'upstream_error'))
   })
@@ -1079,7 +1095,7 @@ async function handleSpecialistChat(
         )
       } else if (team) {
         // Team mode: one turn per grounder slot, pooled connections, disconnect frees the slot.
-        const release = await admitTeamRequest(teamLimiter('grounder'), res)
+        const release = await admitTeamRequest(teamLimiter('grounder'), res, 0, 'caller')
         if (!release) return true
         proxyToLlama(
           req,
@@ -1088,7 +1104,8 @@ async function handleSpecialistChat(
           Date.now() + 45_000,
           activity,
           port,
-          true
+          true,
+          release
         )
       } else
         proxyToLlama(
@@ -1315,7 +1332,10 @@ function sendLimiterFull(res: http.ServerResponse, error: LimiterFullError): voi
 async function admitTeamRequest(
   limiter: UpstreamLimiter,
   res: http.ServerResponse,
-  tokens = 0
+  tokens = 0,
+  /** 'client': the turn ends when the client's response closes. 'caller': the caller ends it
+   *  (proxyToLlama, once llama-server has let go of the request too). */
+  holdUntil: 'client' | 'caller' = 'client'
 ): Promise<Release | null> {
   const gone = new AbortController()
   const onClose = (): void => gone.abort()
@@ -1326,7 +1346,7 @@ async function admitTeamRequest(
       release()
       return null
     }
-    res.once('close', release)
+    if (holdUntil === 'client') res.once('close', release)
     return release
   } catch (error) {
     if (gone.signal.aborted) return null
@@ -1424,7 +1444,11 @@ async function handleTeamChat(
 
   const release = remote
     ? await admitTeamRequest(teamLimiter('remote'), res)
-    : await admitOnRequestedModel(requested, () => admitTeamRequest(teamLimiter('chat'), res, tokens), res)
+    : await admitOnRequestedModel(
+        requested,
+        () => admitTeamRequest(teamLimiter('chat'), res, tokens, 'caller'),
+        res
+      )
   if (!release) return
   const activity = new AIRequestHandle({
     modality: 'text',
@@ -1434,7 +1458,7 @@ async function handleTeamChat(
   })
   activity.update({ effectiveRequest: body, backend: llm.activeAccelerator() ?? 'Unknown' })
   if (proxyToSelectedRemote(res, body, activity, true)) return
-  proxyToLlama(req, res, forward, Date.now() + 45_000, activity, undefined, true)
+  proxyToLlama(req, res, forward, Date.now() + 45_000, activity, undefined, true, release)
 }
 
 /** /v1/completions in team mode: a turn on the local limiter, the chat retry window, pooled. */
@@ -1444,11 +1468,11 @@ async function handleTeamCompletion(
   bytes: Buffer,
   body: unknown
 ): Promise<void> {
-  const release = await admitTeamRequest(teamLimiter('chat'), res)
+  const release = await admitTeamRequest(teamLimiter('chat'), res, 0, 'caller')
   if (!release) return
   const activity = new AIRequestHandle({ modality: 'text', source: 'API completion', request: body })
   activity.update({ backend: llm.activeAccelerator() ?? 'Unknown' })
-  proxyToLlama(req, res, bytes, Date.now() + 45_000, activity, undefined, true)
+  proxyToLlama(req, res, bytes, Date.now() + 45_000, activity, undefined, true, release)
 }
 
 // ─── Embeddings (local MiniLM) ───────────────────────────────────────────────
