@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { User, Users } from '@phosphor-icons/react'
 import { IconExternalLink, IconServer2 } from '@tabler/icons-react'
 import { GATEWAY_HOST, GATEWAY_PORT } from '@offgrid/core/shared/ports'
 import { CopyButton } from './ui/CopyButton'
@@ -99,6 +100,74 @@ console.log(resp.choices[0].message.content);`
   }
 ]
 
+type GatewayMode = 'single' | 'team'
+
+/** Who the gateway serves: one person at full speed, or several clients at once. Switching
+ *  relaunches the chat engine with the new slot count; it applies to the next request. */
+function GatewayModeControl(): React.ReactElement | null {
+  const [mode, setMode] = useState<GatewayMode | null>(null)
+  const [slots, setSlots] = useState<number | null>(null)
+  useEffect(() => {
+    let mounted = true
+    void window.api.getLlmSettings().then((s: { gatewayMode?: GatewayMode; gatewaySlots?: number }) => {
+      if (!mounted) return
+      setMode(s.gatewayMode ?? 'single')
+      setSlots(s.gatewaySlots ?? null)
+    })
+    return () => {
+      mounted = false
+    }
+  }, [])
+  if (!mode) return null
+  const choose = (next: GatewayMode): void => {
+    const previous = mode
+    setMode(next)
+    void window.api
+      .setLlmSettings({ gatewayMode: next })
+      .then((s: { gatewayMode?: GatewayMode; gatewaySlots?: number }) => {
+        setMode(s.gatewayMode ?? next)
+        setSlots(s.gatewaySlots ?? null)
+      })
+      .catch(() => setMode(previous))
+  }
+  const option = (
+    id: GatewayMode,
+    label: string,
+    tip: string,
+    icon: React.ReactNode
+  ): { id: GatewayMode; label: string; icon: React.ReactNode } => ({
+    id,
+    label,
+    icon: (
+      <IconTip label={tip}>
+        <span className="flex items-center gap-1.5">
+          {icon}
+          {label}
+        </span>
+      </IconTip>
+    )
+  })
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <Segmented
+        label="Who uses the gateway"
+        size="sm"
+        value={mode}
+        onValueChange={choose}
+        options={[
+          option('single', 'Just me', 'One request at a time, full speed', <User aria-hidden="true" />),
+          option('team', 'Team', 'Several clients at once; extras wait their turn', <Users aria-hidden="true" />)
+        ]}
+      />
+      {mode === 'team' && slots !== null && (
+        <span role="status" className="text-[11px] text-neutral-500">
+          {slots} at once
+        </span>
+      )}
+    </div>
+  )
+}
+
 export function GatewayScreen(): React.ReactElement {
   const [tab, setTab] = useState(SNIPPETS[0]!.id)
   const open = (p: string): void => {
@@ -165,6 +234,12 @@ export function GatewayScreen(): React.ReactElement {
           </div>
 
           <div className="min-w-0 space-y-8">
+            <Section label="Clients">
+              <section aria-label="Clients">
+                <GatewayModeControl />
+              </section>
+            </Section>
+
             <Section label="API keys">
               <section aria-label="API keys">
                 <GatewayApiKeysSettings />
