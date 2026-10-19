@@ -12,7 +12,6 @@ export const packagingIntegrationTests = [
 
 export const modelPortIntegrationTests = [
   'src/main/__tests__/model-server-chat.integration.test.ts',
-  'src/main/__tests__/model-server-team-access.integration.test.ts',
   'src/main/__tests__/model-server-team-mode.integration.test.ts',
   'src/main/__tests__/model-server-team-runtimes.integration.test.ts',
   'src/main/__tests__/model-switch-ownership.integration.test.ts',

@@ -24,12 +24,7 @@ import { GlyphSwap, IconTip } from './IconTip'
 import { ListRow } from '@offgrid/operator-ui/operator/list-row'
 import { LiveStatus } from '@offgrid/operator-ui/operator/presence'
 
-export function GatewayApiKeysSettings({
-  lanNeedsKey = false
-}: {
-  /** Team mode: callers on the network need a key even while keys are not required. */
-  lanNeedsKey?: boolean
-} = {}): React.JSX.Element {
+export function GatewayApiKeysSettings(): React.JSX.Element {
   const [settings, setSettings] = useState<GatewayApiKeySettingsContract | null>(null)
   const [name, setName] = useState('')
   const [expiry, setExpiry] = useState('30')
@@ -140,11 +135,6 @@ export function GatewayApiKeysSettings({
           </Button>
         </IconTip>
       </div>
-      {lanNeedsKey && !settings.enabled && (
-        <p role="note" className="text-[11px] text-amber-300">
-          Team mode: clients on your network need a key.
-        </p>
-      )}
       <form
         className="flex flex-wrap items-center gap-2"
         onSubmit={(event) => {

@@ -1331,7 +1331,6 @@ export function setupIPC(): void {
   ipcMain.handle('gateway:keys:revoke', async (_, id: string) =>
     (await import('./model-server')).revokeGatewayApiKey(id)
   )
-  ipcMain.handle('gateway:lan-url', async () => (await import('./model-server')).gatewayLanBaseUrl())
 
   // === SETTINGS HANDLERS ===
 
