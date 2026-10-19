@@ -7,7 +7,7 @@ copyright: © Off Grid AI
 # This hook runs before electron-builder emits artifactCreated, which is the event
 # that schedules publishing. A truncated DMG therefore cannot reach GitHub.
 artifactBuildCompleted: scripts/verify-electron-builder-artifact.mjs
-afterPack: scripts/prune-onnx-runtime.mjs
+afterPack: scripts/after-pack.mjs
 # Notarize + staple here, not with mac.notarize: the built-in staple gives Apple's ticket service only
 # seconds, and its connections from CI runners drop for longer (see scripts/notarize-mac.mjs).
 afterSign: scripts/notarize-mac.mjs
