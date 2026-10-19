@@ -228,7 +228,17 @@ export function buildMcpServer(
     async ({ audio }) => {
       const p = await materialize(audio, 'wav')
       try {
-        const text = (await onTurn('transcription', () => mediaText.transcribeAudio(p))).trim()
+        const text = (
+          await onTurn('transcription', async (team) => {
+            // Team mode: a resident whisper-server lane when Whisper is the active engine.
+            const onLane = team
+              ? await (
+                  await import('./transcription/team-lanes')
+                ).transcribeOnTeamLane({ path: p }, {}, teamConcurrency().transcription)
+              : null
+            return onLane ? onLane.text : mediaText.transcribeAudio(p)
+          })
+        ).trim()
         return TEXT(text)
       } finally {
         if (p.includes('offgrid-mcp-')) fs.promises.unlink(p).catch(() => {})

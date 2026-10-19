@@ -238,3 +238,58 @@ describe('team mode', () => {
     expect(await chat).toContain('done')
   })
 })
+
+describe('team mode with a resident whisper-server installed', () => {
+  beforeAll(() => {
+    // whisper-server: loads its model once at start (logged as a spawn), then serves /inference.
+    const file = path.join(binDir, 'whisper-server', 'whisper-server')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(
+      file,
+      `#!/usr/bin/env node
+const fs = require('node:fs')
+const http = require('node:http')
+const args = process.argv.slice(2)
+const port = Number(args[args.indexOf('--port') + 1])
+fs.appendFileSync(${JSON.stringify(runLog)}, 'spawn server ' + port + ' ' + Date.now() + '\\n')
+http.createServer((req, res) => {
+  if (req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('ok'); return }
+  req.resume()
+  req.on('end', () => {
+    const id = Math.random().toString(36).slice(2)
+    fs.appendFileSync(${JSON.stringify(runLog)}, 'lane start ' + id + ' ' + Date.now() + '\\n')
+    setTimeout(() => {
+      fs.appendFileSync(${JSON.stringify(runLog)}, 'lane end ' + id + ' ' + Date.now() + '\\n')
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ text: 'Book a table on a lane' }))
+    }, 400)
+  })
+}).listen(port, '127.0.0.1')
+`
+    )
+    fs.chmodSync(file, 0o755)
+  })
+
+  it('transcribes on resident lanes, one model load per lane, never a process per request', async () => {
+    await llm.setSettings({ gatewayMode: 'team' })
+    const workers = teamConcurrency().transcription
+    const first = await Promise.all(Array.from({ length: workers + 1 }, () => transcribe()))
+    const second = await Promise.all(Array.from({ length: workers }, () => transcribe()))
+    for (const result of [...first, ...second]) {
+      expect(result.status).toBe(200)
+      expect(JSON.parse(result.body)).toMatchObject({ text: 'Book a table on a lane' })
+    }
+    expect(peak('lane')).toBe(workers)
+    expect(runs('stt')).toBe(0)
+    const spawns = fs.readFileSync(runLog, 'utf8').split('\n').filter((line) => line.startsWith('spawn server'))
+    expect(spawns).toHaveLength(workers)
+  })
+
+  afterAll(async () => {
+    const { whisperServer } = await import('../transcription/whisper-server')
+    const { stopTeamLanes } = await import('../transcription/team-lanes')
+    stopTeamLanes()
+    whisperServer.stop()
+  })
+})
+

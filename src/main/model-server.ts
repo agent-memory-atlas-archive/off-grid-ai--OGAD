@@ -1616,8 +1616,14 @@ async function handleTranscription(
   const run = async (): Promise<unknown> => {
     try {
       await fs.promises.writeFile(tmp, file.data)
+      // Team mode: a resident whisper-server lane (model already loaded) when Whisper is active.
+      const onLane = teamMode()
+        ? await (
+            await import('./transcription/team-lanes')
+          ).transcribeOnTeamLane({ path: tmp }, transcriptionOptions, teamConcurrency().transcription)
+        : null
       const text = (
-        await getActiveTranscription().transcribe({ path: tmp }, transcriptionOptions)
+        onLane ?? (await getActiveTranscription().transcribe({ path: tmp }, transcriptionOptions))
       ).text.trim()
       return { text }
     } finally {

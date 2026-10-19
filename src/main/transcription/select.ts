@@ -172,6 +172,26 @@ export function getLocalTranscription(
   return withConfiguredTranscriptionLanguage(getTranscription(engine), language)
 }
 
+/**
+ * Team gateway mode: this machine's Whisper transcriptions on a resident whisper-server `lane` (the
+ * model stays loaded) instead of a whisper-cli process per call, with the same language hint. Null
+ * when a remote server is chosen, the active engine is not Whisper, or whisper-server is missing.
+ */
+export function getTeamLaneTranscription(
+  lane: TranscriptionService,
+  readSetting: TranscriptionSettingReader = getSetting
+): TranscriptionService | null {
+  if (getActiveRemoteVisionServerForModality('transcription')) return null
+  const active = getActiveModal('transcription')
+  const engine = engineForActiveModel(active, modelsByKind('transcription'))
+  if (engine !== 'whisper' || !lane.isAvailable()) return null
+  const language = resolveConfiguredTranscriptionLanguage(
+    readSetting('sttLanguage', 'auto'),
+    transcriptionLanguages(engine, active)
+  )
+  return withConfiguredTranscriptionLanguage(lane, language)
+}
+
 /** Apply the user's language hint at the shared transcription seam. An explicit
  *  call-site hint still wins, so specialized import flows can override it. */
 export function withConfiguredTranscriptionLanguage(
