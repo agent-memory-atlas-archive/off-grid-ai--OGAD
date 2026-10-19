@@ -30,11 +30,15 @@ afterAll(() => {
   fs.rmSync(TMP_DIR, { recursive: true, force: true })
 })
 
+// A version chosen on screen is the one selected last; a real click is never in the same
+// millisecond as the message before it, so each choice here waits for the clock to move.
+const nextMillisecond = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 2))
+
 const shown = (conversationId: string): string[] =>
   db.getRagMessages(conversationId).map((message) => message.content)
 
 describe('a reply saved after switching versions', () => {
-  it('stays in the thread of the question it answers', () => {
+  it('stays in the thread of the question it answers', async () => {
     const chat = db.createRagConversation('version-turn', 'Versions')
     db.addRagMessage(chat, 'user', 'are you there?')
     const first = db.addRagMessage(chat, 'assistant', 'star')
@@ -46,6 +50,7 @@ describe('a reply saved after switching versions', () => {
     expect(shown(chat)).toEqual(['are you there?', 'I am ever here', 'Ask for specific assistance'])
 
     // Back to version 1 while the follow-up is still being answered.
+    await nextMillisecond()
     expect(db.selectRagMessageVersion(chat, second.uuid, -1)).toBe(true)
     expect(shown(chat)).toEqual(['are you there?', 'star'])
 
@@ -54,6 +59,7 @@ describe('a reply saved after switching versions', () => {
     expect(shown(chat)).toEqual(['are you there?', 'star'])
 
     // ...and version 2 carries its whole thread, the answer included.
+    await nextMillisecond()
     expect(db.selectRagMessageVersion(chat, first.uuid, 1)).toBe(true)
     expect(shown(chat)).toEqual([
       'are you there?',
