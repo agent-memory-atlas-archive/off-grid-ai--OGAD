@@ -1811,11 +1811,11 @@ export function MemoryChat({
     if (!convId) {
       convId = crypto.randomUUID()
       // An action marker (<!-- offgrid-action:... -->) steers the run; it is not what the chat is about.
-      // Removed until none is left, so no removal can leave a new `<!--` behind (CodeQL).
+      // Markers lead the prompt (presetCatalog), so they are peeled off the front by position, not
+      // stripped by pattern: a pattern pass can leave a `<!--` behind (CodeQL), slicing cannot.
       let unmarked = trimmed
-      for (let previous = ''; previous !== unmarked; ) {
-        previous = unmarked
-        unmarked = unmarked.replace(/<!--[\s\S]*?-->/g, '').replace('<!--', '')
+      while (unmarked.startsWith('<!--') && unmarked.includes('-->')) {
+        unmarked = unmarked.slice(unmarked.indexOf('-->') + 3).trimStart()
       }
       const named = unmarked.trim() || trimmed
       const title = named.length > 50 ? named.slice(0, 47) + '...' : named
