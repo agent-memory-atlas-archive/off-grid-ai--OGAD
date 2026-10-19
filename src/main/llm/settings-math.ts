@@ -4,7 +4,13 @@
 // beyond the shared model-sizing types (which are themselves pure).
 
 import type { KvCacheType, PerformanceMode } from '../model-sizing'
-import { llmParallelFlags, type GatewayMode } from '@offgrid/models'
+import {
+  llmParallelFlags,
+  llmSlotPlan,
+  type GatewayMode,
+  type LlmSlotInput,
+  type SlotPlatform
+} from '@offgrid/models'
 
 export type SpeculativeDecodingMode = 'off' | 'ngram' | 'mtp' | 'draft' | 'dflash'
 
@@ -124,6 +130,24 @@ export interface LaunchArgsInput {
   totalRamBytes?: number
   /** Team mode opens several slots over one unified KV pool; single (the default) keeps one. */
   gatewayMode?: GatewayMode
+  /** Team mode's slot inputs: where the model runs, memory free beside it, and its size. */
+  slotPlatform?: SlotPlatform
+  slotFreeMemoryMB?: number
+  weightsGb?: number
+}
+
+/** The shared slot rule's input for these launch inputs. */
+export function slotInput(i: LaunchArgsInput): LlmSlotInput {
+  return {
+    mode: i.gatewayMode ?? 'single',
+    ctxSize: i.effectiveCtxSize,
+    speculativeDecoding: i.speculativeDecoding,
+    totalRamGb: i.totalRamBytes ? i.totalRamBytes / 1024 ** 3 : undefined,
+    platform: i.slotPlatform,
+    freeMemoryMB: i.slotFreeMemoryMB,
+    weightsGb: i.weightsGb,
+    kvMBPer1kTokens: i.kvCacheType === 'q4_0' ? 16 : i.kvCacheType === 'q8_0' ? 32 : 64
+  }
 }
 
 /**
@@ -152,14 +176,11 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
     String(i.port),
     '--host',
     '127.0.0.1',
-    ...llmParallelFlags({
-      mode: i.gatewayMode ?? 'single',
-      ctxSize: i.effectiveCtxSize,
-      speculativeDecoding: i.speculativeDecoding,
-      totalRamGb: i.totalRamBytes ? i.totalRamBytes / 1024 ** 3 : undefined
-    }),
+    ...llmParallelFlags(slotInput(i)),
     '-c',
-    String(i.effectiveCtxSize),
+    // Team mode may grow the shared pool past the person's context so every slot gets its share;
+    // it is never smaller. Single mode: exactly the person's context.
+    String(llmSlotPlan(slotInput(i)).poolCtx),
     '-ngl',
     String(i.gpuLayers)
   )

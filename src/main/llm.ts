@@ -33,10 +33,14 @@ import {
   REASONING_BUDGET_AUTO,
   reasoningBudgetPayload,
   isGatewayMode,
-  llmSlotCount,
-  llmExtraSlotMB,
-  type GatewayMode
+  llmSlotPlan,
+  type GatewayMode,
+  type LlmSlotPlan,
+  type SlotPlatform
 } from '@offgrid/models'
+import { liveMemory } from './runtime-manager'
+import { cudaFreeVramMB } from './llm/vram-probe'
+import { slotInput } from './llm/settings-math'
 import type { EngineAccelerator } from '../shared/engine-accelerator'
 import {
   applyModePreset,
@@ -315,6 +319,10 @@ export class LLMService {
   private speculativeDraftMax = 0
   private draftModel = ''
   private gatewayModeSetting: GatewayMode = 'single'
+  /** The slots and pool the running (or next) team-mode launch was sized to. */
+  private launchedSlotPlan: LlmSlotPlan | null = null
+  /** The backend the last launch placed the model on, kept across restarts for slot sizing. */
+  private lastPlacedBackend: string | undefined
   /** Set by the gateway: an eviction waits for its in-flight streams and admits no new ones. */
   private evictionGate: ((evict: () => Promise<void>) => Promise<void>) | null = null
   // Crash recovery: distinguish an intentional kill (stop/reload/settings respawn)
@@ -642,7 +650,7 @@ export class LLMService {
       this.speculativeModeSupported(this.speculativeDecoding, this.draftModel)
     const useRuntimeMtp =
       this.runtimeModelOverride !== null && this.speculativeDecoding === 'mtp' && this.supportsMtp()
-    return buildLaunchArgs({
+    const input: Parameters<typeof buildLaunchArgs>[0] = {
       modelPath: this.modelPath,
       mmProjPath: this.mmProjPath,
       port: this.port,
@@ -666,8 +674,37 @@ export class LLMService {
       imageMinTokens: this.imageMinTokensForModel(),
       reportModelPlacement: true,
       totalRamBytes: totalmem(),
-      gatewayMode: this.gatewayModeSetting
-    })
+      gatewayMode: this.gatewayModeSetting,
+      ...(this.gatewayModeSetting === 'team' ? this.slotLaunchInputs() : {})
+    }
+    if (this.gatewayModeSetting === 'team') this.launchedSlotPlan = llmSlotPlan(slotInput(input))
+    return buildLaunchArgs(input)
+  }
+
+  /** Team mode's slot inputs: the platform, the memory free beside this model and its pool of the
+   *  person's context, and the model's size. Read once per launch. */
+  private slotLaunchInputs(): {
+    slotPlatform: SlotPlatform
+    slotFreeMemoryMB?: number
+    weightsGb: number
+  } {
+    const weightsGb = this.localWeightsGb()
+    const engineDown = !this.initialized
+    const modelMB = engineDown ? this.baseResidentMB() : 0
+    if (process.platform !== 'darwin' && this.lastPlacedBackend?.includes('CUDA')) {
+      const vram = cudaFreeVramMB()
+      return {
+        slotPlatform: 'cuda',
+        weightsGb,
+        ...(vram === null ? {} : { slotFreeMemoryMB: Math.max(0, vram - modelMB - 1024) })
+      }
+    }
+    const { availableMB, totalMB } = liveMemory()
+    return {
+      slotPlatform: process.platform === 'darwin' ? 'apple-unified' : 'other',
+      weightsGb,
+      slotFreeMemoryMB: Math.max(0, availableMB - modelMB - Math.max(3072, totalMB * 0.1))
+    }
   }
 
   /** Whether the gateway serves one person ('single', as always) or several clients ('team'). */
@@ -679,12 +716,16 @@ export class LLMService {
   /** How many requests the engine serves at once: its llama-server slot count. */
   gatewaySlots(): number {
     this.ensureLoaded()
-    return llmSlotCount({
-      mode: this.gatewayModeSetting,
-      ctxSize: this.ctxSize,
-      speculativeDecoding: this.effectiveSpeculativeDecoding(),
-      totalRamGb: totalmem() / 1024 ** 3
-    })
+    if (this.gatewayModeSetting !== 'team') return 1
+    return (
+      this.launchedSlotPlan?.slots ??
+      llmSlotPlan({
+        mode: 'team',
+        ctxSize: this.ctxSize,
+        speculativeDecoding: this.effectiveSpeculativeDecoding(),
+        totalRamGb: totalmem() / 1024 ** 3
+      }).slots
+    )
   }
 
   /** The speculative mode the launch args actually carry (see launchArgsFor). */
@@ -864,6 +905,8 @@ export class LLMService {
       this.speculativeDraftMax = compatibleSettings.speculativeDraftMax
     if (isGatewayMode(compatibleSettings.gatewayMode))
       this.gatewayModeSetting = compatibleSettings.gatewayMode
+    // The next launch sizes the slots again (mode, context and cache type all change them).
+    if (launchChanged) this.launchedSlotPlan = null
     const budgets = budgetChange(
       { ctxSize: this.ctxSize, maxTokens: this.maxTokens, reasoningBudget: this.reasoningBudget },
       {}
@@ -1521,6 +1564,7 @@ export class LLMService {
       console.log('[LLMService] Vision server ready!')
       const engineDir = path.basename(binDir)
       this.backendPlacement = parseNativeBackend(this.backendOutput)
+      this.lastPlacedBackend = this.backendPlacement?.backend ?? this.lastPlacedBackend
       console.log(
         `[LLMService] model ready: engine=${engineDir}, backend=${this.backendPlacement?.backend ?? 'unconfirmed'}`
       )
@@ -2367,13 +2411,13 @@ export class LLMService {
    *  MTP companion, plus an allowance for the KV cache (about 64 MB per 1K context at f16; q8_0
    *  halves it, q4_0 quarters it) and the server's own buffers. */
   expectedResidentMB(): number {
+    // Team-mode slots add their recurrent state and any growth of the shared pool (none in single).
+    return this.baseResidentMB() + (this.launchedSlotPlan?.extraMB ?? 0)
+  }
+
+  private baseResidentMB(): number {
     const kvScale = this.kvCacheType === 'q4_0' ? 0.25 : this.kvCacheType === 'q8_0' ? 0.5 : 1
-    return (
-      this.localWeightsGb() * 1024 +
-      (this.ctxSize / 1024) * 64 * kvScale +
-      300 +
-      llmExtraSlotMB(this.gatewaySlots(), this.localWeightsGb())
-    )
+    return this.localWeightsGb() * 1024 + (this.ctxSize / 1024) * 64 * kvScale + 300
   }
 
   get runtime(): ManagedRuntime {
