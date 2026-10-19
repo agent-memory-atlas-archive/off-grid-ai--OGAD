@@ -22,7 +22,11 @@
 // documentation is served at GET /docs (and lives in docs/API.md).
 
 import http from 'http'
-import { AIRequestHandle } from './ai-request-log'
+import {
+  AIRequestHandle,
+  setGatewayRequestKeyName,
+  withGatewayRequestScope
+} from './ai-request-log'
 import { observeAIResponse } from './ai-request-log-http'
 import https from 'https'
 import fs from 'fs'
@@ -298,6 +302,8 @@ function authorizeGateway(req: http.IncomingMessage): boolean {
       match = key
   }
   if (!match) return false
+  // The request log names the key that sent this request (its name, never the key).
+  setGatewayRequestKeyName(match.name)
   // Limit disk writes without caching credentials: revocation applies on the next request.
   if (match.lastUsedAt === null || now - match.lastUsedAt >= 60_000) {
     match.lastUsedAt = now
@@ -2263,7 +2269,8 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
     setDecisionGatewayModeSource(() => llm.gatewayMode())
   )
 
-  server = http.createServer(async (req, res) => {
+  // Each request runs in its own scope, so the records it starts can name its API key.
+  server = http.createServer((req, res) => void withGatewayRequestScope(async () => {
     const origin = req.headers.origin
     if (origin !== undefined) {
       // Packaged renderers use file://; dev uses electron-vite. Other origins, including the
@@ -2630,7 +2637,7 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
     }
     // Non-inference routes pass through without generating activity rows.
     proxyToLlama(req, res)
-  })
+  }))
 
   // Long-running modalities (first-run model downloads, multi-step diffusion,
   // streamed chat) must not be severed by idle/header timeouts. Disable them —

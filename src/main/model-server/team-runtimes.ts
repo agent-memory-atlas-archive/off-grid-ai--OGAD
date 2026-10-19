@@ -14,6 +14,7 @@ import {
   type GatewayRuntime
 } from '@offgrid/models'
 import { llm } from '../llm'
+import { gatewayRequestKeyName, withGatewayRequestKeyName } from '../ai-request-log'
 import { LimiterFullError, UpstreamLimiter, type Release } from './upstream-limiter'
 
 /** The context the grounder and Decider llama-servers launch with. */
@@ -125,6 +126,8 @@ export async function withTurn<T>(
 
 interface EmbeddingWaiter {
   texts: string[]
+  /** The API key that sent it, for the request log. */
+  keyName: string | undefined
   resolve: (vectors: number[][]) => void
   reject: (error: unknown) => void
 }
@@ -145,7 +148,7 @@ export function embedCoalesced(texts: string[]): Promise<number[][]> {
     return Promise.reject(new LimiterFullError(LABELS.embeddings))
   }
   return new Promise<number[][]>((resolve, reject) => {
-    embeddingWaiters.push({ texts, resolve, reject })
+    embeddingWaiters.push({ texts, keyName: gatewayRequestKeyName(), resolve, reject })
     runEmbeddingBatch()
   })
 }
@@ -173,9 +176,15 @@ async function embedNextBatch(): Promise<void> {
   const batch = embeddingWaiters.splice(0, take)
   try {
     const { embeddings } = await import('../embeddings')
-    const vectors = await embeddings.embedDocumentTexts(
-      batch.flatMap((waiter) => waiter.texts),
-      { interactive: true, source: 'API embeddings' }
+    // The batch's log record names a key only when every request in it came with that key.
+    const keys = new Set(batch.map((waiter) => waiter.keyName))
+    const vectors = await withGatewayRequestKeyName(
+      keys.size === 1 ? [...keys][0] : undefined,
+      () =>
+        embeddings.embedDocumentTexts(
+          batch.flatMap((waiter) => waiter.texts),
+          { interactive: true, source: 'API embeddings' }
+        )
     )
     let offset = 0
     for (const waiter of batch) {
