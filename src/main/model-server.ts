@@ -1971,12 +1971,8 @@ async function handleImagesUnified(
     if (refUrl) {
       const { data, mime } = await fetchImage(refUrl)
       const ext = extForMime(mime)
-      tmp = path.join(
-        os.tmpdir(),
-        teamMode()
-          ? `offgrid-imgref-${process.pid}-${rid}${ext}`
-          : `offgrid-imgref-${process.pid}-${data.length}${ext}`
-      )
+      // Named by the request: two references of the same size must not share a file.
+      tmp = path.join(os.tmpdir(), `offgrid-imgref-${process.pid}-${rid}${ext}`)
       await fs.promises.writeFile(tmp, data)
       params.initImage = tmp
     }
@@ -2033,12 +2029,8 @@ async function handleImageEdit(
     return
   }
   const ext = path.extname(image.filename) || '.png'
-  const tmp = path.join(
-    os.tmpdir(),
-    teamMode()
-      ? `offgrid-img2img-${process.pid}-${rid}${ext}`
-      : `offgrid-img2img-${process.pid}-${body.length}${ext}`
-  )
+  // Named by the request: two uploads of the same size must not share a file.
+  const tmp = path.join(os.tmpdir(), `offgrid-img2img-${process.pid}-${rid}${ext}`)
   await fs.promises.writeFile(tmp, image.data)
   const { width, height } = resolveDims({
     width: fields.width ? parseInt(fields.width, 10) : undefined,
