@@ -146,6 +146,8 @@ export interface LaunchArgsInput {
   recurrentSlotMB?: number
   /** The person's own "requests at once" (unset: Auto). */
   requestedSlots?: number
+  /** The person set the KV cache type themselves: team mode keeps it unless it leaves one slot. */
+  kvCacheTypeExplicit?: boolean
 }
 
 /** The shared slot rule's input for these launch inputs. */
@@ -163,6 +165,7 @@ export function slotInput(i: LaunchArgsInput): LlmSlotInput {
     kvShape: i.kvShape,
     architecture: i.architecture,
     kvCacheType: i.kvCacheType,
+    kvCacheTypeExplicit: i.kvCacheTypeExplicit,
     recurrentSlotMB: i.recurrentSlotMB,
     requestedSlots: i.requestedSlots
   }
@@ -211,8 +214,9 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
   if (cacheMiB !== undefined) args.push('--cache-ram', String(cacheMiB))
   // llama.cpp maps its model-allocation INFO messages to verbosity 4.
   if (i.reportModelPlacement) args.push('-lv', '4')
-  // Team mode picks the cache types with the slots (q8_0 when memory is tight, V never q4_0,
-  // Gemma f16); single mode uses the person's choice for both.
+  // Team mode picks the cache types with the slots: the person's own choice is kept unless it
+  // leaves one slot; a default follows the team rule (q8_0 when tight, V never q4_0, Gemma f16).
+  // Single mode uses the person's choice for both.
   const team = (i.gatewayMode ?? 'single') === 'team'
   const kv = team
     ? llmSlotPlan(slotInput(i)).kv

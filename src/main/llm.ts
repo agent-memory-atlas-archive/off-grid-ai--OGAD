@@ -38,6 +38,7 @@ import {
   type LlmSlotPlan
 } from '@offgrid/models'
 import { liveMemory } from './runtime-manager'
+import { filesMB } from './model-footprint'
 import { cudaVramMB } from './llm/vram-probe'
 import { slotInput } from './llm/settings-math'
 import type { EngineAccelerator } from '../shared/engine-accelerator'
@@ -696,7 +697,11 @@ export class LLMService {
           }
         : {})
     }
-    if (this.gatewayModeSetting === 'team') this.launchedSlotPlan = llmSlotPlan(slotInput(input))
+    if (this.gatewayModeSetting === 'team') {
+      this.launchedSlotPlan = llmSlotPlan(slotInput(input))
+      // Say when team mode changes the person's cache type, and why.
+      if (this.launchedSlotPlan.kvNote) console.log(`[LLMService] ${this.launchedSlotPlan.kvNote}`)
+    }
     return buildLaunchArgs(input)
   }
 
@@ -707,7 +712,18 @@ export class LLMService {
     // The memory this engine may use counts its own model when it is loaded.
     const ownMB = this.initialized ? this.baseResidentMB() : 0
     const shape = { kvShape: readGgufKvShape(this.modelPath, fs) ?? undefined, architecture: this.modelArchitecture() }
-    const common = { weightsMB, mmprojMB: 0, recurrentSlotMB: 64, ...shape }
+    // localWeightsGb counts the projector and an MTP companion; a draft model sits beside them too.
+    const draftMB =
+      this.speculativeDecoding === 'draft' || this.speculativeDecoding === 'dflash'
+        ? filesMB([this.draftModelPath()])
+        : 0
+    const common = {
+      weightsMB: weightsMB + draftMB,
+      mmprojMB: 0,
+      recurrentSlotMB: 64,
+      kvCacheTypeExplicit: this.userExplicit.has('kvCacheType'),
+      ...shape
+    }
     if (process.platform !== 'darwin' && this.lastPlacedBackend?.includes('CUDA')) {
       const vram = cudaVramMB()
       return {
