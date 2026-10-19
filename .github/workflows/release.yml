@@ -194,10 +194,21 @@ jobs:
           mkdir -p resources/bin
           cp scripts/actions-helper/actions-helper resources/bin/actions-helper
           chmod +x resources/bin/actions-helper
-      - name: Verify macOS Kev runtime
+      # The Mac app no longer bundles Kev's runtime; it downloads the archive pinned in
+      # resources/kev-runtime-packs.json with a Kev model. Prove that archive is published,
+      # matches its pin, and runs the bundled Kev launcher.
+      - name: Verify the published macOS Kev runtime
         run: |
-          resources/bin/kev-runtime/python/bin/python3 -c 'import kev, mlx_lm, torch, uvicorn'
-          resources/bin/kev-runtime/python/bin/python3 resources/bin/kev-local-server.py --help >/dev/null
+          URL=$(node -p "require('./resources/kev-runtime-packs.json')['darwin-arm64'].url")
+          SHA=$(node -p "require('./resources/kev-runtime-packs.json')['darwin-arm64'].sha256")
+          BYTES=$(node -p "require('./resources/kev-runtime-packs.json')['darwin-arm64'].bytes")
+          curl -fL --retry 3 -o "$RUNNER_TEMP/kev-runtime.tar.gz" "$URL"
+          test "$(stat -f %z "$RUNNER_TEMP/kev-runtime.tar.gz")" = "$BYTES"
+          echo "$SHA  $RUNNER_TEMP/kev-runtime.tar.gz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/kev"
+          tar -xzf "$RUNNER_TEMP/kev-runtime.tar.gz" -C "$RUNNER_TEMP/kev"
+          "$RUNNER_TEMP/kev/kev-runtime/python/bin/python3" -c 'import kev, mlx_lm, torch, uvicorn'
+          "$RUNNER_TEMP/kev/kev-runtime/python/bin/python3" resources/bin/kev-local-server.py --help >/dev/null
       # Stage the Parakeet STT runtime (sherpa-onnx CLI + ONNX model) into
       # resources/bin/parakeet. Additive: with SHERPA_ONNX_URL / PARAKEET_MODEL_URL
       # unset this is a no-op and transcription stays on whisper, so it can't break a
@@ -417,6 +428,8 @@ jobs:
           APP="$(find dist -maxdepth 2 -type d -name 'Off Grid AI Desktop.app' -print -quit)"
           test -n "$APP"
           test -s "$APP/Contents/Resources/performance-packs.json"
+          test -s "$APP/Contents/Resources/kev-runtime-packs.json"
+          test ! -e "$APP/Contents/Resources/bin/kev-runtime"
           node scripts/probe-packaged-tts.mjs "$APP" --synthesize
       # Squirrel.Mac downloads the update zip into one buffer that doubles as it grows; past
       # 1 GiB Electron's allocator refuses the next size and the installed app crashes mid-update.

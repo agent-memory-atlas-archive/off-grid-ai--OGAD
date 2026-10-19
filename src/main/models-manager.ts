@@ -55,6 +55,7 @@ import {
   type VisionStatus
 } from './models/catalog-logic'
 import { writeDiagnosticLog } from './diagnostics-log'
+import { installKevRuntime, installedKevRuntimeRoot, kevRuntimeAsset } from './kev-runtime-pack'
 import {
   modelPackageIdentity,
   modelTransferManifestFileError,
@@ -437,8 +438,16 @@ function indexedShards(base: string): string[] {
   }
 }
 
-/** Resolve the packaged server runtime and the model downloaded from the Models screen. */
-export function resolveKevRuntimeArtifact(modelId: string = KEV_4B_ID): KevRuntimeArtifact | null {
+interface KevRuntimeParts {
+  checkpoint: string
+  base: string
+  python: string | undefined
+  script: string | undefined
+  /** Every checkpoint and base file the server reads is on disk. */
+  modelReady: boolean
+}
+
+function resolveKevRuntimeParts(modelId: string): KevRuntimeParts | null {
   if (!(
     (process.platform === 'darwin' && process.arch === 'arm64') ||
     process.platform === 'win32' ||
@@ -459,7 +468,10 @@ export function resolveKevRuntimeArtifact(modelId: string = KEV_4B_ID): KevRunti
     process.platform === 'win32'
       ? path.join('kev-runtime', 'python', 'python.exe')
       : path.join('kev-runtime', 'python', 'bin', 'python3')
-  const packagedPython = binRoots()
+  // The runtime downloaded with the model comes first; resources/bin keeps serving
+  // development checkouts and the platforms that still bundle it.
+  const installedRoot = installedKevRuntimeRoot()
+  const packagedPython = [...(installedRoot ? [installedRoot] : []), ...binRoots()]
     .map((directory) => path.join(directory, pythonRelative))
     .find((candidate) => fs.existsSync(candidate))
   const legacyPython = path.join(
@@ -485,12 +497,33 @@ export function resolveKevRuntimeArtifact(modelId: string = KEV_4B_ID): KevRunti
     path.join(base, 'tokenizer.json'),
     path.join(base, 'tokenizer_config.json')
   ]
-  return python &&
-    script &&
+  const modelReady =
     shards.length > 0 &&
     required.every((file) => fileSizeOf(path.dirname(file), path.basename(file)) > 0)
-    ? { checkpoint, base, python, script }
+  return { checkpoint, base, python, script, modelReady }
+}
+
+/** Resolve the server runtime and the model downloaded from the Models screen. */
+export function resolveKevRuntimeArtifact(modelId: string = KEV_4B_ID): KevRuntimeArtifact | null {
+  const parts = resolveKevRuntimeParts(modelId)
+  return parts?.modelReady && parts.python && parts.script
+    ? { checkpoint: parts.checkpoint, base: parts.base, python: parts.python, script: parts.script }
     : null
+}
+
+/** The runtime archive a Kev model still needs on this machine, or null when it has one
+ *  (downloaded, bundled, or the legacy source checkout) or this platform bundles its own. */
+export function kevRuntimeToDownload(modelId: string = KEV_4B_ID): ReturnType<typeof kevRuntimeAsset> {
+  const asset = kevRuntimeAsset()
+  if (!asset || !isKevModel(modelId)) return null
+  return resolveKevRuntimeParts(modelId)?.python ? null : asset
+}
+
+/** The model is on disk but its runtime is not: an install from before the runtime moved
+ *  out of the Mac app. Starting Kev fetches the runtime first. */
+export function kevNeedsOnlyRuntime(modelId: string): boolean {
+  const parts = resolveKevRuntimeParts(modelId)
+  return Boolean(parts?.modelReady && kevRuntimeToDownload(modelId))
 }
 
 const DESKTOP_CATALOG = [BONSAI_2, DECIDER_2B, DECIDER_2B_VISION, ...KEV_MODELS]
@@ -1100,11 +1133,44 @@ async function downloadModelInner(
         })
         // Catalog sizes plan the denominator; the file being fetched contributes its REAL
         // content-length instead, so the total sharpens as the job proceeds rather than drifting.
-        const plannedBytes = pending.map((file) => file.sizeBytes ?? 0)
+        // A Kev model on a Mac also needs its Python runtime; it rides in the same job, so one
+        // progress bar covers the weights and the runtime.
+        const kevRuntime = kevRuntimeToDownload(modelId)
+        const plannedBytes = [
+          ...pending.map((file) => file.sizeBytes ?? 0),
+          ...(kevRuntime ? [kevRuntime.bytes] : [])
+        ]
+        const fileCount = plannedBytes.length
         const laterBytes = (index: number): number =>
           plannedBytes.slice(index + 1).reduce((sum, bytes) => sum + bytes, 0)
         let jobDoneBytes = 0
         let rateSample: ProgressRateSample | undefined
+        const reportTransfer = (
+          currentFile: string,
+          fileIndex: number,
+          written: number,
+          total: number
+        ): void => {
+          const jobDone = jobDoneBytes + written
+          const jobTotal = jobDoneBytes + total + laterBytes(fileIndex)
+          const rate = sampleProgressRate(rateSample, {
+            currentBytes: jobDone,
+            sampledAtMs: Date.now()
+          })
+          rateSample = rate.sample
+          send({
+            currentFile,
+            fileIndex: fileIndex + 1,
+            fileCount,
+            percent: jobTotal ? Math.round((jobDone / jobTotal) * 100) : 0,
+            downloadedMB: (jobDone / 1048576).toFixed(1),
+            totalMB: jobTotal ? (jobTotal / 1048576).toFixed(1) : '?',
+            downloadedBytes: jobDone,
+            totalBytes: jobTotal || undefined,
+            bytesPerSecond: rate.bytesPerSecond,
+            status: 'downloading'
+          })
+        }
         for (const [fileIndex, file] of pending.entries()) {
           const dest = path.join(dir, file.name)
           fs.mkdirSync(path.dirname(dest), { recursive: true })
@@ -1141,25 +1207,7 @@ async function downloadModelInner(
           // process, and never hangs on a 'finish' that won't come.
           await pumpToFile(reader, out, (n) => {
             written += n
-            const jobDone = jobDoneBytes + written
-            const jobTotal = jobDoneBytes + total + laterBytes(fileIndex)
-            const rate = sampleProgressRate(rateSample, {
-              currentBytes: jobDone,
-              sampledAtMs: Date.now()
-            })
-            rateSample = rate.sample
-            send({
-              currentFile: file.name,
-              fileIndex: fileIndex + 1,
-              fileCount: pending.length,
-              percent: jobTotal ? Math.round((jobDone / jobTotal) * 100) : 0,
-              downloadedMB: (jobDone / 1048576).toFixed(1),
-              totalMB: jobTotal ? (jobTotal / 1048576).toFixed(1) : '?',
-              downloadedBytes: jobDone,
-              totalBytes: jobTotal || undefined,
-              bytesPerSecond: rate.bytesPerSecond,
-              status: 'downloading'
-            })
+            reportTransfer(file.name, fileIndex, written, total)
           })
           if (signal.aborted) {
             return interruptedResult(signal, partPath)
@@ -1193,6 +1241,23 @@ async function downloadModelInner(
           })
         }
         if (signal.aborted) return interruptedResult(signal, activePartPath)
+        if (kevRuntime) {
+          writeDiagnosticLog('models.download', 'kev-runtime.started', {
+            modelId,
+            version: kevRuntime.version
+          })
+          const fileIndex = pending.length
+          await installKevRuntime(kevRuntime, {
+            signal,
+            onBytes: (written) =>
+              reportTransfer('Kev runtime', fileIndex, written, kevRuntime.bytes)
+          })
+          jobDoneBytes += kevRuntime.bytes
+          writeDiagnosticLog('models.download', 'kev-runtime.completed', {
+            modelId,
+            version: kevRuntime.version
+          })
+        }
         // An alternate file from a cataloged repository is a separate installed
         // package. Keep it alongside the catalog default and protect its files.
         const matchesCatalog =

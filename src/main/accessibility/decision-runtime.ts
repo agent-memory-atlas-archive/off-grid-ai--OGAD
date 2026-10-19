@@ -27,7 +27,9 @@ import { isPortFree, pickFreePort } from '../free-port'
 import { reapOrphanProcessesOnPort } from '../kill-orphan-port'
 import {
   KEV_9B_ID,
+  downloadModel,
   isKevModel,
+  kevNeedsOnlyRuntime,
   resolveComputerUseModelArtifact,
   resolveKevRuntimeArtifact
 } from '../models-manager'
@@ -179,6 +181,17 @@ export class DecisionRuntime {
   }
 
   private async startKev(modelId: string): Promise<void> {
+    if (kevNeedsOnlyRuntime(modelId)) {
+      // Installed before the runtime left the Mac app: fetch it once, as a download of this
+      // model, so the Models screen and downloads list show its progress.
+      console.log('[Kev runtime] downloading the Kev runtime before the first start')
+      const result = await downloadModel(modelId)
+      if (!result.success)
+        throw new DecisionRuntimeError(
+          `Kev's runtime could not be downloaded: ${result.error ?? 'unknown error'}`,
+          'missing'
+        )
+    }
     const artifact = resolveKevRuntimeArtifact(modelId)
     if (!artifact)
       throw new DecisionRuntimeError('The local Kev model or runtime is missing.', 'missing')

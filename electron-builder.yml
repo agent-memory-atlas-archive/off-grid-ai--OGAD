@@ -113,6 +113,11 @@ mac:
   extraResources:
     - from: resources/bin
       to: bin
+      filter:
+        - '**/*'
+        # Kev's Python runtime downloads with a Kev model (resources/kev-runtime-packs.json).
+        # Bundled, it pushed the update zip past the 1 GiB Squirrel.Mac can install.
+        - '!kev-runtime/**'
     - from: ../executorch-speech/native/bin/executorch-speech
       to: bin/executorch-speech
     - from: ../executorch-speech/generated/default-assets
