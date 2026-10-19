@@ -751,6 +751,13 @@ export class LLMService {
     )
   }
 
+  /** Team mode: the tokens the slots share (the unified KV pool). Undefined in single mode. */
+  gatewayPoolTokens(): number | undefined {
+    this.ensureLoaded()
+    if (this.gatewayModeSetting !== 'team') return undefined
+    return this.launchedSlotPlan?.poolCtx ?? this.ctxSize
+  }
+
   /** The speculative mode the launch args actually carry (see launchArgsFor). */
   private effectiveSpeculativeDecoding(): SpeculativeDecodingMode {
     if (this.runtimeModelOverride !== null)

@@ -81,7 +81,7 @@ import {
   getActiveRemoteVisionServer,
   getActiveRemoteVisionServerForModality
 } from './vision/remote-vision-server'
-import { REASONING_BUDGET_AUTO, REMOTE_TEAM_CONCURRENCY } from '@offgrid/models'
+import { REASONING_BUDGET_AUTO, REMOTE_TEAM_CONCURRENCY, chatRequestTokens } from '@offgrid/models'
 import { LimiterFullError, UpstreamLimiter, type Release } from './model-server/upstream-limiter'
 import {
   chatLimiter,
@@ -1236,13 +1236,14 @@ function sendLimiterFull(res: http.ServerResponse, error: LimiterFullError): voi
  *  the request was answered (429, or the client is gone). */
 async function admitTeamRequest(
   limiter: UpstreamLimiter,
-  res: http.ServerResponse
+  res: http.ServerResponse,
+  tokens = 0
 ): Promise<Release | null> {
   const gone = new AbortController()
   const onClose = (): void => gone.abort()
   res.once('close', onClose)
   try {
-    const release = await limiter.acquire(gone.signal)
+    const release = await limiter.acquire(gone.signal, tokens)
     if (res.destroyed) {
       release()
       return null
@@ -1296,6 +1297,13 @@ async function handleTeamChat(
     // Image fetch failed — forward the original request so the model returns its own error.
   }
   res.setHeader('X-Request-Id', rid)
+  // What this request may take from the shared KV pool: its prompt and its reply cap.
+  const maxTokens = body.max_tokens ?? body.max_completion_tokens
+  const tokens = chatRequestTokens(
+    forward.length,
+    typeof maxTokens === 'number' ? maxTokens : undefined,
+    llm.effectiveContextSize()
+  )
 
   // Async chat answers 202 at once and takes its turn in the background.
   if (!remote && isAsync(req, body)) {
@@ -1313,7 +1321,7 @@ async function handleTeamChat(
       '/v1/chat/completions',
       true,
       async () => {
-        const release = await teamLimiter('chat').acquire()
+        const release = await teamLimiter('chat').acquire(undefined, tokens)
         try {
           const result = await callLlamaJson(body, Date.now() + 45_000, undefined, true)
           activity.finish(result)
@@ -1330,7 +1338,9 @@ async function handleTeamChat(
     return
   }
 
-  const release = await admitTeamRequest(teamLimiter(remote ? 'remote' : 'chat'), res)
+  const release = remote
+    ? await admitTeamRequest(teamLimiter('remote'), res)
+    : await admitTeamRequest(teamLimiter('chat'), res, tokens)
   if (!release) return
   const activity = new AIRequestHandle({
     modality: 'text',

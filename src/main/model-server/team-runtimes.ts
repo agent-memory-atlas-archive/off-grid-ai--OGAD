@@ -6,7 +6,8 @@
 
 import { totalmem } from 'os'
 import {
-  EMBEDDING_BATCH_MAX,
+  EMBEDDING_BATCH_WINDOW_MS,
+  embeddingBatchSize,
   gatewayRuntimeTable,
   limiterQueueDepth,
   llmSlotCount,
@@ -62,6 +63,8 @@ export function teamLimiter(runtime: GatewayRuntime): UpstreamLimiter {
     limiter = new UpstreamLimiter(LABELS[runtime], capacity)
     limiters.set(runtime, limiter)
   } else limiter.setCapacity(capacity)
+  // The chat model's slots share one KV pool: admit by its tokens too.
+  if (runtime === 'chat') limiter.setTokenBudget(llm.gatewayPoolTokens())
   return limiter
 }
 
@@ -101,9 +104,9 @@ const embeddingWaiters: EmbeddingWaiter[] = []
 let embeddingBatchRunning = false
 
 /**
- * Vectors for `texts`, batched with every other request waiting at the time: the worker runs one
- * batch at a time, so requests that arrive while it is busy share the next forward pass instead of
- * queueing one by one. Interactive: these run ahead of background indexing. Refused (429) past the
+ * Vectors for `texts`, batched with every other request waiting at the time: a batch starts after a
+ * 3 ms window, the worker runs one batch at a time, and requests that arrive meanwhile share the
+ * next forward pass instead of queueing one by one. Interactive: these run ahead of background indexing. Refused (429) past the
  * bounded line.
  */
 export function embedCoalesced(texts: string[]): Promise<number[][]> {
@@ -111,21 +114,31 @@ export function embedCoalesced(texts: string[]): Promise<number[][]> {
     return Promise.reject(new LimiterFullError(LABELS.embeddings))
   return new Promise<number[][]>((resolve, reject) => {
     embeddingWaiters.push({ texts, resolve, reject })
-    void runEmbeddingBatch()
+    runEmbeddingBatch()
   })
 }
 
-async function runEmbeddingBatch(): Promise<void> {
+let embeddingWindow: ReturnType<typeof setTimeout> | null = null
+
+/** Start the next batch after a short window, so requests arriving together share it. */
+function runEmbeddingBatch(): void {
+  if (embeddingBatchRunning || embeddingWindow || embeddingWaiters.length === 0) return
+  embeddingWindow = setTimeout(() => {
+    embeddingWindow = null
+    void embedNextBatch()
+  }, EMBEDDING_BATCH_WINDOW_MS)
+}
+
+async function embedNextBatch(): Promise<void> {
   if (embeddingBatchRunning || embeddingWaiters.length === 0) return
   embeddingBatchRunning = true
-  const batch: EmbeddingWaiter[] = []
-  let size = 0
-  while (embeddingWaiters.length > 0) {
-    const next = embeddingWaiters[0]!
-    if (batch.length > 0 && size + next.texts.length > EMBEDDING_BATCH_MAX) break
-    batch.push(embeddingWaiters.shift()!)
-    size += next.texts.length
-  }
+  const take = embeddingBatchSize(
+    embeddingWaiters.map((waiter) => ({
+      texts: waiter.texts.length,
+      chars: waiter.texts.reduce((sum, text) => sum + text.length, 0)
+    }))
+  )
+  const batch = embeddingWaiters.splice(0, take)
   try {
     const { embeddings } = await import('../embeddings')
     const vectors = await embeddings.embedDocumentTexts(
@@ -141,6 +154,6 @@ async function runEmbeddingBatch(): Promise<void> {
     for (const waiter of batch) waiter.reject(error)
   } finally {
     embeddingBatchRunning = false
-    void runEmbeddingBatch()
+    runEmbeddingBatch()
   }
 }

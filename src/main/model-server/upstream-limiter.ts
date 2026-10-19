@@ -24,6 +24,7 @@ export class LimiterFullError extends Error {
 }
 
 interface Waiter {
+  tokens: number
   start: () => void
   reject: (reason: unknown) => void
 }
@@ -32,6 +33,9 @@ export type Release = () => void
 
 export class UpstreamLimiter {
   private active = 0
+  private activeTokens = 0
+  /** llama-server's KV pool in tokens: running requests may not expect more, together. */
+  private tokenBudget: number | undefined
   private readonly waiting: Waiter[] = []
   private exclusiveDepth = 0
   private exclusiveChain: Promise<unknown> = Promise.resolve()
@@ -49,6 +53,13 @@ export class UpstreamLimiter {
     this.pump()
   }
 
+  /** Admit by tokens as well as by count (the chat model's unified KV pool). */
+  setTokenBudget(tokens: number | undefined): void {
+    if (tokens === this.tokenBudget) return
+    this.tokenBudget = tokens
+    this.pump()
+  }
+
   get inFlight(): number {
     return this.active
   }
@@ -58,22 +69,26 @@ export class UpstreamLimiter {
   }
 
   /** Wait for a turn. Resolves with the release to call when the request ends (idempotent). */
-  acquire(signal?: AbortSignal): Promise<Release> {
+  acquire(signal?: AbortSignal, tokens = 0): Promise<Release> {
     if (signal?.aborted) return Promise.reject(signal.reason ?? new Error('aborted'))
     const decision = limiterAdmission({
       active: this.active,
       queued: this.waiting.length,
       capacity: this.capacity,
       maxQueued: limiterQueueDepth(this.capacity),
-      exclusive: this.exclusiveDepth > 0
+      exclusive: this.exclusiveDepth > 0,
+      tokenBudget: this.tokenBudget,
+      activeTokens: this.activeTokens,
+      requestTokens: tokens
     })
     if (decision === 'reject') return Promise.reject(new LimiterFullError(this.runtime))
-    if (decision === 'run') return Promise.resolve(this.take())
+    if (decision === 'run') return Promise.resolve(this.take(tokens))
     return new Promise<Release>((resolve, reject) => {
       const waiter: Waiter = {
+        tokens,
         start: () => {
           signal?.removeEventListener('abort', onAbort)
-          resolve(this.take())
+          resolve(this.take(tokens))
         },
         reject
       }
@@ -108,13 +123,15 @@ export class UpstreamLimiter {
     return new Promise((resolve) => this.idleWaiters.push(resolve))
   }
 
-  private take(): Release {
+  private take(tokens: number): Release {
     this.active += 1
+    this.activeTokens += tokens
     let released = false
     return () => {
       if (released) return
       released = true
       this.active -= 1
+      this.activeTokens -= tokens
       if (this.active === 0) {
         const waiters = this.idleWaiters
         this.idleWaiters = []
@@ -130,7 +147,10 @@ export class UpstreamLimiter {
       limiterCanStart({
         active: this.active,
         capacity: this.capacity,
-        exclusive: this.exclusiveDepth > 0
+        exclusive: this.exclusiveDepth > 0,
+        tokenBudget: this.tokenBudget,
+        activeTokens: this.activeTokens,
+        requestTokens: this.waiting[0]!.tokens
       })
     ) {
       this.waiting.shift()!.start()
