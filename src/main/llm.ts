@@ -334,6 +334,8 @@ export class LLMService {
   private lastPlacedBackend: string | undefined
   /** Set by the gateway: an eviction waits for its in-flight streams and admits no new ones. */
   private evictionGate: ((evict: () => Promise<void>) => Promise<void>) | null = null
+  /** Set by the gateway: a settings relaunch lets in-flight team-mode streams finish first. */
+  private relaunchGate: ((relaunch: () => Promise<void>) => Promise<void>) | null = null
   // Crash recovery: distinguish an intentional kill (stop/reload/settings respawn)
   // from an unexpected crash so we only auto-restart on real crashes.
   private intentionalStop = false
@@ -815,6 +817,12 @@ export class LLMService {
     this.evictionGate = gate
   }
 
+  /** The gateway makes a relaunch for changed settings wait for its in-flight streams, up to a
+   *  deadline (team mode; in single mode no stream holds the gate). */
+  setRelaunchGate(gate: ((relaunch: () => Promise<void>) => Promise<void>) | null): void {
+    this.relaunchGate = gate
+  }
+
   private draftModelPath(): string | undefined {
     if (this.speculativeDecoding === 'mtp') {
       return this.mtpModelPath()
@@ -1099,8 +1107,12 @@ export class LLMService {
       if (request !== this.launchRestartRequest) return
       // A successful spawn records the settings its arguments were built from as the working
       // launch (launchWithFallback), so a save made while this loads is never mistaken for it.
-      this.stop()
-      await this.init()
+      const relaunch = async (): Promise<void> => {
+        this.stop()
+        await this.init()
+      }
+      // Team mode: streams in flight finish (up to a deadline) and none start meanwhile.
+      await (this.relaunchGate ? this.relaunchGate(relaunch) : relaunch())
     })
     // The queue itself must never carry a rejection: a failed respawn is reported to the
     // caller that asked for it, and the next request still gets its turn.

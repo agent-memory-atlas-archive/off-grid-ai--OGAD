@@ -102,12 +102,14 @@ export class UpstreamLimiter {
     })
   }
 
-  /** Run `fn` with the runtime to itself: no new request starts, running ones finish first. */
-  exclusive<T>(fn: () => Promise<T>): Promise<T> {
+  /** Run `fn` with the runtime to itself: no new request starts, running ones finish first. With
+   *  `maxWaitMs`, `fn` runs once that has passed even if some are still running (a relaunch for
+   *  changed settings must happen; a stuck stream must not hold it off for ever). */
+  exclusive<T>(fn: () => Promise<T>, maxWaitMs?: number): Promise<T> {
     const run = this.exclusiveChain.then(async () => {
       this.exclusiveDepth += 1
       try {
-        await this.idle()
+        await this.idle(maxWaitMs)
         return await fn()
       } finally {
         this.exclusiveDepth -= 1
@@ -118,9 +120,21 @@ export class UpstreamLimiter {
     return run
   }
 
-  private idle(): Promise<void> {
+  private idle(maxWaitMs?: number): Promise<void> {
     if (this.active === 0) return Promise.resolve()
-    return new Promise((resolve) => this.idleWaiters.push(resolve))
+    return new Promise((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const wake = (): void => {
+        if (timer) clearTimeout(timer)
+        resolve()
+      }
+      this.idleWaiters.push(wake)
+      if (maxWaitMs !== undefined)
+        timer = setTimeout(() => {
+          this.idleWaiters = this.idleWaiters.filter((waiter) => waiter !== wake)
+          resolve()
+        }, maxWaitMs)
+    })
   }
 
   private take(tokens: number): Release {

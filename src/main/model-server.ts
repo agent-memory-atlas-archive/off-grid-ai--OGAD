@@ -81,7 +81,12 @@ import {
   getActiveRemoteVisionServer,
   getActiveRemoteVisionServerForModality
 } from './vision/remote-vision-server'
-import { REASONING_BUDGET_AUTO, REMOTE_TEAM_CONCURRENCY, chatRequestTokens } from '@offgrid/models'
+import {
+  REASONING_BUDGET_AUTO,
+  REMOTE_TEAM_CONCURRENCY,
+  TEAM_DRAIN_TIMEOUT_MS,
+  chatRequestTokens
+} from '@offgrid/models'
 import { LimiterFullError, UpstreamLimiter, type Release } from './model-server/upstream-limiter'
 import {
   chatLimiter,
@@ -2094,6 +2099,9 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
   // An eviction of the chat model (an image job needs its memory) waits for team-mode streams to
   // finish and admits no new ones meanwhile. In single mode no stream holds the limiter.
   llm.setEvictionGate((evict) => chatLimiter().exclusive(evict))
+  // A relaunch for changed settings (the mode, the context, the cache type...) lets team-mode
+  // streams in flight finish first, for at most a minute.
+  llm.setRelaunchGate((relaunch) => chatLimiter().exclusive(relaunch, TEAM_DRAIN_TIMEOUT_MS))
   // The Decider's llama-server opens slots in team mode too; it reads the mode from here.
   void import('./accessibility/decision-runtime').then(({ setDecisionGatewayModeSource }) =>
     setDecisionGatewayModeSource(() => llm.gatewayMode())
