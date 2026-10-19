@@ -6,7 +6,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { llm } from './llm'
+import { llm, type LlmSettings } from './llm'
+import { probedGpuMemoryMB } from './llm/gpu-device-probe'
+import { cudaVramMB } from './llm/vram-probe'
 import { selectLocalEngine } from './llm/select-local-engine'
 import { getBackendPreferences, setBackendPreference } from './backend-preferences'
 import { getResidency, setResidencyMode } from './runtime-residency'
@@ -37,9 +39,8 @@ async function applePerformanceCores(): Promise<number | null> {
 }
 
 /** The GPU backend of the engine llama.cpp would load with, after its own device probe. */
-async function nativeGpu(): Promise<NativeGpu | null> {
+function nativeGpu(engine: string | undefined): NativeGpu | null {
   if (process.platform === 'darwin') return 'Metal'
-  const engine = await selectLocalEngine('auto')
   const directory = engine ? path.basename(path.dirname(engine)) : ''
   if (directory === 'llama-cuda') return 'CUDA'
   if (directory === 'llama') return 'Vulkan'
@@ -50,14 +51,25 @@ export async function detectMachine(): Promise<MachineProfile> {
   const cpus = os.cpus()
   const logical = os.availableParallelism()
   const performance = process.platform === 'darwin' ? await applePerformanceCores() : null
+  const engine = process.platform === 'darwin' ? undefined : await selectLocalEngine('auto')
+  const gpu = nativeGpu(engine)
   return {
     platform: process.platform,
     cpuModel: (cpus[0]?.model ?? 'CPU').trim(),
     // Outside Apple, physical cores are about half the logical count on SMT processors.
     performanceCores: performance ?? Math.max(1, Math.floor(logical / 2)),
     totalRamGb: os.totalmem() / 1024 ** 3,
-    gpu: await nativeGpu()
+    gpu,
+    gpuMemoryGb: gpuMemoryGb(gpu, engine)
   }
+}
+
+/** The card's VRAM in GB, as the engine's own device list or nvidia-smi reports it. */
+function gpuMemoryGb(gpu: NativeGpu | null, engine: string | undefined): number | null {
+  if (gpu !== 'CUDA' && gpu !== 'Vulkan') return null
+  const listedMB = engine ? probedGpuMemoryMB(engine, gpu) : null
+  const totalMB = listedMB ?? (gpu === 'CUDA' ? (cudaVramMB()?.totalMB ?? null) : null)
+  return totalMB === null ? null : totalMB / 1024
 }
 
 export interface BestSettingsResult {
@@ -105,11 +117,24 @@ function readState(): BestSettingsState | null {
 
 async function currentPlan(): Promise<BestSettingsResult & { fingerprint: string }> {
   const machine = await machineProfile()
-  const current = llm.getSettings() as { supportsMtp?: boolean; modelMaxCtx?: number | null }
+  const current = llm.getSettings() as LlmSettings & { modelMaxCtx?: number | null }
+  // A draft-model or DFlash choice is the person's own and stays.
+  const own =
+    (current.speculativeDecoding === 'draft' || current.speculativeDecoding === 'dflash') &&
+    current.draftModel
+      ? {
+          mode: current.speculativeDecoding,
+          draftModel: current.draftModel,
+          draftMax: current.speculativeDraftMax ?? 0
+        }
+      : undefined
   const plan = planBestSettings(machine, {
     weightsGb: llm.localWeightsGb(),
     supportsMtp: current.supportsMtp === true,
-    modelMaxCtx: current.modelMaxCtx ?? null
+    modelMaxCtx: current.modelMaxCtx ?? null,
+    isMoe: llm.localModelIsMoe(),
+    hasMmproj: llm.localModelHasProjector(),
+    ...(own ? { ownSpeculation: own } : {})
   })
   return { machine, plan, fingerprint: bestSettingsFingerprint(machine, llm.localModelFile()) }
 }

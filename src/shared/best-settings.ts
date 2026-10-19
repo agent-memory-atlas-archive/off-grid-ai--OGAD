@@ -3,6 +3,14 @@
 // engine's launch settings, which engines stay in memory, and the screenshot size).
 // The main process detects the hardware and applies the plan; this file only decides.
 
+import {
+  fastestKvCache,
+  planFastestSettings,
+  METAL_WORKING_SET_SHARE,
+  type GpuPlacement,
+  type SpeedDeviceClass,
+  type SpeedSpeculativeMode
+} from '@offgrid/models'
 import { backendChoices, type BackendModality, type BackendPreference } from './backend-preferences'
 import { DEFAULT_CTX_SIZE } from './llm-defaults'
 import type { Modality } from './runtime-residency-types'
@@ -18,6 +26,9 @@ export interface MachineProfile {
   totalRamGb: number
   /** The GPU backend a bundled llama.cpp engine proved it can use, or null for CPU only. */
   gpu: NativeGpu | null
+  /** VRAM of the GPU in GB, or null when the engine did not report it. A Mac uses the Metal
+   *  working set of its unified memory instead. */
+  gpuMemoryGb?: number | null
 }
 
 export interface ChatModelProfile {
@@ -25,15 +36,21 @@ export interface ChatModelProfile {
   weightsGb: number
   supportsMtp: boolean
   modelMaxCtx: number | null
+  /** A mixture-of-experts model. */
+  isMoe?: boolean
+  hasMmproj?: boolean
+  /** The person's own draft-model or DFlash choice, kept by the plan. */
+  ownSpeculation?: { mode: 'draft' | 'dflash'; draftModel: string; draftMax: number }
 }
 
 export interface BestChatSettings {
+  gpuPlacement: GpuPlacement
   gpuLayers: number
   flashAttn: boolean
   kvCacheType: KvCache
   ctxSize: number
   threads: number
-  speculativeDecoding: 'mtp' | 'off'
+  speculativeDecoding: SpeedSpeculativeMode
   speculativeDraftMax: number
   draftModel: string
 }
@@ -56,12 +73,6 @@ const BACKEND_ORDER: BackendModality[] = [
   'decision',
   'embeddings'
 ]
-// KV cache cost per 1K tokens for an ~8B model; larger estimates keep the choice safe.
-const KV_GB_PER_1K: Record<KvCache, number> = { f16: 0.16, q8_0: 0.085, q4_0: 0.05 }
-// Share of RAM the chat model may use, matching the Balanced budget the app loads with.
-const CHAT_RAM_SHARE = 0.65
-const RAM_RESERVE_GB = 1.5
-const MTP_DRAFT_TOKENS = 2
 const MANY_RAM_GB = 32
 const ENOUGH_RAM_GB = 16
 
@@ -85,9 +96,21 @@ export function bestBackend(
 /** f16 when RAM holds the context at full precision (the reference path), else the
  *  lightest quantization that still fits. */
 export function bestKvCache(ctxSize: number, totalRamGb: number, weightsGb: number): KvCache {
-  const budgetGb = totalRamGb * CHAT_RAM_SHARE - weightsGb - RAM_RESERVE_GB
-  const fits = (kv: KvCache): boolean => (ctxSize / 1000) * KV_GB_PER_1K[kv] <= budgetGb
-  return fits('f16') ? 'f16' : fits('q8_0') ? 'q8_0' : 'q4_0'
+  return fastestKvCache(ctxSize, totalRamGb, weightsGb)
+}
+
+/** The row of the shared fastest-settings table this machine belongs to. */
+export function speedDeviceClass(machine: Pick<MachineProfile, 'platform' | 'gpu'>): SpeedDeviceClass {
+  if (machine.platform === 'darwin') return 'mac'
+  if (machine.gpu === 'CUDA') return 'cuda'
+  if (machine.gpu === 'Vulkan') return 'vulkan'
+  return 'cpu'
+}
+
+/** The memory the GPU can hold the model in: the Metal working set on a Mac, VRAM elsewhere. */
+function gpuMemoryGb(machine: MachineProfile): number | null {
+  if (machine.platform === 'darwin') return machine.totalRamGb * METAL_WORKING_SET_SHARE
+  return machine.gpu ? (machine.gpuMemoryGb ?? null) : null
 }
 
 export function bestChatSettings(
@@ -98,18 +121,36 @@ export function bestChatSettings(
     model.modelMaxCtx && model.modelMaxCtx > 0
       ? Math.min(DEFAULT_CTX_SIZE, model.modelMaxCtx)
       : DEFAULT_CTX_SIZE
-  return {
-    gpuLayers: machine.gpu ? 99 : 0,
-    flashAttn: true,
-    kvCacheType: bestKvCache(ctxSize, machine.totalRamGb, model.weightsGb),
+  // The rules live in the shared table (@offgrid/models planFastestSettings): Auto GPU placement,
+  // MTP only when the whole model fits in GPU memory, n-gram when the model has no MTP head. The
+  // person's own draft-model or DFlash choice is kept.
+  const own = model.ownSpeculation
+  const plan = planFastestSettings({
+    machine: {
+      device: speedDeviceClass(machine),
+      totalRamGb: machine.totalRamGb,
+      gpuMemoryGb: gpuMemoryGb(machine),
+      performanceCores: machine.performanceCores
+    },
+    model: {
+      weightsGb: model.weightsGb,
+      isMoe: model.isMoe === true,
+      hasMtpHead: model.supportsMtp,
+      hasMmproj: model.hasMmproj === true
+    },
     ctxSize,
-    // With every layer on the GPU, llama.cpp picks its own thread count.
-    threads: machine.gpu ? 0 : Math.max(1, machine.performanceCores),
-    // MTP uses the model's own prediction heads. DFlash and draft models stay opt-in:
-    // DFlash rejects image requests while a vision projector is loaded.
-    speculativeDecoding: model.supportsMtp ? 'mtp' : 'off',
-    speculativeDraftMax: model.supportsMtp ? MTP_DRAFT_TOKENS : 0,
-    draftModel: ''
+    overrides: own ? { speculativeDecoding: own.mode, speculativeDraftMax: own.draftMax } : {}
+  })
+  return {
+    gpuPlacement: plan.gpuPlacement,
+    gpuLayers: plan.gpuLayers,
+    flashAttn: plan.flashAttn,
+    kvCacheType: plan.kvCacheType,
+    ctxSize,
+    threads: plan.threads,
+    speculativeDecoding: plan.speculativeDecoding,
+    speculativeDraftMax: plan.speculativeDraftMax,
+    draftModel: own ? own.draftModel : ''
   }
 }
 
@@ -141,15 +182,20 @@ const KV_LABEL: Record<KvCache, string> = {
   q4_0: 'a q4_0 cache'
 }
 
+const SPECULATION_LABEL: Record<SpeedSpeculativeMode, (draftMax: number) => string> = {
+  mtp: (draftMax) => `MTP with ${draftMax} draft tokens`,
+  ngram: () => 'n-gram speculation',
+  draft: () => 'your draft model',
+  dflash: () => 'your DFlash model',
+  off: () => 'no speculative decoding'
+}
+
 function summarize(machine: MachineProfile, plan: Omit<BestSettingsPlan, 'summary'>): string[] {
   const { chat } = plan
-  const speculation =
-    chat.speculativeDecoding === 'mtp'
-      ? `MTP with ${chat.speculativeDraftMax} draft tokens`
-      : 'no speculative decoding (this model has no MTP heads)'
+  const speculation = SPECULATION_LABEL[chat.speculativeDecoding](chat.speculativeDraftMax)
   const kept = (Object.keys(plan.residency) as Modality[]).map((m) => KEPT_LABEL[m] ?? m)
   return [
-    `Chat and vision run on the ${processorName(machine)} with ${chat.gpuLayers ? 'every layer offloaded' : `${chat.threads} CPU threads`}, ${speculation}, ${KV_LABEL[chat.kvCacheType]} and a ${chat.ctxSize / 1024}K context.`,
+    `Chat and vision run on the ${processorName(machine)} with ${machine.gpu ? 'automatic GPU placement' : `${chat.threads} CPU threads`}, ${speculation}, ${KV_LABEL[chat.kvCacheType]} and a ${chat.ctxSize / 1024}K context.`,
     `Images, voice, transcription and search use ${machine.platform === 'darwin' ? 'Metal and Core ML' : machine.gpu ? `the ${machine.gpu} GPU` : 'the best available processor'}.`,
     kept.length
       ? `Kept ready in memory: ${kept.join(', ')}.`
@@ -210,6 +256,7 @@ export function bestSettingsFingerprint(machine: MachineProfile, modelFile: stri
 }
 
 const SPEED_FIELDS: (keyof BestChatSettings)[] = [
+  'gpuPlacement',
   'gpuLayers',
   'flashAttn',
   'kvCacheType',

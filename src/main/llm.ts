@@ -548,6 +548,22 @@ export class LLMService {
     return bytes / 1024 ** 3
   }
 
+  /** Whether the active local chat model is a mixture of experts (GGUF expert_count above 0). */
+  localModelIsMoe(): boolean {
+    if (!this.modelsExist()) return false
+    this.ensureLoaded()
+    this.resolveModel()
+    return !!this.modelPath && readGgufExpertCount(this.modelPath, fs) > 0
+  }
+
+  /** Whether the active local chat model loads with a vision projector. */
+  localModelHasProjector(): boolean {
+    if (!this.modelsExist()) return false
+    this.ensureLoaded()
+    this.resolveModel()
+    return !!this.mmProjPath
+  }
+
   private mtpModelPath(): string | undefined {
     const companion = mtpHeadForPrimaryFile(path.basename(this.modelPath))
     if (!companion) return undefined

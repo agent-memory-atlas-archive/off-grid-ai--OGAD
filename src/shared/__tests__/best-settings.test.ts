@@ -21,6 +21,7 @@ describe('planBestSettings', () => {
     const plan = planBestSettings(appleM5, qwen9b)
 
     expect(plan.chat).toEqual({
+      gpuPlacement: 'auto',
       gpuLayers: 99,
       flashAttn: true,
       kvCacheType: 'f16',
@@ -39,7 +40,7 @@ describe('planBestSettings', () => {
     })
     expect(plan.screenshotSize).toBe('balanced')
     expect(plan.summary[0]).toBe(
-      'Chat and vision run on the Apple M5 GPU (Metal) with every layer offloaded, MTP with 2 draft tokens, a full-precision (f16) cache and a 16K context.'
+      'Chat and vision run on the Apple M5 GPU (Metal) with automatic GPU placement, MTP with 2 draft tokens, a full-precision (f16) cache and a 16K context.'
     )
     expect(plan.summary[2]).toBe(
       'Kept ready in memory: image generation, transcription, voice, search.'
@@ -104,7 +105,8 @@ describe('planBestSettings', () => {
       gpuLayers: 0,
       threads: 4,
       kvCacheType: 'q4_0',
-      speculativeDecoding: 'off',
+      // No MTP head: the n-gram cache needs no extra model.
+      speculativeDecoding: 'ngram',
       speculativeDraftMax: 0
     })
     expect(Object.values(plan.backends)).toEqual(Array(7).fill('auto'))
@@ -120,7 +122,7 @@ describe('planBestSettings', () => {
 
     expect(plan.chat.kvCacheType).toBe('q8_0')
     expect(plan.chat.ctxSize).toBe(16_384)
-    expect(plan.chat.speculativeDecoding).toBe('off')
+    expect(plan.chat.speculativeDecoding).toBe('ngram')
   })
 
   it('never asks for more context than the model was trained on', () => {
@@ -150,11 +152,58 @@ describe('planBestSettings', () => {
   })
 })
 
+describe('planBestSettings speculation and placement', () => {
+  const cudaPc = (gpuMemoryGb: number | null): MachineProfile => ({
+    platform: 'win32',
+    cpuModel: 'AMD Ryzen 9',
+    performanceCores: 8,
+    totalRamGb: 64,
+    gpu: 'CUDA',
+    gpuMemoryGb
+  })
+  const moe = { weightsGb: 18, supportsMtp: true, modelMaxCtx: 262_144, isMoe: true }
+
+  it('turns MTP on only when the whole model fits in VRAM', () => {
+    expect(planBestSettings(cudaPc(32), moe).chat).toMatchObject({
+      gpuPlacement: 'auto',
+      speculativeDecoding: 'mtp',
+      speculativeDraftMax: 2
+    })
+    // On a 12 GB card the experts spill to the CPU: the MTP head would cost VRAM and slow decoding.
+    expect(planBestSettings(cudaPc(12), moe).chat).toMatchObject({
+      gpuPlacement: 'auto',
+      speculativeDecoding: 'off',
+      speculativeDraftMax: 0
+    })
+    // VRAM the engine did not report never counts as fitting.
+    expect(planBestSettings(cudaPc(null), moe).chat.speculativeDecoding).toBe('off')
+  })
+
+  it('uses the n-gram cache for a model without an MTP head', () => {
+    const plan = planBestSettings(cudaPc(32), { ...moe, supportsMtp: false })
+    expect(plan.chat.speculativeDecoding).toBe('ngram')
+    expect(plan.summary[0]).toContain('n-gram speculation')
+  })
+
+  it('keeps the person\'s DFlash or draft-model choice', () => {
+    const plan = planBestSettings(appleM5, {
+      ...qwen9b,
+      ownSpeculation: { mode: 'dflash', draftModel: 'Qwen3.5-9B-DFlash.gguf', draftMax: 6 }
+    })
+    expect(plan.chat).toMatchObject({
+      speculativeDecoding: 'dflash',
+      draftModel: 'Qwen3.5-9B-DFlash.gguf',
+      speculativeDraftMax: 6
+    })
+  })
+})
+
 describe('isSpeedSettingsPatch', () => {
   it('counts engine and memory changes but not answer or sampling changes', () => {
     expect(isSpeedSettingsPatch({ kvCacheType: 'q8_0' })).toBe(true)
     expect(isSpeedSettingsPatch({ speculativeDecoding: 'off' })).toBe(true)
     expect(isSpeedSettingsPatch({ performanceMode: 'extreme' })).toBe(true)
+    expect(isSpeedSettingsPatch({ gpuPlacement: 'manual' })).toBe(true)
     expect(isSpeedSettingsPatch({ temperature: 0.4, topK: 20 })).toBe(false)
   })
 })
