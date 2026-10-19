@@ -91,9 +91,17 @@ import {
   REASONING_BUDGET_AUTO,
   REMOTE_TEAM_CONCURRENCY,
   TEAM_DRAIN_TIMEOUT_MS,
+  TEAM_KEEP_AWAKE_GRACE_MS,
   chatRequestTokens
 } from '@offgrid/models'
-import { LimiterFullError, UpstreamLimiter, type Release } from './model-server/upstream-limiter'
+import {
+  LimiterFullError,
+  UpstreamLimiter,
+  limiterRunning,
+  setLimiterActivityListener,
+  type Release
+} from './model-server/upstream-limiter'
+import { TeamKeepAwake, type PowerBlocker } from './model-server/keep-awake'
 import {
   chatLimiter,
   embedCoalesced,
@@ -2637,4 +2645,23 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
 export function stopModelServer(): void {
   server?.close()
   server = null
+  keepAwake?.release()
+}
+
+// ─── Keeping a Team server awake ─────────────────────────────────────────────
+let keepAwake: TeamKeepAwake | null = null
+
+/** The host hands over its sleep blocker (Electron's powerSaveBlocker; a headless Node host may
+ *  have none). While Team mode has requests in flight the machine stays awake; it may sleep again
+ *  a minute after the last one, at once in single mode, and when the gateway stops. */
+export function setGatewayPowerBlocker(blocker: PowerBlocker | null): void {
+  keepAwake?.release()
+  keepAwake = blocker ? new TeamKeepAwake(blocker, TEAM_KEEP_AWAKE_GRACE_MS) : null
+  setLimiterActivityListener(
+    keepAwake ? (running) => keepAwake?.update(teamMode(), running > 0) : null
+  )
+  // Switching to single mode lets the machine sleep at once; to team, it follows the work.
+  llm.onGatewayModeChange(
+    keepAwake ? (mode) => keepAwake?.update(mode === 'team', limiterRunning() > 0) : null
+  )
 }

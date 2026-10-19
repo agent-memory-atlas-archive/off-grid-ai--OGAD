@@ -31,6 +31,25 @@ interface Waiter {
 
 export type Release = () => void
 
+/** Requests running now across every limiter (team-mode work in flight), and who hears of it. */
+let runningEverywhere = 0
+let activityListener: ((running: number) => void) | null = null
+
+/** Hear whenever team-mode work starts or ends anywhere (the gateway keeps the machine awake). */
+export function setLimiterActivityListener(listener: ((running: number) => void) | null): void {
+  activityListener = listener
+}
+
+/** Team-mode requests running now, across every limiter. */
+export function limiterRunning(): number {
+  return runningEverywhere
+}
+
+function noteActivity(change: 1 | -1): void {
+  runningEverywhere += change
+  activityListener?.(runningEverywhere)
+}
+
 export class UpstreamLimiter {
   private active = 0
   private activeTokens = 0
@@ -140,12 +159,14 @@ export class UpstreamLimiter {
   private take(tokens: number): Release {
     this.active += 1
     this.activeTokens += tokens
+    noteActivity(1)
     let released = false
     return () => {
       if (released) return
       released = true
       this.active -= 1
       this.activeTokens -= tokens
+      noteActivity(-1)
       if (this.active === 0) {
         const waiters = this.idleWaiters
         this.idleWaiters = []
