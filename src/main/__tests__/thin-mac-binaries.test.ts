@@ -10,7 +10,10 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
-function macContext(root: string, arch: number): {
+function macContext(
+  root: string,
+  arch: number
+): {
   appOutDir: string
   electronPlatformName: string
   arch: number
@@ -65,10 +68,20 @@ describe.runIf(process.platform === 'darwin')('packaged macOS engine thinning', 
   it('keeps both slices in a universal build', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ogad-thin-'))
     roots.push(root)
-    const engine = path.join(root, 'Off Grid AI Desktop.app', 'Contents', 'Resources', 'bin', 'sd', 'sd-cli')
+    const engine = path.join(
+      root,
+      'Off Grid AI Desktop.app',
+      'Contents',
+      'Resources',
+      'bin',
+      'sd',
+      'sd-cli'
+    )
     universalExecutable(root, engine)
 
     expect(thinMacUniversalBinaries(macContext(root, 4))).toEqual([])
-    expect(execFileSync('lipo', ['-archs', engine], { encoding: 'utf8' }).trim()).toBe('x86_64 arm64')
+    expect(execFileSync('lipo', ['-archs', engine], { encoding: 'utf8' }).trim()).toBe(
+      'x86_64 arm64'
+    )
   })
 })

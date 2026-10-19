@@ -48,9 +48,13 @@ export function thinMacUniversalBinaries(context) {
   const thinned = []
   for (const file of regularFiles(resources)) {
     if (!isFatMachO(file)) continue
-    const archs = String(execFileSync('lipo', ['-archs', file], { encoding: 'utf8' })).trim().split(/\s+/)
+    const archs = String(execFileSync('lipo', ['-archs', file], { encoding: 'utf8' }))
+      .trim()
+      .split(/\s+/)
     if (!archs.includes(lipoArch)) {
-      throw new Error(`${path.relative(resources, file)} has no ${lipoArch} slice (${archs.join(', ')})`)
+      throw new Error(
+        `${path.relative(resources, file)} has no ${lipoArch} slice (${archs.join(', ')})`
+      )
     }
     const output = `${file}.thin`
     execFileSync('lipo', [file, '-thin', lipoArch, '-output', output])
