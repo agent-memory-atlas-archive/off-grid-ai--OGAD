@@ -104,5 +104,5 @@ export function chatPromptShape(body: unknown): { chars: number; images: number 
     }
     return value
   })
-  return { chars: json?.length ?? 0, images }
+  return { chars: json.length, images }
 }

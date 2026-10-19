@@ -108,7 +108,9 @@ describe('every setting the person chose reaches llama-server in both modes', ()
     const person = { ...PERSON, speculativeDecoding: 'dflash' as const }
     const args = buildLaunchArgs({ ...person, ...TEAM })
     expect(flag(args, '--parallel')).toBe('1')
-    expect(personFlags(args)).toEqual(personFlags(buildLaunchArgs({ ...person, gatewayMode: 'single' })))
+    expect(personFlags(args)).toEqual(
+      personFlags(buildLaunchArgs({ ...person, gatewayMode: 'single' }))
+    )
   })
 })
 
@@ -139,7 +141,12 @@ describe('where team mode may differ, and why', () => {
     const args = buildLaunchArgs({ ...person, ...TEAM, architecture: 'gemma4' })
     expect(args).not.toContain('--cache-type-k')
     // The person's explicit q8_0 on Gemma is kept.
-    const chosen = buildLaunchArgs({ ...person, kvCacheTypeExplicit: true, ...TEAM, architecture: 'gemma4' })
+    const chosen = buildLaunchArgs({
+      ...person,
+      kvCacheTypeExplicit: true,
+      ...TEAM,
+      architecture: 'gemma4'
+    })
     expect(flag(chosen, '--cache-type-k')).toBe('q8_0')
   })
 
@@ -153,9 +160,16 @@ describe('where team mode may differ, and why', () => {
       kvShape: DENSE8B,
       architecture: 'llama'
     }
-    const person = { ...PERSON, effectiveCtxSize: 8192, kvCacheType: 'f16' as const, batchSize: undefined }
+    const person = {
+      ...PERSON,
+      effectiveCtxSize: 8192,
+      kvCacheType: 'f16' as const,
+      batchSize: undefined
+    }
     const args = buildLaunchArgs({ ...person, ...cuda })
-    expect(flag(args, '--parallel')).toBe(String(llmSlotPlan(slotInput({ ...person, ...cuda })).slots))
+    expect(flag(args, '--parallel')).toBe(
+      String(llmSlotPlan(slotInput({ ...person, ...cuda })).slots)
+    )
     expect(flag(args, '--parallel')).toBe('16')
     expect(flag(args, '-b')).toBe('4096')
     expect(flag(args, '-ub')).toBe('1024')
