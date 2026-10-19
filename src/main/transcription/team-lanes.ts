@@ -45,7 +45,10 @@ function laneMB(): number {
 /** The least busy lane, opening another while every lane is busy, `wanted` allows and live memory
  *  holds one more model copy; otherwise the request shares the least busy lane. */
 async function pickLane(wanted: number): Promise<Lane> {
-  const idle = lanes.reduce((best, lane) => (lane.inFlight < best.inFlight ? lane : best))
+  const idle = lanes.reduce(
+    (best, lane) => (lane.inFlight < best.inFlight ? lane : best),
+    lanes[0]!
+  )
   if (idle.inFlight === 0 || lanes.length >= wanted) return idle
   if (!adding && !mayStartMediaWorker(measuredAvailableMB(), laneMB())) return idle
   adding ??= addLane().finally(() => {

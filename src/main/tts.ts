@@ -54,7 +54,10 @@ const teamOnnxSpeech: OnnxSpeechRuntime[] = []
  *  live memory holds one more voice model; otherwise the request shares the least busy worker. */
 function onnxWorker(workers: number): OnnxSpeechRuntime {
   const all = [onnxSpeech, ...teamOnnxSpeech]
-  const idle = all.reduce((best, worker) => (worker.inFlight < best.inFlight ? worker : best))
+  const idle = all.reduce(
+    (best, worker) => (worker.inFlight < best.inFlight ? worker : best),
+    onnxSpeech
+  )
   if (idle.inFlight === 0 || all.length >= workers) return idle
   if (!mayStartMediaWorker(measuredAvailableMB(), KOKORO_MB)) return idle
   const added = new OnnxSpeechRuntime()
@@ -158,7 +161,9 @@ async function synthesizeExecutorch(
   } catch (error) {
     status.fail(error)
     throw error
-  } finally { status.stop() }
+  } finally {
+    status.stop()
+  }
 }
 
 let busy = false
