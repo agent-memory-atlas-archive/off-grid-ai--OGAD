@@ -122,7 +122,7 @@ function image(signal?: AbortSignal): Promise<{ status: number; body: string }> 
 /** An image-to-image request with `picture` as its upload. */
 function edit(picture: Buffer): Promise<{ status: number; body: string }> {
   const form = new FormData()
-  form.append('image', new Blob([picture], { type: 'image/png' }), 'in.png')
+  form.append('image', new Blob([new Uint8Array(picture)], { type: 'image/png' }), 'in.png')
   form.append('prompt', 'Make it autumn')
   form.append('model', IMAGE_MODEL)
   return fetch(`http://127.0.0.1:${gatewayPort}/v1/images/edits`, {

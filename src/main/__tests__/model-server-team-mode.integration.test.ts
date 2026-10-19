@@ -356,6 +356,112 @@ describe('team mode', () => {
     }
   })
 
+  it('launches with the cache type the person chose, as single mode does', async () => {
+    await llm.setSettings({ kvCacheType: 'q4_0' })
+    try {
+      const team = llm.launchArgs()
+      expect(team[team.indexOf('--cache-type-k') + 1]).toBe('q4_0')
+      expect(team[team.indexOf('--cache-type-v') + 1]).toBe('q4_0')
+      await llm.setSettings({ gatewayMode: 'single' })
+      const single = llm.launchArgs()
+      expect(single[single.indexOf('--cache-type-v') + 1]).toBe('q4_0')
+    } finally {
+      await llm.setSettings({ kvCacheType: 'f16' })
+    }
+  })
+
+  it('a client leaving a remote stream cancels it at the provider', async () => {
+    const remote = await import('../vision/remote-vision-server')
+    const codec = await import('../../shared/remote-vision-server')
+    let providerClosed = false
+    let providerStarted = false
+    const provider = http.createServer((request, response) => {
+      request.resume()
+      request.on('end', () => {
+        providerStarted = true
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        const tick = setInterval(() => response.write('data: {"choices":[{"delta":{"content":"."}}]}\n\n'), 25)
+        response.on('close', () => {
+          clearInterval(tick)
+          providerClosed = true
+        })
+      })
+    })
+    await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve))
+    const serverId = 'team-remote-cancel'
+    try {
+      remote.setRemoteVisionServerSettings({
+        provider: 'custom',
+        endpoint: `http://127.0.0.1:${(provider.address() as AddressInfo).port}/v1`,
+        model: 'remote-model',
+        serverId,
+        name: 'Remote'
+      })
+      const leaving = new AbortController()
+      const reply = chat('remote leaver', {
+        model: codec.remoteVisionModelId(serverId, 'remote-model'),
+        signal: leaving.signal
+      }).catch((error: unknown) => error)
+      await waitFor(() => providerStarted, 'the provider stream')
+      leaving.abort()
+      await reply
+      await waitFor(() => providerClosed, 'the provider to see the cancel')
+    } finally {
+      remote.removeRemoteVisionServer(serverId)
+      provider.closeAllConnections()
+      await new Promise<void>((resolve) => provider.close(() => resolve()))
+    }
+  })
+
+  it('soak: 500 requests at 16 at once with random disconnects leave no slot, waiter or listener behind', async () => {
+    const { teamLimiter } = await import('../model-server/team-runtimes')
+    // The fake engine answers at once here: the soak is about the gateway's bookkeeping.
+    const autoFinish = setInterval(() => {
+      for (const stream of held) if (!stream.closed && Math.random() < 0.5) stream.finish()
+    }, 5)
+    const heapBefore = process.memoryUsage().heapUsed
+    const warnings: string[] = []
+    const onWarning = (warning: Error): void => {
+      warnings.push(warning.name)
+    }
+    process.on('warning', onWarning)
+    let next = 0
+    const statuses: (number | 'aborted')[] = []
+    const worker = async (): Promise<void> => {
+      while (next < 500) {
+        const index = next++
+        const leaving = new AbortController()
+        if (index % 5 === 0) setTimeout(() => leaving.abort(), Math.floor(Math.random() * 60))
+        statuses.push(
+          await chat(`soak${index}`, { signal: leaving.signal }).then(
+            (r) => r.status,
+            () => 'aborted' as const
+          )
+        )
+      }
+    }
+    try {
+      await Promise.all(Array.from({ length: 16 }, () => worker()))
+    } finally {
+      clearInterval(autoFinish)
+      process.off('warning', onWarning)
+    }
+    for (const stream of held) stream.finish()
+    await waitFor(() => running === 0, 'the engine to be idle')
+    const limiter = teamLimiter('chat')
+    await waitFor(() => limiter.inFlight === 0 && limiter.queued === 0, 'the line to drain')
+    expect(statuses).toHaveLength(500)
+    // Every request either finished or was left by its client; none was refused or failed (16
+    // clients never overflow four slots and their line of sixteen).
+    expect(statuses.every((status) => status === 200 || status === 'aborted')).toBe(true)
+    expect(warnings).not.toContain('MaxListenersExceededWarning')
+    expect(statuses.filter((status) => status === 200).length).toBeGreaterThan(300)
+    expect(peak).toBeLessThanOrEqual(llm.gatewaySlots())
+    // Bookkeeping stays flat: no growing heap from leaked streams (generous for GC timing).
+    global.gc?.()
+    expect(process.memoryUsage().heapUsed - heapBefore).toBeLessThan(64 * 1024 * 1024)
+  }, 60_000)
+
   it('makes an image job wait for the streams in flight before it evicts the chat model', async () => {
     await llm.setSettings({ gatewayMode: 'team' })
     const { modalityQueue, IMAGE_JOB } = await import('../modality-queue/queue')
