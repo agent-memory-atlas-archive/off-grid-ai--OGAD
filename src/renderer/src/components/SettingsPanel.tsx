@@ -99,6 +99,8 @@ type LlmSettings = {
   kvCacheType?: KvCacheType
   flashAttn?: boolean
   gpuLayers?: number
+  gpuPlacement?: 'auto' | 'manual'
+  gpuOffload?: { layers: number; total: number } | null // what the running engine placed; read-only
   threads?: number
   batchSize?: number
   speculativeDecoding?: SpeculativeDecodingMode
@@ -199,6 +201,7 @@ const DEFAULTS: LlmSettings = {
   kvCacheType: 'f16',
   flashAttn: false,
   gpuLayers: 99,
+  gpuPlacement: 'auto',
   threads: 0,
   batchSize: 512,
   speculativeDecoding: 'off',
@@ -1094,16 +1097,35 @@ export function SettingsPanel({
                 </Row>
               )}
               <Row inline label="GPU layers" hint={gpuLayersHint(s.gpuAccelerator ?? null)}>
-                <SettingSlider
-                  label="GPU layers"
-                  value={s.gpuLayers ?? 99}
-                  min={0}
-                  max={99}
-                  step={1}
-                  format={(value) => String(value)}
-                  onDraft={(value) => setS((current) => ({ ...current, gpuLayers: value }))}
-                  onCommit={(value) => set({ gpuLayers: value })}
-                />
+                <div className="flex items-center gap-3">
+                  {(s.gpuPlacement ?? 'auto') === 'manual' ? (
+                    <SettingSlider
+                      label="GPU layers"
+                      value={s.gpuLayers ?? 99}
+                      min={0}
+                      max={99}
+                      step={1}
+                      format={(value) => String(value)}
+                      onDraft={(value) => setS((current) => ({ ...current, gpuLayers: value }))}
+                      onCommit={(value) => set({ gpuLayers: value })}
+                    />
+                  ) : (
+                    <span
+                      aria-label="GPU layers in use"
+                      className="text-[12px] tabular-nums text-muted-foreground"
+                    >
+                      {s.gpuOffload ? `${s.gpuOffload.layers}/${s.gpuOffload.total}` : 'Set on load'}
+                    </span>
+                  )}
+                  <label className="flex w-fit cursor-pointer items-center gap-3 text-[12px] text-muted-foreground">
+                    <Switch
+                      aria-label="Place GPU layers automatically"
+                      checked={(s.gpuPlacement ?? 'auto') === 'auto'}
+                      onCheckedChange={(auto) => set({ gpuPlacement: auto ? 'auto' : 'manual' })}
+                    />
+                    Auto
+                  </label>
+                </div>
               </Row>
               <Row inline label="CPU threads" hint="Auto lets llama.cpp choose.">
                 <div className="flex items-center gap-3">
