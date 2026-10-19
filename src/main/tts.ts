@@ -34,7 +34,7 @@ import { modalityQueue, SPEECH_JOB } from './modality-queue/queue'
 import { chooseVoice, DEFAULT_VOICE } from './tts-logic'
 import { OnnxSpeechRuntime } from './tts-onnx'
 import { MEDIA_WORKER_IDLE_MS, mayStartMediaWorker } from '@offgrid/models'
-import { liveMemory } from './runtime-manager'
+import { measuredAvailableMB } from './runtime-manager'
 
 const LANGUAGE_TAGS: Readonly<Record<string, string>> = {
   'en-us': 'en-US',
@@ -56,7 +56,7 @@ function onnxWorker(workers: number): OnnxSpeechRuntime {
   const all = [onnxSpeech, ...teamOnnxSpeech]
   const idle = all.reduce((best, worker) => (worker.inFlight < best.inFlight ? worker : best))
   if (idle.inFlight === 0 || all.length >= workers) return idle
-  if (!mayStartMediaWorker(liveMemory().availableMB, KOKORO_MB)) return idle
+  if (!mayStartMediaWorker(measuredAvailableMB(), KOKORO_MB)) return idle
   const added = new OnnxSpeechRuntime()
   teamOnnxSpeech.push(added)
   scheduleTeamWorkerTrim()

@@ -70,6 +70,14 @@ export function liveMemory(): { availableMB: number; totalMB: number } {
   return { availableMB: linux ?? os.freemem() / 1024 ** 2, totalMB }
 }
 
+/** liveMemory's available figure where it is a real measure, or undefined outside Electron on a
+ *  Mac, where Node's free memory leaves out the file cache and reads far too low. */
+export function measuredAvailableMB(): number | undefined {
+  if (process.platform === 'darwin' && typeof process.getSystemMemoryInfo !== 'function')
+    return undefined
+  return liveMemory().availableMB
+}
+
 /** Each modality's kind in the shared residency policy (text is kept longest). */
 const RESIDENT_TYPE: Record<Modality, ResidentType> = {
   llm: 'text',

@@ -6,7 +6,7 @@
 
 import { mayStartMediaWorker } from '@offgrid/models'
 import { isPortFree, pickFreePort } from '../free-port'
-import { liveMemory } from '../runtime-manager'
+import { measuredAvailableMB } from '../runtime-manager'
 import { filesMB } from '../model-footprint'
 import { WhisperServerService, whisperServer } from './whisper-server'
 import { WhisperServerTranscription } from './whisper-server-transcription'
@@ -47,7 +47,7 @@ function laneMB(): number {
 async function pickLane(wanted: number): Promise<Lane> {
   const idle = lanes.reduce((best, lane) => (lane.inFlight < best.inFlight ? lane : best))
   if (idle.inFlight === 0 || lanes.length >= wanted) return idle
-  if (!adding && !mayStartMediaWorker(liveMemory().availableMB, laneMB())) return idle
+  if (!adding && !mayStartMediaWorker(measuredAvailableMB(), laneMB())) return idle
   adding ??= addLane().finally(() => {
     adding = null
   })
