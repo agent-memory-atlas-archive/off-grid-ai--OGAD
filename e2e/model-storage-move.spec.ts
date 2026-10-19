@@ -49,6 +49,15 @@ const launchedModels = (): string[] =>
         })
     : []
 
+/** Chat requests the engine has answered. */
+const chatRequests = (): number =>
+  fs.existsSync(modelLog)
+    ? fs
+        .readFileSync(modelLog, 'utf8')
+        .split('\n')
+        .filter((line) => line.includes('"event":"chat"')).length
+    : 0
+
 const launch = async (): Promise<void> => {
   app = await launchOffGrid({
     env: {
@@ -86,11 +95,14 @@ const openStorage = async (): Promise<void> => {
   await openSettingsSection(page, 'Setup & health')
 }
 
+/** A chat is the model's first use: the engine starts for it (it never starts at launch). */
 const askInChat = async (): Promise<void> => {
+  const before = chatRequests()
   await page.getByRole('button', { name: 'Chat', exact: true }).click()
   const composer = page.getByRole('textbox', { name: 'Message', exact: true })
   await composer.fill(QUESTION)
   await composer.press('Enter')
+  await expect.poll(chatRequests, { timeout: 60_000 }).toBeGreaterThan(before)
   await expect(page.getByText(ANSWER).first()).toBeVisible({ timeout: 30_000 })
 }
 
@@ -117,8 +129,10 @@ test.describe('Model storage folder', () => {
     const executable = path.join(llamaDir, 'llama-server')
     fs.copyFileSync(path.resolve('e2e/fixtures/launch-log-llama-server.mjs'), executable)
     fs.chmodSync(executable, 0o755)
+    // The model loads on its first use, never at launch; each test chats after its restart to
+    // see which folder it starts from. A chat before the move would leave its background indexing
+    // holding the download gate, which a move waits for.
     await launch()
-    await expect.poll(launchedModels, { timeout: 30_000 }).toContain(oldFolder)
   })
 
   // Playwright requires the first callback argument to use object destructuring.
@@ -149,16 +163,14 @@ test.describe('Model storage folder', () => {
     const before = launchedModels().length
     await launch()
 
-    await expect
-      .poll(() => launchedModels().slice(before), { timeout: 30_000 })
-      .toContain(newFolder)
+    await askInChat()
+    expect(launchedModels().slice(before)).toContain(newFolder)
     await expect
       .poll(() => fs.existsSync(path.join(oldFolder, MODEL_FILE)), { timeout: 15_000 })
       .toBe(false)
     expect(fs.existsSync(path.join(oldFolder, UNKNOWN_FILE))).toBe(true)
     await openStorage()
     await expect(page.getByTitle(newFolder, { exact: true })).toBeVisible()
-    await askInChat()
   })
 
   test('Leave files uses the new folder for downloads and keeps the model where it is', async () => {
@@ -175,15 +187,13 @@ test.describe('Model storage folder', () => {
     const before = launchedModels().length
     await launch()
 
-    await expect
-      .poll(() => launchedModels().slice(before), { timeout: 30_000 })
-      .toContain(oldFolder)
+    await askInChat()
+    expect(launchedModels().slice(before)).toContain(oldFolder)
     expect(fs.existsSync(path.join(oldFolder, MODEL_FILE))).toBe(true)
     await openStorage()
     await expect(page.getByTitle(newFolder, { exact: true })).toBeVisible()
     await expect(
       page.getByRole('button', { name: `Remove ${oldFolder}`, exact: true })
     ).toBeVisible()
-    await askInChat()
   })
 })

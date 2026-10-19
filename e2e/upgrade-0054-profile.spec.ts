@@ -112,7 +112,12 @@ test.describe('Upgrading a 0.0.54 profile', () => {
     })
     await launch()
 
-    // The same model starts, with the hand-picked mode's window.
+    // The same model starts, with the hand-picked mode's window. It loads on its first use, never
+    // at launch, so a chat starts it.
+    await gotoScreen(page, 'Chat')
+    const composer = page.getByRole('textbox', { name: 'Message', exact: true })
+    await composer.fill('Are you there?')
+    await composer.press('Enter')
     await expect
       .poll(
         () =>
