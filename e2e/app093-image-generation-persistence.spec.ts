@@ -193,11 +193,11 @@ test('APP-093 generates one owned image and keeps it usable across a full relaun
   })
 
   await generated.click()
-  const preview = page.getByRole('dialog', { name: 'Generated image preview' })
+  const preview = page.getByRole('dialog', { name: 'Generated image' })
   await expect(preview).toBeVisible()
   expect(
     await preview
-      .getByRole('img', { name: 'Generated preview' })
+      .getByRole('img', { name: 'Generated image' })
       .evaluate((image: HTMLImageElement) => ({
         width: image.naturalWidth,
         height: image.naturalHeight
@@ -229,13 +229,13 @@ test('APP-093 generates one owned image and keeps it usable across a full relaun
   await expect(page.getByText(PROMPT, { exact: true })).toBeVisible()
   await expect(page.getByRole('img', { name: 'Generated', exact: true })).toHaveCount(1)
 
-  await page.getByTitle('Generated images').click()
+  await page.getByRole('button', { name: 'Gallery', exact: true }).click()
   const gallery = page.getByText('Gallery', { exact: true }).locator('..').locator('..')
-  await expect(gallery.getByRole('button', { name: 'images (1)' })).toBeVisible()
+  await expect(gallery.getByRole('button', { name: 'images 1' })).toBeVisible()
   const galleryImage = gallery.locator('img')
   await expect(galleryImage).toHaveCount(1)
   await galleryImage.click()
-  await expect(page.getByRole('dialog', { name: 'Generated image preview' })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Generated image' })).toBeVisible()
   const theme = page.getByRole('button', { name: /Theme:/ })
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark')) break
