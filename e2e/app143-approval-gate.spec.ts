@@ -159,11 +159,19 @@ test('holds a connector write until approval, then executes it once with visible
 
   // This fresh profile contains one proposal, so the visible controls are unique.
   await expect(page.getByRole('paragraph').filter({ hasText: APPROVAL_TITLE })).toBeVisible()
-  const pendingLabels = page.getByText('pending', { exact: true })
-  // The pending filter and the proposal's status must both be visible.
-  await expect(pendingLabels).toHaveCount(2)
-  for (const label of await pendingLabels.all()) await expect(label).toBeVisible()
-  await expect(page.getByText('APP-143 guarded connector · create_external_task')).toBeVisible()
+  // It waits under the Pending filter, named by the app it acts in; the tool id stays internal.
+  await expect(page.getByRole('radio', { name: 'Pending', exact: true })).toHaveAttribute(
+    'aria-checked',
+    'true'
+  )
+  const row = page
+    .getByRole('table', { name: 'Approvals', exact: true })
+    .getByRole('row')
+    .filter({ hasText: APPROVAL_TITLE })
+  await expect(
+    row.getByRole('cell', { name: 'APP-143 guarded connector', exact: true })
+  ).toBeVisible()
+  await expect(row).not.toContainText('create_external_task')
   await expect(page.getByRole('button', { name: 'Review in Chat', exact: true })).toBeVisible()
 
   // The proposal has traversed production IPC and is visibly waiting in the real queue. Give the
@@ -175,9 +183,12 @@ test('holds a connector write until approval, then executes it once with visible
     fullPage: true
   })
 
-  await page.getByRole('button', { name: 'details' }).click()
-  await expect(page.getByText(`"title": "${EXTERNAL_TITLE}"`)).toBeVisible()
-  await expect(page.getByText(`"project": "${EXTERNAL_PROJECT}"`)).toBeVisible()
+  await page.getByRole('button', { name: 'Show details', exact: true }).click()
+  // The saved fields read as labelled lines, never as JSON.
+  const fields = page.getByRole('table', { name: 'Approvals', exact: true }).locator('dl')
+  await expect(fields.getByText(EXTERNAL_TITLE, { exact: true })).toBeVisible()
+  await expect(fields.getByText(EXTERNAL_PROJECT, { exact: true })).toBeVisible()
+  await expect(page.getByText(`"title": "${EXTERNAL_TITLE}"`)).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Review in Chat', exact: true }).click()
   // Pro 99146f6 and core ca04e4f8b route local approvals through this Chat form.
