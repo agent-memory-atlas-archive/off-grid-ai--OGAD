@@ -286,6 +286,14 @@ button:disabled,
   outline: none;
 }
 
+/* Settings lays its cards out in three columns, or four when the cards this build draws fill
+   four-wide rows better (Settings.tsx counts them; an open card is the only one drawn). */
+@media (min-width: 1536px) {
+  .settings-grid[data-columns='4'] {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
 /* The inline-code box is for code in running text. Inside a code block it would box every line. */
 :not(pre) > code {
   font-weight: 600;
