@@ -68,6 +68,35 @@ export function teamLimiter(runtime: GatewayRuntime): UpstreamLimiter {
   return limiter
 }
 
+export interface RuntimeStatus {
+  /** Requests it serves at once; null where single mode sets no limit. */
+  capacity: number | null
+  running: number | null
+  waiting: number | null
+  /** Requests refused with 429 since the app started. */
+  refused: number
+}
+
+/** Every runtime's line as team mode runs it now: from its limiter, read without resizing it.
+ *  A runtime nobody has used yet reports its capacity and nothing running. */
+export function teamRuntimeStatus(): Record<GatewayRuntime, RuntimeStatus> {
+  const concurrency = teamConcurrency()
+  const out = {} as Record<GatewayRuntime, RuntimeStatus>
+  for (const runtime of Object.keys(LABELS) as GatewayRuntime[]) {
+    const limiter = limiters.get(runtime)
+    out[runtime] = limiter
+      ? { ...limiter.status(), capacity: concurrency[runtime] }
+      : { capacity: concurrency[runtime], running: 0, waiting: 0, refused: 0 }
+  }
+  out.embeddings = {
+    capacity: concurrency.embeddings,
+    running: embeddingBatchRunning ? 1 : 0,
+    waiting: embeddingWaiters.length,
+    refused: embeddingsRefused
+  }
+  return out
+}
+
 /** The chat model's limiter without resizing it (the eviction gate reads it at any time). */
 export function chatLimiter(): UpstreamLimiter {
   let limiter = limiters.get('chat')
@@ -102,6 +131,7 @@ interface EmbeddingWaiter {
 
 const embeddingWaiters: EmbeddingWaiter[] = []
 let embeddingBatchRunning = false
+let embeddingsRefused = 0
 
 /**
  * Vectors for `texts`, batched with every other request waiting at the time: a batch starts after a
@@ -110,8 +140,10 @@ let embeddingBatchRunning = false
  * bounded line.
  */
 export function embedCoalesced(texts: string[]): Promise<number[][]> {
-  if (embeddingWaiters.length >= limiterQueueDepth(1) * 4)
+  if (embeddingWaiters.length >= limiterQueueDepth(1) * 4) {
+    embeddingsRefused += 1
     return Promise.reject(new LimiterFullError(LABELS.embeddings))
+  }
   return new Promise<number[][]>((resolve, reject) => {
     embeddingWaiters.push({ texts, resolve, reject })
     runEmbeddingBatch()

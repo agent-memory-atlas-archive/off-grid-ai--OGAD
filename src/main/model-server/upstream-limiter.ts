@@ -59,6 +59,8 @@ export class UpstreamLimiter {
   private exclusiveDepth = 0
   private exclusiveChain: Promise<unknown> = Promise.resolve()
   private idleWaiters: (() => void)[] = []
+  /** Requests refused with 429 since the app started. */
+  private refusedCount = 0
 
   constructor(
     readonly runtime: string,
@@ -87,6 +89,16 @@ export class UpstreamLimiter {
     return this.waiting.length
   }
 
+  /** What the gateway status reports: slots, running, waiting, and 429s since the app started. */
+  status(): { capacity: number; running: number; waiting: number; refused: number } {
+    return {
+      capacity: this.capacity,
+      running: this.active,
+      waiting: this.waiting.length,
+      refused: this.refusedCount
+    }
+  }
+
   /** Wait for a turn. Resolves with the release to call when the request ends (idempotent). */
   acquire(signal?: AbortSignal, tokens = 0): Promise<Release> {
     if (signal?.aborted) return Promise.reject(signal.reason ?? new Error('aborted'))
@@ -100,7 +112,10 @@ export class UpstreamLimiter {
       activeTokens: this.activeTokens,
       requestTokens: tokens
     })
-    if (decision === 'reject') return Promise.reject(new LimiterFullError(this.runtime))
+    if (decision === 'reject') {
+      this.refusedCount += 1
+      return Promise.reject(new LimiterFullError(this.runtime))
+    }
     if (decision === 'run') return Promise.resolve(this.take(tokens))
     return new Promise<Release>((resolve, reject) => {
       const waiter: Waiter = {

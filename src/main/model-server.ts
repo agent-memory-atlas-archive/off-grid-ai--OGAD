@@ -107,7 +107,8 @@ import {
   embedCoalesced,
   teamConcurrency,
   teamLimiter,
-  teamMode
+  teamMode,
+  teamRuntimeStatus
 } from './model-server/team-runtimes'
 import type { GatewayRuntime } from '@offgrid/models'
 import { pipeline } from 'stream'
@@ -1325,6 +1326,42 @@ async function admitOnRequestedModel(
     if (failure) {
       if (res && !res.headersSent) json(res, 400, errBody(failure))
       return null
+    }
+  }
+}
+
+/** GET /v1/gateway/status: the mode, requests at once, and each runtime's line. Team mode reads
+ *  the limiters; single mode reads the app's one queue, where chat, images and speech take turns
+ *  with the person's own work, and leaves null where single mode sets no limit. */
+function gatewayStatus(): Record<string, unknown> {
+  const mode = llm.gatewayMode()
+  const base = {
+    object: 'gateway.status',
+    mode,
+    requests_at_once: llm.gatewayClients() ?? 'auto',
+    slots: llm.gatewaySlots()
+  }
+  if (mode === 'team') return { ...base, runtimes: teamRuntimeStatus() }
+  const queue = modalityQueue.getState()
+  const turns = (label: string): Record<string, number> => ({
+    capacity: 1,
+    running: queue.running.filter((job) => job.label === label).length,
+    waiting: queue.queued.filter((job) => job.label === label).length,
+    refused: 0
+  })
+  const open = { capacity: null, running: null, waiting: null, refused: 0 }
+  return {
+    ...base,
+    runtimes: {
+      chat: turns('chat'),
+      grounder: open,
+      decision: open,
+      kev: open,
+      remote: open,
+      image: turns('image'),
+      transcription: open,
+      speech: turns('speech'),
+      embeddings: open
     }
   }
 }
@@ -2563,6 +2600,7 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
     // Chat (text + image-to-text): buffer so we can inline remote image URLs,
     // which llama-server can't fetch itself, then forward (response still streams).
     if (url === '/v1/chat/completions' && method === 'POST') return void handleChat(req, res, rid)
+    if (url === '/v1/gateway/status' && method === 'GET') return json(res, 200, gatewayStatus())
     // Full local model surface across all modalities (not just the LLM).
     if (url === '/v1/models' && method === 'GET')
       return void handleModelsList(
