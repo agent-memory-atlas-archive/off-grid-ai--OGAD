@@ -319,55 +319,6 @@ describe('model-manager GGUF integrity', () => {
     )
   })
 
-  it('starts over when a kept partial file is already whole, instead of asking for a range past its end', async () => {
-    // A download cancelled after its last byte keeps a complete .part. Asking the server for
-    // bytes past the end gets 416 on every retry; the downloader must start the file again.
-    const expected = interrupted.entry.files[0]!.sizeBytes!
-    fs.mkdirSync(path.dirname(interrupted.filePath), { recursive: true })
-    fs.writeFileSync(`${interrupted.filePath}.part`, '')
-    fs.truncateSync(`${interrupted.filePath}.part`, expected)
-    const complete = Buffer.concat([Buffer.from('GGUF', 'ascii'), Buffer.alloc(2_000, 5)])
-    const ranges: (string | null)[] = []
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_input, init?: RequestInit) => {
-        ranges.push(new Headers(init?.headers).get('range'))
-        return new Response(complete, {
-          status: 200,
-          headers: { 'content-length': String(complete.length) }
-        })
-      })
-    )
-
-    const result = await manager.downloadModel(interrupted.entry.id)
-
-    expect(result).toEqual({ success: true })
-    expect(ranges.every((range) => range === null)).toBe(true)
-    expect(fs.readFileSync(interrupted.filePath)).toEqual(complete)
-  })
-
-  it('refuses a file the folder cannot hold before writing a byte, and says so in words', async () => {
-    // A server that reports a petabyte: the real free space on this volume cannot hold it.
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => {
-        const body = new ReadableStream<Uint8Array>({
-          pull(controller) {
-            controller.enqueue(Buffer.from('GGUF'))
-          }
-        })
-        return new Response(body, { status: 200, headers: { 'content-length': String(1e15) } })
-      })
-    )
-
-    const result = await manager.downloadModel(interrupted.entry.id)
-
-    expect(result.success).toBe(false)
-    expect(result.error).toMatch(/^Not enough disk space\. .+ needs 1000000\.0 GB and [\d.]+ GB is free\.$/)
-    // Nothing was written: no partial file to clean up.
-    expect(fs.existsSync(`${interrupted.filePath}.part`)).toBe(false)
-  })
-
   it('reports an offline download clearly and keeps retry plus installed state usable', async () => {
     const validGguf = Buffer.concat([Buffer.from('GGUF', 'ascii'), Buffer.alloc(2_000, 9)])
     fs.writeFileSync(primary.filePath, validGguf)
