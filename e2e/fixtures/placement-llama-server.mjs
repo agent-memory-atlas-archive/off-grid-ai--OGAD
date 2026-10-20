@@ -9,6 +9,11 @@ import fs from 'node:fs'
 import http from 'node:http'
 
 const args = process.argv.slice(2)
+// The device probe (Linux and Windows) lists one Vulkan GPU, as llama.cpp prints it, and exits.
+if (args.includes('--list-devices')) {
+  process.stdout.write('Available devices:\n  Vulkan0: Fake GPU (8192 MiB, 8000 MiB free)\n')
+  process.exit(0)
+}
 const portFlag = Math.max(args.indexOf('--port'), args.indexOf('-p'))
 const port = portFlag >= 0 ? Number(args[portFlag + 1]) : 8439
 const log = process.env.OFFGRID_LLAMA_LAUNCH_LOG
