@@ -142,19 +142,19 @@ describe('<ModelsScreen/> Computer Use catalog journey', () => {
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
   })
 
-  it('places distilled text models and the GUI specialist in their product tabs', async () => {
+  it('places text models and the GUI specialist in their product tabs, and offers no replaced model', async () => {
     const user = userEvent.setup()
     render(<ModelsScreen />)
 
-    expect(await screen.findByText('Qwen 3.8 4B Distill')).toBeTruthy()
-    expect(screen.getByText('Qwen 3.8 9B Distill')).toBeTruthy()
+    // The October audit marked the Qwen 3.8 distills replaced: no longer offered.
+    expect(await screen.findByText('Qwen 3.5 4B')).toBeTruthy()
+    expect(screen.queryByText('Qwen 3.8 4B Distill')).toBeNull()
     expect(screen.queryByText('GUI-Owl-1.5-8B-Instruct')).toBeNull()
 
     await user.click(screen.getByRole('radio', { name: 'Tasks' }))
 
     expect(await screen.findByText('GUI-Owl-1.5-8B-Instruct')).toBeTruthy()
-    expect(screen.queryByText('Qwen 3.8 4B Distill')).toBeNull()
-    expect(screen.queryByText('Qwen 3.8 9B Distill')).toBeNull()
+    expect(screen.queryByText('Qwen 3.5 4B')).toBeNull()
   })
 
   it('lists grounding specialists and decision models apart, each card saying its role', async () => {
