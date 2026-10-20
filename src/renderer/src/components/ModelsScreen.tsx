@@ -55,7 +55,6 @@ import {
   IconUpload,
   IconInfoCircle,
   IconExternalLink,
-  IconEye,
   IconDatabase,
   IconStarFilled,
   IconClock,
@@ -65,6 +64,7 @@ import {
   IconSettings
 } from '@tabler/icons-react'
 import { StoragePanel } from './setup/StoragePanel'
+import { ModelCapabilityIcons } from './ModelCapabilityIcons'
 import { SidePanel } from './SidePanel'
 import { deviceNoun } from '@renderer/lib/device'
 import { collectTags, matchesAllTags, toggleTag } from '@renderer/lib/model-tag-filter'
@@ -233,6 +233,10 @@ const USE_CASES: UseCase[] = [
     match: (m) => (m.params ?? 0) <= 4
   }
 ]
+
+// Catalog tags a card does not show: fit and size are said by the fit chip, "Recommended" by the
+// picks row, and ranking labels and release years say nothing a person can act on.
+const NOISE_TAG = /tight|risky|fit|challenger|^large$|^recommended$|^\d{4}$/i
 
 function fmtReleaseDate(iso?: string): string {
   if (!iso) return ''
@@ -806,7 +810,7 @@ export function ModelsScreen({
 
   // Tags offered as filter chips — every tag present in this tab's models.
   const availableTags = useMemo(
-    () => collectTags(list).filter((t) => !/challenger|^large$/i.test(t)),
+    () => collectTags(list).filter((t) => !NOISE_TAG.test(t)),
     [list]
   )
 
@@ -958,7 +962,7 @@ export function ModelsScreen({
       .join(' · ')
     const tier: FitTier = ramTier(m)
     // Size and fit already say "large" and "tight"; ranking labels say nothing to the person.
-    const tags = (m.tags ?? []).filter((t) => !/tight|risky|fit|challenger|^large$/i.test(t))
+    const tags = (m.tags ?? []).filter((t) => !NOISE_TAG.test(t))
     const comingSoon = m.availability === 'coming_soon'
     // The image pick for this machine's RAM, when the picks row is not already saying so.
     const recommended =
@@ -991,11 +995,8 @@ export function ModelsScreen({
             {pickLabel}
           </span>
         )}
-        {m.kind === 'vision' && (
-          <span className="flex shrink-0 items-center gap-0.5 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-            <IconEye className="h-2 w-2" /> Vision
-          </span>
-        )}
+        {/* What the model can do, as icons with tooltips: the shared capability rule. */}
+        <span className="flex shrink-0 items-center gap-1"><ModelCapabilityIcons model={m} /></span>
       </div>
     )
     const metaLine = (
@@ -1268,12 +1269,17 @@ export function ModelsScreen({
     const repairActions = (
       <>
         {!comingSoon && partsMissing.length > 0 && !downloading && (
-          <button
-            onClick={() => download(m.id)}
-            className="flex items-center gap-1 self-start rounded border border-amber-400/50 px-2 py-1 text-[10px] text-amber-300 transition-all duration-150 hover:border-amber-400 hover:bg-amber-400/10 active:scale-95"
-          >
-            <IconDownload className="h-3 w-3" /> Add {partsMissing.join(' and ')}
-          </button>
+          <IconTip label={`Add ${partsMissing.join(' and ')}`}>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label={`Add ${partsMissing.join(' and ')}`}
+              onClick={() => download(m.id)}
+              className="self-start text-amber-300 hover:text-amber-200"
+            >
+              <IconDownload className="h-3.5 w-3.5" />
+            </Button>
+          </IconTip>
         )}
       </>
     )
@@ -1969,11 +1975,7 @@ export function ModelsScreen({
                       <h2 className="truncate text-sm text-white">
                         {quantChoices ? quantChoices[0]!.name : m.name}
                       </h2>
-                      {m.kind === 'vision' && (
-                        <span className="flex items-center gap-0.5 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-                          <IconEye className="h-2.5 w-2.5" /> Vision
-                        </span>
-                      )}
+                      <span className="flex items-center gap-1"><ModelCapabilityIcons model={m} /></span>
                     </div>
                   </div>
                   <IconTip label="Close">
