@@ -128,6 +128,10 @@ mac:
   # re-signed AFTER notarization → invalidated the staple → "Unnotarized Developer ID".
   # Let electron-builder's signing stand.
 dmg:
+  # mac.compression: maximum would switch the DMG to bzip2 (UDBZ), which the release's
+  # DMG integrity check cannot attach. Maximum compression is for the update zip; the DMG
+  # keeps the zlib format every release has shipped.
+  format: UDZO
   sign: true
   artifactName: ${name}-${version}.${ext}
   # The app is currently ~3.3 GB before compression. macOS 26 adds an EFI/GPT
