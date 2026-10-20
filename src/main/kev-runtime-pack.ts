@@ -134,6 +134,8 @@ async function downloadArchive(
       const { done, value } = await reader.read()
       if (done) break
       if (signal.aborted) throw signal.reason
+      // The stream's error listener sets streamError between reads; TypeScript cannot see that.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       if (streamError) throw streamError
       if (!stream.write(value)) {
         await new Promise<void>((resolve, reject) => {
@@ -147,6 +149,7 @@ async function downloadArchive(
       }
       onBytes?.(downloaded)
     }
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if (streamError) throw streamError
     await new Promise<void>((resolve, reject) => {
       stream.once('error', reject)
