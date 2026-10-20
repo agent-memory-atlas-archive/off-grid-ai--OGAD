@@ -1809,9 +1809,20 @@ export function setupIPC(): void {
     try {
       const { saveModelStorageChoice } = await import('./model-storage-choice')
       const profile = app.getPath('userData')
-      const currentFiles = fs.existsSync(current) ? fs.readdirSync(current) : []
-      const sameFolder =
-        fs.existsSync(current) && fs.realpathSync(current) === fs.realpathSync(directory)
+      // An old folder this app can no longer read (a removed drive, or macOS privacy blocking
+      // iCloud Drive) has nothing to move, and must never stop the person leaving it.
+      const { modelStorageError } = await import('./runtime-env')
+      const currentReadable = fs.existsSync(current) && modelStorageError(current) === null
+      let currentFiles: string[] = []
+      let sameFolder = false
+      if (currentReadable) {
+        try {
+          currentFiles = fs.readdirSync(current)
+          sameFolder = fs.realpathSync(current) === fs.realpathSync(directory)
+        } catch {
+          currentFiles = []
+        }
+      }
       let moved = false
       let left = false
       let unknownEntriesLeft = 0
