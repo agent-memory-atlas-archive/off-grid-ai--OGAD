@@ -216,12 +216,12 @@ describe('recommendedParamCeiling — 16GB must default to a 4B', () => {
     expect(recommendedParamCeiling(64, 'balanced')).toBe(32)
   })
 
-  it('Configure: a 16GB Mac in balanced prefers Gemma 4 E4B (not the light 2B)', () => {
+  it('Configure: a 16GB Mac in balanced prefers Qwen 3.5 4B (not the light 2B)', () => {
     // The curated picks are tried before the size heuristic, so balanced must list
-    // E4B first (2B is only the fallback when the weight budget is too tight).
-    expect(preferredModelIds(16, 'balanced')[0]).toBe('unsloth/gemma-4-E4B-it-GGUF')
-    expect(preferredModelIds(16, 'extreme')[0]).toBe('unsloth/gemma-4-E4B-it-GGUF')
-    expect(preferredModelIds(16, 'conservative')[0]).toBe('unsloth/Qwen3-VL-2B-Instruct-GGUF')
+    // the 4B first (2B is only the fallback when the weight budget is too tight).
+    expect(preferredModelIds(16, 'balanced')[0]).toBe('unsloth/Qwen3.5-4B-GGUF')
+    expect(preferredModelIds(16, 'extreme')[0]).toBe('unsloth/Qwen3.5-4B-GGUF')
+    expect(preferredModelIds(16, 'conservative')[0]).toBe('unsloth/Qwen3.5-2B-GGUF')
   })
 
   it('with the ceiling applied, a 16/17GB Mac picks the 4B even when the 8B fits by bytes', () => {

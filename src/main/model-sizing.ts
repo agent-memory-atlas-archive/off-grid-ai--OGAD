@@ -115,14 +115,12 @@ export function recommendedParamCeiling(ramGb: number, mode: PerformanceMode): n
  *  so a curated pick that wouldn't fit falls through to the heuristic. */
 export function preferredModelIds(ramGb: number, mode: PerformanceMode): string[] {
   if (ramGb < 24) {
-    // Prefer VISION models so the "Vision" capability actually works. The only
-    // on-device vision models that fit ≤16GB are Qwen3-VL-2B (~1.9GB) and Gemma 4
-    // E4B (~6GB). Conservative → light 2B; balanced & extreme → Gemma 4 E4B
-    // (strong reasoning + vision, fits a 16GB Mac), with the 2B as a fallback when
-    // the weight budget is too tight.
+    // Prefer models that read images, so the Vision capability works. Qwen 3.5 has vision built in
+    // and leads its sizes (October 2026 audit): conservative → 2B; balanced & extreme → 4B, with the
+    // 2B as the fallback when the weight budget is too tight.
     if (mode === 'conservative')
-      return ['unsloth/Qwen3-VL-2B-Instruct-GGUF', 'unsloth/Qwen3.5-0.8B-GGUF']
-    return ['unsloth/gemma-4-E4B-it-GGUF', 'unsloth/Qwen3-VL-2B-Instruct-GGUF'] // balanced + extreme → E4B, 2B fallback
+      return ['unsloth/Qwen3.5-2B-GGUF', 'unsloth/Qwen3.5-0.8B-GGUF']
+    return ['unsloth/Qwen3.5-4B-GGUF', 'unsloth/Qwen3.5-2B-GGUF'] // balanced + extreme → 4B, 2B fallback
   }
   return [] // 24GB+ → size heuristic (chooseChatModel)
 }
