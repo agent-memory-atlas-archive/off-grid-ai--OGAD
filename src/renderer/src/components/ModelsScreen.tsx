@@ -728,8 +728,14 @@ export function ModelsScreen({
     const chat = tab === 'text'
     const fit = await api.estimateModelFit?.(id).catch(() => null)
     if (fit && fit.level !== 'ok') return
-    const res =
-      tab === 'computer_use' ? await api.activateModel?.(id, tab) : await api.activateModel?.(id)
+    let res: { success?: boolean; error?: string } | undefined
+    try {
+      res =
+        tab === 'computer_use' ? await api.activateModel?.(id, tab) : await api.activateModel?.(id)
+    } catch (e) {
+      setSwitchError(e instanceof Error ? e.message : "Couldn't switch model")
+      return
+    }
     if (!res?.success) {
       setSwitchError(res?.error ? `Couldn't switch: ${res.error}` : "Couldn't switch model")
       return
