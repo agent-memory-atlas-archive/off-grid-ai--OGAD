@@ -648,7 +648,8 @@ export function ModelsScreen({
       const tab = switchWhenReady.current.get(d.modelId)
       if (tab !== undefined) {
         switchWhenReady.current.delete(d.modelId)
-        void switchToReady(d.modelId, tab, d.modelName)
+        // The exact package installed, so a size picked in the panel is the size that loads.
+        void switchToReady(d.installedId ?? d.modelId, tab, d.modelName)
       }
     }
     if (d.status === 'failed') switchWhenReady.current.delete(d.modelId)

@@ -625,6 +625,9 @@ export interface DownloadProgress {
   totalBytes?: number
   bytesPerSecond?: number
   error?: string
+  /** On completion: the exact installed package to activate (an alternate size of a catalog model
+   *  is its own package), so a switch loads the size that was downloaded. */
+  installedId?: string
 }
 export type ProgressCb = (p: DownloadProgress) => void
 
@@ -1333,6 +1336,7 @@ async function downloadModelInner(
           entry.files.every((file) =>
             inCatalog.files.some((catalogFile) => catalogFile.name === file.name)
           )
+        let installedId = modelId
         if (inCatalog && !matchesCatalog) {
           const files = entry.files.map((file) => ({
             name: file.name,
@@ -1347,6 +1351,7 @@ async function downloadModelInner(
             files: files as [(typeof files)[number], ...typeof files],
             engine: 'llama'
           })
+          installedId = packageIdentity
           recordDownloaded(dir, {
             id: packageIdentity,
             familyId: modelId,
@@ -1367,7 +1372,7 @@ async function downloadModelInner(
         // vision on now (main-side, so it works even when no Models screen is open).
         await reconcileActiveModelProjector().catch(() => false)
         settingsChanged()
-        send({ percent: 100, status: 'completed' })
+        send({ percent: 100, status: 'completed', installedId })
         return { success: true }
       } catch (err) {
         // A capacity failure cannot resume until space is reclaimed. A file that failed byte or
@@ -1674,7 +1679,12 @@ async function setActiveLlamaModel(
   // An exact catalog pick takes precedence once its files are present. A prior
   // download of another quantization in this family must not override it.
   const catalogReady = catalogEntry?.files.every((file) => fileSizeOf(dir, file.name) > 0)
-  const transferred = catalogReady ? undefined : downloadedVariant(downloaded, modelId)
+  // Several downloaded sizes of one family: the newest download is the one meant (the registry keeps
+  // download order).
+  const transferred = catalogReady
+    ? undefined
+    : (downloadedVariant(downloaded, modelId) ??
+      downloaded.filter((model) => model.familyId === modelId).at(-1))
   if (transferred) {
     if (!acceptsKind(transferred.kind)) {
       return {
