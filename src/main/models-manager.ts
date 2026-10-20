@@ -563,6 +563,16 @@ export async function desktopCatalog(): Promise<ModelEntry[]> {
   return [...DESKTOP_CATALOG, ...catalog, ...uiMateMtp]
 }
 
+/** Free bytes on the volume that holds `dir`, or null when the OS will not say. */
+function freeBytes(dir: string): number | null {
+  try {
+    const stats = fs.statfsSync(dir)
+    return stats.bavail * stats.bsize
+  } catch {
+    return null
+  }
+}
+
 export interface DownloadProgress {
   modelId: string
   /** The name a person reads for `modelId`. Screens show this, never the id. */
@@ -1090,12 +1100,10 @@ async function downloadModelInner(
     // terminal transitions here, but skip high-frequency transfer ticks.
     if (p.status && p.status !== 'queued' && p.status !== 'downloading') persistRegistry()
   }
-  const interruptedResult = (
-    signal: AbortSignal,
-    activePartPath: string | null
-  ): { success: false; error: string } => {
+  // A cancelled download keeps its partial file, so downloading the model again resumes where it
+  // stopped. Temporary Storage in the Storage tab clears it.
+  const interruptedResult = (signal: AbortSignal): { success: false; error: string } => {
     const interrupted = signal.reason === DOWNLOAD_INTERRUPTED_ERROR
-    if (!interrupted && activePartPath) fs.rmSync(activePartPath, { force: true })
     const error = interrupted ? DOWNLOAD_INTERRUPTED_ERROR : 'cancelled'
     send(interrupted ? { status: 'failed', error } : { status: 'cancelled' })
     return { success: false, error }
@@ -1215,6 +1223,17 @@ async function downloadModelInner(
           const append = resumeFrom > 0 && res.status === 206
           const remaining = Number(res.headers.get('content-length') ?? 0)
           const total = (append ? resumeFrom : 0) + remaining
+          // Refuse before writing, in words, when the folder cannot hold this file (the size the
+          // server reports): running out halfway wastes the time and bandwidth already spent.
+          // A restart (200) rewrites the partial file, so its bytes come back too.
+          const free = freeBytes(dir)
+          const reclaimable = append ? 0 : resumeFrom
+          if (free !== null && remaining > free + reclaimable) {
+            void res.body.cancel().catch(() => {})
+            throw new Error(
+              `Not enough disk space. ${file.name} needs ${(remaining / 1e9).toFixed(1)} GB and ${(free / 1e9).toFixed(1)} GB is free.`
+            )
+          }
           const out = fs.createWriteStream(partPath, append ? { flags: 'a' } : {})
           let written = append ? resumeFrom : 0
           const reader = res.body.getReader()
@@ -1226,7 +1245,7 @@ async function downloadModelInner(
             reportTransfer(file.name, fileIndex, written, total)
           })
           if (signal.aborted) {
-            return interruptedResult(signal, partPath)
+            return interruptedResult(signal)
           }
           // Verify the file is complete + valid BEFORE promoting it — never mark a
           // truncated/corrupt download installed (it loads as a blank "Chat model Down").
@@ -1256,7 +1275,7 @@ async function downloadModelInner(
             bytes: written
           })
         }
-        if (signal.aborted) return interruptedResult(signal, activePartPath)
+        if (signal.aborted) return interruptedResult(signal)
         if (kevRuntime) {
           await installKevRuntimeInJob(modelId, kevRuntime, signal, (written) =>
             reportTransfer('Kev runtime', pending.length, written, kevRuntime.bytes)
@@ -1318,7 +1337,7 @@ async function downloadModelInner(
           }
         }
         if (signal.aborted || (err as Error).name === 'AbortError') {
-          return interruptedResult(signal, activePartPath)
+          return interruptedResult(signal)
         }
         const error = downloadFailureMessage(err)
         send({ status: 'failed', error })
