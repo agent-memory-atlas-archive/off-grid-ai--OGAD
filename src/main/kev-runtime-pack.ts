@@ -122,12 +122,19 @@ async function downloadArchive(
   let downloaded = append ? resumeFrom : 0
   onBytes?.(downloaded)
   const stream = fs.createWriteStream(archive, { flags: append ? 'a' : 'w' })
+  // A write error (disk full, folder removed) can fire between awaits; keep it for the loop
+  // to throw, so it never reaches the process as an unhandled 'error' event.
+  let streamError: Error | null = null
+  stream.on('error', (error) => {
+    streamError = error
+  })
   try {
     const reader = response.body.getReader()
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
       if (signal.aborted) throw signal.reason
+      if (streamError) throw streamError
       if (!stream.write(value)) {
         await new Promise<void>((resolve, reject) => {
           stream.once('drain', resolve)
@@ -140,6 +147,7 @@ async function downloadArchive(
       }
       onBytes?.(downloaded)
     }
+    if (streamError) throw streamError
     await new Promise<void>((resolve, reject) => {
       stream.once('error', reject)
       stream.end(resolve)
