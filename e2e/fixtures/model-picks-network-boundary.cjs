@@ -43,6 +43,12 @@ globalThis.fetch = async (input, init) => {
   const target = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   const match = /huggingface\.co\/.+\/resolve\/[^/]+\/(.+?)(?:\?|$)/.exec(target)
   const local = match ? path.join(sourceDir, path.basename(decodeURIComponent(match[1]))) : null
+  // Stand-in mode: any model file arrives as a small valid GGUF, for journeys about which file is
+  // chosen rather than what it answers.
+  if (match && process.env.OFFGRID_PICKS_STANDIN === '1' && /\.gguf$/i.test(match[1])) {
+    const standIn = Buffer.concat([Buffer.from('GGUF'), Buffer.alloc(4096, 1)])
+    return new Response(standIn, { status: 200, headers: { 'content-length': String(standIn.length) } })
+  }
   if (!local || !fs.existsSync(local)) return originalFetch(input, init)
   const delivery = fileBody(local)
   return new Response(delivery.body, {
