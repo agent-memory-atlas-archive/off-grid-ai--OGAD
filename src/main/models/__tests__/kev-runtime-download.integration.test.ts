@@ -208,7 +208,8 @@ describe('Kev runtime download with the Kev model', () => {
     ).toEqual([])
   })
 
-  it.skipIf(process.getuid?.() === 0)(
+  // Windows has no POSIX read-only folder, and root ignores the mode.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'fails the download instead of crashing when the archive cannot be written',
     async () => {
       const folder = path.join(store.data, 'kev-runtime')
