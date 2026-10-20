@@ -100,9 +100,9 @@ export function modelFileGuidance(
       {
         ...row,
         labels: [
-          ...(row.fileName === balanced?.fileName ? ['Best balance'] : []),
-          ...(row.bits === highestBits ? ['Highest precision'] : []),
-          ...(row.fileName === smallest?.fileName ? ['Smallest download'] : [])
+          ...(row.fileName === balanced?.fileName ? ['Recommended'] : []),
+          ...(row.fileName === smallest?.fileName ? ['Smaller'] : []),
+          ...(row.bits === highestBits ? ['Best quality'] : [])
         ]
       }
     ])

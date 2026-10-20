@@ -4,7 +4,7 @@
 // installed/available sections, card actions, and progress state as every other model kind. Only the
 // Electron IPC bridge is controlled because it is outside the renderer process.
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CATALOG, MODEL_KINDS, modelsByKind } from '@offgrid/models'
 import { withTaskRoles } from './harness/task-roles'
@@ -108,18 +108,16 @@ describe('<ModelsScreen/> Computer Use catalog journey', () => {
     expect(screen.queryByRole('list', { name: 'Grounding specialists coming soon' })).toBeNull()
     expect(await screen.findByText(wholeText(`${computerUseModels.length} models`))).toBeTruthy()
     expect(screen.getByRole('combobox', { name: 'All sources' })).toBeTruthy()
-    expect(screen.getByRole('combobox', { name: 'Any size' })).toBeTruthy()
     expect(screen.getByRole('combobox', { name: 'Sort' }).textContent).toContain(
       'Sort: Recommended'
     )
 
-    await user.click(screen.getByRole('combobox', { name: 'Any size' }))
-    await user.click(await screen.findByRole('option', { name: 'Tiny (<2B)' }))
-    expect(await screen.findByText(wholeText('1 models'))).toBeTruthy()
+    // One size filter: by download size.
+    await user.click(screen.getByRole('radio', { name: '≤2GB' }))
+    await waitFor(() => expect(screen.queryByText('UI-Mate-27B')).toBeNull())
     expect(screen.getByText('Holo3.1-0.8B')).toBeTruthy()
-    expect(screen.queryByText('UI-Mate-27B')).toBeNull()
 
-    await user.click(screen.getByRole('button', { name: 'Clear' }))
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }))
     // The card, not the lineup above the cards, which names it too.
     const onDevice = await screen.findByRole('list', {
       name: 'Grounding specialists on this device'

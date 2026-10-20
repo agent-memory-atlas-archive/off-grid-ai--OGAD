@@ -101,8 +101,8 @@ describe('<ModelsScreen/> image quantizations', () => {
     expect(screen.queryByText('RealVisXL v5.0 (Light)')).toBeNull()
 
     // Download on the card opens the side panel to choose the size; nothing downloads yet.
-    const downloadButtons = screen.getAllByRole('button', { name: 'Download' })
-    await user.click(downloadButtons[0]!)
+    const card = screen.getByText('RealVisXL v5.0 (photoreal)').closest('[role="listitem"]') as HTMLElement
+    await user.click(within(card).getByRole('button', { name: 'Download' }))
     const panel = await screen.findByRole('dialog', { name: /RealVisXL v5.0/ })
     expect(downloads).toEqual([])
 
@@ -143,12 +143,15 @@ describe('<ModelsScreen/> image quantizations', () => {
     render(<ModelsScreen />)
     await screen.findByText('SDXL Turbo (fast drafts)')
 
-    await user.type(screen.getByPlaceholderText('Search HuggingFace…'), 'chroma')
+    await user.type(screen.getByPlaceholderText('Search models…'), 'chroma')
     const result = await screen.findByText('Chroma-GGUF')
     const row = result.closest('[role="listitem"]') ?? result.parentElement!
+    // A search result opens its panel; the sizes are listed there.
     await user.click(within(row as HTMLElement).getByRole('button', { name: 'Download' }))
-    const picker = await screen.findByRole('dialog', { name: /Choose a file/ })
-    await user.click(within(picker).getByRole('button', { name: /chroma-unlocked-v50-Q4_K_M\.gguf/ }))
+    const panel = await screen.findByRole('dialog', { name: /Chroma-GGUF details/ })
+    await user.click(
+      await within(panel).findByRole('button', { name: 'Download chroma-unlocked-v50-Q4_K_M.gguf' })
+    )
     await waitFor(() =>
       expect(downloads).toEqual([{ id: HF_REPO, fileName: 'chroma-unlocked-v50-Q4_K_M.gguf' }])
     )
@@ -165,7 +168,7 @@ describe('<ModelsScreen/> image quantizations', () => {
       }
     ]
     installed = [HF_REPO]
-    await user.clear(screen.getByPlaceholderText('Search HuggingFace…'))
+    await user.clear(screen.getByPlaceholderText('Search models…'))
     inventoryChanged()
 
     const onDevice = await screen.findByRole('list', { name: /on this device/i })

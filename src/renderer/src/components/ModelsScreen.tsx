@@ -9,7 +9,6 @@ import {
   ProgressTrack
 } from '@offgrid/operator-ui/operator/coss/progress'
 import { AnimatedNumber } from '@offgrid/operator-ui/operator/motion/animated-number'
-import { TextMorph } from '@offgrid/operator-ui/operator/motion/text-morph'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 import { PageHeader, Section } from '@offgrid/operator-ui/operator/experience'
 import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
@@ -79,12 +78,11 @@ import {
   openModelSettingsPanel,
   supportsModelSettings
 } from '@renderer/lib/model-settings-panel'
-import { fitTier, type FitTier, fitLevel, FIT_OK_FRAC } from '../../../shared/model-fit'
+import { fitTier, type FitTier, fitLabel } from '../../../shared/model-fit'
 import {
   filterAndSort,
   parseParamCount,
   CREDIBILITY_OPTIONS,
-  SIZE_OPTIONS,
   SORT_OPTIONS,
   determineCredibility,
   hasActiveFilters,
@@ -93,6 +91,7 @@ import {
   collapseQuantizations,
   huggingFaceRepoFor,
   isOffGridHfRepo,
+  pickModelsForDevice,
   type FilterState,
   type Credibility,
   type ModelKind
@@ -147,17 +146,6 @@ function Sel({
         ))}
       </SelectPopup>
     </Select>
-  )
-}
-
-// Published full-model MTP exports. Do not redirect a fine-tune to its base model.
-const MTP_DOWNLOAD_REPOS: Readonly<Record<string, string>> = {
-  'bartowski/tencent_UI-Mate-9B-GGUF': 'bartowski/tencent_UI-Mate-9B-GGUF+MTP',
-  ...Object.fromEntries(
-    ['0.8B', '2B', '4B', '9B', '27B', '35B-A3B', '122B-A10B', '397B-A17B'].map((size) => [
-      `unsloth/Qwen3.5-${size}-GGUF`,
-      `unsloth/Qwen3.5-${size}-MTP-GGUF`
-    ])
   )
 }
 
@@ -253,7 +241,6 @@ function fmtReleaseDate(iso?: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
 }
 
-const BONSAI_2_ID = 'prism-ml/Ternary-Bonsai-2-27B-gguf'
 /** Kev releases (jaredpalmer/kev-4b, kev-9b): SafeTensors packages, not GGUF repositories. */
 const isKevModel = (id: string): boolean => id.startsWith('jaredpalmer/kev-')
 
@@ -287,13 +274,11 @@ function kevFormat(m: { params?: number; files: ModelFile[] }): {
 
 function featureRank(
   m: { id?: string; sourceModelId?: string; credibility?: string; tags?: string[] },
-  recommendedId?: string | null,
-  bonsaiRecommended = false
+  recommendedId?: string | null
 ): number {
   // The model recommended for THIS machine's RAM sorts to the very top (above a
   // plain 'Fast' pick). Then distilled few-step models (tagged "Fast") render in
   // ~30s vs ~100s, so surface them next. Then our own org's models, then the rest.
-  if (bonsaiRecommended && (m.sourceModelId ?? m.id) === BONSAI_2_ID) return -2
   if (recommendedId && m.id === recommendedId) return -1
   if (m.tags?.some((t) => /^fast/i.test(t))) return 0
   if (m.credibility !== 'offgrid') return 2
@@ -371,7 +356,18 @@ function downloadFailureText(error?: string): string {
   if (!error) return 'The download did not start.'
   if (error.startsWith('interrupted')) return 'The download stopped before it finished.'
   if (error === 'unknown model') return 'This model is not available to download.'
+  if (/EPERM|operation not permitted|blocked access/i.test(error)) return 'macOS blocked access to the model folder.'
+  if (/model folder is unavailable/i.test(error)) return 'The model folder cannot be reached.'
   return error
+}
+
+/** The one control that fixes a failed download, when one exists. */
+type FailureFix = 'privacy' | 'folder' | null
+function downloadFailureFix(error?: string): FailureFix {
+  if (!error) return null
+  if (/EPERM|operation not permitted|blocked access/i.test(error)) return 'privacy'
+  if (/model folder is unavailable|disk space/i.test(error)) return 'folder'
+  return null
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -475,7 +471,12 @@ export function ModelsScreen({
   const [detail, setDetail] = useState<ShownModel | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [mtpDownloads, setMtpDownloads] = useState(false)
+  // Models past this device's ceiling stay out of the list until asked for.
+  const [showTooBig, setShowTooBig] = useState(false)
+  // Downloads started here switch to their model when they finish; repairs of an installed model don't.
+  const switchWhenReady = useRef(new Set<string>())
+  const [ready, setReady] = useState<{ id: string; name: string } | null>(null)
+  const [allFiles, setAllFiles] = useState(false)
   const [hfResults, setHfResults] = useState<
     {
       id: string
@@ -488,11 +489,6 @@ export function ModelsScreen({
     }[]
   >([])
   const [searching, setSearching] = useState(false)
-  const [variantModel, setVariantModel] = useState<ModelEntry | null>(null)
-  const [variants, setVariants] = useState<DownloadableModelFile[]>([])
-  const [variantLoading, setVariantLoading] = useState(false)
-  const [variantError, setVariantError] = useState<string | null>(null)
-  const variantGuidance = useMemo(() => modelFileGuidance(variants, ramGb), [variants, ramGb])
   const [detailFiles, setDetailFiles] = useState<DownloadableModelFile[]>([])
   const detailFileGuidance = useMemo(
     () => modelFileGuidance(detailFiles, ramGb),
@@ -506,6 +502,7 @@ export function ModelsScreen({
   const SIZE_BUCKETS = [2, 4, 6, 8, 16] as const
 
   const openDetail = useCallback((m: ShownModel) => {
+    setAllFiles(false)
     setDetailFiles([])
     setDetailFilesError(null)
     setDetailFilesLoading(true)
@@ -530,19 +527,10 @@ export function ModelsScreen({
       !detail ||
       isKevModel(detail.id) ||
       detail.id.startsWith('local:') ||
-      !['text', 'vision', 'computer_use'].includes(detail.kind)
+      // Sizes are offered for chat models, and for any search result (image ones included).
+      (!['text', 'vision', 'computer_use'].includes(detail.kind) &&
+        models.some((catalogModel) => catalogModel.id === detail.id))
     ) {
-      setDetailFilesLoading(false)
-      return
-    }
-    if (
-      mtpDownloads &&
-      !/-MTP-GGUF$/i.test(detail.id) &&
-      !detail.id.endsWith('+MTP') &&
-      !visionSt[detail.id]?.supportsMtp
-    ) {
-      setDetailFiles([])
-      setDetailFilesError('MTP files are not available for this model.')
       setDetailFilesLoading(false)
       return
     }
@@ -566,7 +554,9 @@ export function ModelsScreen({
     return () => {
       cancelled = true
     }
-  }, [detail, mtpDownloads, visionSt])
+    // Reads the catalog only to tell a search result from a catalog model; `detail` drives it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail])
 
   const importModel = async (): Promise<void> => {
     if (importing) return
@@ -636,14 +626,20 @@ export function ModelsScreen({
       api.getInstalledModels?.().then(setInstalled)
       refreshVision()
       refreshActive()
+      if (switchWhenReady.current.delete(d.modelId)) void switchToReady(d.modelId, d.modelName)
     }
+    if (d.status === 'failed') switchWhenReady.current.delete(d.modelId)
   })
 
   const cancelDownload = (id: string): void => {
+    switchWhenReady.current.delete(id)
     void api.cancelModelDownload?.(id)
     setProgress((p) => withoutProgressEntry(p, id))
   }
   const download = (id: string, fileName?: string): void => {
+    // A new model becomes the one in use when it lands; adding a missing part to an installed one
+    // leaves the current choice alone.
+    if (!installed.includes(id)) switchWhenReady.current.add(id)
     // 'queued', not 'downloading': nothing has been downloaded yet, and claiming otherwise is what
     // left a refused request showing a spinner at 0% forever. The main process moves it to
     // 'downloading' when bytes actually start, and to 'failed' if it never gets that far.
@@ -667,21 +663,6 @@ export function ModelsScreen({
   const retryDownload = (id: string): void => {
     setProgress((p) => withoutProgressEntry(p, id))
     download(id, chosenVariants[id])
-  }
-  const chooseVariant = async (model: ModelEntry): Promise<void> => {
-    setVariantModel(model)
-    setVariantLoading(true)
-    setVariantError(null)
-    setVariants([])
-    try {
-      const files = (await api.getModelFiles?.(model.id))?.filter(isModelWeightFile)
-      if (!files?.length) throw new Error('No GGUF files found in this repository.')
-      setVariants(files)
-    } catch (error) {
-      setVariantError(error instanceof Error ? error.message : 'Could not load model files.')
-    } finally {
-      setVariantLoading(false)
-    }
   }
   const removeModel = async (id: string, label: string): Promise<void> => {
     const external = id.startsWith('external:')
@@ -730,6 +711,17 @@ export function ModelsScreen({
       setSwitching(null)
     }
   }
+  // A finished download takes over its slot, then offers the next step.
+  const switchToReady = async (id: string, name?: string): Promise<void> => {
+    const res = await api.activateModel?.(id)
+    if (!res?.success) return
+    refreshActive()
+    setReady({ id, name: name ?? models.find((m) => m.id === id)?.name ?? id })
+  }
+  const openChat = (): void => {
+    setReady(null)
+    window.dispatchEvent(new CustomEvent('og:navigate', { detail: 'memory-chat' }))
+  }
   const openModelSettings = (kind?: string): void => {
     openModelSettingsPanel(modelSettingsTabForKind(kind))
   }
@@ -774,12 +766,6 @@ export function ModelsScreen({
   // The image model recommended for this machine's RAM (Light Q4 on <=16GB, full
   // Q8 above) — one pure rule, reused for both the badge and the top-of-list sort.
   const recommendedImageId = useMemo(() => recommendedImageModelId(models, ramGb), [models, ramGb])
-  const bonsaiFits = (m: ModelEntry): boolean =>
-    (m.sourceModelId ?? m.id) === BONSAI_2_ID &&
-    ramGb !== null &&
-    ramGb >= (m.minRamGb ?? 0) &&
-    ['easy', 'fits'].includes(fitTier(totalBytes(m) / 1e9, ramGb))
-
   const displayed = useMemo(
     () =>
       filterAndSort(
@@ -819,7 +805,10 @@ export function ModelsScreen({
   )
 
   // Tags offered as filter chips — every tag present in this tab's models.
-  const availableTags = useMemo(() => collectTags(list), [list])
+  const availableTags = useMemo(
+    () => collectTags(list).filter((t) => !/challenger|^large$/i.test(t)),
+    [list]
+  )
 
   const displayedCatalog = useMemo(
     () =>
@@ -844,12 +833,9 @@ export function ModelsScreen({
             activeIds.has(x.id) ? 0 : installed.includes(x.id) ? 1 : 2
           return (
             rank(a) - rank(b) ||
-            featureRank(a, recommendedImageId, bonsaiFits(a)) -
-              featureRank(b, recommendedImageId, bonsaiFits(b))
+            featureRank(a, recommendedImageId) - featureRank(b, recommendedImageId)
           )
         }),
-    // bonsaiFits reads only ramGb, which is listed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       list,
       filterState,
@@ -859,8 +845,7 @@ export function ModelsScreen({
       selectedTags,
       activeIds,
       installed,
-      recommendedImageId,
-      ramGb
+      recommendedImageId
     ]
   )
 
@@ -894,55 +879,65 @@ export function ModelsScreen({
     failed: Object.values(progress).filter((p) => p.status === 'failed').length
   }
 
-  // Four-way browse chip: only a model past the AGGRESSIVE ceiling reads "won't
-  // fit"; 55-82%-of-RAM models read "tight" and stay loadable (Load anyway) — the
-  // never-block posture, more accurate than the old 3-way "may not fit".
-  const ramTier = (m: { files?: ModelFile[] }): FitTier => {
-    if (!ramGb) return 'easy'
-    const gb = totalBytes(m) / 1e9
-    if (!gb) return 'easy'
-    return fitTier(gb, ramGb)
+  // One fit rule for every card (shared with the detail panel and the switch warning). A search result
+  // has no file list yet, so its size is estimated from its parameter count at the usual 4-bit size.
+  const estimatedBytes = (m: { files?: ModelFile[]; params?: number }): number =>
+    totalBytes(m) || (m.params ? m.params * 0.6e9 : 0)
+  const ramTier = (m: { files?: ModelFile[]; params?: number }): FitTier => {
+    const gb = estimatedBytes(m) / 1e9
+    return ramGb && gb ? fitTier(gb, ramGb) : 'easy'
   }
 
+  // Fast, Balanced and Best for this device on every model tab (chat, image, voice, transcription),
+  // from the models that fit with room (shared rule). Task models play roles, not tiers: no picks.
+  const picks = useMemo(() => {
+    if (activeKind === 'computer_use' || activeKind === 'storage') return []
+    const chosen = pickModelsForDevice(
+      list
+        .filter(
+          (m) =>
+            (activeKind !== 'text' || m.kind === 'text' || m.kind === 'vision') &&
+            !m.quantOf &&
+            !m.remoteServerId &&
+            m.availability !== 'coming_soon'
+        )
+        .map((m) => ({ id: m.id, sizeBytes: totalBytes(m), params: m.params })),
+      ramGb
+    )
+    return (
+      [
+        ['Fast', chosen.fast],
+        ['Balanced', chosen.balanced],
+        ['Best', chosen.best]
+      ] as const
+    ).flatMap(([label, id]) => {
+      const model = list.find((m) => m.id === id)
+      // A model already on this device lives under "On this device"; the picks are for getting one.
+      const owned = list.some((m) => (m.quantOf ?? m.id) === id && installed.includes(m.id))
+      return model && !owned ? [{ label, model }] : []
+    })
+  }, [list, ramGb, activeKind, installed])
+  // A pick stands for its whole family (every quantization of it is one card).
+  const pickIds = new Set(picks.map((pick) => pick.model.id))
+  const isPick = (m: ModelEntry): boolean => pickIds.has(m.quantOf ?? m.id)
+
+  const filtersNarrowing =
+    hasActiveFilters(filterState) ||
+    sizeBucket !== null ||
+    selectedTags.length > 0 ||
+    (activeKind === 'text' && useCase !== 'all')
+  // The picks lead each tab while the person is browsing; a filter means they know what they want.
+  const showPicks = !filtersNarrowing && picks.length > 0
   const renderCard = (
     m: ShownModel & { credibility?: string; params?: number; org?: string },
-    isHf = false
+    isHf = false,
+    pickLabel?: string
   ): React.JSX.Element => {
     // A model with several quantizations is one card, named for the model; the size is chosen in
     // the side panel.
     const choosesQuant = (m.quantOptions?.length ?? 0) > 1
-    const useMtpDownloads = mtpDownloads && ['text', 'vision', 'computer_use'].includes(activeKind)
-    const mtpRepository = MTP_DOWNLOAD_REPOS[m.id]
-    const mtpEntry = mtpRepository ? models.find((model) => model.id === mtpRepository) : undefined
-    // "MTP downloads" changes what a NEW download fetches. An installed model keeps its own card (Use,
-    // Delete, active state), and a variant that is not ready yet is never offered in its place:
-    // swapping either in left an active model looking uninstalled, "coming soon", and unchangeable.
-    if (
-      useMtpDownloads &&
-      mtpEntry &&
-      mtpEntry.availability !== 'coming_soon' &&
-      !installed.includes(m.id) &&
-      !visionSt[m.id]?.mtpInstalled
-    ) {
-      m = {
-        ...m,
-        id: mtpEntry.id,
-        name: `${m.name} MTP`,
-        files: mtpEntry.files,
-        availability: mtpEntry.availability ?? m.availability,
-        availabilityNote: mtpEntry.availabilityNote ?? m.availabilityNote
-      }
-    }
     const displayName = choosesQuant ? m.quantOptions![0]!.name : m.name
-    const isInstalled =
-      installed.includes(m.id) &&
-      (!useMtpDownloads || !m.id.endsWith('+MTP') || !!visionSt[m.id]?.mtpInstalled)
-    const mtpUnavailable =
-      useMtpDownloads &&
-      !isInstalled &&
-      !/-MTP-GGUF$/i.test(m.id) &&
-      !m.id.endsWith('+MTP') &&
-      !visionSt[m.id]?.supportsMtp
+    const isInstalled = installed.includes(m.id)
     const isRemote = Boolean(m.remoteServerId)
     const active = isActive(m.id)
     const prog = progress[m.id]
@@ -957,24 +952,21 @@ export function ModelsScreen({
     const dflashMissing = isInstalled && !!vs?.supportsDflash && !vs.dflashInstalled
     const mtpMissing = isInstalled && !!vs?.supportsMtp && !vs.mtpInstalled
     const bytes = totalBytes(m)
-    const size = formatSize(bytes) || null
-    const meta = [
-      m.org,
-      m.params ? formatParams(m.params) : null,
-      size,
-      fmtReleaseDate(m.releaseDate)
-    ]
+    const size = formatSize(bytes) || (isHf && m.params ? `~${formatSize(estimatedBytes(m))}` : null)
+    const meta = [m.org, m.params ? formatParams(m.params) : null, size]
       .filter(Boolean)
       .join(' · ')
-    const tier: FitTier = isHf ? 'easy' : ramTier(m)
-    const tags = (m.tags ?? []).filter((t) => !/tight|risky|fit/i.test(t))
+    const tier: FitTier = ramTier(m)
+    // Size and fit already say "large" and "tight"; ranking labels say nothing to the person.
+    const tags = (m.tags ?? []).filter((t) => !/tight|risky|fit|challenger|^large$/i.test(t))
     const comingSoon = m.availability === 'coming_soon'
-    const worksBest =
-      bonsaiFits(m) || /(?:^|[\s/_-])UI[\s_-]?Mate(?:[\s/_-]|$)/i.test(`${m.id} ${m.name}`)
-    // The single image pick best-suited to THIS machine's RAM (Light on <=16GB,
-    // full above) — a prominent filled-emerald badge, distinct from the outlined tags.
+    // The image pick for this machine's RAM, when the picks row is not already saying so.
     const recommended =
-      !isHf && (bonsaiFits(m) || (!!recommendedImageId && m.id === recommendedImageId))
+      !isHf && !showPicks && !!recommendedImageId && m.id === recommendedImageId
+    const partsMissing = [
+      ...(projectorMissing ? ['vision'] : []),
+      ...(dflashMissing || mtpMissing ? ['faster replies'] : [])
+    ]
 
     // One model, two layouts: the collections chapter's grid card and its table row share every
     // piece below, so a state (downloading, failed, active) reads the same in either view.
@@ -994,9 +986,9 @@ export function ModelsScreen({
         >
           {displayName}
         </button>
-        {worksBest && (
-          <span className="shrink-0 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-            Works best
+        {pickLabel && (
+          <span className="shrink-0 rounded-sm bg-green-500 px-1.5 py-px text-[8px] font-semibold uppercase tracking-wide text-black">
+            {pickLabel}
           </span>
         )}
         {m.kind === 'vision' && (
@@ -1004,15 +996,17 @@ export function ModelsScreen({
             <IconEye className="h-2 w-2" /> Vision
           </span>
         )}
-        {m.isNew && (
-          <span className="shrink-0 rounded-sm border border-green-500/60 px-1 py-px text-[8px] uppercase tracking-wide text-green-500">
-            New
-          </span>
-        )}
       </div>
     )
     const metaLine = (
-      <>{meta && <div className="mt-0.5 truncate text-[10px] text-neutral-600">{meta}</div>}</>
+      <>
+        {meta && <div className="mt-0.5 truncate text-[10px] text-neutral-600">{meta}</div>}
+        {m.description && (
+          <p className="mt-1 line-clamp-2 text-[10px] leading-snug text-neutral-400">
+            {m.description}
+          </p>
+        )}
+      </>
     )
     const detailsButton = (
       <button
@@ -1075,11 +1069,11 @@ export function ModelsScreen({
                 }`}
                 title={
                   tier === 'tight'
-                    ? `Fits, but context will be tight on this ${deviceNoun()}`
-                    : `Past this ${deviceNoun()}'s comfortable ceiling — you can still Load anyway`
+                    ? `Runs, with less room for long chats on this ${deviceNoun()}`
+                    : `Larger than this ${deviceNoun()} can run well. You can still load it.`
                 }
               >
-                {tier === 'tight' ? 'Tight on RAM' : "Won't fit — Load anyway"}
+                {fitLabel(tier)}
               </span>
             )}
           </div>
@@ -1133,11 +1127,27 @@ export function ModelsScreen({
       // A failure is a STATE of the action row, not a banner under it: reason here, one retry
       // control in the trailing actions.
       <span
-        className="min-w-0 truncate text-[10px] text-red-400/90"
+        className="min-w-0 text-[10px] text-red-400/90"
         title={prog.error}
         role="status"
       >
-        {downloadFailureText(prog.error)}
+        {downloadFailureText(prog.error)}{' '}
+        {downloadFailureFix(prog.error) === 'privacy' && (
+          <button
+            onClick={() => void api.openFilesAndFoldersSettings?.()}
+            className="underline underline-offset-2 hover:text-red-300"
+          >
+            Open Privacy Settings
+          </button>
+        )}
+        {downloadFailureFix(prog.error) === 'folder' && (
+          <button
+            onClick={() => selectKind('storage')}
+            className="underline underline-offset-2 hover:text-red-300"
+          >
+            Choose folder
+          </button>
+        )}
       </span>
     ) : null
     // The action half: trailing icon controls (the old label is each one's name and tooltip).
@@ -1199,20 +1209,14 @@ export function ModelsScreen({
             </Button>
           </IconTip>
         ) : (
-          <IconTip label={mtpUnavailable ? 'MTP unavailable' : 'Download'}>
+          <IconTip label="Download">
             <Button
               size="icon-xs"
               variant="ghost"
-              aria-label={mtpUnavailable ? 'MTP unavailable' : 'Download'}
-              onClick={() =>
-                choosesQuant
-                  ? openDetail(m)
-                  : isHf || useMtpDownloads
-                    ? void chooseVariant(m)
-                    : download(m.id)
-              }
-              disabled={mtpUnavailable}
-              className="text-neutral-300 hover:text-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="Download"
+              // A model with several sizes, or a search result, opens its panel to pick the size.
+              onClick={() => (choosesQuant || isHf ? openDetail(m) : download(m.id))}
+              className="text-neutral-300 hover:text-emerald-500"
             >
               <IconDownload className="h-3.5 w-3.5" />
             </Button>
@@ -1259,30 +1263,16 @@ export function ModelsScreen({
         ) : null}
       </div>
     )
+    // An installed model missing a part (vision, faster replies) gets one button that adds it.
+    // downloadModel skips files already on disk, so only the missing part downloads.
     const repairActions = (
       <>
-        {/* Vision-capable but projector not downloaded — offer to add it. Hidden while a
-            download is in flight (the progress UI covers that). */}
-        {!comingSoon && projectorMissing && !dflashMissing && !mtpMissing && !downloading && (
+        {!comingSoon && partsMissing.length > 0 && !downloading && (
           <button
             onClick={() => download(m.id)}
-            title="Download the vision projector so this model can read images"
-            className="flex items-center gap-1 rounded border border-amber-400/50 px-2 py-1 text-[10px] text-amber-300 transition-all duration-150 hover:border-amber-400 hover:bg-amber-400/10 active:scale-95"
+            className="flex items-center gap-1 self-start rounded border border-amber-400/50 px-2 py-1 text-[10px] text-amber-300 transition-all duration-150 hover:border-amber-400 hover:bg-amber-400/10 active:scale-95"
           >
-            <IconEye className="h-3 w-3" /> Add vision support
-          </button>
-        )}
-        {!comingSoon && (dflashMissing || mtpMissing) && !downloading && (
-          <button
-            onClick={() => download(m.id)}
-            title={
-              mtpMissing
-                ? 'Download the missing MTP file for speculative decoding'
-                : 'Download the missing DFlash model for speculative decoding'
-            }
-            className="flex items-center gap-1 rounded border border-amber-400/50 px-2 py-1 text-[10px] text-amber-300 transition-all duration-150 hover:border-amber-400 hover:bg-amber-400/10 active:scale-95"
-          >
-            <IconDownload className="h-3 w-3" /> {mtpMissing ? 'Add MTP' : 'Repair'}
+            <IconDownload className="h-3 w-3" /> Add {partsMissing.join(' and ')}
           </button>
         )}
       </>
@@ -1423,11 +1413,6 @@ export function ModelsScreen({
       </div>
     )
 
-  const filtersNarrowing =
-    hasActiveFilters(filterState) ||
-    sizeBucket !== null ||
-    selectedTags.length > 0 ||
-    (activeKind === 'text' && useCase !== 'all')
   const clearFilters = (): void => {
     setFilterState(initialFilterState)
     setSizeBucket(null)
@@ -1504,11 +1489,6 @@ export function ModelsScreen({
               )
           }))}
         />
-        {ramGb && activeKind !== 'storage' && (
-          <span className="ml-auto text-[9px] text-neutral-700">
-            {ramGb}GB RAM · fits ≤{Math.round(ramGb * FIT_OK_FRAC)}GB
-          </span>
-        )}
       </div>
 
       {/* Storage tab */}
@@ -1531,7 +1511,7 @@ export function ModelsScreen({
                 <InputGroupInput
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder={`Search HuggingFace…`}
+                  placeholder="Search models…"
                   className="w-44 text-[10px]"
                 />
                 {searching && (
@@ -1541,22 +1521,6 @@ export function ModelsScreen({
                 )}
               </InputGroup>
             )}
-            {['text', 'vision', 'computer_use'].includes(activeKind) && (
-              <Button
-                size="xs"
-                variant={mtpDownloads ? 'secondary' : 'outline'}
-                className="text-[10px]"
-                aria-pressed={mtpDownloads}
-                onClick={() => {
-                  setMtpDownloads((enabled) => !enabled)
-                  setVariantModel(null)
-                  setDetail(null)
-                }}
-                title="Choose full models with Multi-Token Prediction weights"
-              >
-                <TextMorph as="span">{`MTP downloads: ${mtpDownloads ? 'On' : 'Off'}`}</TextMorph>
-              </Button>
-            )}
             <Sel
               value={filterState.source}
               onChange={(v) =>
@@ -1564,12 +1528,6 @@ export function ModelsScreen({
               }
               allLabel="All sources"
               options={CREDIBILITY_OPTIONS}
-            />
-            <Sel
-              value={filterState.size}
-              onChange={(v) => setFilterState((s) => ({ ...s, size: v as FilterState['size'] }))}
-              allLabel="Any size"
-              options={SIZE_OPTIONS}
             />
             <Sel
               value={filterState.sort}
@@ -1593,16 +1551,13 @@ export function ModelsScreen({
                 ]}
               />
             )}
-            {hasActiveFilters(filterState) && (
-              <IconTip label="Clear">
+            {filtersNarrowing && (
+              <IconTip label="Clear filters">
                 <Button
                   size="icon-xs"
                   variant="ghost"
-                  aria-label="Clear"
-                  onClick={() => {
-                    setFilterState(initialFilterState)
-                    setSizeBucket(null)
-                  }}
+                  aria-label="Clear filters"
+                  onClick={clearFilters}
                   className="text-neutral-500 hover:text-emerald-500"
                 >
                   <IconX className="h-3 w-3" />
@@ -1695,6 +1650,33 @@ export function ModelsScreen({
             </div>
           )}
 
+          <AnimatePresence initial={false}>
+            {ready && (
+              <motion.div
+                key="ready"
+                {...RISE}
+                role="status"
+                className="flex shrink-0 items-center gap-2 border-b border-green-500/20 bg-green-500/10 px-6 py-1.5 text-[10px] text-green-300"
+              >
+                <IconCircleCheck className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 flex-1 truncate">{ready.name} is ready.</span>
+                <Button size="xs" onClick={openChat}>
+                  Chat now
+                </Button>
+                <IconTip label="Dismiss">
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label="Dismiss"
+                    onClick={() => setReady(null)}
+                    className="text-green-300/70 hover:text-green-200"
+                  >
+                    <IconX className="h-3 w-3" />
+                  </Button>
+                </IconTip>
+              </motion.div>
+            )}
+          </AnimatePresence>
           {switchError && (
             <div className="shrink-0 border-b border-red-500/20 bg-red-500/10 px-6 py-1.5 text-[10px] text-red-300">
               {switchError}
@@ -1728,33 +1710,36 @@ export function ModelsScreen({
                   )}
                 </AnimatePresence>
                 {renderCollection(
-                  'Model search results',
+                  'Matching models',
                   displayed
-                    .filter(
-                      (result, index, results) =>
-                        !mtpDownloads ||
-                        results.findIndex(
-                          (other) =>
-                            (MTP_DOWNLOAD_REPOS[other.id] ?? other.id) ===
-                            (MTP_DOWNLOAD_REPOS[result.id] ?? result.id)
-                        ) === index
-                    )
-                    .map((r) =>
-                      renderCard(
-                        list.find((model) => model.id === r.id) ?? {
-                          id: r.id,
-                          name: r.name,
-                          kind: activeKind as ModelKind,
-                          org: r.org,
-                          files: [],
-                          params: r.params ?? undefined,
-                          credibility: r.credibility
-                        },
-                        !list.some((model) => model.id === r.id)
-                      )
-                    ),
+                    .filter((r) => list.some((model) => model.id === r.id))
+                    .map((r) => renderCard(list.find((model) => model.id === r.id)!)),
                   GRID,
                   'px-6 py-3'
+                )}
+                {displayed.some((r) => !list.some((model) => model.id === r.id)) && (
+                  <Section label="More from Hugging Face" className="px-6 pt-4">
+                    {renderCollection(
+                      'More from Hugging Face',
+                      displayed
+                        .filter((r) => !list.some((model) => model.id === r.id))
+                        .map((r) =>
+                          renderCard(
+                            {
+                              id: r.id,
+                              name: r.name,
+                              kind: activeKind as ModelKind,
+                              org: r.org,
+                              files: [],
+                              params: r.params ?? undefined,
+                              credibility: r.credibility
+                            },
+                            true
+                          )
+                        ),
+                      SECTION_GRID
+                    )}
+                  </Section>
                 )}
               </>
             ) : (
@@ -1809,15 +1794,23 @@ export function ModelsScreen({
                 // One group of cards, the same rows on every tab: on this device, remote (a saved
                 // server's models), available to download, coming soon. `group` names the lists
                 // when a tab shows more than one group.
-                const cardRows = (models: ModelEntry[], group?: string): React.ReactNode => {
+                const cardRows = (all: ModelEntry[], group?: string): React.ReactNode => {
+                  // A pick shows once, in the picks row.
+                  const models = showPicks ? all.filter((m) => !isPick(m)) : all
                   const installedModels = models.filter(
                     (m) => installed.includes(m.id) && m.availability !== 'coming_soon'
                   )
                   const localModels = installedModels.filter((m) => !m.remoteServerId)
                   const remoteModels = installedModels.filter((m) => m.remoteServerId)
-                  const availableModels = models.filter(
-                    (m) => !installed.includes(m.id) && m.availability !== 'coming_soon'
+                  const downloadable = models.filter(
+                    (m) =>
+                      !installed.includes(m.id) &&
+                      m.availability !== 'coming_soon'
                   )
+                  const tooBig = downloadable.filter((m) => ramTier(m) === 'wontFit')
+                  const availableModels = showTooBig
+                    ? downloadable
+                    : downloadable.filter((m) => ramTier(m) !== 'wontFit')
                   const comingSoonModels = models.filter((m) => m.availability === 'coming_soon')
                   const rows: Array<[string, string, ModelEntry[]]> = [
                     [
@@ -1841,7 +1834,7 @@ export function ModelsScreen({
                       comingSoonModels
                     ]
                   ]
-                  return rows.map(([heading, label, list]) => {
+                  const sections = rows.map(([heading, label, list]) => {
                     if (list.length === 0) return null
                     const collection = renderCollection(
                       label,
@@ -1863,8 +1856,50 @@ export function ModelsScreen({
                       </Section>
                     )
                   })
+                  return (
+                    <>
+                      {sections}
+                      {tooBig.length > 0 && (
+                        <div className="px-6 pt-4">
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            onClick={() => setShowTooBig((shown) => !shown)}
+                            className="text-[10px] text-neutral-500"
+                          >
+                            {showTooBig
+                              ? `Hide models too big for this ${deviceNoun()}`
+                              : `Show ${tooBig.length} more, too big for this ${deviceNoun()}`}
+                          </Button>
+                        </div>
+                      )}
+                    </>
+                  )
                 }
-                if (activeKind !== 'computer_use') return <>{cardRows(displayedModels)}</>
+                if (activeKind !== 'computer_use')
+                  return (
+                    <>
+                      {showPicks && (
+                        <Section
+                          label={`For this ${deviceNoun()}`}
+                          className="px-6 pt-4"
+                        >
+                          {renderCollection(
+                            `Picks for this ${deviceNoun()}`,
+                            picks.map(({ label, model }) =>
+                              renderCard(
+                                displayedModels.find((m) => (m.quantOf ?? m.id) === model.id) ?? model,
+                                false,
+                                label
+                              )
+                            ),
+                            'grid grid-cols-3 gap-2'
+                          )}
+                        </Section>
+                      )}
+                      {cardRows(displayedModels)}
+                    </>
+                  )
                 // Tasks: grounding specialists and decision models are different jobs, run side by
                 // side, so they are listed apart.
                 const groups: Array<[string, ModelEntry[]]> = [
@@ -1910,10 +1945,9 @@ export function ModelsScreen({
             const rows: [string, string | null][] = [
               ['Source', m.org || (isLocal ? 'Imported' : '—')],
               ['Parameters', m.params ? formatParams(m.params) : null],
-              ['Quantization', m.quant || null],
               ['Download', formatSize(bytes) || null],
               ['Released', fmtReleaseDate(m.releaseDate) || null],
-              ['Min RAM', m.minRamGb ? `${m.minRamGb} GB` : null]
+              ['Runs', ramGb && bytes > 0 ? fitLabel(fitTier(bytes / 1e9, ramGb)) : null]
             ]
             return (
               <SidePanel
@@ -1941,7 +1975,6 @@ export function ModelsScreen({
                         </span>
                       )}
                     </div>
-                    <div className="mt-0.5 truncate text-[10px] text-neutral-600">{m.id}</div>
                   </div>
                   <IconTip label="Close">
                     <Button
@@ -2035,15 +2068,6 @@ export function ModelsScreen({
                       </div>
                     </section>
                   )}
-                  {ramGb && bytes > 0 && (
-                    <p className="mt-3 text-[10px] text-neutral-500">
-                      {fitLevel(bytes / 1e9, ramGb) === 'ok'
-                        ? `Comfortable fit on your ${deviceNoun()}.`
-                        : fitLevel(bytes / 1e9, ramGb) === 'tight'
-                          ? 'Tight on RAM - context will be reduced.'
-                          : `Large for your ${deviceNoun()} - may run slowly.`}
-                    </p>
-                  )}
                   {m.imageModes && m.imageModes.length > 0 && (
                     <div className="mt-3 flex flex-wrap gap-1">
                       {m.imageModes.map((mode) => (
@@ -2094,14 +2118,14 @@ export function ModelsScreen({
                     })()}
                   {hfUrl &&
                     !isKevModel(m.id) &&
-                    ['text', 'vision', 'computer_use'].includes(m.kind) && (
+                    (['text', 'vision', 'computer_use'].includes(m.kind) ||
+                      !models.some((catalogModel) => catalogModel.id === m.id)) && (
                       <section
                         aria-label="Available model files"
                         className="mt-3 border-t border-neutral-800 pt-3"
                       >
                         <h3 className="mb-2 text-[10px] uppercase tracking-wide text-neutral-400">
-                          Available GGUF files
-                          {detailFileGuidance.size > 0 ? ` · ${detailFileGuidance.size}` : ''}
+                          Sizes
                         </h3>
                         {detailFilesLoading && (
                           <p className="text-xs text-neutral-500">Loading available files…</p>
@@ -2115,12 +2139,16 @@ export function ModelsScreen({
                           !detailFilesError &&
                           detailFileGuidance.size === 0 && (
                             <p className="text-xs text-neutral-500">
-                              No GGUF files found in this repository.
+                              No downloadable sizes in this repository.
                             </p>
                           )}
                         <div className="space-y-2">
                           {detailFiles
                             .filter(isModelWeightFile)
+                            .filter(
+                              (file) =>
+                                allFiles || !!detailFileGuidance.get(file.fileName)?.labels.length
+                            )
                             .sort(
                               (a, b) =>
                                 Number(!!detailFileGuidance.get(b.fileName)?.labels.length) -
@@ -2134,57 +2162,40 @@ export function ModelsScreen({
                                   className="flex items-start justify-between gap-2 rounded border border-neutral-800 px-3 py-2"
                                 >
                                   <div className="min-w-0">
-                                    <p className="break-all text-[11px] text-neutral-200">
+                                    {/* The size in words leads; the file name is for the curious. */}
+                                    <p className="text-[11px] text-neutral-200">
+                                      {guidance?.labels.join(' · ') || formatSize(file.sizeBytes)}
+                                    </p>
+                                    <p className="mt-0.5 text-[10px] text-neutral-500">
+                                      {[
+                                        guidance?.labels.length ? formatSize(file.sizeBytes) : null,
+                                        guidance?.fit === 'risky'
+                                          ? 'Too big'
+                                          : guidance?.fit === 'tight'
+                                            ? 'Tight'
+                                            : null,
+                                        guidance?.split && guidance.weightBytes !== null
+                                          ? `${formatSize(guidance.weightBytes)} in parts`
+                                          : null
+                                      ]
+                                        .filter(Boolean)
+                                        .join(' · ')}
+                                    </p>
+                                    <p className="mt-0.5 break-all text-[9px] text-neutral-600">
                                       {file.fileName}
                                     </p>
-                                    {guidance && guidance.labels.length > 0 && (
-                                      <div className="mt-1 flex flex-wrap gap-1">
-                                        {guidance.labels.map((label) => (
-                                          <span
-                                            key={label}
-                                            title={
-                                              label === 'Best balance'
-                                                ? 'Balances file size and precision within your estimated RAM budget.'
-                                                : label === 'Highest precision'
-                                                  ? 'Keeps the most weight precision among these files.'
-                                                  : 'The smallest complete model download, including its vision file.'
-                                            }
-                                            className={`rounded-sm border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${label.startsWith('Best balance') ? 'border-green-500 bg-green-500/10 text-green-500' : 'border-neutral-700 text-neutral-300'}`}
-                                          >
-                                            {label}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    )}
-                                    <p className="mt-1 text-[10px] text-neutral-500">
-                                      {guidance?.quant ?? file.quant} · {formatSize(file.sizeBytes)}
-                                      {file.mmproj ? ` · includes ${file.mmproj.fileName}` : ''}
-                                    </p>
-                                    {guidance?.fit === 'risky' && (
-                                      <p
-                                        className="mt-1 text-[10px] text-neutral-400"
-                                        title="Estimated from system RAM and file size. GPU memory and context size also affect memory use."
-                                      >
-                                        Large for this device
-                                      </p>
-                                    )}
-                                    {guidance?.split && (
-                                      <p
-                                        className="mt-1 text-[10px] text-neutral-400"
-                                        title="All model parts are required."
-                                      >
-                                        Split model /{' '}
-                                        {guidance.weightBytes !== null
-                                          ? `${formatSize(guidance.weightBytes)} total`
-                                          : 'Total size unavailable'}
-                                      </p>
-                                    )}
                                   </div>
                                   <IconTip label="Download">
                                     <Button
                                       size="icon-xs"
                                       variant="ghost"
-                                      onClick={() => download(m.id, file.fileName)}
+                                      onClick={() => {
+                                        setChosenVariants((chosen) => ({
+                                          ...chosen,
+                                          [m.id]: file.fileName
+                                        }))
+                                        download(m.id, file.fileName)
+                                      }}
                                       disabled={comingSoon || !!downloading || !!detailFilesError}
                                       aria-label={`Download ${file.fileName}`}
                                       className="shrink-0 text-neutral-300 hover:text-green-500 disabled:cursor-not-allowed disabled:opacity-40"
@@ -2196,6 +2207,19 @@ export function ModelsScreen({
                               )
                             })}
                         </div>
+                        {detailFileGuidance.size >
+                          detailFiles.filter(
+                            (file) => !!detailFileGuidance.get(file.fileName)?.labels.length
+                          ).length && (
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            onClick={() => setAllFiles((shown) => !shown)}
+                            className="mt-2 text-[10px] text-neutral-500"
+                          >
+                            {allFiles ? 'Fewer sizes' : `All files (${detailFileGuidance.size})`}
+                          </Button>
+                        )}
                       </section>
                     )}
                 </div>
@@ -2253,13 +2277,28 @@ export function ModelsScreen({
                   ) : (
                     <button
                       onClick={() => {
-                        if (hfUrl && !models.some((catalogModel) => catalogModel.id === m.id)) {
-                          void chooseVariant(m)
+                        if (!models.some((catalogModel) => catalogModel.id === m.id)) {
+                          // A search result downloads its recommended size; the list above offers the rest.
+                          const recommended = detailFiles.find((file) =>
+                            detailFileGuidance.get(file.fileName)?.labels.includes('Recommended')
+                          )
+                          if (!recommended) return
+                          setChosenVariants((chosen) => ({
+                            ...chosen,
+                            [m.id]: recommended.fileName
+                          }))
+                          download(m.id, recommended.fileName)
                         } else {
                           download(m.id)
                         }
                         closeDetail()
                       }}
+                      disabled={
+                        !models.some((catalogModel) => catalogModel.id === m.id) &&
+                        !detailFiles.some((file) =>
+                          detailFileGuidance.get(file.fileName)?.labels.includes('Recommended')
+                        )
+                      }
                       className="flex items-center gap-1 rounded border border-neutral-700 px-3 py-1.5 text-xs text-white transition-all duration-150 hover:border-green-500 hover:text-emerald-500 active:scale-95"
                     >
                       <IconDownload className="h-3.5 w-3.5" /> Download
@@ -2269,109 +2308,6 @@ export function ModelsScreen({
               </SidePanel>
             )
           })()}
-      </AnimatePresence>
-      <AnimatePresence>
-        {variantModel && (
-          <SidePanel
-            key="model-file-picker"
-            ariaLabel={`Choose a file for ${variantModel.name}`}
-            onClose={() => setVariantModel(null)}
-            className="w-[26vw] min-w-[380px]"
-          >
-            <div className="flex items-start justify-between gap-3 border-b border-neutral-800 px-5 py-4">
-              <div>
-                <h2 className="text-sm font-medium text-white">Choose a model file</h2>
-                <p className="mt-1 text-[10px] text-neutral-500">{variantModel.name}</p>
-                <p className="mt-1 break-all text-[10px] text-neutral-500">{variantModel.id}</p>
-              </div>
-              <button
-                onClick={() => setVariantModel(null)}
-                aria-label="Close file picker"
-                className="text-neutral-500 hover:text-white"
-              >
-                <IconX className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-              {variantLoading && (
-                <p className="text-xs text-neutral-400">Loading available files…</p>
-              )}
-              {variantError && (
-                <p className="text-xs text-red-400" role="alert">
-                  {variantError}
-                </p>
-              )}
-              <div className="space-y-2">
-                {variants
-                  .filter(isModelWeightFile)
-                  .sort(
-                    (a, b) =>
-                      Number(!!variantGuidance.get(b.fileName)?.labels.length) -
-                      Number(!!variantGuidance.get(a.fileName)?.labels.length)
-                  )
-                  .map((variant) => {
-                    const guidance = variantGuidance.get(variant.fileName)
-                    return (
-                      <Button
-                        variant="outline"
-                        key={variant.fileName}
-                        onClick={() => {
-                          setChosenVariants((current) => ({
-                            ...current,
-                            [variantModel.id]: variant.fileName
-                          }))
-                          download(variantModel.id, variant.fileName)
-                          setVariantModel(null)
-                        }}
-                        className="h-auto w-full flex-col sm:h-auto items-start gap-1 whitespace-normal rounded px-3 py-2 text-left leading-normal shadow-none"
-                      >
-                        <span className="break-all text-[11px] text-neutral-200">
-                          {variant.fileName}
-                        </span>
-                        <span className="text-[10px] text-neutral-400">
-                          {formatSize(variant.sizeBytes)}
-                        </span>
-                        {guidance && (
-                          <>
-                            {guidance.labels.length > 0 && (
-                              <span className="text-[10px] uppercase tracking-wide text-neutral-200">
-                                {guidance.labels.join(' / ')}
-                              </span>
-                            )}
-                            <span className="text-[10px] text-neutral-400">{guidance.quant}</span>
-                            {guidance.fit === 'risky' && (
-                              <span
-                                className="text-[10px] text-neutral-400"
-                                title="Estimated from system RAM and file size. GPU memory and context size also affect memory use."
-                              >
-                                Large for this device
-                              </span>
-                            )}
-                            {guidance.split && (
-                              <span
-                                className="text-[10px] text-neutral-400"
-                                title="All model parts are required."
-                              >
-                                Split model /{' '}
-                                {guidance.weightBytes !== null
-                                  ? `${formatSize(guidance.weightBytes)} total`
-                                  : 'Total size unavailable'}
-                              </span>
-                            )}
-                          </>
-                        )}
-                        {variant.mmproj && (
-                          <span className="break-all text-[9px] text-neutral-500">
-                            Includes {variant.mmproj.fileName}
-                          </span>
-                        )}
-                      </Button>
-                    )
-                  })}
-              </div>
-            </div>
-          </SidePanel>
-        )}
       </AnimatePresence>
     </div>
   )

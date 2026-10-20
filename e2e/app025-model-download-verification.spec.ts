@@ -187,7 +187,7 @@ test('rejects corrupt download, verifies retry, activates, chats, and persists',
   const card = targetCard()
   await expect(card).toBeVisible()
   await expect(card).toContainText('2.0GB')
-  await expect(card).not.toContainText("Won't fit")
+  await expect(card).not.toContainText('Too big')
   await card.getByRole('button', { name: 'Download', exact: true }).click()
 
   // The staged response is delivered in visible increments. The card must render transfer
@@ -253,9 +253,8 @@ test('rejects corrupt download, verifies retry, activates, chats, and persists',
   )
 
   await page.getByRole('button', { name: 'Text', exact: true }).click()
+  // A model downloaded from this screen becomes the one in use when it lands.
   const installedCard = targetCard()
-  await expect(installedCard.getByRole('button', { name: 'Use', exact: true })).toBeVisible()
-  await installedCard.getByRole('button', { name: 'Use', exact: true }).click()
   await expect(installedCard.getByText('Active', { exact: true })).toBeVisible()
 
   await enterChat()
