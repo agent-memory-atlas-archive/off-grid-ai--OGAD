@@ -35,6 +35,8 @@ vi.mock('../../free-port', () => ({ isPortFree: vi.fn(), pickFreePort: mocks.pic
 vi.mock('../../kill-orphan-port', () => ({ reapOrphanProcessesOnPort: mocks.reap }))
 vi.mock('../../models-manager', () => ({
   KEV_9B_ID: 'offgrid/kev-9b',
+  downloadModel: vi.fn(),
+  kevNeedsOnlyRuntime: () => false,
   isKevModel: (id: string | null | undefined) => id === 'offgrid/kev-4b' || id === 'offgrid/kev-9b',
   resolveComputerUseModelArtifact: mocks.artifact,
   resolveKevRuntimeArtifact: mocks.kevArtifact

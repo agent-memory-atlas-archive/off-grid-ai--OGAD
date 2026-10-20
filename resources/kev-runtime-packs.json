@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "darwin-arm64": {
+    "url": "https://runtime.getoffgridai.co/desktop/kev-runtime/darwin-arm64/2026-10-20-v1.tar.gz",
+    "sha256": "54f726e1b34877b251b524124a7685ec213fcb75a62a4a02ca8acfc533cb0f29",
+    "bytes": 235116860,
+    "version": "2026-10-20-v1"
+  }
+}
