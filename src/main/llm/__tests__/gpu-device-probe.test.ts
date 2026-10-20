@@ -46,6 +46,15 @@ describe('listedGpuMemoryMB', () => {
     expect(listedGpuMemoryMB(listing, 'CUDA')).toBeNull()
     expect(listedGpuMemoryMB('failed to list devices', 'Vulkan')).toBeNull()
   })
+
+  it('never reads a software Vulkan device, which reports host RAM, as GPU memory', () => {
+    const listing =
+      'Available devices:\n  Vulkan0: NVIDIA GeForce RTX 3060 (12288 MiB, 11800 MiB free)\n  Vulkan1: llvmpipe (LLVM 17.0.6, 256 bits) (64000 MiB, 64000 MiB free)'
+    expect(listedGpuMemoryMB(listing, 'Vulkan')).toBe(12288)
+    expect(
+      listedGpuMemoryMB('Available devices:\n  Vulkan0: llvmpipe (32000 MiB, 32000 MiB free)', 'Vulkan')
+    ).toBeNull()
+  })
 })
 
 describe('offloadedLayerShare', () => {
