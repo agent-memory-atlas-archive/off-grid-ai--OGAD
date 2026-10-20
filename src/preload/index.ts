@@ -534,7 +534,6 @@ const offGridApi = {
 
   // Model Download APIs
   checkModelStatus: () => ipcRenderer.invoke('model:check-status'),
-  downloadModels: () => ipcRenderer.invoke('model:download'),
   onModelDownloadProgress: (
     callback: (data: {
       modelName: string
