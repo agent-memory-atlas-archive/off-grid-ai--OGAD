@@ -84,4 +84,28 @@ describe.runIf(process.platform === 'darwin')('packaged macOS engine thinning', 
       'x86_64 arm64'
     )
   })
+
+  it('fails the build when a universal file has no slice for the target', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ogad-thin-'))
+    roots.push(root)
+    const source = path.join(root, 'main.c')
+    fs.writeFileSync(source, 'int main(void) { return 0; }\n')
+    const intelOnly = path.join(root, 'main-x86_64')
+    execFileSync('clang', ['-arch', 'x86_64', source, '-o', intelOnly])
+    const engine = path.join(
+      root,
+      'Off Grid AI Desktop.app',
+      'Contents',
+      'Resources',
+      'bin',
+      'whisper',
+      'whisper-cli'
+    )
+    fs.mkdirSync(path.dirname(engine), { recursive: true })
+    execFileSync('lipo', ['-create', intelOnly, '-output', engine])
+
+    expect(() => thinMacUniversalBinaries(macContext(root, 3))).toThrow(
+      `${path.join('bin', 'whisper', 'whisper-cli')} has no arm64 slice (x86_64)`
+    )
+  })
 })
