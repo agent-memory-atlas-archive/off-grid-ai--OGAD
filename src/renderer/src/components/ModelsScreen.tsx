@@ -92,6 +92,8 @@ import {
   huggingFaceRepoFor,
   isOffGridHfRepo,
   pickModelsForDevice,
+  baseModelKey,
+  mtpHeadForModel,
   type FilterState,
   type Credibility,
   type ModelKind
@@ -184,6 +186,17 @@ interface ModelEntry {
   grounder?: boolean
   remoteServerId?: string
   remoteModelId?: string
+  quality?: number
+  activeParams?: number
+  supersededBy?: string
+  nonCommercial?: boolean
+  minLlamaBuild?: number
+}
+/** What a Hugging Face search adds to a card: other uploads of the model, an MTP head, a newer model. */
+interface SearchExtras {
+  variants?: string[]
+  hasMtp?: boolean
+  newer?: string
 }
 /** A card's model: one catalog entry, with every quantization of it when there is more than one. */
 type ShownModel = ModelEntry & { quantOptions?: ModelEntry[] }
@@ -483,7 +496,7 @@ export function ModelsScreen({
   const [ready, setReady] = useState<{ id: string; name: string; chat: boolean } | null>(null)
   const [allFiles, setAllFiles] = useState(false)
   const [hfResults, setHfResults] = useState<
-    {
+    ({
       id: string
       name: string
       org: string
@@ -491,7 +504,8 @@ export function ModelsScreen({
       likes?: number
       lastModified?: string
       credibility?: string
-    }[]
+      params?: number
+    } & Pick<ModelEntry, 'activeParams'> & SearchExtras)[]
   >([])
   const [searching, setSearching] = useState(false)
   const [detailFiles, setDetailFiles] = useState<DownloadableModelFile[]>([])
@@ -811,9 +825,22 @@ export function ModelsScreen({
               downloads: undefined,
               likes: undefined,
               lastModified: undefined,
-              credibility: undefined
+              credibility: undefined,
+              params: model.params,
+              activeParams: model.activeParams,
+              variants: undefined,
+              hasMtp: undefined,
+              newer: model.supersededBy
             })),
-          ...hfResults.filter((result) => !list.some((model) => model.id === result.id))
+          ...hfResults.filter(
+            (result) =>
+              !list.some(
+                (model) =>
+                  model.id === result.id ||
+                  baseModelKey(model.id) === baseModelKey(result.id) ||
+                  result.variants?.includes(model.id)
+              )
+          )
         ].map((r) => ({
           id: r.id,
           name: r.name,
@@ -822,7 +849,11 @@ export function ModelsScreen({
           likes: r.likes,
           lastModified: r.lastModified,
           credibility: r.credibility as Credibility | undefined,
-          params: parseParamCount(r.name) ?? parseParamCount(r.id)
+          params: r.params ?? parseParamCount(r.name) ?? parseParamCount(r.id),
+          activeParams: r.activeParams,
+          variants: r.variants,
+          hasMtp: r.hasMtp,
+          newer: r.newer
         })),
         filterState
       ),
@@ -926,7 +957,15 @@ export function ModelsScreen({
             !m.remoteServerId &&
             m.availability !== 'coming_soon'
         )
-        .map((m) => ({ id: m.id, sizeBytes: totalBytes(m), params: m.params })),
+        .map((m) => ({
+          id: m.id,
+          sizeBytes: totalBytes(m),
+          params: m.params,
+          quality: m.quality,
+          activeParams: m.activeParams,
+          supersededBy: m.supersededBy,
+          nonCommercial: m.nonCommercial
+        })),
       ramGb
     )
     return (
@@ -954,7 +993,7 @@ export function ModelsScreen({
   // The picks lead each tab while the person is browsing; a filter means they know what they want.
   const showPicks = !filtersNarrowing && picks.length > 0
   const renderCard = (
-    m: ShownModel & { credibility?: string; params?: number; org?: string },
+    m: ShownModel & SearchExtras & { credibility?: string; params?: number; org?: string },
     isHf = false,
     pickLabel?: string
   ): React.JSX.Element => {
@@ -983,7 +1022,51 @@ export function ModelsScreen({
       .join(' · ')
     const tier: FitTier = ramTier(m)
     // Size and fit already say "large" and "tight"; ranking labels say nothing to the person.
-    const tags = (m.tags ?? []).filter((t) => !NOISE_TAG.test(t))
+    // A pick's label already says Fast or Best; the same word as a tag beside it says it twice.
+    const tags = (m.tags ?? []).filter(
+      (t) => !NOISE_TAG.test(t) && t.toLowerCase() !== pickLabel?.toLowerCase()
+    )
+    // What makes this model quick or worth a second look, said once on the card.
+    const fasterReplies =
+      Boolean(m.hasMtp) ||
+      Boolean(mtpHeadForModel(m.id)) ||
+      m.files.some((file) => file.role === 'aux' && /(?:^|[-_.])(mtp|dflash)(?:[-_.]|$)/i.test(file.name))
+    const newer = m.newer ?? m.supersededBy
+    const otherUploads = m.variants?.length ?? 0
+    const facts: Array<{ label: string; title: string; tone: 'good' | 'muted' | 'warn' }> = [
+      ...(m.activeParams
+        ? [
+            {
+              label: `MoE · ${formatParams(m.activeParams)} active`,
+              title: `Mixture of experts: needs the memory of ${m.params ? formatParams(m.params) : 'the whole model'}, runs at the speed of ${formatParams(m.activeParams)}`,
+              tone: 'good' as const
+            }
+          ]
+        : []),
+      ...(fasterReplies
+        ? [
+            {
+              label: 'Faster replies',
+              title:
+                'Comes with a draft head (MTP or DFlash) that guesses the next words, so replies arrive faster when the model fits in GPU memory',
+              tone: 'good' as const
+            }
+          ]
+        : []),
+      ...(newer ? [{ label: `Newer: ${newer}`, title: `${newer} does this job better`, tone: 'warn' as const }] : []),
+      ...(m.nonCommercial
+        ? [{ label: 'Research licence', title: 'Its licence does not allow commercial use', tone: 'warn' as const }]
+        : []),
+      ...(otherUploads > 0
+        ? [
+            {
+              label: `+${otherUploads} upload${otherUploads === 1 ? '' : 's'}`,
+              title: `Also uploaded as: ${m.variants!.join(', ')}`,
+              tone: 'muted' as const
+            }
+          ]
+        : [])
+    ]
     const comingSoon = m.availability === 'coming_soon'
     // The image pick for this machine's RAM, when the picks row is not already saying so.
     const recommended =
@@ -1044,6 +1127,7 @@ export function ModelsScreen({
         {(comingSoon ||
           recommended ||
           tags.length > 0 ||
+          facts.length > 0 ||
           tier === 'tight' ||
           tier === 'wontFit') && (
           <div className="flex flex-wrap items-center gap-1">
@@ -1082,6 +1166,21 @@ export function ModelsScreen({
                 </span>
               )
             })}
+            {facts.map((fact) => (
+              <span
+                key={fact.label}
+                title={fact.title}
+                className={`rounded-sm px-1 py-px text-[8px] uppercase tracking-wide ${
+                  fact.tone === 'good'
+                    ? 'border border-green-500/40 text-green-500'
+                    : fact.tone === 'warn'
+                      ? 'border border-amber-400/50 text-amber-400'
+                      : 'text-neutral-500'
+                }`}
+              >
+                {fact.label}
+              </span>
+            ))}
             {(tier === 'tight' || tier === 'wontFit') && (
               <span
                 className={`rounded-sm px-1.5 py-px text-[8px] uppercase tracking-wide ${
@@ -1761,7 +1860,11 @@ export function ModelsScreen({
                               org: r.org,
                               files: [],
                               params: r.params ?? undefined,
-                              credibility: r.credibility
+                              credibility: r.credibility,
+                              activeParams: r.activeParams,
+                              variants: r.variants,
+                              hasMtp: r.hasMtp,
+                              newer: r.newer
                             },
                             true
                           )
@@ -1831,10 +1934,12 @@ export function ModelsScreen({
                   )
                   const localModels = installedModels.filter((m) => !m.remoteServerId)
                   const remoteModels = installedModels.filter((m) => m.remoteServerId)
+                  // A model a newer one replaces stays usable once installed, but is no longer offered.
                   const downloadable = models.filter(
                     (m) =>
                       !installed.includes(m.id) &&
-                      m.availability !== 'coming_soon'
+                      m.availability !== 'coming_soon' &&
+                      !m.supersededBy
                   )
                   const tooBig = downloadable.filter((m) => ramTier(m) === 'wontFit')
                   const availableModels = showTooBig
