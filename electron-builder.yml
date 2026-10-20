@@ -79,10 +79,6 @@ mac:
     - dmg
     - zip
   category: public.app-category.productivity
-  # Squirrel.Mac reads the whole update zip into one growing buffer, and Electron's
-  # allocator refuses it past 1 GiB: the update crashes. Compress as hard as possible;
-  # release.yml fails the build if the zip still nears that limit.
-  compression: maximum
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
@@ -128,9 +124,7 @@ mac:
   # re-signed AFTER notarization → invalidated the staple → "Unnotarized Developer ID".
   # Let electron-builder's signing stand.
 dmg:
-  # mac.compression: maximum would switch the DMG to bzip2 (UDBZ), which the release's
-  # DMG integrity check cannot attach. Maximum compression is for the update zip; the DMG
-  # keeps the zlib format every release has shipped.
+  # The zlib format every release has shipped; the release's DMG integrity check attaches it.
   format: UDZO
   sign: true
   artifactName: ${name}-${version}.${ext}
