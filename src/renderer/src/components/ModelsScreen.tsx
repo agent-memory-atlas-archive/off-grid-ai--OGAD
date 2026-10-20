@@ -478,8 +478,9 @@ export function ModelsScreen({
   // Models past this device's ceiling stay out of the list until asked for.
   const [showTooBig, setShowTooBig] = useState(false)
   // Downloads started here switch to their model when they finish; repairs of an installed model don't.
-  const switchWhenReady = useRef(new Set<string>())
-  const [ready, setReady] = useState<{ id: string; name: string } | null>(null)
+  // id → the tab it was downloaded from, which decides the slot it takes.
+  const switchWhenReady = useRef(new Map<string, string>())
+  const [ready, setReady] = useState<{ id: string; name: string; chat: boolean } | null>(null)
   const [allFiles, setAllFiles] = useState(false)
   const [hfResults, setHfResults] = useState<
     {
@@ -630,7 +631,11 @@ export function ModelsScreen({
       api.getInstalledModels?.().then(setInstalled)
       refreshVision()
       refreshActive()
-      if (switchWhenReady.current.delete(d.modelId)) void switchToReady(d.modelId, d.modelName)
+      const tab = switchWhenReady.current.get(d.modelId)
+      if (tab !== undefined) {
+        switchWhenReady.current.delete(d.modelId)
+        void switchToReady(d.modelId, tab, d.modelName)
+      }
     }
     if (d.status === 'failed') switchWhenReady.current.delete(d.modelId)
   })
@@ -643,7 +648,7 @@ export function ModelsScreen({
   const download = (id: string, fileName?: string): void => {
     // A new model becomes the one in use when it lands; adding a missing part to an installed one
     // leaves the current choice alone.
-    if (!installed.includes(id)) switchWhenReady.current.add(id)
+    if (!installed.includes(id)) switchWhenReady.current.set(id, activeKind)
     // 'queued', not 'downloading': nothing has been downloaded yet, and claiming otherwise is what
     // left a refused request showing a spinner at 0% forever. The main process moves it to
     // 'downloading' when bytes actually start, and to 'failed' if it never gets that far.
@@ -716,11 +721,21 @@ export function ModelsScreen({
     }
   }
   // A finished download takes over its slot, then offers the next step.
-  const switchToReady = async (id: string, name?: string): Promise<void> => {
-    const res = await api.activateModel?.(id)
-    if (!res?.success) return
+  // It goes through the same checks as Use: a model that does not run well waits for the person
+  // to choose it, a Tasks model takes the Tasks slot, and a failure is said.
+  const switchToReady = async (id: string, tab: string, name?: string): Promise<void> => {
+    const label = name ?? models.find((m) => m.id === id)?.name ?? id
+    const chat = tab === 'text'
+    const fit = await api.estimateModelFit?.(id).catch(() => null)
+    if (fit && fit.level !== 'ok') return
+    const res =
+      tab === 'computer_use' ? await api.activateModel?.(id, tab) : await api.activateModel?.(id)
+    if (!res?.success) {
+      setSwitchError(res?.error ? `Couldn't switch: ${res.error}` : "Couldn't switch model")
+      return
+    }
     refreshActive()
-    setReady({ id, name: name ?? models.find((m) => m.id === id)?.name ?? id })
+    setReady({ id, name: label, chat })
   }
   const openChat = (): void => {
     setReady(null)
@@ -1666,9 +1681,11 @@ export function ModelsScreen({
               >
                 <IconCircleCheck className="h-3.5 w-3.5 shrink-0" />
                 <span className="min-w-0 flex-1 truncate">{ready.name} is ready.</span>
-                <Button size="xs" onClick={openChat}>
-                  Chat now
-                </Button>
+                {ready.chat && (
+                  <Button size="xs" onClick={openChat}>
+                    Chat now
+                  </Button>
+                )}
                 <IconTip label="Dismiss">
                   <Button
                     size="icon-xs"
