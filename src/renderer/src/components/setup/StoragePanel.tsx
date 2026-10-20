@@ -320,7 +320,15 @@ export function StoragePanel(): React.ReactElement {
             </div>
             {info?.unavailable && (
               <div role="alert" className="mt-2 text-[11px] text-red-400">
-                {info.unavailable} Model downloads are paused.
+                {info.unavailable} Model downloads are paused.{' '}
+                {/blocked access/.test(info.unavailable) && (
+                  <button
+                    onClick={() => void window.api.openFilesAndFoldersSettings()}
+                    className="underline underline-offset-2 hover:text-red-300"
+                  >
+                    Open Privacy Settings
+                  </button>
+                )}
               </div>
             )}
             {pendingDirectory && (

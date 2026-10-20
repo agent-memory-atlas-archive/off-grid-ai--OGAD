@@ -98,7 +98,11 @@ export function modelStorageError(directory = cfg.modelsDir): string | null {
     if (!fs.statSync(directory).isDirectory()) throw new Error('not a folder')
     fs.accessSync(directory, fs.constants.R_OK | fs.constants.W_OK)
     return null
-  } catch {
+  } catch (error) {
+    // macOS privacy (iCloud Drive, Documents) refuses with EPERM: the folder is there, but blocked.
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+      return `macOS blocked access to the model folder: ${directory}. Allow it in Privacy & Security, or choose another folder.`
+    }
     return `The selected model folder is unavailable: ${directory}. Connect the drive or choose another folder.`
   }
 }

@@ -136,6 +136,16 @@ export function openMicrophoneSettings(): void {
   }
 }
 
+/** Files & Folders, where macOS lists the folders (iCloud Drive, Documents, removable volumes) the
+ *  app may read. A model folder macOS blocks is unblocked here. */
+export function openFilesAndFoldersSettings(): void {
+  if (process.platform === 'darwin') {
+    shell.openExternal(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders'
+    )
+  }
+}
+
 export function openLocalNetworkSettings(): void {
   if (process.platform === 'darwin') {
     // macOS 26 ignores the undocumented Privacy_LocalNetwork anchor and opens the parent page.

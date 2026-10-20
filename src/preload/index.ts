@@ -527,6 +527,8 @@ const offGridApi = {
   relaunchForPermissions: () => ipcRenderer.invoke('permissions:relaunch'),
   openMicrophoneSettings: () => ipcRenderer.invoke('permissions:open-microphone-settings'),
   openLocalNetworkSettings: () => ipcRenderer.invoke('permissions:open-local-network-settings'),
+  openFilesAndFoldersSettings: () =>
+    ipcRenderer.invoke('permissions:open-files-and-folders-settings'),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   openExternal: (url: string) => ipcRenderer.invoke('app:open-external', url),
 

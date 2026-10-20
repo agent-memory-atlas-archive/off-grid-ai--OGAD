@@ -57,7 +57,8 @@ import {
   openAccessibilitySettings,
   openScreenRecordingSettings,
   openMicrophoneSettings,
-  openLocalNetworkSettings
+  openLocalNetworkSettings,
+  openFilesAndFoldersSettings
 } from './permissions'
 import { setupSystemStatusIpc } from './system-status-ipc'
 import { CACHE_CLEANUP_CHANNEL } from '../shared/ipc-contracts'
@@ -1179,6 +1180,11 @@ export function setupIPC(): void {
 
   ipcMain.handle('permissions:open-microphone-settings', () => {
     openMicrophoneSettings()
+    return true
+  })
+
+  ipcMain.handle('permissions:open-files-and-folders-settings', () => {
+    openFilesAndFoldersSettings()
     return true
   })
 
