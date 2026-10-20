@@ -1209,6 +1209,12 @@ async function downloadModelInner(
           } catch {
             /* fresh */
           }
+          // A partial file already as long as the whole file (cancelled after the last byte, before
+          // it was promoted) has no range left to ask for: a server answers 416 forever. Start over.
+          if (file.sizeBytes && resumeFrom >= file.sizeBytes) {
+            fs.rmSync(partPath, { force: true })
+            resumeFrom = 0
+          }
           writeDiagnosticLog('models.download', 'file.started', {
             modelId,
             file: file.name,
@@ -1226,12 +1232,15 @@ async function downloadModelInner(
           // Refuse before writing, in words, when the folder cannot hold this file (the size the
           // server reports): running out halfway wastes the time and bandwidth already spent.
           // A restart (200) rewrites the partial file, so its bytes come back too.
+          // A server may omit the length; the catalog's size, less what is already on disk, stands in.
+          const needed =
+            remaining || Math.max(0, (file.sizeBytes ?? 0) - (append ? resumeFrom : 0))
           const free = freeBytes(dir)
           const reclaimable = append ? 0 : resumeFrom
-          if (free !== null && remaining > free + reclaimable) {
+          if (free !== null && needed > free + reclaimable) {
             void res.body.cancel().catch(() => {})
             throw new Error(
-              `Not enough disk space. ${file.name} needs ${(remaining / 1e9).toFixed(1)} GB and ${(free / 1e9).toFixed(1)} GB is free.`
+              `Not enough disk space. ${file.name} needs ${(needed / 1e9).toFixed(1)} GB and ${(free / 1e9).toFixed(1)} GB is free.`
             )
           }
           const out = fs.createWriteStream(partPath, append ? { flags: 'a' } : {})
