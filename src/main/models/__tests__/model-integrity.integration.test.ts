@@ -346,6 +346,28 @@ describe('model-manager GGUF integrity', () => {
     expect(fs.readFileSync(interrupted.filePath)).toEqual(complete)
   })
 
+  it('refuses a file the folder cannot hold before writing a byte, and says so in words', async () => {
+    // A server that reports a petabyte: the real free space on this volume cannot hold it.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.enqueue(Buffer.from('GGUF'))
+          }
+        })
+        return new Response(body, { status: 200, headers: { 'content-length': String(1e15) } })
+      })
+    )
+
+    const result = await manager.downloadModel(interrupted.entry.id)
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/^Not enough disk space\. .+ needs 1000000\.0 GB and [\d.]+ GB is free\.$/)
+    // Nothing was written: no partial file to clean up.
+    expect(fs.existsSync(`${interrupted.filePath}.part`)).toBe(false)
+  })
+
   it('reports an offline download clearly and keeps retry plus installed state usable', async () => {
     const validGguf = Buffer.concat([Buffer.from('GGUF', 'ascii'), Buffer.alloc(2_000, 9)])
     fs.writeFileSync(primary.filePath, validGguf)
