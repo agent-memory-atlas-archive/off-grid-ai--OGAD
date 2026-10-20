@@ -5,9 +5,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { LLMService } from '../../llm'
+import type { LLMService } from '../llm'
 
-const FAKE_ENGINE = path.join(__dirname, 'fixtures', 'placement-llama-server.mjs')
+const FAKE_ENGINE = path.join(__dirname, '..', 'llm', '__tests__', 'fixtures', 'placement-llama-server.mjs')
 // Bigger than the fake card's 8 GiB and than a Mac's Metal working set, without allocating it.
 const TOO_BIG = Math.max(os.totalmem(), 16 * 1024 ** 3)
 
@@ -73,11 +73,11 @@ describe('GPU placement at launch', () => {
 
   async function activate(file: string, experts: number, size: number): Promise<LLMService> {
     gguf(path.join(profile, 'models', file), experts, size)
-    const { importLocalModel, setActiveModel } = await import('../../models-manager')
+    const { importLocalModel, setActiveModel } = await import('../models-manager')
     const imported = await importLocalModel(path.join(profile, 'models', file))
     expect(imported.success).toBe(true)
     expect((await setActiveModel(imported.id!)).success).toBe(true)
-    const { LLMService } = await import('../../llm')
+    const { LLMService } = await import('../llm')
     return new LLMService()
   }
 
@@ -96,7 +96,7 @@ describe('GPU placement at launch', () => {
     const owner = await activate('dense.gguf', 0, 1024)
     await owner.pause()
     await owner.setSettings({ gpuPlacement: 'manual', gpuLayers: 20 }, { emitSync: false })
-    const { LLMService } = await import('../../llm')
+    const { LLMService } = await import('../llm')
     const restarted = new LLMService()
     expect(restarted.getSettings()).toMatchObject({ gpuPlacement: 'manual', gpuLayers: 20 })
     const args = restarted.launchArgs()
