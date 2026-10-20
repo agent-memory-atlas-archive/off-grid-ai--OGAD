@@ -16,8 +16,6 @@ export {
   fitLevel,
   fitTier,
   isLoadableOnDevice,
-  FIT_OK_FRAC,
-  FIT_TIGHT_FRAC,
   type FitLevel,
   type FitTier
 } from '../shared/model-fit'

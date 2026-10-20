@@ -244,22 +244,22 @@ describe('recommendedParamCeiling — 16GB must default to a 4B', () => {
 })
 
 describe('fitLevel — RAM-fit badge thresholds', () => {
-  it('ok / tight / risky split at 38% and 55% of RAM', () => {
-    expect(fitLevel(5, 16)).toBe('ok') // 31%
-    expect(fitLevel(6.5, 16)).toBe('tight') // 41%
-    expect(fitLevel(10, 16)).toBe('risky') // 63%
+  it('ok / tight / risky follow the card chip: tight past 65% of RAM, risky past 82%', () => {
+    expect(fitLevel(10, 16)).toBe('ok') // 63%: the card says it runs well
+    expect(fitLevel(11, 16)).toBe('tight') // 69%
+    expect(fitLevel(14, 16)).toBe('risky') // 88%
   })
 
-  it('is the SAME function the shared source exports (one rule, main + renderer)', async () => {
-    // The renderer badge imports fitLevel from ../../../shared/model-fit; main
-    // re-exports that exact function. Guard the single source so a copy can't
-    // creep back into either layer with drifted thresholds.
+  it('is the SAME rule the card chip uses (one rule, main + renderer)', async () => {
+    // The card chip, the detail panel and the activation warning all read the shared rule, so
+    // a model can no longer read as fine on its card and too big when you press Use.
     const shared = await import('../../shared/model-fit')
     expect(fitLevel).toBe(shared.fitLevel)
-    // Thresholds sit exactly on the shared constants, not re-hardcoded numbers.
-    expect(fitLevel(16 * shared.FIT_OK_FRAC, 16)).toBe('ok')
-    expect(fitLevel(16 * shared.FIT_OK_FRAC + 0.01, 16)).toBe('tight')
-    expect(fitLevel(16 * shared.FIT_TIGHT_FRAC + 0.01, 16)).toBe('risky')
+    for (const gb of [1, 5, 9, 10.4, 11, 13.1, 13.2, 20]) {
+      const tier = shared.fitTier(gb, 16)
+      const expected = tier === 'wontFit' ? 'risky' : tier === 'tight' ? 'tight' : 'ok'
+      expect(fitLevel(gb, 16)).toBe(expected)
+    }
   })
 
   it('totalBytes sums all files (primary + mmproj)', () => {
