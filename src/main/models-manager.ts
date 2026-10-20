@@ -104,6 +104,8 @@ export const BONSAI_2: ModelEntry = {
   org: 'Prism ML',
   description: 'Compact 27B reasoning model with optional vision; uses the bundled Prism engine.',
   params: 27,
+  // Qwen 3.8 27B in ternary weights: below the full model (34), above every 9B.
+  quality: 24,
   minRamGb: 16,
   quant: 'PQ2_0',
   tags: [],
@@ -122,6 +124,39 @@ export const BONSAI_2: ModelEntry = {
       url: 'https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/6ed5e12bf84b7a63069882c91dd9e9218647d17b/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf',
       sizeBytes: 629246976,
       sha256: '6807ede61d570bb86ba34b756a0fa109edc33668604de867c6ea6d8f1d631903',
+      role: 'mmproj'
+    }
+  ]
+}
+
+// Bonsai 2 9B: Qwen 3.5 9B in packed ternary weights, 2.4GB, from the same Prism engine as the 27B.
+// The strongest model for an 8GB Mac. Desktop only: phones do not ship PrismML's llama.cpp fork.
+export const BONSAI_2_9B: ModelEntry = {
+  id: 'prism-ml/Ternary-Bonsai-2-9B-gguf',
+  name: 'Bonsai 2 9B',
+  kind: 'vision',
+  org: 'Prism ML',
+  description: 'A 9B model in 2.4 GB; reads images; uses the bundled Prism engine.',
+  params: 9,
+  quality: 15,
+  minRamGb: 8,
+  quant: 'PQ2_0',
+  tags: [],
+  isNew: true,
+  releaseDate: '2026-09-23',
+  files: [
+    {
+      name: 'Ternary-Bonsai-2-9B-PQ2_0.gguf',
+      url: 'https://huggingface.co/prism-ml/Ternary-Bonsai-2-9B-gguf/resolve/5b2abb02362efbed46bbe204014b02837778b2c2/Ternary-Bonsai-2-9B-PQ2_0.gguf',
+      sizeBytes: 2416851840,
+      sha256: '7a89ab48f5038c704480f60781f9b8d4035351f5f6beb7d11fad80001fde23f9',
+      role: 'primary'
+    },
+    {
+      name: 'Ternary-Bonsai-2-9B-mmproj-Q8_0.gguf',
+      url: 'https://huggingface.co/prism-ml/Ternary-Bonsai-2-9B-gguf/resolve/5b2abb02362efbed46bbe204014b02837778b2c2/Ternary-Bonsai-2-9B-mmproj-Q8_0.gguf',
+      sizeBytes: 624229664,
+      sha256: 'e0cb6f6988cea323ef798cd77d019bbb819af75582f034eaab0e7232314953db',
       role: 'mmproj'
     }
   ]
@@ -528,7 +563,7 @@ export function kevNeedsOnlyRuntime(modelId: string): boolean {
   return Boolean(parts?.modelReady && kevRuntimeToDownload(modelId))
 }
 
-const DESKTOP_CATALOG = [BONSAI_2, DECIDER_2B, DECIDER_2B_VISION, ...KEV_MODELS]
+const DESKTOP_CATALOG = [BONSAI_2, BONSAI_2_9B, DECIDER_2B, DECIDER_2B_VISION, ...KEV_MODELS]
 
 export async function desktopCatalog(): Promise<ModelEntry[]> {
   const { CATALOG } = await import('@offgrid/models')
