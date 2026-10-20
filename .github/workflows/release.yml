@@ -437,16 +437,18 @@ jobs:
       - name: Check the Mac update zip stays under the updater limit
         run: |
           LIMIT=996147200 # 950 MiB
-          ZIPS=$(find dist -maxdepth 1 -name '*-mac.zip' -print)
-          test -n "$ZIPS"
-          for ZIP in $ZIPS; do
+          FOUND=0
+          # The zip name has spaces ("Off Grid AI Desktop-…"), so read find's NUL-separated list.
+          while IFS= read -r -d '' ZIP; do
+            FOUND=1
             BYTES=$(stat -f %z "$ZIP")
             echo "$ZIP: $BYTES bytes ($((BYTES / 1048576)) MiB); limit $LIMIT bytes (950 MiB)"
             if [ "$BYTES" -gt "$LIMIT" ]; then
               echo "::error::$ZIP is $BYTES bytes, over the 950 MiB limit. Squirrel.Mac crashes on update zips past 1 GiB."
               exit 1
             fi
-          done
+          done < <(find dist -maxdepth 1 -name '*-mac.zip' -print0)
+          test "$FOUND" = 1
       # Internal demo build: hand the signed+notarized DMG back as a run artifact and stop
       # (the publish steps below are all skipped). Repo-scoped, auto-expiring, no Release.
       - name: Upload signed DMG as a build artifact
