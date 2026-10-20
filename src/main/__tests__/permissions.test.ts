@@ -279,6 +279,10 @@ describe('reading this machine-s permissions', () => {
       [
         'openMicrophoneSettings',
         'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'
+      ],
+      [
+        'openFilesAndFoldersSettings',
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders'
       ]
     ])('%s opens its own anchor', async (name, url) => {
       const permissions = (await import('../permissions')) as unknown as Record<string, () => void>
