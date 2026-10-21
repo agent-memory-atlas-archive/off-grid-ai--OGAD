@@ -184,6 +184,24 @@ it('creates a project from the composer and sends into it', async () => {
   expect(await screen.findByText('The Desktop chat changed.')).toBeTruthy()
 })
 
+it('opens a new chat with Cmd+T or Ctrl+T', async () => {
+  const boundary = new ChatBoundary()
+  await boundary.addRagMessage('conversation-a', 'assistant', 'Answer in the first chat')
+  installBoundary(boundary)
+  const user = userEvent.setup()
+  renderChat({ conversationId: 'conversation-a' })
+
+  expect(await screen.findByText('Answer in the first chat')).toBeTruthy()
+  await user.keyboard('{Meta>}t{/Meta}')
+  expect(await screen.findByText('Start a conversation')).toBeTruthy()
+  expect(screen.queryByText('Answer in the first chat')).toBeNull()
+
+  await user.click(within(screen.getByRole('complementary')).getByText('Conversation A'))
+  expect(await screen.findByText('Answer in the first chat')).toBeTruthy()
+  await user.keyboard('{Control>}t{/Control}')
+  expect(await screen.findByText('Start a conversation')).toBeTruthy()
+})
+
 it('switches between saved chats and shows a peer update to an inactive chat', async () => {
   const boundary = new ChatBoundary()
   await boundary.addRagMessage('conversation-a', 'assistant', 'Answer in the first chat')
@@ -205,7 +223,7 @@ it('switches between saved chats and shows a peer update to an inactive chat', a
   expect(screen.queryByRole('status', { name: 'Loading conversation' })).toBeNull()
   expect(screen.getAllByTitle('Close tab')).toHaveLength(1)
   expect(screen.getByTitle('Close tab').parentElement?.textContent).toContain('Conversation B')
-  await user.click(screen.getByTitle('New tab'))
+  await user.click(screen.getByTitle(/^New tab/))
   expect(await screen.findByText('Start a conversation')).toBeTruthy()
   expect(screen.queryByRole('status', { name: 'Loading conversation' })).toBeNull()
   await user.click(within(conversationList).getByText('Conversation A'))
