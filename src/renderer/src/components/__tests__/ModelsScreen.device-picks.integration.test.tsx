@@ -24,9 +24,10 @@ const image = (id: string, name: string, gb: number): Record<string, unknown> =>
   files: [{ name: `${id}.gguf`, sizeBytes: gb * 1e9 }]
 })
 const IMAGE_MODELS = [
-  image('acme/sd-turbo', 'SD Turbo', 2.5),
-  image('acme/sdxl', 'SDXL', 6.9),
-  image('acme/flux', 'Flux Schnell', 9)
+  image('off-grid-ai/sd-turbo', 'SD Turbo', 2.5),
+  image('off-grid-ai/sdxl', 'SDXL', 6.9),
+  image('someone/other-image', 'Other Image', 3),
+  image('off-grid-ai/flux', 'Flux Schnell', 9)
 ]
 const MODELS = [
   model('acme/tiny', 'Tiny 0.8B', 0.8, 0.7),
@@ -103,7 +104,7 @@ describe('<ModelsScreen/> picks for this device', () => {
     expect(screen.queryByRole('list', { name: /^Picks for this / })).toBeNull()
   })
 
-  it('leads the Image tab with its own picks too, from the same rule', async () => {
+  it('leads the Image tab with picks from Off Grid AI\'s own image models only', async () => {
     ramGb = 24
     const user = userEvent.setup()
     const { ModelsScreen } = await import('../ModelsScreen')
@@ -115,5 +116,7 @@ describe('<ModelsScreen/> picks for this device', () => {
     expect(fast).toContain('SD Turbo')
     expect(balanced).toContain('SDXL')
     expect(best).toContain('Flux Schnell')
+    // Only Off Grid AI's own image models are picked.
+    expect(pickNames().join(' ')).not.toContain('Other Image')
   })
 })

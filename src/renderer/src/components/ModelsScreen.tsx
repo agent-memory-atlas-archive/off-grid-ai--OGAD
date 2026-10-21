@@ -954,6 +954,8 @@ export function ModelsScreen({
         .filter(
           (m) =>
             (activeKind !== 'text' || m.kind === 'text' || m.kind === 'vision') &&
+            // Image picks come only from Off Grid AI's own conversions (huggingface.co/off-grid-ai).
+            (activeKind !== 'image' || isOffGridModel(m.id)) &&
             !m.quantOf &&
             !m.remoteServerId &&
             m.availability !== 'coming_soon'
