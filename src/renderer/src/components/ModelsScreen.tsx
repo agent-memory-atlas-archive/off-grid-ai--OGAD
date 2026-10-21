@@ -92,6 +92,7 @@ import {
   huggingFaceRepoFor,
   isOffGridHfRepo,
   pickModelsForDevice,
+  desktopImagePicks,
   baseModelKey,
   mtpHeadForModel,
   type FilterState,
@@ -949,13 +950,15 @@ export function ModelsScreen({
   // from the models that fit with room (shared rule). Task models play roles, not tiers: no picks.
   const picks = useMemo(() => {
     if (activeKind === 'computer_use' || activeKind === 'storage') return []
-    const chosen = pickModelsForDevice(
+    // Image picks are set by product (shared rule): Off Grid AI's own models, one SDXL always among them.
+    const chosen =
+      activeKind === 'image'
+        ? desktopImagePicks(ramGb)
+        : pickModelsForDevice(
       list
         .filter(
           (m) =>
             (activeKind !== 'text' || m.kind === 'text' || m.kind === 'vision') &&
-            // Image picks come only from Off Grid AI's own conversions (huggingface.co/off-grid-ai).
-            (activeKind !== 'image' || isOffGridModel(m.id)) &&
             !m.quantOf &&
             !m.remoteServerId &&
             m.availability !== 'coming_soon'

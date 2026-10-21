@@ -24,10 +24,12 @@ const image = (id: string, name: string, gb: number): Record<string, unknown> =>
   files: [{ name: `${id}.gguf`, sizeBytes: gb * 1e9 }]
 })
 const IMAGE_MODELS = [
-  image('off-grid-ai/sd-turbo', 'SD Turbo', 2.5),
-  image('off-grid-ai/sdxl', 'SDXL', 6.9),
-  image('someone/other-image', 'Other Image', 3),
-  image('off-grid-ai/flux', 'Flux Schnell', 9)
+  image('offgrid-ai/dreamshaper-xl-v2-turbo-GGUF', 'DreamShaper XL v2 Turbo', 4.2),
+  image('offgrid-ai/realvisxl-v5.0-lightning-GGUF', 'RealVisXL v5.0 Lightning', 2.8),
+  image('offgrid-ai/juggernaut-xl-v9-GGUF', 'Juggernaut XL v9', 4.3),
+  image('offgrid-ai/Qwen-Image-2.1-Turbo-GGUF', 'Qwen-Image 2.1 Turbo', 14.5),
+  image('offgrid-ai/Qwen-Image-2.1-GGUF', 'Qwen-Image 2.1', 14.5),
+  image('someone/other-image', 'Other Image', 3)
 ]
 const MODELS = [
   model('acme/tiny', 'Tiny 0.8B', 0.8, 0.7),
@@ -46,11 +48,6 @@ let ramGb = 16
   getModelVisionStatus: async () => ({}),
   onModelProgress: () => () => {},
   searchModels: async () => []
-}
-
-const waitForPicks = async (): Promise<string[]> => {
-  await screen.findByText('Flux Schnell')
-  return pickNames()
 }
 
 const pickNames = (): string[] =>
@@ -104,7 +101,7 @@ describe('<ModelsScreen/> picks for this device', () => {
     expect(screen.queryByRole('list', { name: /^Picks for this / })).toBeNull()
   })
 
-  it('leads the Image tab with picks from Off Grid AI\'s own image models only', async () => {
+  it('leads the Image tab with DreamShaper, then Qwen-Image 2.1 Turbo and base where they run', async () => {
     ramGb = 24
     const user = userEvent.setup()
     const { ModelsScreen } = await import('../ModelsScreen')
@@ -112,11 +109,25 @@ describe('<ModelsScreen/> picks for this device', () => {
 
     await screen.findByRole('list', { name: /^Picks for this / })
     await user.click(screen.getByRole('radio', { name: 'Image' }))
-    const [fast, balanced, best] = await waitForPicks()
-    expect(fast).toContain('SD Turbo')
-    expect(balanced).toContain('SDXL')
-    expect(best).toContain('Flux Schnell')
-    // Only Off Grid AI's own image models are picked.
+    await screen.findByText('Qwen-Image 2.1 Turbo')
+    const [fast, balanced, best] = pickNames()
+    expect(fast).toContain('DreamShaper XL v2 Turbo')
+    expect(balanced).toContain('Qwen-Image 2.1 Turbo')
+    expect(best).toContain('Qwen-Image 2.1')
     expect(pickNames().join(' ')).not.toContain('Other Image')
+  })
+
+  it('leads the Image tab with the SDXL line where Qwen-Image does not run', async () => {
+    ramGb = 8
+    const user = userEvent.setup()
+    const { ModelsScreen } = await import('../ModelsScreen')
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('radio', { name: 'Image' }))
+    await screen.findByText('Juggernaut XL v9')
+    const [fast, balanced, best] = pickNames()
+    expect(fast).toContain('DreamShaper XL v2 Turbo')
+    expect(balanced).toContain('RealVisXL v5.0 Lightning')
+    expect(best).toContain('Juggernaut XL v9')
   })
 })
