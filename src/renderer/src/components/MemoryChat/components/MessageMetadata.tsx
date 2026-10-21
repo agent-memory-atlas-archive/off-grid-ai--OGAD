@@ -39,7 +39,7 @@ function GenerationMetricsRowComponent({
       : null
   const contextLabel =
     contextPercent !== null
-      ? `Context: ${estimated ? '~' : ''}${contextPercent}% used (${estimated ? '~' : ''}${promptTokens} prompt + ${outputTokens} output / ${contextWindowTokens} context)`
+      ? `Context: ${estimated ? '~' : ''}${contextPercent}% used (${estimated ? '~' : ''}${usedTokens} / ${contextWindowTokens} tokens)`
       : usedTokens
         ? `Context: ${estimated ? '~' : ''}${usedTokens} tokens used (limit unknown)`
         : null
