@@ -1,4 +1,3 @@
-import { isAuthoringRequest, NON_AUTHORING_TOOLS } from '../../shared/authoring-request'
 import { budgetTools, MAX_TOOL_TOKENS } from './tool-budget'
 import { mergeStickyTools, previousOfferedTools, rememberOfferedTools } from './sticky-tool-set'
 
@@ -129,26 +128,12 @@ export async function selectChatToolSchemas(
       ...relevantTools.filter((schema) => !explicitNames.has(schema))
     ]
   }
-  // A request to write code or a file is answered in the chat. Acting and image tools are not
-  // offered for it unless the user names one: a small model otherwise reaches for them.
-  const authoring = isAuthoringRequest(query)
-  const offeredForRequest = (schema: unknown): boolean => {
-    if (!authoring) return true
-    const name = (schema as { function?: { name?: unknown } }).function?.name
-    return (
-      typeof name !== 'string' ||
-      !NON_AUTHORING_TOOLS.has(name) ||
-      explicitlyNamedTools.includes(schema)
-    )
-  }
-  relevantTools = relevantTools.filter(offeredForRequest)
-  const requiredTools = assistantRequiredTools.filter(offeredForRequest)
   // Acting is offered whenever the assistant may act, and the model decides from the prompt
   // (answer questions; act when asked to do something on a website or in an app). Routing by the
   // words of the message must not hide it: "can you check this site?" shares no words with it.
-  if (requiredTools.length) {
-    const acting = new Set(requiredTools)
-    relevantTools = [...requiredTools, ...relevantTools.filter((t) => !acting.has(t))]
+  if (assistantRequiredTools.length) {
+    const acting = new Set(assistantRequiredTools)
+    relevantTools = [...assistantRequiredTools, ...relevantTools.filter((t) => !acting.has(t))]
   }
   if (!/\bbrave\b/i.test(query)) {
     const hasPrimarySearch = relevantTools.some(
@@ -162,7 +147,7 @@ export async function selectChatToolSchemas(
   }
   const protectedToolCount =
     explicitlyNamedTools.length +
-    requiredTools.filter((t) => !explicitlyNamedTools.includes(t)).length
+    assistantRequiredTools.filter((t) => !explicitlyNamedTools.includes(t)).length
   const ctx = options.contextSize
   // Cap tool tokens in ABSOLUTE terms too, not just as a fraction of context:
   // llama-server re-processes the entire tool prompt every tool round (gemma-4's
@@ -172,12 +157,11 @@ export async function selectChatToolSchemas(
   const toolBudget = Math.max(1024, Math.min(Math.floor(ctx * 0.4), MAX_TOOL_TOKENS))
   // Tools sit in the system message, ahead of the history: keep earlier turns' tools in place
   // so the server reuses its prompt cache. Start fresh only when the kept set no longer fits.
-  // Earlier turns' tools stay for the prompt cache, but not ones this request must not be offered.
   const stickyTools = mergeStickyTools(
     previousOfferedTools(options.conversationId),
     relevantTools,
     rawTools
-  ).filter(offeredForRequest)
+  )
   const stickyFits =
     budgetTools(stickyTools, toolBudget, stickyTools.length).estTokens <= toolBudget
   if (stickyFits) relevantTools = stickyTools
