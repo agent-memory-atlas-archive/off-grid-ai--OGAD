@@ -1,19 +1,45 @@
 name: Publish engine update
 
-# Publishes an official llama.cpp CUDA build to the runtime store's signed engine index. Apps with
-# "Keep engines up to date" on (the default) install it in the background, without an app release.
-# The engine is staged from the ggml-org release asset and checked against GitHub's published
-# SHA-256; only files the store does not already hold are uploaded.
+# Publishes every inference engine pinned in resources/engine-pins.json (llama.cpp, Prism,
+# stable-diffusion.cpp, whisper.cpp; CPU, Vulkan, Metal and CUDA builds) to the runtime store's
+# signed engine indexes for macOS, Linux and Windows. Apps with "Keep engines up to date" on (the
+# default) install them in the background, without an app release. Only files the store does not
+# already hold are uploaded, and an engine already published at its pinned build is left alone.
+#
+# When it runs (repository variable ENGINE_UPDATE_CHANNEL):
+#   on-merge (default)  when engine pins land on main, so a person merged the update first
+#   nightly             update-engines.yml calls it straight after its checks pass
+# It can also be run by hand on any branch.
+#
+# macOS engines are signed with the Developer ID (secrets CSC_LINK, CSC_KEY_PASSWORD) before
+# publishing. The CUDA chat engine is also written to the legacy index.json, the one apps before
+# index-v2.json read.
 on:
   workflow_dispatch:
     inputs:
-      llama_ref:
-        description: 'llama.cpp build to publish, e.g. b11551'
-        required: true
       min_app_version:
-        description: 'Oldest app version that may install it (optional)'
+        description: 'Oldest app version that may install these engines (optional)'
         required: false
         default: ''
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+    secrets:
+      R2_ACCESS_KEY_ID:
+        required: true
+      R2_SECRET_ACCESS_KEY:
+        required: true
+      ENGINE_SIGNING_PRIVATE_KEY:
+        required: true
+      CSC_LINK:
+        required: true
+      CSC_KEY_PASSWORD:
+        required: true
+  push:
+    branches: [main]
+    paths: [resources/engine-pins.json]
 
 permissions:
   contents: read
@@ -22,43 +48,169 @@ concurrency:
   group: publish-engine-index
   cancel-in-progress: false
 
+env:
+  MIN_APP_VERSION: ${{ inputs.min_app_version }}
+  R2_ENDPOINT: https://0693da34a224264a4ec10f07fc8336ae.r2.cloudflarestorage.com
+  R2_BUCKET: offgrid-desktop-runtime-packs
+
 jobs:
-  publish:
-    name: Publish ${{ matrix.platform }} engine
+  gate:
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: true
-      max-parallel: 1 # both platforms rewrite their own index, but keep uploads easy to follow
-      matrix:
-        platform: [linux, win32]
-    env:
-      LLAMA_REF: ${{ inputs.llama_ref }}
-      MIN_APP_VERSION: ${{ inputs.min_app_version }}
+    if: github.event_name != 'push' || vars.ENGINE_UPDATE_CHANNEL != 'nightly'
     steps:
-      - name: Check inputs
-        run: |
-          [[ "$LLAMA_REF" =~ ^b[0-9]+$ ]] || { echo 'llama_ref must look like b11551' >&2; exit 1; }
+      - run: |
           [[ -z "$MIN_APP_VERSION" || "$MIN_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'min_app_version must look like 0.0.56' >&2; exit 1; }
+
+  darwin:
+    needs: gate
+    runs-on: macos-15
+    steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Stage engine
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/stage-llama-engine.mjs --platform "${{ matrix.platform }}" --ref "$LLAMA_REF" --out "$RUNNER_TEMP/engine"
-      - name: Check the Linux engine's libraries resolve
-        if: matrix.platform == 'linux'
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          lfs: false
+          persist-credentials: false
+      - name: Unpack the pinned macOS engines
         run: |
-          deps="$(LD_LIBRARY_PATH="$RUNNER_TEMP/engine/llama-cuda:$RUNNER_TEMP/engine/cuda-runtime" ldd "$RUNNER_TEMP/engine/llama-cuda/llama-server")"
-          printf '%s\n' "$deps"
-          # The NVIDIA driver library comes from the user's machine, never from the engine.
-          if printf '%s\n' "$deps" | grep 'not found' | grep -v 'libcuda.so.1'; then exit 1; fi
-      - name: Publish to the runtime store
+          pin() { node -p "require('./resources/engine-pins.json').$1"; }
+          curl -fL --retry 3 -o "$RUNNER_TEMP/mac.tar.gz" \
+            "https://github.com/off-grid-ai/OGAD/releases/download/$(pin archives.release)/$(pin "archives['mac-native'].name")"
+          echo "$(pin "archives['mac-native'].sha256")  $RUNNER_TEMP/mac.tar.gz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/mac.tar.gz" -C "$RUNNER_TEMP/bin" llama llama-prism sd whisper
+      - name: Sign with the Developer ID
         env:
-          R2_ENDPOINT: https://0693da34a224264a4ec10f07fc8336ae.r2.cloudflarestorage.com
-          R2_BUCKET: offgrid-desktop-runtime-packs
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          test -n "$CSC_LINK" || { echo 'Add the CSC_LINK secret; macOS engines are never published unsigned.' >&2; exit 1; }
+          keychain="$RUNNER_TEMP/engines.keychain-db"
+          security create-keychain -p ci "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p ci "$keychain"
+          printf '%s' "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/ {print $2; exit}')
+          test -n "$identity"
+          find "$RUNNER_TEMP/bin" -type f | while read -r file; do
+            if file "$file" | grep -q Mach-O; then
+              codesign --force --timestamp --options runtime --sign "$identity" --keychain "$keychain" "$file"
+            fi
+          done
+          for engine in llama llama-prism; do
+            codesign --verify --strict "$RUNNER_TEMP/bin/$engine/llama-server"
+            DYLD_LIBRARY_PATH="$RUNNER_TEMP/bin/$engine" "$RUNNER_TEMP/bin/$engine/llama-server" --version
+          done
+          DYLD_LIBRARY_PATH="$RUNNER_TEMP/bin/sd" "$RUNNER_TEMP/bin/sd/sd-cli" --version
+          DYLD_LIBRARY_PATH="$RUNNER_TEMP/bin/whisper" "$RUNNER_TEMP/bin/whisper/whisper-cli" --version
+      - name: Publish
+        env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           ENGINE_SIGNING_PRIVATE_KEY: ${{ secrets.ENGINE_SIGNING_PRIVATE_KEY }}
         run: |
-          test -n "$ENGINE_SIGNING_PRIVATE_KEY" || { echo 'Add the ENGINE_SIGNING_PRIVATE_KEY secret (from pro/.env).' >&2; exit 1; }
-          node scripts/publish-engine.mjs --platform "${{ matrix.platform }}" --dir "$RUNNER_TEMP/engine" \
-            ${MIN_APP_VERSION:+--min-app "$MIN_APP_VERSION"}
+          node scripts/stage-engines.mjs --platform darwin --bin "$RUNNER_TEMP/bin" --out "$RUNNER_TEMP/engines"
+          for dir in "$RUNNER_TEMP"/engines/*/; do
+            node scripts/publish-engine.mjs --platform darwin --dir "$dir" ${MIN_APP_VERSION:+--min-app "$MIN_APP_VERSION"}
+          done
+
+  linux:
+    needs: gate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          lfs: false
+          persist-credentials: false
+      - name: Install runtime dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y libgomp1 libvulkan1 unzip
+      - name: Unpack the pinned Linux engines and stage the CUDA ones
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pin() { node -p "require('./resources/engine-pins.json').$1"; }
+          curl -fL --retry 3 -o "$RUNNER_TEMP/linux.tar.gz" \
+            "https://github.com/off-grid-ai/OGAD/releases/download/$(pin archives.release)/$(pin "archives['linux-native'].name")"
+          echo "$(pin "archives['linux-native'].sha256")  $RUNNER_TEMP/linux.tar.gz" | sha256sum -c -
+          mkdir -p build/linux-bin
+          tar -xzf "$RUNNER_TEMP/linux.tar.gz" -C build/linux-bin --no-same-owner
+          LLAMA_VARIANT=prism LLAMA_ACCELERATOR=cuda bash scripts/build-llama-linux.sh
+          bash scripts/build-image-cuda-linux.sh
+          bash scripts/build-voice-linux.sh
+          node scripts/stage-llama-engine.mjs --platform linux --ref "$(pin llama.ref)" --out "$RUNNER_TEMP/llama-cuda"
+          for engine in llama-cuda llama-prism-cuda; do
+            dir="build/linux-bin"; [ "$engine" = llama-cuda ] && dir="$RUNNER_TEMP/llama-cuda"
+            deps="$(LD_LIBRARY_PATH="$dir/$engine:$dir/cuda-runtime:build/linux-bin/cuda-runtime" ldd "$dir/$engine/llama-server")"
+            if printf '%s\n' "$deps" | grep 'not found' | grep -v 'libcuda.so.1'; then exit 1; fi
+          done
+      - name: Publish
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ENGINE_SIGNING_PRIVATE_KEY: ${{ secrets.ENGINE_SIGNING_PRIVATE_KEY }}
+        run: |
+          node scripts/stage-engines.mjs --platform linux --bin build/linux-bin --out "$RUNNER_TEMP/engines"
+          for dir in "$RUNNER_TEMP"/engines/*/ "$RUNNER_TEMP/llama-cuda"; do
+            node scripts/publish-engine.mjs --platform linux --dir "$dir" ${MIN_APP_VERSION:+--min-app "$MIN_APP_VERSION"}
+          done
+          node scripts/publish-engine.mjs --platform linux --dir "$RUNNER_TEMP/llama-cuda" --index legacy
+
+  win32:
+    needs: gate
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          lfs: false
+          persist-credentials: false
+      - name: Fetch the pinned Windows engines
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          # The checkout holds macOS LFS pointers in these folders; publish only what the fetch stages.
+          foreach ($name in 'llama', 'llama-cpu', 'llama-prism', 'llama-prism-cpu', 'sd', 'sd-cpu', 'whisper', 'whisper-cpu') {
+            Remove-Item -Recurse -Force (Join-Path 'resources/bin' $name) -ErrorAction SilentlyContinue
+          }
+          ./scripts/fetch-win-binaries.ps1
+      - name: Publish
+        shell: pwsh
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ENGINE_SIGNING_PRIVATE_KEY: ${{ secrets.ENGINE_SIGNING_PRIVATE_KEY }}
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'engines'
+          node scripts/stage-engines.mjs --platform win32 --bin resources/bin --out $out
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $minApp = if ($env:MIN_APP_VERSION) { @('--min-app', $env:MIN_APP_VERSION) } else { @() }
+          foreach ($dir in Get-ChildItem $out -Directory) {
+            node scripts/publish-engine.mjs --platform win32 --dir $dir.FullName @minApp
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
+  # The Windows CUDA chat engine is staged from its upstream zip, which needs no Windows runner.
+  win32-cuda-chat:
+    needs: gate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          lfs: false
+          persist-credentials: false
+      - name: Stage and publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ENGINE_SIGNING_PRIVATE_KEY: ${{ secrets.ENGINE_SIGNING_PRIVATE_KEY }}
+        run: |
+          ref=$(node -p "require('./resources/engine-pins.json').llama.ref")
+          node scripts/stage-llama-engine.mjs --platform win32 --ref "$ref" --out "$RUNNER_TEMP/llama-cuda"
+          node scripts/publish-engine.mjs --platform win32 --dir "$RUNNER_TEMP/llama-cuda" ${MIN_APP_VERSION:+--min-app "$MIN_APP_VERSION"}
+          node scripts/publish-engine.mjs --platform win32 --dir "$RUNNER_TEMP/llama-cuda" --index legacy

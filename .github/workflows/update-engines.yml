@@ -2,8 +2,13 @@ name: Update engines
 
 # Nightly: moves resources/engine-pins.json to the newest upstream engines (llama.cpp, Prism,
 # stable-diffusion.cpp, whisper.cpp, NVIDIA CUDA libraries), rebuilds and smoke-tests the macOS and
-# Linux engine archives, publishes new CUDA packs for Windows and Linux to R2, and opens a PR with
-# every pin. Windows installers fetch the pinned upstream zips at release time.
+# Linux engine archives, and publishes new CUDA packs for Windows and Linux to R2. Then, by
+# ENGINE_UPDATE_CHANNEL:
+#   on-merge (default)  opens a PR with every pin; merging it publishes the engines to every app
+#                       (publish-engine.yml runs when engine pins land on main)
+#   nightly             publishes the engines to every app at once and moves main's pins forward
+#                       itself, so installers and the update channel never disagree; no PR
+# Windows installers fetch the pinned upstream zips at release time.
 #
 # Settings (repository variables; Settings > Secrets and variables > Actions > Variables):
 #   ENGINE_UPDATE_ENABLED           'false' turns the nightly run off (manual runs still work)
@@ -11,8 +16,10 @@ name: Update engines
 #   ENGINE_UPDATE_LLAMA_MIN_BUILDS  move llama.cpp only when upstream is this many builds ahead
 #                                   (it tags several a day), default 50
 #   ENGINE_UPDATE_BASE              branch to update and open the PR against, default main
-# Secrets: R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY (the packs), and optionally ENGINE_BOT_TOKEN,
-# a token that can push and open PRs; a PR opened with the default token does not start CI.
+#   ENGINE_UPDATE_CHANNEL           'on-merge' (default) or 'nightly', above
+# Secrets: R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY (packs and engines), ENGINE_SIGNING_PRIVATE_KEY
+# (the engine index), CSC_LINK and CSC_KEY_PASSWORD (macOS engines), and ENGINE_BOT_TOKEN, a token
+# that can push to main and open PRs (a PR opened with the default token does not start CI).
 #
 # Packs on R2 are immutable and versioned, so publishing one before the PR merges changes nothing
 # for users: an app only downloads the pack its performance-packs.json names.
@@ -113,7 +120,7 @@ jobs:
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
-  pull-request:
+  pin-packs:
     needs: [check, packs]
     runs-on: ubuntu-24.04
     steps:
@@ -126,10 +133,6 @@ jobs:
         with:
           pattern: cuda-*-manifest
           path: ${{ runner.temp }}/artifacts
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: engine-update-summary
-          path: ${{ runner.temp }}/artifacts/engine-update-summary
       - name: Pin the new CUDA packs
         env:
           VERSION: ${{ needs.check.outputs.version }}
@@ -148,6 +151,59 @@ jobs:
           git add resources/performance-packs.json
           git commit -m "CUDA packs $VERSION for Windows and Linux"
           git push origin "HEAD:${{ needs.check.outputs.branch }}"
+
+  # nightly: publish to every app now, then move main's pins forward.
+  publish:
+    needs: [check, pin-packs]
+    if: vars.ENGINE_UPDATE_CHANNEL == 'nightly'
+    uses: ./.github/workflows/publish-engine.yml
+    with:
+      ref: ${{ needs.check.outputs.branch }}
+    secrets:
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      ENGINE_SIGNING_PRIVATE_KEY: ${{ secrets.ENGINE_SIGNING_PRIVATE_KEY }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+
+  land:
+    needs: [check, publish]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.check.outputs.branch }}
+          fetch-depth: 0
+          lfs: false
+          token: ${{ secrets.ENGINE_BOT_TOKEN || github.token }}
+      - name: Move main's pins forward
+        env:
+          BASE: ${{ vars.ENGINE_UPDATE_BASE || 'main' }}
+        run: |
+          # The update branch started from the base, so this is a fast-forward unless the base
+          # moved meanwhile; then the update rebases onto it (it only touches pin files).
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin "$BASE"
+          git rebase "origin/$BASE"
+          git push origin "HEAD:$BASE"
+          git push origin --delete "${{ needs.check.outputs.branch }}"
+
+  # on-merge: a person merges the PR; publish-engine.yml then runs from main.
+  pull-request:
+    needs: [check, pin-packs]
+    if: vars.ENGINE_UPDATE_CHANNEL != 'nightly'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.check.outputs.branch }}
+          lfs: false
+          token: ${{ secrets.ENGINE_BOT_TOKEN || github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: engine-update-summary
+          path: ${{ runner.temp }}/artifacts/engine-update-summary
       - name: Open or refresh the PR
         env:
           GH_TOKEN: ${{ secrets.ENGINE_BOT_TOKEN || github.token }}
@@ -165,7 +221,8 @@ jobs:
             echo "- CUDA packs \`${{ needs.check.outputs.version }}\` on R2 for Windows and Linux, pinned in \`resources/performance-packs.json\`"
             echo '- Windows installers fetch the pinned upstream zips (hash-checked) at release time'
             echo
-            echo '**Before merging:** run a CUDA chat and an image on an NVIDIA machine (CI has no GPU).'
+            echo '**Merging publishes these engines to every app** through the engine update channel.'
+            echo 'Before merging, run a CUDA chat and an image on an NVIDIA machine (CI has no GPU).'
           } > "$RUNNER_TEMP/body.md"
           if gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -q OPEN; then
             gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/body.md"

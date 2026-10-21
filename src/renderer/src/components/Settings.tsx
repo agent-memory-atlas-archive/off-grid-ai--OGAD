@@ -5,6 +5,7 @@ import { PageHeader, Section } from '@offgrid/operator-ui/operator/experience'
 import { Badge } from '@offgrid/operator-ui/operator/coss/badge'
 import { SetupPanel } from './setup/SetupPanel'
 import { PerformancePackPanel } from './setup/PerformancePackPanel'
+import { EngineUpdatesSection } from './setup/EngineUpdatesSection'
 import { StoragePanel } from './setup/StoragePanel'
 import { DataPrivacyPanel } from './setup/DataPrivacyPanel'
 import { getRegisteredSettingsSections } from '../bootstrap/sectionRegistry'
@@ -28,7 +29,7 @@ export { ModelPipelineSection } from './ProcessingControls'
 const SETTINGS_SECTION_TITLES: Record<string, string> = {
   setup: 'Setup & health',
   permissions: 'Setup & health',
-  performance: 'GPU performance',
+  performance: 'Engines',
   capture: 'Capture & processing',
   'computer-use': 'Computer use',
   remote: 'Remote model server',
@@ -198,11 +199,12 @@ export function Settings({
             </SettingsCard>
 
             <SettingsCard
-              title="GPU performance"
-              summary="Manage GPU components for chat, images, transcription, and Computer Use."
+              title="Engines"
+              summary="Keep chat, image and transcription engines current, and manage GPU components."
               delay={0.135}
             >
               <PerformancePackPanel showUnavailable />
+              <EngineUpdatesSection />
             </SettingsCard>
 
             <SettingsCard

@@ -14,7 +14,7 @@ export const engineUpdater = createEngineUpdater({
   appVersion: () => app.getVersion(),
   enabled: () => getSetting<boolean>(KEEP_ENGINES_UPDATED, true) !== false,
   setEnabled: (enabled) => saveSetting(KEEP_ENGINES_UPDATED, enabled),
-  hasGpu: () =>
+  hasNvidiaGpu: () =>
     process.platform === 'win32'
       ? hasWindowsNvidiaDriver()
       : process.platform === 'linux' && hasLinuxNvidiaDriver(),
