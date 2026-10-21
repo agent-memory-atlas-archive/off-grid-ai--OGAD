@@ -147,6 +147,10 @@ export const TOOL_INTENT_EXAMPLES: Readonly<Record<string, readonly string[]>> =
 export const TOOL_INTENT_FLOOR = 0.3
 /** …and beat the closest chat answer by this much. */
 export const TOOL_INTENT_MARGIN = 0.05
+/** One sentence asks for a tool on its own when it is this close to the tool's examples (and beats
+ *  its own chat answers): "draw a dog. write an HTML file…" is two tasks. A descriptive sentence
+ *  inside a build request stays below it ("…a rocket that bursts into colourful sparks" 0.51). */
+export const TOOL_INTENT_SENTENCE_FLOOR = 0.6
 
 export type Embed = (text: string) => Promise<number[]>
 
@@ -179,8 +183,8 @@ async function closest(
 }
 
 /** The routed tools (by name) this request is for, with their scores. `query` is the request's
- *  embedding; `sentences` are the embeddings of its sentences, each matched against the code
- *  examples. Tools without examples are not judged here. */
+ *  embedding; `sentences` are the embeddings of its sentences: each is matched against the code
+ *  examples, and each can ask for a tool on its own. Tools without examples are not judged here. */
 export async function toolIntents(
   query: number[],
   embed: Embed,
@@ -196,6 +200,13 @@ export async function toolIntents(
     if (!examples) continue
     const score = await closest(query, examples, embed)
     if (score >= TOOL_INTENT_FLOOR && score > chat + TOOL_INTENT_MARGIN) picked.set(name, score)
+    // A code sentence must not veto a separate, confident task in another sentence.
+    for (const sentence of sentences) {
+      const own = await closest(sentence, examples, embed)
+      if (own < TOOL_INTENT_SENTENCE_FLOOR) continue
+      if (own > (await closest(sentence, ANSWER_IN_CHAT, embed)) + TOOL_INTENT_MARGIN)
+        picked.set(name, Math.max(picked.get(name) ?? 0, own))
+    }
   }
   return picked
 }
