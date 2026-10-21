@@ -6,6 +6,8 @@
 // isn't ready. Tool embeddings are cached by content hash (name+description
 // rarely change), so across turns only the query is embedded fresh.
 
+import { TOOL_INTENT_EXAMPLES, toolIntents } from './tool-intent'
+
 export interface EmbedDeps {
   /** Returns a NORMALIZED embedding (so cosine similarity == dot product). */
   embed: (text: string) => Promise<number[]>
@@ -122,8 +124,19 @@ export async function selectRelevantToolsSemantic(
   if (!query.trim() || tools.length === 0) return []
 
   const qv = await deps.embed(query)
+  // Tools with example requests are judged against them and against chat answers (tool-intent);
+  // the rest by their description.
+  const toolName = (tool: unknown): string => {
+    const t = tool as { name?: string; function?: { name?: string } }
+    return t.function?.name ?? t.name ?? ''
+  }
+  const intents = await toolIntents(qv, deps.embed, tools.map(toolName))
+  const byExample = tools
+    .filter((tool) => intents.has(toolName(tool)))
+    .sort((a, b) => (intents.get(toolName(b)) ?? 0) - (intents.get(toolName(a)) ?? 0))
+  const described = tools.filter((tool) => !(toolName(tool) in TOOL_INTENT_EXAMPLES))
   const scored = await Promise.all(
-    tools.map(async (tool, index) => {
+    described.map(async (tool, index) => {
       try {
         return { tool, index, score: dot(qv, await embedTool(toolText(tool), deps.embed)) }
       } catch {
@@ -133,14 +146,17 @@ export async function selectRelevantToolsSemantic(
   )
   scored.sort((a, b) => b.score - a.score || a.index - b.index)
   const best = scored[0]?.score ?? -1
-  if (best < RELEVANCE_FLOOR) return []
+  const byDescription =
+    best < RELEVANCE_FLOOR
+      ? []
+      : scored
+          .filter(
+            (candidate) =>
+              candidate.score >= RELEVANCE_FLOOR && candidate.score >= best - SCORE_WINDOW
+          )
+          .map((candidate) => candidate.tool)
 
-  return scored
-    .filter(
-      (candidate) => candidate.score >= RELEVANCE_FLOOR && candidate.score >= best - SCORE_WINDOW
-    )
-    .slice(0, MAX_RELEVANT_TOOLS)
-    .map((candidate) => candidate.tool)
+  return [...byExample, ...byDescription].slice(0, MAX_RELEVANT_TOOLS)
 }
 
 /** Test-only: clear the tool-embedding cache between cases. */
