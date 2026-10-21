@@ -15,6 +15,8 @@ export interface ModelDownloadProgressEvent {
   bytesPerSecond?: number
   fileIndex?: number
   fileCount?: number
+  /** On completion: the exact installed package (an alternate size is its own package). */
+  installedId?: string
 }
 
 const VISIBLE_PROGRESS_INTERVAL_MS = 2_000

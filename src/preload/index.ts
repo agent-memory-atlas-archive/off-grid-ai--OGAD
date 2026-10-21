@@ -527,12 +527,13 @@ const offGridApi = {
   relaunchForPermissions: () => ipcRenderer.invoke('permissions:relaunch'),
   openMicrophoneSettings: () => ipcRenderer.invoke('permissions:open-microphone-settings'),
   openLocalNetworkSettings: () => ipcRenderer.invoke('permissions:open-local-network-settings'),
+  openFilesAndFoldersSettings: () =>
+    ipcRenderer.invoke('permissions:open-files-and-folders-settings'),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   openExternal: (url: string) => ipcRenderer.invoke('app:open-external', url),
 
   // Model Download APIs
   checkModelStatus: () => ipcRenderer.invoke('model:check-status'),
-  downloadModels: () => ipcRenderer.invoke('model:download'),
   onModelDownloadProgress: (
     callback: (data: {
       modelName: string
@@ -753,6 +754,7 @@ const offGridApi = {
     kvCacheType?: 'f16' | 'q8_0' | 'q4_0'
     flashAttn?: boolean
     gpuLayers?: number
+    gpuPlacement?: 'auto' | 'manual'
     threads?: number
     batchSize?: number
     speculativeDecoding?: 'off' | 'ngram' | 'mtp' | 'draft' | 'dflash'

@@ -4,7 +4,7 @@
 // integration coverage. The production Models screen and shared modal are real;
 // only Electron/native calls are provided at the window.api boundary.
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Modal, ModalBody, ModalContent, ModalTrigger } from '../ui/animated-modal'
@@ -106,8 +106,10 @@ describe('desktop collection and transient-layer integration', () => {
     expect(screen.queryByRole('button', { name: 'Seeded Model 001' })).toBeNull()
 
     await user.click(screen.getByRole('button', { name: 'Seeded Model 120' }))
-    expect(await screen.findByRole('heading', { name: 'Seeded Model 120' })).not.toBeNull()
-    expect(screen.getByText('Synthetic catalog entry 120')).not.toBeNull()
+    const heading = await screen.findByRole('heading', { name: 'Seeded Model 120' })
+    // The card shows the description too; the detail panel is the one under test.
+    const panel = heading.closest('[role="dialog"]') as HTMLElement
+    expect(within(panel).getByText('Synthetic catalog entry 120')).not.toBeNull()
   })
 
   it('Escape closes only the model detail layer and preserves the filtered collection (#152)', async () => {

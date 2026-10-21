@@ -516,6 +516,7 @@ interface RendererAPIOverrides {
   relaunchForPermissions: () => Promise<boolean>
   openMicrophoneSettings: () => Promise<boolean>
   openLocalNetworkSettings: () => Promise<boolean>
+  openFilesAndFoldersSettings: () => Promise<boolean>
 }
 
 type IElectronAPI = Omit<import('../../preload').OffGridAPI, keyof RendererAPIOverrides> &

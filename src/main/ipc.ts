@@ -1,5 +1,5 @@
 import { settingsChanged } from './settings-version'
-import { withStorageDownload, storageDownloadsActive } from './model-storage-guard'
+import { storageDownloadsActive } from './model-storage-guard'
 import { moveModelStorage } from './model-storage-move'
 import { ipcMain, BrowserWindow, app, clipboard } from 'electron'
 import { listBridgeBrowsers, removeBridgeBrowser } from './extension-bridge/bridge-electron'
@@ -57,7 +57,8 @@ import {
   openAccessibilitySettings,
   openScreenRecordingSettings,
   openMicrophoneSettings,
-  openLocalNetworkSettings
+  openLocalNetworkSettings,
+  openFilesAndFoldersSettings
 } from './permissions'
 import { setupSystemStatusIpc } from './system-status-ipc'
 import { CACHE_CLEANUP_CHANNEL } from '../shared/ipc-contracts'
@@ -83,7 +84,6 @@ import {
   startPerformancePack
 } from './performance-pack'
 import { engineUpdater } from './engine-updates-service'
-import { sampleProgressRate, type ProgressRateSample } from '@offgrid/ui'
 import { notifyRagConversationChanged } from './rag-conversation-events'
 // import { llm } from './llm'; // Moved to dynamic import to support ESM
 
@@ -1182,6 +1182,11 @@ export function setupIPC(): void {
     return true
   })
 
+  ipcMain.handle('permissions:open-files-and-folders-settings', () => {
+    openFilesAndFoldersSettings()
+    return true
+  })
+
   ipcMain.handle('permissions:open-local-network-settings', () => {
     openLocalNetworkSettings()
     return true
@@ -1587,119 +1592,6 @@ export function setupIPC(): void {
     }
   })
 
-  ipcMain.handle('model:download', () =>
-    withStorageDownload(async () => {
-      const { llm } = await import('./llm')
-      const modelsDir = llm.getModelsDir()
-      const fs = await import('fs')
-      const path = await import('path')
-      const https = await import('https')
-
-      // Ensure models directory exists
-      if (!fs.existsSync(modelsDir)) {
-        fs.mkdirSync(modelsDir, { recursive: true })
-      }
-
-      const models = [
-        {
-          name: 'Qwen3-VL-4B-Instruct-Q4_K_M.gguf',
-          url: 'https://huggingface.co/bartowski/Qwen_Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen_Qwen3-VL-4B-Instruct-Q4_K_M.gguf'
-        },
-        {
-          name: 'mmproj-Qwen3VL-4B-Instruct-F16.gguf',
-          url: 'https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-4B-Instruct-F16.gguf'
-        }
-      ]
-
-      const downloadFile = (url: string, destPath: string, modelName: string): Promise<void> => {
-        return new Promise((resolve, reject) => {
-          const file = fs.createWriteStream(destPath)
-          let rateSample: ProgressRateSample | undefined
-
-          const request = (redirectUrl: string): void => {
-            https
-              .get(redirectUrl, (response) => {
-                if (
-                  response.statusCode &&
-                  response.statusCode >= 300 &&
-                  response.statusCode < 400 &&
-                  response.headers.location
-                ) {
-                  request(response.headers.location)
-                  return
-                }
-
-                if (response.statusCode !== 200) {
-                  fs.unlink(destPath, () => {})
-                  reject(new Error(`HTTP ${response.statusCode}`))
-                  return
-                }
-
-                const totalSize = parseInt(response.headers['content-length'] || '0', 10)
-                let downloaded = 0
-
-                response.pipe(file)
-
-                response.on('data', (chunk: Buffer) => {
-                  downloaded += chunk.length
-                  const percent = totalSize ? Math.round((downloaded / totalSize) * 100) : 0
-                  const rate = sampleProgressRate(rateSample, {
-                    currentBytes: downloaded,
-                    sampledAtMs: Date.now()
-                  })
-                  rateSample = rate.sample
-
-                  // Send progress to renderer
-                  BrowserWindow.getAllWindows().forEach((win) => {
-                    win.webContents.send('model:download-progress', {
-                      modelName,
-                      percent,
-                      downloadedBytes: downloaded,
-                      totalBytes: totalSize || undefined,
-                      bytesPerSecond: rate.bytesPerSecond,
-                      downloadedMB: (downloaded / 1024 / 1024).toFixed(1),
-                      totalMB: totalSize ? (totalSize / 1024 / 1024).toFixed(1) : '?'
-                    })
-                  })
-                })
-
-                file.on('finish', () => {
-                  file.close()
-                  resolve()
-                })
-              })
-              .on('error', (err) => {
-                fs.unlink(destPath, () => {})
-                reject(err)
-              })
-          }
-
-          request(url)
-        })
-      }
-
-      try {
-        for (const model of models) {
-          const destPath = path.join(modelsDir, model.name)
-
-          if (fs.existsSync(destPath)) {
-            console.log(`[Model] ${model.name} already exists, skipping`)
-            continue
-          }
-
-          console.log(`[Model] Downloading ${model.name}...`)
-          await downloadFile(model.url, destPath, model.name)
-          console.log(`[Model] ${model.name} downloaded`)
-        }
-
-        return { success: true }
-      } catch (err: unknown) {
-        console.error('[Model] Download failed:', err)
-        return { success: false, error: err instanceof Error ? err.message : String(err) }
-      }
-    })
-  )
-
   // === Off Grid AI MODEL CATALOG (text, vision, image, voice, transcription) ===
 
   // Model management lives in ./models-manager (one source of truth, shared with
@@ -1809,9 +1701,20 @@ export function setupIPC(): void {
     try {
       const { saveModelStorageChoice } = await import('./model-storage-choice')
       const profile = app.getPath('userData')
-      const currentFiles = fs.existsSync(current) ? fs.readdirSync(current) : []
-      const sameFolder =
-        fs.existsSync(current) && fs.realpathSync(current) === fs.realpathSync(directory)
+      // An old folder this app can no longer read (a removed drive, or macOS privacy blocking
+      // iCloud Drive) has nothing to move, and must never stop the person leaving it.
+      const { modelStorageError } = await import('./runtime-env')
+      const currentReadable = fs.existsSync(current) && modelStorageError(current) === null
+      let currentFiles: string[] = []
+      let sameFolder = false
+      if (currentReadable) {
+        try {
+          currentFiles = fs.readdirSync(current)
+          sameFolder = fs.realpathSync(current) === fs.realpathSync(directory)
+        } catch {
+          currentFiles = []
+        }
+      }
       let moved = false
       let left = false
       let unknownEntriesLeft = 0

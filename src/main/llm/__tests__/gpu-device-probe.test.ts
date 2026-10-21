@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { hasGpuDevice, offloadedGpuLayers } from '../gpu-device-probe'
+import {
+  hasGpuDevice,
+  listedGpuMemoryMB,
+  offloadedGpuLayers,
+  offloadedLayerShare
+} from '../gpu-device-probe'
 
 describe('hasGpuDevice', () => {
   it('accepts an enumerated Vulkan GPU', () => {
@@ -30,5 +35,34 @@ describe('offloadedGpuLayers', () => {
   it('does not infer offload from a device list or requested layer count', () => {
     expect(offloadedGpuLayers('Available devices:\n  CUDA0: NVIDIA RTX 4060')).toBeNull()
     expect(offloadedGpuLayers('n_gpu_layers = 99')).toBeNull()
+  })
+})
+
+describe('listedGpuMemoryMB', () => {
+  it('reads the largest card of the backend from llama.cpp\'s device list', () => {
+    const listing =
+      'Available devices:\n  Vulkan0: NVIDIA GeForce RTX 3060 (Rev 1) (12288 MiB, 11800 MiB free)\n  Vulkan1: Intel UHD (4096 MiB, 4000 MiB free)'
+    expect(listedGpuMemoryMB(listing, 'Vulkan')).toBe(12288)
+    expect(listedGpuMemoryMB(listing, 'CUDA')).toBeNull()
+    expect(listedGpuMemoryMB('failed to list devices', 'Vulkan')).toBeNull()
+  })
+
+  it('never reads a software Vulkan device, which reports host RAM, as GPU memory', () => {
+    const listing =
+      'Available devices:\n  Vulkan0: NVIDIA GeForce RTX 3060 (12288 MiB, 11800 MiB free)\n  Vulkan1: llvmpipe (LLVM 17.0.6, 256 bits) (64000 MiB, 64000 MiB free)'
+    expect(listedGpuMemoryMB(listing, 'Vulkan')).toBe(12288)
+    expect(
+      listedGpuMemoryMB('Available devices:\n  Vulkan0: llvmpipe (32000 MiB, 32000 MiB free)', 'Vulkan')
+    ).toBeNull()
+  })
+})
+
+describe('offloadedLayerShare', () => {
+  it('reads the placed and total layers from the last load', () => {
+    expect(offloadedLayerShare('load_tensors: offloaded 31/49 layers to GPU')).toEqual({
+      layers: 31,
+      total: 49
+    })
+    expect(offloadedLayerShare('Available devices:')).toBeNull()
   })
 })

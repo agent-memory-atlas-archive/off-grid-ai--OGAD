@@ -6,6 +6,9 @@ import { engineSpawnEnv } from './spawn-env'
 const execFileAsync = promisify(execFile)
 
 /** A GPU candidate must name a device for its own backend before it outranks CPU. */
+/** Software rasterizers that list as Vulkan devices but are not GPUs. */
+const SOFTWARE_RENDERER = /llvmpipe|lavapipe|softpipe|swiftshader|basic render driver/i
+
 export function hasGpuDevice(output: string, backend: 'CUDA' | 'Vulkan'): boolean {
   const devices = output.split(/Available devices:/i)[1]
   if (!devices) return false
@@ -14,9 +17,35 @@ export function hasGpuDevice(output: string, backend: 'CUDA' | 'Vulkan'): boolea
     if (!deviceLine.test(line)) return false
     return (
       backend === 'CUDA' ||
-      !/llvmpipe|lavapipe|softpipe|swiftshader|basic render driver/i.test(line)
+      !SOFTWARE_RENDERER.test(line)
     )
   })
+}
+
+/** The largest memory, in MiB, that the device list reports for one of this backend's GPUs
+ *  (llama.cpp prints `Vulkan0: NAME (8188 MiB, 7800 MiB free)`), or null when it names none.
+ *  A software Vulkan device reports host RAM, so it never counts as GPU memory. */
+export function listedGpuMemoryMB(output: string, backend: 'CUDA' | 'Vulkan'): number | null {
+  const devices = output.split(/Available devices:/i)[1]
+  if (!devices) return null
+  const line = new RegExp(`^\\s*${backend}\\d+\\s*:.*\\((\\d+)\\s*MiB`)
+  const sizes = devices
+    .split(/\r?\n/)
+    .filter((entry) => backend === 'CUDA' || !SOFTWARE_RENDERER.test(entry))
+    .map((entry) => line.exec(entry)?.[1])
+    .filter((size): size is string => size !== undefined)
+    .map(Number)
+  return sizes.length ? Math.max(...sizes) : null
+}
+
+/** Each engine's last device listing, kept so a launch can read the GPU's memory without
+ *  probing again. */
+const deviceListings = new Map<string, string>()
+
+/** The GPU memory, in MiB, the last probe of this engine reported, or null. */
+export function probedGpuMemoryMB(serverPath: string, backend: 'CUDA' | 'Vulkan'): number | null {
+  const listing = deviceListings.get(serverPath)
+  return listing ? listedGpuMemoryMB(listing, backend) : null
 }
 
 /** The engine's own model-load log is the proof that layers reached a GPU. */
@@ -24,6 +53,12 @@ export function offloadedGpuLayers(output: string): number | null {
   const matches = [...output.matchAll(/\boffloaded\s+(\d+)\/\d+\s+layers to GPU\b/gi)]
   const count = matches.at(-1)?.[1]
   return count === undefined ? null : Number(count)
+}
+
+/** The layers the engine placed on the GPU out of the model's total, from its load log. */
+export function offloadedLayerShare(output: string): { layers: number; total: number } | null {
+  const match = [...output.matchAll(/\boffloaded\s+(\d+)\/(\d+)\s+layers to GPU\b/gi)].at(-1)
+  return match ? { layers: Number(match[1]), total: Number(match[2]) } : null
 }
 
 export async function gpuDeviceAvailable(
@@ -40,7 +75,9 @@ export async function gpuDeviceAvailable(
         maxBuffer: 512 * 1024,
         env: { ...inherited, ...engineSpawnEnv({ platform, binDir, currentEnv: inherited }) }
       })
-      return hasGpuDevice(`${stdout}\n${stderr}`, backend)
+      const listing = `${stdout}\n${stderr}`
+      deviceListings.set(serverPath, listing)
+      return hasGpuDevice(listing, backend)
     } catch (error) {
       console.warn(`[LLMService] ${backend} device probe failed for ${serverPath}:`, error)
     }

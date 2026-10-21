@@ -9,6 +9,7 @@ import {
   llmSlotPlan,
   teamBatchFlags,
   type GatewayMode,
+  type GpuPlacement,
   type KvShape,
   type LlmSlotInput,
   type SlotPlatform
@@ -98,6 +99,7 @@ export interface LaunchState {
   kvCacheType: KvCacheType
   flashAttn: boolean
   gpuLayers: number
+  gpuPlacement?: GpuPlacement
   threads: number | undefined
   batchSize: number | undefined
   speculativeDecoding?: SpeculativeDecodingMode
@@ -116,7 +118,12 @@ export interface LaunchArgsInput {
   mmProjPath: string // empty string = text-only (no --mmproj)
   port: number
   effectiveCtxSize: number // already RAM-clamped
-  gpuLayers: number
+  /** 'auto' passes no -ngl, so llama-server's `--fit` places layers and MoE experts itself.
+   *  A number is a manual count (0 = CPU only). */
+  gpuLayers: number | 'auto'
+  /** Batch and micro-batch for an MoE that spills its experts to the CPU under Auto (see
+   *  spillBatchSize in @offgrid/models). The person's own batch size wins. */
+  spillBatch?: number | null
   flashAttn: boolean
   kvCacheType: KvCacheType
   threads: number | undefined
@@ -201,10 +208,9 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
     '-c',
     // Team mode may grow the shared pool past the person's context so every slot gets its share;
     // it is never smaller. Single mode: exactly the person's context.
-    String(llmSlotPlan(slotInput(i)).poolCtx),
-    '-ngl',
-    String(i.gpuLayers)
+    String(llmSlotPlan(slotInput(i)).poolCtx)
   )
+  if (i.gpuLayers !== 'auto') args.push('-ngl', String(i.gpuLayers))
   // Hybrid models (Qwen3.5, Bonsai 2) cannot roll recurrent state back past a saved
   // context checkpoint. At the 8192-token default spacing, any edit earlier in a shorter
   // conversation (a dropped screenshot, a compacted turn) re-processes the whole prompt;
@@ -235,6 +241,9 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
   }
   if (typeof i.batchSize === 'number') {
     args.push('-b', String(i.batchSize))
+  } else if (i.spillBatch) {
+    // Experts on the CPU: a wide batch keeps prompt reading on the GPU busy.
+    args.push('-b', String(i.spillBatch), '-ub', String(i.spillBatch))
   } else if (team) {
     // Team mode on CUDA batches wider prefill; the person's own batch size always wins.
     args.push(...(teamBatchFlags(i.slotPlatform) ?? []))
@@ -247,7 +256,9 @@ export function buildLaunchArgs(i: LaunchArgsInput): string[] {
     const draftMax = i.speculativeDraftMax ? String(i.speculativeDraftMax) : '2'
     args.push('--spec-type', 'draft-mtp', '--spec-draft-n-max', draftMax)
     if (i.draftModelPath) {
-      args.push('--spec-draft-model', i.draftModelPath, '--spec-draft-ngl', String(i.gpuLayers))
+      args.push('--spec-draft-model', i.draftModelPath)
+      // Auto leaves the draft head's placement to the engine too.
+      if (i.gpuLayers !== 'auto') args.push('--spec-draft-ngl', String(i.gpuLayers))
     }
   } else if (
     i.draftModelPath &&
@@ -279,6 +290,7 @@ export function launchArgsChanged(
     kvCacheType?: KvCacheType
     flashAttn?: boolean
     gpuLayers?: number
+    gpuPlacement?: GpuPlacement
     threads?: number
     batchSize?: number
     speculativeDecoding?: SpeculativeDecodingMode
@@ -296,6 +308,8 @@ export function launchArgsChanged(
     (patch.kvCacheType !== undefined && patch.kvCacheType !== current.kvCacheType) ||
     (typeof patch.flashAttn === 'boolean' && patch.flashAttn !== current.flashAttn) ||
     (typeof patch.gpuLayers === 'number' && patch.gpuLayers !== current.gpuLayers) ||
+    (patch.gpuPlacement !== undefined &&
+      patch.gpuPlacement !== (current.gpuPlacement ?? 'auto')) ||
     (typeof patch.threads === 'number' && patch.threads !== current.threads) ||
     (typeof patch.batchSize === 'number' && patch.batchSize !== current.batchSize) ||
     (patch.speculativeDecoding !== undefined &&

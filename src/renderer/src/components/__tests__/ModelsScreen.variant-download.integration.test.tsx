@@ -30,17 +30,23 @@ const downloadModel = vi.fn(async () => ({ success: true }))
 describe('<ModelsScreen/> Hugging Face variant download', () => {
   afterEach(() => { cleanup(); downloadModel.mockClear() })
 
-  it('lets the user choose the 1-bit GGUF before downloading', async () => {
+  it('lets the user choose the 1-bit size from the panel before downloading', async () => {
     const { ModelsScreen } = await import('../ModelsScreen')
     const user = userEvent.setup()
     render(<ModelsScreen />)
-    await user.type(screen.getByPlaceholderText('Search HuggingFace…'), 'Bonsai')
+    await user.type(screen.getByPlaceholderText('Search models…'), 'Bonsai')
     const model = await screen.findByRole('listitem')
+    // A search result opens its panel, where the sizes are offered in words.
     await user.click(within(model).getByRole('button', { name: 'Download' }))
-    const picker = await screen.findByRole('dialog', { name: /Choose a file/ })
-    expect(picker.closest('[data-testid="side-panel-layer"]')).toBeTruthy()
-    expect(within(picker).getByText('Ternary-Bonsai-2-27B-F16.gguf')).toBeTruthy()
-    await user.click(within(picker).getByRole('button', { name: /Ternary-Bonsai-2-27B-PTQ1_0.gguf/ }))
+    const panel = await screen.findByRole('dialog', { name: /Ternary-Bonsai-2-27B-gguf details/ })
+    expect(panel.closest('[data-testid="side-panel-layer"]')).toBeTruthy()
+    const sizes = within(panel).getByRole('region', { name: 'Available model files' })
+    expect(await within(sizes).findByText('Ternary-Bonsai-2-27B-F16.gguf')).toBeTruthy()
+    expect(within(sizes).getByText('Best quality')).toBeTruthy()
+    expect(within(sizes).getByText('Smaller')).toBeTruthy()
+    await user.click(
+      within(sizes).getByRole('button', { name: 'Download Ternary-Bonsai-2-27B-PTQ1_0.gguf' })
+    )
     expect(downloadModel).toHaveBeenCalledWith(repo, 'Ternary-Bonsai-2-27B-PTQ1_0.gguf')
   })
 

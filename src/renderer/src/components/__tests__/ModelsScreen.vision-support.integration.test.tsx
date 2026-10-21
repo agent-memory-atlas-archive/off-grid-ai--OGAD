@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-// Integration: the Models screen offers "Add vision support" for an INSTALLED
+// Integration: the Models screen offers "Add vision" for an INSTALLED
 // vision-capable model whose projector isn't on disk (the Gemma 4 E2B case), and
 // clicking it downloads the model (which fetches only the missing projector). Real
 // ModelsScreen; only window.api is faked. ModelsScreen captures window.api at module
@@ -53,7 +53,7 @@ describe('<ModelsScreen/> — Add vision support', () => {
     const user = userEvent.setup()
     render(<ModelsScreen />)
 
-    const btn = await screen.findByRole('button', { name: /add vision support/i })
+    const btn = await screen.findByRole('button', { name: /^add vision$/i })
     await user.click(btn)
     expect(downloadModel).toHaveBeenCalledWith(VISION_MODEL.id)
   })
@@ -63,6 +63,6 @@ describe('<ModelsScreen/> — Add vision support', () => {
     render(<ModelsScreen />)
 
     await screen.findByText('Gemma 4 E2B') // card rendered
-    expect(screen.queryByRole('button', { name: /add vision support/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^add vision$/i })).toBeNull()
   })
 })

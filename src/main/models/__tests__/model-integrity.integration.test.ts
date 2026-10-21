@@ -6,7 +6,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { Writable } from 'stream'
-import { NETWORK_UNAVAILABLE_MESSAGE } from '../download-error'
+import { NETWORK_UNAVAILABLE_MESSAGE, STORAGE_FULL_MESSAGE } from '../download-error'
 
 const originalDataDir = process.env.OFFGRID_DATA_DIR
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'offgrid-model-integrity-'))
@@ -32,7 +32,9 @@ const unavailableModel = {
 // voice / transcription entries.
 const fixtures = CATALOG.flatMap((entry) => {
   const file = entry.files.at(0)
-  if (entry.files.length !== 1 || !file?.name.endsWith('.gguf')) return []
+  // These scenarios deliver stand-in bytes, so a file pinned to a SHA-256 cannot be one of them
+  // (the Muse test checks the pin on its own).
+  if (entry.files.length !== 1 || !file?.name.endsWith('.gguf') || file.sha256) return []
   return [{ entry, fileName: file.name, filePath: path.join(dataDir, 'models', file.name) }]
 })
 
@@ -236,7 +238,7 @@ describe('model-manager GGUF integrity', () => {
 
     expect(result).toEqual({
       success: false,
-      error: 'ENOSPC: no space left on device, write'
+      error: STORAGE_FULL_MESSAGE
     })
     expect(fs.existsSync(diskFailure.filePath)).toBe(false)
     expect(fs.existsSync(`${diskFailure.filePath}.part`)).toBe(false)

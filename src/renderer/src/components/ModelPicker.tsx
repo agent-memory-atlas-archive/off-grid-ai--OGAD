@@ -3,8 +3,6 @@ import {
   canonicalModelId,
   modelCapabilities,
   modelSizeLabel,
-  MODEL_CAPABILITIES,
-  type ModelCapability,
   type ModelFile as CatalogModelFile
 } from '@offgrid/models'
 import {
@@ -13,11 +11,12 @@ import {
   type RuntimeId
 } from '../../../shared/runtime-backends'
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import { Brain, Cpu, Eye, GearSix, PencilSimple, Translate, Wrench, X } from '@phosphor-icons/react'
+import { Cpu, GearSix, X } from '@phosphor-icons/react'
 import { AnimatePresence, motion } from 'motion/react'
 import { ListRow } from '@offgrid/operator-ui/operator/list-row'
 import { Section } from '@offgrid/operator-ui/operator/experience'
 import { SidePanel } from './SidePanel'
+import { ModelCapabilityIcons } from './ModelCapabilityIcons'
 import { Button } from './ui/button'
 import { IconTip } from './IconTip'
 import { openModelSettingsPanel } from '@renderer/lib/model-settings-panel'
@@ -87,37 +86,10 @@ function primaryVariant(m: ModelEntry): string | null {
   return file.slice(0, -'.gguf'.length).split('-').at(-1) ?? null
 }
 
-// The glyph for each capability; the shared rule decides which apply and what they are called.
-const CAPABILITY_ICONS: Record<ModelCapability, React.ReactElement> = {
-  vision: <Eye />,
-  tools: <Wrench />,
-  reasoning: <Brain />,
-  multilingual: <Translate />,
-  image_edit: <PencilSimple />
-}
-const CAPABILITY_LABELS = new Map(MODEL_CAPABILITIES.map(({ id, label }) => [id, label]))
-
-// Capability icons alone (no size): shown on the chosen model's card, next to its load state.
-function capabilityIcons(m: ModelEntry): React.ReactNode {
-  const capabilities = modelCapabilities(m)
-  if (capabilities.length === 0) return null
-  return capabilities.map((capability) => (
-    <span
-      key={capability}
-      role="img"
-      title={CAPABILITY_LABELS.get(capability)}
-      aria-label={CAPABILITY_LABELS.get(capability)}
-      className="flex text-green-500 [&>svg]:h-3.5 [&>svg]:w-3.5"
-    >
-      {CAPABILITY_ICONS[capability]}
-    </span>
-  ))
-}
-
 // The right side of a dropdown row: capability icons, then the size. Undefined when nothing to say.
 function optionMeta(m: ModelEntry): React.ReactNode {
   const size = modelSizeLabel(m)
-  const icons = capabilityIcons(m)
+  const icons = modelCapabilities(m).length ? <ModelCapabilityIcons model={m} /> : null
   if (!size && !icons) return undefined
   return (
     <>
@@ -325,7 +297,7 @@ export function ModelPicker({ onClose }: { onClose: () => void }): React.ReactEl
                   ? {
                       name: current.name,
                       remote: !!current.remoteServerId,
-                      capabilities: capabilityIcons(current),
+                      capabilities: modelCapabilities(current).length ? <ModelCapabilityIcons model={current} /> : null,
                       detail: current.remoteServerId
                         ? null
                         : backendFor(mode === 'text' ? 'chat' : mode, [

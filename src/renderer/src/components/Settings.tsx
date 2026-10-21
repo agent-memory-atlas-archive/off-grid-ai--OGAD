@@ -154,7 +154,7 @@ export function Settings({
       />
 
       {/* Scrolling content below the fixed header */}
-      <div className="relative flex-1 overflow-y-auto px-1 pt-2 pb-16">
+      <div className="relative flex-1 overflow-y-auto overflow-x-hidden px-1 pt-2 pb-16">
         <motion.div
           ref={gridRef}
           data-columns={columns}

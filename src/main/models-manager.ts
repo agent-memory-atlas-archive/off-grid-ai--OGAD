@@ -104,6 +104,8 @@ export const BONSAI_2: ModelEntry = {
   org: 'Prism ML',
   description: 'Compact 27B reasoning model with optional vision; uses the bundled Prism engine.',
   params: 27,
+  // Qwen 3.8 27B in ternary weights: below the full model (34), above every 9B.
+  quality: 24,
   minRamGb: 16,
   quant: 'PQ2_0',
   tags: [],
@@ -122,6 +124,39 @@ export const BONSAI_2: ModelEntry = {
       url: 'https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/6ed5e12bf84b7a63069882c91dd9e9218647d17b/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf',
       sizeBytes: 629246976,
       sha256: '6807ede61d570bb86ba34b756a0fa109edc33668604de867c6ea6d8f1d631903',
+      role: 'mmproj'
+    }
+  ]
+}
+
+// Bonsai 2 9B: Qwen 3.5 9B in packed ternary weights, 2.4GB, from the same Prism engine as the 27B.
+// The strongest model for an 8GB Mac. Desktop only: phones do not ship PrismML's llama.cpp fork.
+export const BONSAI_2_9B: ModelEntry = {
+  id: 'prism-ml/Ternary-Bonsai-2-9B-gguf',
+  name: 'Bonsai 2 9B',
+  kind: 'vision',
+  org: 'Prism ML',
+  description: 'A 9B model in 2.4 GB; reads images; uses the bundled Prism engine.',
+  params: 9,
+  quality: 15,
+  minRamGb: 8,
+  quant: 'PQ2_0',
+  tags: [],
+  isNew: true,
+  releaseDate: '2026-09-23',
+  files: [
+    {
+      name: 'Ternary-Bonsai-2-9B-PQ2_0.gguf',
+      url: 'https://huggingface.co/prism-ml/Ternary-Bonsai-2-9B-gguf/resolve/5b2abb02362efbed46bbe204014b02837778b2c2/Ternary-Bonsai-2-9B-PQ2_0.gguf',
+      sizeBytes: 2416851840,
+      sha256: '7a89ab48f5038c704480f60781f9b8d4035351f5f6beb7d11fad80001fde23f9',
+      role: 'primary'
+    },
+    {
+      name: 'Ternary-Bonsai-2-9B-mmproj-Q8_0.gguf',
+      url: 'https://huggingface.co/prism-ml/Ternary-Bonsai-2-9B-gguf/resolve/5b2abb02362efbed46bbe204014b02837778b2c2/Ternary-Bonsai-2-9B-mmproj-Q8_0.gguf',
+      sizeBytes: 624229664,
+      sha256: 'e0cb6f6988cea323ef798cd77d019bbb819af75582f034eaab0e7232314953db',
       role: 'mmproj'
     }
   ]
@@ -528,7 +563,7 @@ export function kevNeedsOnlyRuntime(modelId: string): boolean {
   return Boolean(parts?.modelReady && kevRuntimeToDownload(modelId))
 }
 
-const DESKTOP_CATALOG = [BONSAI_2, DECIDER_2B, DECIDER_2B_VISION, ...KEV_MODELS]
+const DESKTOP_CATALOG = [BONSAI_2, BONSAI_2_9B, DECIDER_2B, DECIDER_2B_VISION, ...KEV_MODELS]
 
 export async function desktopCatalog(): Promise<ModelEntry[]> {
   const { CATALOG } = await import('@offgrid/models')
@@ -563,6 +598,16 @@ export async function desktopCatalog(): Promise<ModelEntry[]> {
   return [...DESKTOP_CATALOG, ...catalog, ...uiMateMtp]
 }
 
+/** Free bytes on the volume that holds `dir`, or null when the OS will not say. */
+function freeBytes(dir: string): number | null {
+  try {
+    const stats = fs.statfsSync(dir)
+    return stats.bavail * stats.bsize
+  } catch {
+    return null
+  }
+}
+
 export interface DownloadProgress {
   modelId: string
   /** The name a person reads for `modelId`. Screens show this, never the id. */
@@ -580,6 +625,9 @@ export interface DownloadProgress {
   totalBytes?: number
   bytesPerSecond?: number
   error?: string
+  /** On completion: the exact installed package to activate (an alternate size of a catalog model
+   *  is its own package), so a switch loads the size that was downloaded. */
+  installedId?: string
 }
 export type ProgressCb = (p: DownloadProgress) => void
 
@@ -663,6 +711,18 @@ function downloadedVariant(models: DownloadedModel[], id: string): DownloadedMod
   return family.length === 1 ? family[0] : undefined
 }
 
+/** Bytes a download of `model` still needs, when some of its files are already on disk. */
+function missingBytes(model: CatalogEntry, dir: string): { missingBytes?: number } {
+  const files = model.files as { name: string; sizeBytes?: number }[]
+  const onDisk = files.filter((file) => fileSizeOf(dir, file.name) > 0)
+  if (onDisk.length === 0 || onDisk.length === files.length) return {}
+  return {
+    missingBytes: files
+      .filter((file) => !onDisk.includes(file))
+      .reduce((sum, file) => sum + (file.sizeBytes ?? 0), 0)
+  }
+}
+
 export async function getCatalog(): Promise<{ kinds: readonly string[]; models: unknown[] }> {
   const { MODEL_KINDS } = await import('@offgrid/models')
   const CATALOG = await desktopCatalog()
@@ -706,7 +766,13 @@ export async function getCatalog(): Promise<{ kinds: readonly string[]; models: 
   return {
     kinds: MODEL_KINDS,
     models: [
-      ...models.map((model) => ({ ...model, ...traitsById.get((model as CatalogEntry).id) })),
+      ...models.map((model) => ({
+        ...model,
+        ...traitsById.get((model as CatalogEntry).id),
+        // What a download would still fetch: files another model already brought (a shared text
+        // encoder or VAE) are on disk and cost nothing. Absent when nothing is on disk yet.
+        ...missingBytes(model as CatalogEntry, dir)
+      })),
       ...remoteModels
     ].map((model) => ({
       ...model,
@@ -1090,12 +1156,10 @@ async function downloadModelInner(
     // terminal transitions here, but skip high-frequency transfer ticks.
     if (p.status && p.status !== 'queued' && p.status !== 'downloading') persistRegistry()
   }
-  const interruptedResult = (
-    signal: AbortSignal,
-    activePartPath: string | null
-  ): { success: false; error: string } => {
+  // A cancelled download keeps its partial file, so downloading the model again resumes where it
+  // stopped. Temporary Storage in the Storage tab clears it.
+  const interruptedResult = (signal: AbortSignal): { success: false; error: string } => {
     const interrupted = signal.reason === DOWNLOAD_INTERRUPTED_ERROR
-    if (!interrupted && activePartPath) fs.rmSync(activePartPath, { force: true })
     const error = interrupted ? DOWNLOAD_INTERRUPTED_ERROR : 'cancelled'
     send(interrupted ? { status: 'failed', error } : { status: 'cancelled' })
     return { success: false, error }
@@ -1201,6 +1265,12 @@ async function downloadModelInner(
           } catch {
             /* fresh */
           }
+          // A partial file already as long as the whole file (cancelled after the last byte, before
+          // it was promoted) has no range left to ask for: a server answers 416 forever. Start over.
+          if (file.sizeBytes && resumeFrom >= file.sizeBytes) {
+            fs.rmSync(partPath, { force: true })
+            resumeFrom = 0
+          }
           writeDiagnosticLog('models.download', 'file.started', {
             modelId,
             file: file.name,
@@ -1215,6 +1285,20 @@ async function downloadModelInner(
           const append = resumeFrom > 0 && res.status === 206
           const remaining = Number(res.headers.get('content-length') ?? 0)
           const total = (append ? resumeFrom : 0) + remaining
+          // Refuse before writing, in words, when the folder cannot hold this file (the size the
+          // server reports): running out halfway wastes the time and bandwidth already spent.
+          // A restart (200) rewrites the partial file, so its bytes come back too.
+          // A server may omit the length; the catalog's size, less what is already on disk, stands in.
+          const needed =
+            remaining || Math.max(0, (file.sizeBytes ?? 0) - (append ? resumeFrom : 0))
+          const free = freeBytes(dir)
+          const reclaimable = append ? 0 : resumeFrom
+          if (free !== null && needed > free + reclaimable) {
+            void res.body.cancel().catch(() => {})
+            throw new Error(
+              `Not enough disk space. ${file.name} needs ${(needed / 1e9).toFixed(1)} GB and ${(free / 1e9).toFixed(1)} GB is free.`
+            )
+          }
           const out = fs.createWriteStream(partPath, append ? { flags: 'a' } : {})
           let written = append ? resumeFrom : 0
           const reader = res.body.getReader()
@@ -1226,7 +1310,7 @@ async function downloadModelInner(
             reportTransfer(file.name, fileIndex, written, total)
           })
           if (signal.aborted) {
-            return interruptedResult(signal, partPath)
+            return interruptedResult(signal)
           }
           // Verify the file is complete + valid BEFORE promoting it — never mark a
           // truncated/corrupt download installed (it loads as a blank "Chat model Down").
@@ -1256,7 +1340,7 @@ async function downloadModelInner(
             bytes: written
           })
         }
-        if (signal.aborted) return interruptedResult(signal, activePartPath)
+        if (signal.aborted) return interruptedResult(signal)
         if (kevRuntime) {
           await installKevRuntimeInJob(modelId, kevRuntime, signal, (written) =>
             reportTransfer('Kev runtime', pending.length, written, kevRuntime.bytes)
@@ -1270,6 +1354,7 @@ async function downloadModelInner(
           entry.files.every((file) =>
             inCatalog.files.some((catalogFile) => catalogFile.name === file.name)
           )
+        let installedId = modelId
         if (inCatalog && !matchesCatalog) {
           const files = entry.files.map((file) => ({
             name: file.name,
@@ -1284,6 +1369,7 @@ async function downloadModelInner(
             files: files as [(typeof files)[number], ...typeof files],
             engine: 'llama'
           })
+          installedId = packageIdentity
           recordDownloaded(dir, {
             id: packageIdentity,
             familyId: modelId,
@@ -1304,7 +1390,7 @@ async function downloadModelInner(
         // vision on now (main-side, so it works even when no Models screen is open).
         await reconcileActiveModelProjector().catch(() => false)
         settingsChanged()
-        send({ percent: 100, status: 'completed' })
+        send({ percent: 100, status: 'completed', installedId })
         return { success: true }
       } catch (err) {
         // A capacity failure cannot resume until space is reclaimed. A file that failed byte or
@@ -1318,7 +1404,7 @@ async function downloadModelInner(
           }
         }
         if (signal.aborted || (err as Error).name === 'AbortError') {
-          return interruptedResult(signal, activePartPath)
+          return interruptedResult(signal)
         }
         const error = downloadFailureMessage(err)
         send({ status: 'failed', error })
@@ -1611,7 +1697,12 @@ async function setActiveLlamaModel(
   // An exact catalog pick takes precedence once its files are present. A prior
   // download of another quantization in this family must not override it.
   const catalogReady = catalogEntry?.files.every((file) => fileSizeOf(dir, file.name) > 0)
-  const transferred = catalogReady ? undefined : downloadedVariant(downloaded, modelId)
+  // Several downloaded sizes of one family: the newest download is the one meant (the registry keeps
+  // download order).
+  const transferred = catalogReady
+    ? undefined
+    : (downloadedVariant(downloaded, modelId) ??
+      downloaded.filter((model) => model.familyId === modelId).at(-1))
   if (transferred) {
     if (!acceptsKind(transferred.kind)) {
       return {

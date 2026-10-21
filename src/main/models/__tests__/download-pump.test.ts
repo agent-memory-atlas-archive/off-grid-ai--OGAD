@@ -60,4 +60,22 @@ describe('pumpToFile (D1 — download write path)', () => {
     await expect(pumpToFile(readerOf([Buffer.from('data')]), out, () => {})).rejects.toThrow()
     // Reaching here at all means the unhandled 'error' did not take the process down.
   })
+
+  it('waits for the disk when the network is faster, so memory stays bounded and the file is whole', async () => {
+    // 3,000 chunks offered instantly: a reader that never waits outruns any disk. Without
+    // backpressure the stream queued every chunk in memory, and macOS refused the batched
+    // write (EINVAL, writev takes at most 1024 buffers).
+    const chunk = new Uint8Array(64 * 1024).fill(7)
+    const dest = path.join(TMP, 'fast-network.bin')
+    const out = fs.createWriteStream(dest)
+    let peak = 0
+    let total = 0
+    await pumpToFile(readerOf(Array.from({ length: 3000 }, () => chunk)), out, (n) => {
+      total += n
+      peak = Math.max(peak, out.writableLength)
+    })
+    expect(fs.statSync(dest).size).toBe(3000 * chunk.length)
+    expect(total).toBe(3000 * chunk.length)
+    expect(peak).toBeLessThanOrEqual(out.writableHighWaterMark + chunk.length)
+  })
 })

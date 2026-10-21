@@ -36,8 +36,21 @@ export async function pumpToFile(
       if (writeErr) throw writeErr
       const { done, value } = await reader.read()
       if (done || !value) break
-      out.write(Buffer.from(value))
       onBytes(value.length)
+      // Wait for the disk when it falls behind the network. Without this a fast connection
+      // queued gigabytes in memory, and macOS refused the batched write (EINVAL: writev takes
+      // at most 1024 buffers).
+      if (!out.write(Buffer.from(value))) {
+        await new Promise<void>((resolve) => {
+          const settle = (): void => {
+            out.off('drain', settle)
+            out.off('error', settle)
+            resolve()
+          }
+          out.on('drain', settle)
+          out.on('error', settle)
+        })
+      }
     }
   } finally {
     out.end()

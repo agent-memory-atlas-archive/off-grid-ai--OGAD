@@ -4,12 +4,13 @@
  * The browse fit chip through the REAL ModelsScreen. Only the Electron window.api
  * bridge is faked (a true boundary); the catalog load, the filter/sort pipeline,
  * the real shared fitTier rule, and the card render are all production code. Proves
- * the never-block posture the user sees: on a 16GB Mac a 15GB model is flagged
- * "Won't fit — Load anyway" (past the aggressive ceiling, still loadable), while a
- * small model shows no fit warning — and the SAME 15GB model is comfortable on a
- * 24GB Mac (the verdict is RAM-relative). Neither model is ever hidden.
+ * the never-block posture the user sees: on a 16GB Mac a 15GB model waits behind
+ * "Show 1 more", then reads "Too big" and can still be downloaded, while a small
+ * model shows no fit warning — and the SAME 15GB model is comfortable on a 24GB Mac
+ * (the verdict is RAM-relative).
  */
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
 
 interface Entry {
@@ -59,19 +60,21 @@ const cardFor = (name: string): HTMLElement =>
 describe('<ModelsScreen/> — browse fit chip (never-block posture)', () => {
   afterEach(() => cleanup())
 
-  it('flags a 15GB model "Won\'t fit — Load anyway" on a 16GB Mac; no warning on a small one', async () => {
+  it('keeps a 15GB model behind "Show 1 more" on a 16GB Mac, then flags it "Too big" and still offers it', async () => {
     ramGbValue = 16
+    const user = userEvent.setup()
     const { ModelsScreen } = await import('../ModelsScreen')
     render(<ModelsScreen />)
 
-    // Both models render (neither is hidden — the never-block rule).
-    expect(await screen.findByText('Huge Model')).toBeTruthy()
-    expect(screen.getByText('Small Model')).toBeTruthy()
+    expect(await screen.findByText('Small Model')).toBeTruthy()
+    const more = await screen.findByRole('button', { name: /Show 1 more, too big/ })
+    expect(screen.queryByText('Huge Model')).toBeNull()
 
-    await waitFor(() =>
-      expect(within(cardFor('Huge Model')).getByText(/Won't fit — Load anyway/i)).toBeTruthy()
-    )
-    expect(within(cardFor('Small Model')).queryByText(/Won't fit|Tight on RAM/i)).toBeNull()
+    await user.click(more)
+    expect(await screen.findByText('Huge Model')).toBeTruthy()
+    expect(within(cardFor('Huge Model')).getByText('Too big')).toBeTruthy()
+    expect(within(cardFor('Huge Model')).getByRole('button', { name: 'Download' })).toBeTruthy()
+    expect(within(cardFor('Small Model')).queryByText(/Too big|Tight/)).toBeNull()
   })
 
   it('the SAME 15GB model gets no fit warning on a 24GB Mac (verdict is RAM-relative)', async () => {
@@ -83,6 +86,6 @@ describe('<ModelsScreen/> — browse fit chip (never-block posture)', () => {
     await screen.findByText('Huge Model')
     // Let the async systemHealth (24GB) settle, then assert no warning appears.
     await new Promise((r) => setTimeout(r, 60))
-    expect(within(cardFor('Huge Model')).queryByText(/Won't fit|Tight on RAM/i)).toBeNull()
+    expect(within(cardFor('Huge Model')).queryByText(/Too big|Tight/)).toBeNull()
   })
 })

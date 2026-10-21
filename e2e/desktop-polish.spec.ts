@@ -145,7 +145,7 @@ test('window resize adds collection columns while filter context remains reachab
 
   await collection.hover()
   await page.mouse.wheel(0, 10_000)
-  await expect(page.getByPlaceholder('Search HuggingFace…')).toBeVisible()
+  await expect(page.getByPlaceholder('Search models…')).toBeVisible()
 
   await page.setViewportSize({ width: 1800, height: 900 })
   await expect
@@ -202,13 +202,13 @@ test('keyboard focus follows navigation, form, dialog, and primary-action order 
     'first model type'
   )
   await page.keyboard.press('Tab')
-  const modelSearch = page.getByPlaceholder('Search HuggingFace…')
+  const modelSearch = page.getByPlaceholder('Search models…')
   await expectVisibleKeyboardFocus(modelSearch, 'model search field')
 
-  for (const name of ['MTP downloads: Off', 'All sources', 'Any size', 'Sort']) {
+  for (const name of ['All sources', 'Sort']) {
     await page.keyboard.press('Tab')
     await expectVisibleKeyboardFocus(
-      page.getByRole(name === 'MTP downloads: Off' ? 'button' : 'combobox', { name, exact: true }),
+      page.getByRole('combobox', { name, exact: true }),
       `${name} filter`
     )
   }

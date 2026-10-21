@@ -11,6 +11,7 @@
 //   3. catalog entries         (CATALOG)
 // Any change here that drops or reorders a source is a regression.
 
+import { MTP_HEADS } from '@offgrid/models'
 import { modalityForKind, isModelActive, type Modality } from '../active-models'
 
 // Minimal structural shapes so this module needs no runtime imports from
@@ -61,36 +62,11 @@ export interface CatalogEntry {
 }
 // Desktop MTP companions use the existing aux-file download contract. Keep the
 // pinned file identity shared by catalog installation and engine launch.
-export const MTP_COMPANIONS = {
-  'unsloth/gemma-4-E4B-it-GGUF': {
-    name: 'mtp-gemma-4-E4B-it-Q8_0.gguf',
-    url: 'https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/MTP/mtp-gemma-4-E4B-it-Q8_0.gguf',
-    sizeBytes: 98653248,
-    sha256: 'b6a723115efa510d3b3215db1e26790dae84cd08c2134a764f3d194f1f0c3376',
-    role: 'aux' as const
-  },
-  'unsloth/gemma-4-12b-it-GGUF': {
-    name: 'mtp-gemma-4-12b-it-Q8_0.gguf',
-    url: 'https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/fc034cfff751157913579611efad8462ac1be606/MTP/mtp-gemma-4-12b-it-Q8_0.gguf',
-    sizeBytes: 465109248,
-    sha256: '145db9094bc0f85f1701e255a2ed216dcc9800fc8bc8631ad00905b456bd451b',
-    role: 'aux' as const
-  },
-  'bartowski/tencent_UI-Mate-9B-GGUF+MTP': {
-    name: 'Qwen3.5-9B-MTP-ONLY-Q4_K_M.gguf',
-    url: 'https://huggingface.co/a4lg/Qwen3.5-9B-MTP-ONLY-GGUF/resolve/b609b41c40921b0d1912f0d42347e53e28d22731/Qwen3.5-9B-MTP-ONLY-Q4_K_M.gguf',
-    sizeBytes: 1576551712,
-    sha256: '82f356f754e70172f474e70229153bb0fe7137f3a181af5bc5e6fe43d56876fa',
-    role: 'aux' as const
-  },
-  'unsloth/Qwen3.8-27B-GGUF': {
-    name: 'mtp-Qwen3.8-27B-Q4_0.gguf',
-    url: 'https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/MTP/mtp-Qwen3.8-27B-Q4_0.gguf',
-    sizeBytes: 1369590656,
-    sha256: '50d9ce5a6da381bbcfb31061cf73df94a90e6faf8efeddee379a9cb8f1501c6e',
-    role: 'aux' as const
-  }
-}
+// The published MTP heads live in @offgrid/models (one table for desktop and mobile); here each is
+// a catalog file with the aux role.
+export const MTP_COMPANIONS = Object.fromEntries(
+  Object.entries(MTP_HEADS).map(([id, head]) => [id, { ...head, role: 'aux' as const }])
+) as { [Id in keyof typeof MTP_HEADS]: (typeof MTP_HEADS)[Id] & { role: 'aux' } }
 
 export const isMtpFileName = (name: string): boolean =>
   /(?:^|[-_.])mtp(?:[-_.]|$)/i.test(name.split(/[\\/]/).at(-1) ?? name)

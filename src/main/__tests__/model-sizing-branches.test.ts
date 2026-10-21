@@ -47,17 +47,23 @@ describe('totalBytes null-coalescing defaults', () => {
 })
 
 describe('preferredModelIds under 24GB (curated picks)', () => {
-  it('conservative on a small Mac prefers the light 2B vision model first', () => {
-    const ids = preferredModelIds(16, 'conservative')
-    expect(ids[0]).toContain('Qwen3-VL-2B')
+  // October 2026 audit: Qwen 3.5 has vision built in and leads its sizes on a small Mac.
+  it('conservative on a small Mac prefers Qwen 3.5 2B, with 0.8B behind it', () => {
+    expect(preferredModelIds(16, 'conservative')).toEqual([
+      'unsloth/Qwen3.5-2B-GGUF',
+      'unsloth/Qwen3.5-0.8B-GGUF'
+    ])
   })
 
-  it('balanced on a small Mac prefers Gemma 4 E4B first', () => {
-    expect(preferredModelIds(16, 'balanced')[0]).toContain('gemma-4-E4B')
+  it('balanced on a small Mac prefers Qwen 3.5 4B, with 2B as the fallback', () => {
+    expect(preferredModelIds(16, 'balanced')).toEqual([
+      'unsloth/Qwen3.5-4B-GGUF',
+      'unsloth/Qwen3.5-2B-GGUF'
+    ])
   })
 
-  it('extreme on a small Mac also prefers Gemma 4 E4B (not conservative branch)', () => {
-    expect(preferredModelIds(16, 'extreme')[0]).toContain('gemma-4-E4B')
+  it('extreme on a small Mac also prefers Qwen 3.5 4B (not the conservative branch)', () => {
+    expect(preferredModelIds(16, 'extreme')[0]).toBe('unsloth/Qwen3.5-4B-GGUF')
   })
 
   it('returns no curated ids at 24GB+ (defers to the size heuristic)', () => {

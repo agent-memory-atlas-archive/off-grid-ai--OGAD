@@ -1,6 +1,9 @@
 const NETWORK_UNAVAILABLE_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH'])
 const STORAGE_CAPACITY_CODES = new Set(['ENOSPC', 'EDQUOT'])
 
+export const STORAGE_FULL_MESSAGE =
+  'Not enough disk space to finish this download. Free some space, then try again.'
+
 export const NETWORK_UNAVAILABLE_MESSAGE =
   'Unable to download model: network unavailable. Check your connection and retry.'
 
@@ -43,6 +46,7 @@ export function downloadFailureMessage(error: unknown): string {
   if (typeof code === 'string' && NETWORK_UNAVAILABLE_CODES.has(code)) {
     return NETWORK_UNAVAILABLE_MESSAGE
   }
+  if (isStorageCapacityError(error)) return STORAGE_FULL_MESSAGE
   if (error instanceof Error) return error.message
   if (typeof outer?.message === 'string') return outer.message
   return thrownValueMessage(error)

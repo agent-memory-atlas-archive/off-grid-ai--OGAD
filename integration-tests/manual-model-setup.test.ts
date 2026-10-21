@@ -227,21 +227,14 @@ describe('manual model setup', () => {
     if (!(chosenCard instanceof HTMLElement)) throw new Error('Chosen model card did not render')
     await user.click(within(chosenCard).getByRole('button', { name: 'Download' }))
 
-    let installedCard: HTMLElement | null = null
-    await waitFor(() => {
-      installedCard = screen.getByText(chosenModel.name).closest('[role="listitem"]')
-      if (!(installedCard instanceof HTMLElement)) throw new Error('Installed model card missing')
-      expect(within(installedCard).getByRole('button', { name: 'Use' })).not.toBeNull()
-    })
+    // A model downloaded from the Models screen becomes the one in use when it lands.
+    await waitFor(() => expect(manager.getActiveModel()).toBe(chosenModel.id))
     expect(await manager.listInstalled()).toEqual([chosenModel.id])
     expect(requestedUrls).toEqual(chosenModel.files.map((file) => file.url))
     expect(requestedUrls).not.toEqual(expect.arrayContaining(unchosenModel.files.map((f) => f.url)))
     expect(fs.existsSync(path.join(dataDir, 'models', chosenModel.files[0]!.name))).toBe(true)
     expect(fs.existsSync(path.join(dataDir, 'models', unchosenModel.files[0]!.name))).toBe(false)
 
-    if (!(installedCard instanceof HTMLElement)) throw new Error('Installed model card missing')
-    await user.click(within(installedCard).getByRole('button', { name: 'Use' }))
-    await waitFor(() => expect(manager.getActiveModel()).toBe(chosenModel.id))
     await expect(manager.getActiveModelIds()).resolves.toContain(chosenModel.id)
     await expect(manager.listInstalled()).resolves.not.toContain(unchosenModel.id)
     await waitFor(() => {
