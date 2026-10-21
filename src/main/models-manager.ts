@@ -63,12 +63,12 @@ import {
 } from '@offgrid/sync'
 import { sampleProgressRate, type ProgressRateSample } from '@offgrid/ui'
 import {
-  CATALOG as BASE_CATALOG,
   describeModel,
   modelDisplayName,
   type ModelEntry,
   type ModelNameSources
 } from '@offgrid/models'
+import { baseCatalogModels } from './models/remote-catalog'
 import {
   parseRemoteVisionModelId,
   remoteVisionInventoryModels,
@@ -564,10 +564,15 @@ export function kevNeedsOnlyRuntime(modelId: string): boolean {
 }
 
 const DESKTOP_CATALOG = [BONSAI_2, BONSAI_2_9B, DECIDER_2B, DECIDER_2B_VISION, ...KEV_MODELS]
+const DESKTOP_CATALOG_IDS = new Set(DESKTOP_CATALOG.map((model) => model.id))
+
+/** The shared catalog with the fetched entries merged in; desktop-only entries keep their ids. */
+function baseCatalog(): ModelEntry[] {
+  return baseCatalogModels().filter((model) => !DESKTOP_CATALOG_IDS.has(model.id))
+}
 
 export async function desktopCatalog(): Promise<ModelEntry[]> {
-  const { CATALOG } = await import('@offgrid/models')
-  const catalog = CATALOG.map((model) => {
+  const catalog = baseCatalog().map((model) => {
     const companion = Object.entries(MTP_COMPANIONS).find(([id]) => id === model.id)?.[1]
     const files =
       companion && !model.files.some((file) => file.name === companion.name)
@@ -2092,7 +2097,7 @@ export function getLocalModels(dir = llm.getModelsDir()): LocalModel[] {
     ...readDownloaded(dir).flatMap((model) =>
       model.files.map((name) => resolveModelReference(name))
     ),
-    ...[...DESKTOP_CATALOG, ...BASE_CATALOG].flatMap((model) =>
+    ...[...DESKTOP_CATALOG, ...baseCatalog()].flatMap((model) =>
       model.files.flatMap((file) =>
         modelReadDirectories().flatMap((root) => {
           const asset = resolveModelAsset(file.name, [root])

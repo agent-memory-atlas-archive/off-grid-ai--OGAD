@@ -13,7 +13,8 @@ import { parakeetTranscription as parakeet } from './parakeet-cli'
 import { whisperServer } from './whisper-server'
 import { whisperServerTranscription as whisperResident } from './whisper-server-transcription'
 import { getActiveModal } from '../active-models'
-import { modelDisplayName, modelsByKind } from '@offgrid/models'
+import { modelDisplayName } from '@offgrid/models'
+import { catalogModelsByKind } from '../models/remote-catalog'
 import { transcriptionLanguages, type SpeechLanguage } from '@offgrid/speech'
 import type { ManagedRuntime } from '../runtime-manager'
 import { getSetting } from '../database'
@@ -100,7 +101,7 @@ export function engineForActiveModel(
   active: string | null,
   // engine is the raw catalog field (a free string, only 'parakeet' is meaningful) - not the
   // resolved TranscriptionEngine union. catalogEngine() narrows it. Typed to match what the
-  // live catalog (modelsByKind('transcription')) actually provides.
+  // live catalog (catalogModelsByKind('transcription')) actually provides.
   entries: Array<{ id: string; engine?: string; files: Array<{ name: string }> }>
 ): TranscriptionEngine {
   if (!active) return 'whisper'
@@ -164,7 +165,7 @@ export function getLocalTranscription(
   readSetting: TranscriptionSettingReader = getSetting
 ): TranscriptionService {
   const active = getActiveModal('transcription')
-  const engine = engineForActiveModel(active, modelsByKind('transcription'))
+  const engine = engineForActiveModel(active, catalogModelsByKind('transcription'))
   const language = resolveConfiguredTranscriptionLanguage(
     readSetting('sttLanguage', 'auto'),
     transcriptionLanguages(engine, active)
@@ -183,7 +184,7 @@ export function getTeamLaneTranscription(
 ): TranscriptionService | null {
   if (getActiveRemoteVisionServerForModality('transcription')) return null
   const active = getActiveModal('transcription')
-  const engine = engineForActiveModel(active, modelsByKind('transcription'))
+  const engine = engineForActiveModel(active, catalogModelsByKind('transcription'))
   if (engine !== 'whisper' || !lane.isAvailable()) return null
   const language = resolveConfiguredTranscriptionLanguage(
     readSetting('sttLanguage', 'auto'),
@@ -296,7 +297,7 @@ export function getActiveTranscriptionInfo(): ActiveTranscriptionInfo {
       })}`
     }
   const active = getActiveModal('transcription')
-  const entries = modelsByKind('transcription')
+  const entries = catalogModelsByKind('transcription')
   const engine = effectiveEngine(engineForActiveModel(active, entries))
   return transcriptionProvenance(engine, active, entries)
 }

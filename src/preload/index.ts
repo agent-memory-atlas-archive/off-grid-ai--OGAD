@@ -563,6 +563,7 @@ const offGridApi = {
 
   // Off Grid AI model catalog (text, vision, image, voice, transcription)
   getModelCatalog: () => ipcRenderer.invoke('models:catalog'),
+  checkForNewModels: () => ipcRenderer.invoke('models:check-for-new'),
   getInstalledModels: () => ipcRenderer.invoke('models:installed'),
   getModelVisionStatus: () => ipcRenderer.invoke('models:vision-status'),
   searchModels: (query: string, kind?: string) => ipcRenderer.invoke('models:search', query, kind),

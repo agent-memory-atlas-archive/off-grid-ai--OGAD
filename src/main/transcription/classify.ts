@@ -5,7 +5,7 @@
 // imports the CLIs), the CLIs importing them back would form a load-time cycle and
 // select's `const ALL = { whisper, ... }` would read a not-yet-initialized singleton
 // (a temporal-dead-zone crash on boot). Keeping them here breaks that cycle.
-import { modelsByKind } from '@offgrid/models'
+import { catalogModelsByKind } from '../models/remote-catalog'
 
 /**
  * The catalog `engine` field for a transcription model. Only Parakeet models carry an
@@ -30,12 +30,12 @@ export function catalogEngine(
 /**
  * The transcription catalog entries for one engine. The one place the catalog is
  * partitioned by engine - whisper-cli (its whisper/Parakeet guard) and parakeet-cli
- * (its Parakeet-only filter) both call this instead of re-filtering `modelsByKind`.
+ * (its Parakeet-only filter) both call this instead of re-filtering `catalogModelsByKind`.
  * Pure over the passed entries; the no-arg default reads the live catalog for callers.
  */
 export function modelsByEngine(
   engine: CatalogTranscriptionEngine,
-  entries: readonly TranscriptionEntry[] = modelsByKind('transcription')
+  entries: readonly TranscriptionEntry[] = catalogModelsByKind('transcription')
 ): TranscriptionEntry[] {
   return entries.filter((e) => catalogEngine(e) === engine)
 }
