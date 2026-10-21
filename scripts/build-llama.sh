@@ -11,16 +11,16 @@ set -euo pipefail
 # official llama.cpp release binaries are now minos 26. The only reliable fix is
 # to build it ourselves with the target pinned. Run in CI before packaging.
 #
-#   LLAMA_REF=<tag> MACOS_DEPLOYMENT_TARGET=13.0 scripts/build-llama.sh   (override; default is package.json offgrid.llamaRef)
+#   LLAMA_REF=<tag> MACOS_DEPLOYMENT_TARGET=13.0 scripts/build-llama.sh   (override; default is resources/engine-pins.json llama.ref)
 
-# ONE owner for the version: package.json, where every other version in this repo already lives. It was
-# hardcoded here AND in fetch-win-binaries.ps1 AND passed again by two callers - one fact with four homes.
-# The standard macOS source build and Windows binary fetch share one llama.cpp pin.
-# Bonsai 2 needs an additional PrismML fork, pinned separately below.
-LLAMA_REF="${LLAMA_REF:-$(node -p "require('$(cd "$(dirname "$0")/.." && pwd)/package.json').offgrid.llamaRef")}"
+# ONE owner for every engine version: resources/engine-pins.json, shared with the Windows and Linux
+# fetch scripts and rewritten by scripts/update-engine-pins.mjs.
+# Bonsai 2 needs an additional PrismML fork, pinned separately.
+PINS="$(cd "$(dirname "$0")/.." && pwd)/resources/engine-pins.json"
+LLAMA_REF="${LLAMA_REF:-$(node -p "require('$PINS').llama.ref")}"
 LLAMA_VARIANT="${LLAMA_VARIANT:-standard}"
 if [ "$LLAMA_VARIANT" = prism ]; then
-  LLAMA_REF="${PRISM_LLAMA_REF:-$(node -p "require('$(cd "$(dirname "$0")/.." && pwd)/package.json').offgrid.prismLlamaRef")}"
+  LLAMA_REF="${PRISM_LLAMA_REF:-$(node -p "require('$PINS').prism.ref")}"
   LLAMA_REPO=https://github.com/PrismML-Eng/llama.cpp
   LLAMA_DIR=llama-prism
 elif [ "$LLAMA_VARIANT" = standard ]; then

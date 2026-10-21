@@ -4,18 +4,18 @@
 from pathlib import Path
 from zipfile import ZipFile
 import hashlib
+import json
 import shutil
 import sys
 
 ORT_ARCHIVE_SHA256 = "d4667ea48eb0a10bc9b96b838f7b8975a6bf18de3bc5edd403a22e15c1458b23"
 BINDING_SHA256 = "c658fdb8db34f3dda9c9a19db996858ac127db94999c10be777b93694c275515"
 ORT_PREFIX = "onnxruntime-win-x64-gpu_cuda12-1.30.0/"
+# NVIDIA wheel versions and hashes live in resources/engine-pins.json (nvidia.win).
+PINS = json.loads((Path(__file__).resolve().parent.parent / "resources" / "engine-pins.json").read_text())
 WHEELS = {
-    "nvidia_cublas_cu12-12.8.5.5-py3-none-win_amd64.whl": "1e272895b82946b4db6f592d9080291fb60f78c9fe253a5c71ba5ebb74864c3e",
-    "nvidia_cuda_nvrtc_cu12-12.8.93-py3-none-win_amd64.whl": "7a4b6b2904850fe78e0bd179c4b655c404d4bb799ef03ddc60804247099ae909",
-    "nvidia_cuda_runtime_cu12-12.8.90-py3-none-win_amd64.whl": "c0c6027f01505bfed6c3b21ec546f69c687689aad5f1a377554bc6ca4aa993a8",
-    "nvidia_cudnn_cu12-9.19.0.56-py3-none-win_amd64.whl": "cec70596b9ce878fab83810c3f5a2e606d35f510e5fee579759e4cbc68a23750",
-    "nvidia_cufft_cu12-11.3.3.83-py3-none-win_amd64.whl": "7a64a98ef2a7c47f905aaf8931b69a3a43f27c55530c698bb2ed7c75c0b42cb7",
+    f"{name.replace('-', '_')}-{pin['version']}-py3-none-win_amd64.whl": pin["sha256"]
+    for name, pin in PINS["nvidia"]["win"].items()
 }
 ORT_DLLS = (
     "onnxruntime.dll",

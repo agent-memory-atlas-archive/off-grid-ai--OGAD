@@ -4,10 +4,10 @@
 # Upstream's macOS release zip is arm64-only and needs macOS 26, so the app builds its own.
 #   scripts/build-sd-macos.sh [tag] [work-dir]
 set -euo pipefail
-TAG="${1:-master-968-8cd731e}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TAG="${1:-$(node -p "require('$ROOT/resources/engine-pins.json').sd.ref")}"
 TARGET="${MACOS_DEPLOYMENT_TARGET:-13.0}"
 WORK="${2:-${TMPDIR:-/tmp}/offgrid-sd-build}"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${OFFGRID_SD_OUT:-$ROOT/resources/bin/sd}"
 
 rm -rf "$WORK/src" "$WORK/build"

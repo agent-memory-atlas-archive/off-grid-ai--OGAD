@@ -21,7 +21,7 @@
 # Most runtimes are resolved DYNAMICALLY from each project's latest GitHub
 # release so the script does not go stale. llama.cpp is the EXCEPTION: it is
 # pinned to the same ref the macOS engine is built from (scripts/build-llama.sh,
-# package.json offgrid.llamaRef) so grammar / native tool-call handling is byte-for-byte
+# resources/engine-pins.json llama.ref) so grammar / native tool-call handling is byte-for-byte
 # identical across platforms. 'latest' floats, and upstream builds have shipped
 # that reject the tool-call GBNF the app generates from MCP tool schemas.
 # Set OFFGRID_GH_TOKEN (or GITHUB_TOKEN) to avoid the unauthenticated API rate
@@ -49,7 +49,7 @@ if ($token) { $ghHeaders['Authorization'] = "Bearer $token" }
 
 # Find the download URL of a release asset whose name matches $pattern. With no
 # $tag it uses the project's LATEST release; with $tag it pins to that exact
-# release (package.json offgrid.llamaRef, to match the macOS source build).
+# release (resources/engine-pins.json llama.ref, to match the macOS source build).
 function Get-AssetUrl($repo, $pattern, $tag) {
   $uri = if ($tag) { "https://api.github.com/repos/$repo/releases/tags/$tag" }
          else      { "https://api.github.com/repos/$repo/releases/latest" }
@@ -96,16 +96,17 @@ function Copy-Runtime($srcDir, $destName) {
 #   bin/llama-cpu  <- CPU-only build, the app's FALLBACK (llm.ts) for the rare
 #                     box with no Vulkan loader at all, where the Vulkan .exe
 #                     can't even load.
-# The version has ONE owner: package.json's offgrid.llamaRef, shared with build-llama.sh. Hardcoding it in
-# both is how the macOS build and the Windows binaries drift apart within a single release.
-$PackageJson = Join-Path (Split-Path $PSScriptRoot -Parent) 'package.json'
-$DefaultLlamaRef = (Get-Content $PackageJson -Raw | ConvertFrom-Json).offgrid.llamaRef
+# Every engine version and hash has ONE owner: resources/engine-pins.json, shared with build-llama.sh
+# and the Linux scripts, and rewritten by scripts/update-engine-pins.mjs. Hardcoding a version in two
+# places is how the macOS build and the Windows binaries drift apart within a single release.
+$Pins = Get-Content (Join-Path (Split-Path $PSScriptRoot -Parent) 'resources/engine-pins.json') -Raw | ConvertFrom-Json
+$DefaultLlamaRef = $Pins.llama.ref
 $LlamaRef = if ($env:LLAMA_REF) { $env:LLAMA_REF } else { $DefaultLlamaRef }
 $LlamaHashes = @{
-  cuda = 'c2da1f73ed176ae093ac5aceb978a7b167a16113f6d74c6789eeaee2135cb8dc'
-  cudart = '8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6'
-  vulkan = '2c07574e7bde71321cb785282b20cc821e951132149eeceeea32ddebdbf0598e'
-  cpu = '37b3efcf962847ca869745fd4ccf7f5e7e8dacfeff9fa3523b4ca8cdc66d632b'
+  cuda = $Pins.llama.sha256.'win-cuda'
+  cudart = $Pins.llama.sha256.'win-cudart'
+  vulkan = $Pins.llama.sha256.'win-vulkan'
+  cpu = $Pins.llama.sha256.'win-cpu'
 }
 if ($LlamaRef -ne $DefaultLlamaRef) {
   $overrideHashes = @{
@@ -136,26 +137,26 @@ Copy-Runtime $x 'llama-cpu' | Out-Null
 # Bonsai 2 uses packed ternary weights that require PrismML's llama.cpp fork.
 # Try CUDA on NVIDIA, Vulkan on other GPUs, then CPU.
 # Keep these DLLs separate from the standard llama.cpp DLLs.
-$PrismLlamaRef = (Get-Content $PackageJson -Raw | ConvertFrom-Json).offgrid.prismLlamaRef
+$PrismLlamaRef = $Pins.prism.ref
 Write-Host "== Prism llama.cpp (pinned $PrismLlamaRef): CUDA + Vulkan + CPU =="
 if ($IncludeCuda) {
-  $x = Expand-Asset 'PrismML-Eng/llama.cpp' '^llama-.+-bin-win-cuda-12\.4-x64\.zip$' $PrismLlamaRef 'fa5874a1412e251a6efb13f289e97bacbbb4e7fc6714c1836b4fc6c1dc863462'
+  $x = Expand-Asset 'PrismML-Eng/llama.cpp' '^llama-.+-bin-win-cuda-12\.4-x64\.zip$' $PrismLlamaRef $Pins.prism.sha256.'win-cuda'
   Copy-Runtime $x 'llama-prism-cuda' | Out-Null
 }
-$x = Expand-Asset 'PrismML-Eng/llama.cpp' 'bin-win-vulkan-x64\.zip$' $PrismLlamaRef '6bf30d60dd35ae1129ae221593d79bed053c775c6ce8554f75cfe171f3028f10'
+$x = Expand-Asset 'PrismML-Eng/llama.cpp' 'bin-win-vulkan-x64\.zip$' $PrismLlamaRef $Pins.prism.sha256.'win-vulkan'
 Copy-Runtime $x 'llama-prism' | Out-Null
-$x = Expand-Asset 'PrismML-Eng/llama.cpp' 'bin-win-cpu-x64\.zip$' $PrismLlamaRef 'cff7eeff19163e6263720618cf98023715b8dac14d0873f5be0918765de323c4'
+$x = Expand-Asset 'PrismML-Eng/llama.cpp' 'bin-win-cpu-x64\.zip$' $PrismLlamaRef $Pins.prism.sha256.'win-cpu'
 Copy-Runtime $x 'llama-prism-cpu' | Out-Null
 
 # --- whisper.cpp (whisper-cli.exe + DLLs): CUDA GPU + CPU fallback -----------
 # The newest semantic release can have no binary assets. Pin the current build
 # release so Windows voice cannot disappear because GitHub's "latest" moved.
-$WhisperRef = 'b5454'
+$WhisperRef = $Pins.whisper.winRef
 Write-Host "== whisper.cpp (pinned $WhisperRef): CUDA 12.4 + CPU =="
 if ($IncludeCuda) {
   # The CUDA 11.8 build needs cublas64_11.dll, while the performance pack
   # provides CUDA 12.4. Keep Whisper's CUDA major version aligned with the pack.
-  $x = Expand-Asset 'ggml-org/whisper.cpp' '^whisper-bin-win-cuda-12\.4\.0-x64\.zip$' $WhisperRef 'afef0b881c500958921c3f5523b50e59ee2ec9b6f5cbd25b324c51ed308a957a'
+  $x = Expand-Asset 'ggml-org/whisper.cpp' '^whisper-bin-win-cuda-12\.4\.0-x64\.zip$' $WhisperRef $Pins.whisper.sha256.'win-cuda'
   $dest = Copy-Runtime $x 'whisper'
   # Older releases ship the CLI as main.exe; the app expects whisper-cli.exe.
   $wc = Join-Path $dest 'whisper-cli.exe'
@@ -164,7 +165,7 @@ if ($IncludeCuda) {
 }
 
 try {
-  $x = Expand-Asset 'ggml-org/whisper.cpp' '^whisper-bin-x64\.zip$' $WhisperRef '6ba69e3482d7826214f90a6a9c84ca07782aec1e1d0c6a7c30c994fd5d816ccb'
+  $x = Expand-Asset 'ggml-org/whisper.cpp' '^whisper-bin-x64\.zip$' $WhisperRef $Pins.whisper.sha256.'win-cpu'
   $dest = Copy-Runtime $x 'whisper-cpu'
   $wc = Join-Path $dest 'whisper-cli.exe'
   $mn = Join-Path $dest 'main.exe'
@@ -177,11 +178,11 @@ try {
 # three CUDA DLLs and previously made the installer too large to build.
 # Keep this release pinned: Qwen-Image 2.1 needs the current runtime and a moving
 # latest release can change the packaged DLL contract without review.
-$SdRef = 'master-968-8cd731e'
+$SdRef = $Pins.sd.ref
 Write-Host "== stable-diffusion.cpp (pinned $SdRef): CUDA + Vulkan + CPU =="
 if ($IncludeCuda) {
   try {
-    $x = Expand-Asset 'leejet/stable-diffusion.cpp' 'bin-win-cuda12-x64\.zip$' $SdRef '8b6f311f22b56db02f545a674f7549a0da283f7134d5fd01c42014b81ab78af0'
+    $x = Expand-Asset 'leejet/stable-diffusion.cpp' 'bin-win-cuda12-x64\.zip$' $SdRef $Pins.sd.sha256.'win-cuda'
     $dest = Copy-Runtime $x 'sd-cuda'
     $cli = Join-Path $dest 'sd-cli.exe'
     $sd = Join-Path $dest 'sd.exe'
@@ -190,7 +191,7 @@ if ($IncludeCuda) {
 }
 
 try {
-  $x = Expand-Asset 'leejet/stable-diffusion.cpp' 'bin-win-vulkan-x64\.zip$' $SdRef '060767935e2543c27e0fcd5a024f62d978970c221c60658da87c768c27a841fa'
+  $x = Expand-Asset 'leejet/stable-diffusion.cpp' 'bin-win-vulkan-x64\.zip$' $SdRef $Pins.sd.sha256.'win-vulkan'
   $dest = Copy-Runtime $x 'sd'
   # Older releases named the one-shot binary sd.exe; normalize the app contract.
   $cli = Join-Path $dest 'sd-cli.exe'
@@ -199,7 +200,7 @@ try {
 } catch { Write-Warning "stable-diffusion.cpp Vulkan fetch failed: $_" }
 
 try {
-  $x = Expand-Asset 'leejet/stable-diffusion.cpp' 'bin-win-cpu-x64\.zip$' $SdRef '3289065032e298d751964ced2fb444c6e11f58793ba14c76f1f6a1d5b5ffff9c'
+  $x = Expand-Asset 'leejet/stable-diffusion.cpp' 'bin-win-cpu-x64\.zip$' $SdRef $Pins.sd.sha256.'win-cpu'
   $dest = Copy-Runtime $x 'sd-cpu'
   $cli = Join-Path $dest 'sd-cli.exe'
   $sd = Join-Path $dest 'sd.exe'
