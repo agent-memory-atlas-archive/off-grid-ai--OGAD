@@ -261,3 +261,49 @@ describe('ModalityQueue', () => {
     expect(captureStarted).toBe(true) // ...and runs once chat frees the slot
   })
 })
+
+describe('ModalityQueue — remote engines', () => {
+  const CHAT = { tier: 2 as const, label: 'chat', uses: { id: 'llm' }, evicts: ['image'] }
+
+  it('runs chats on a remote engine side by side instead of one after another', async () => {
+    const q = new ModalityQueue()
+    q.setRemoteEngine('llm', () => true)
+    let running = 0
+    let peak = 0
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const chat = (): Promise<void> =>
+      q.run(CHAT, async () => {
+        running++
+        peak = Math.max(peak, running)
+        await gate
+        running--
+      })
+    const both = Promise.all([chat(), chat()])
+    await Promise.resolve()
+    expect(peak).toBe(2)
+    release()
+    await both
+  })
+
+  it('serializes the same chats again once the engine is local', async () => {
+    const q = new ModalityQueue()
+    q.setRemoteEngine('llm', () => false)
+    let running = 0
+    let peak = 0
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const chat = (): Promise<void> =>
+      q.run(CHAT, async () => {
+        running++
+        peak = Math.max(peak, running)
+        await gate
+        running--
+      })
+    const both = Promise.all([chat(), chat()])
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(peak).toBe(1)
+    release()
+    await both
+  })
+})
