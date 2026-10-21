@@ -4,9 +4,9 @@
  * The reason, in plain words. `finishReason` is the provider's stop reason; `maxTokens` the output
  * allowance the turn had.
  */
-export function emptyAnswerReason(finishReason: string | null, maxTokens: number): string {
+export function emptyAnswerReason(finishReason: string | null, maxTokens?: number): string {
   if (finishReason === 'length') {
-    return `The model used its whole output allowance (${maxTokens} tokens) before it answered, most likely on reasoning. Raise Context size or Max output in Settings > Text, or ask again.`
+    return `The model used its whole output allowance${maxTokens === undefined ? '' : ` (${maxTokens} tokens)`} before it answered, most likely on reasoning. Raise Context size or Max output in Settings > Text, or ask again.`
   }
   if (finishReason === 'content_filter') {
     return 'The model provider blocked this answer. Ask another way, or try another model.'

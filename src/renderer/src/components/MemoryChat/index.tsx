@@ -30,7 +30,6 @@ import { parseSqliteUtc, shiftLocalDay, startOfLocalDay } from '@renderer/lib/ti
 import { writeClipboardWithFallback } from '@renderer/lib/clipboard-write'
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
-import { isAgenticTurn } from '@renderer/lib/agentic-active'
 import { appendTimelineEvent, applyStreamEvent } from '@renderer/lib/stream-reducer'
 import { useActiveModelSummary } from '@renderer/hooks/useActiveModelSummary'
 import { shouldFollowBottom } from '@renderer/lib/scroll-follow'
@@ -98,7 +97,9 @@ import {
   readVoicePreferences,
   type VoicePreferences
 } from '@renderer/lib/voice-preferences'
-import { shouldAutoRouteImage, cleanImagePrompt } from '@renderer/lib/image-intent'
+import { cleanImagePrompt } from '@renderer/lib/image-intent'
+import { ArtifactReadyCards, type ReadyArtifact } from './components/ArtifactReadyCards'
+import { primaryModifier } from '@renderer/lib/device'
 import { buildAssistantContext, type AssistantTimelineEntry } from '../../lib/message-persistence'
 import type { GenerationMetrics } from '../../../../shared/generation-metrics'
 import { withGeneratedImageReference } from '../../../../shared/generated-image-reference'
@@ -894,11 +895,26 @@ export function MemoryChat({
   // The canvas / text viewer / gallery belong to a specific message, so they must
   // not bleed across chats — close them whenever the active conversation changes
   // (switch tab, new chat, close-to-fallback, open-from-projects, delete).
+  // An artifact asked for in another chat (a "Ready" card): it opens once that chat is active
+  // instead of being closed with the chat it came from.
+  const pendingCanvasOpen = useRef<{
+    conversationId: string
+    artifact: Artifact
+    messageId: string
+  } | null>(null)
   useEffect(() => {
     console.log('MemoryChat effect: close conversation-scoped overlays')
-    setCanvasArtifact(null)
+    const pending = pendingCanvasOpen.current
     setViewer(null)
     setShowGallery(false)
+    if (pending && pending.conversationId === activeConversationId) {
+      pendingCanvasOpen.current = null
+      setCanvasFromGallery(false)
+      setCanvasArtifact(pending.artifact)
+      setCanvasMessageId(pending.messageId)
+      return
+    }
+    setCanvasArtifact(null)
   }, [activeConversationId])
   const [gallery, setGallery] = useState<{ path: string; name: string; mtime: number }[]>([])
   const [galleryTab, setGalleryTab] = useState<'images' | 'artifacts'>('images')
@@ -1561,6 +1577,17 @@ export function MemoryChat({
     setApprovalSetup(null)
   }, [setConvMessages])
 
+  // ⌘T on macOS, Ctrl+T on Windows and Linux: a new chat, like a new browser tab.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 't') return
+      e.preventDefault()
+      startNewConversation()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [startNewConversation])
+
   const deleteConversation = useCallback(
     async (convId: string) => {
       try {
@@ -2010,23 +2037,12 @@ export function MemoryChat({
         }
       }
 
-      // Image-generation mode: render a prompt → image instead of a memory answer.
-      // Also auto-route when the user clearly asks for an image in chat ("draw a
-      // dog") so they get a picture instead of the text model refusing. The auto-
-      // route is SUPPRESSED when the agentic tools/connectors path owns the turn:
-      // there, image generation is a tool the model calls, so the renderer must not
-      // pre-decide (that double decision hijacked "draw ..." away from the tool loop).
-      // All memory adds search_memory to the normal tool catalog. Assistant and
-      // Connectors keep their own opt-in state.
+      // Image-generation mode: render a prompt → image instead of a memory answer. Otherwise the
+      // renderer does not decide: every turn goes to the model through toolChat, where MiniLM
+      // offers generate_image when the request is for a picture. A word rule here sent "Create a
+      // 3D starfield in a single HTML file… Render hundreds of stars" to the image model first.
       if (cancelledRef.current.has(convId)) return
-      const explicitAgentic = isAgenticTurn({ toolsOn: assistantForTurn, connectorsOn })
-      const autoImage = shouldAutoRouteImage({
-        mode: turnMode,
-        imageAvailable,
-        agenticActive: explicitAgentic,
-        text: trimmed
-      })
-      if (opts?.imageRequest || turnMode === 'image' || autoImage) {
+      if (opts?.imageRequest || turnMode === 'image') {
         if (regen && opts?.history) setConvMessages(convId, opts.history)
         setShowImageOptions(false)
         setImgProgress(null)
@@ -3330,6 +3346,56 @@ export function MemoryChat({
     [closePanels]
   )
 
+  // A card when a chat finishes an artifact, in this tab or another one. A conversation is watched
+  // from the moment its reply streams; when the reply settles with a finished artifact, the card
+  // appears, and a click opens that chat and its artifact.
+  const [readyArtifacts, setReadyArtifacts] = useState<ReadyArtifact[]>([])
+  const replyingConversations = useRef(new Set<string>())
+  useEffect(() => {
+    for (const [conversationId, list] of Object.entries(messagesByConv)) {
+      if (conversationId === NEW_CHAT) continue
+      const last = list[list.length - 1]
+      if (last?.role !== 'assistant') continue
+      if (last.streaming) {
+        replyingConversations.current.add(conversationId)
+        continue
+      }
+      if (!replyingConversations.current.delete(conversationId)) continue
+      const artifact = parseArtifact(last.content)
+      if (!artifact || artifact.partial) continue
+      setReadyArtifacts((cards) => [
+        ...cards,
+        {
+          id: `${conversationId}:${last.id}`,
+          conversationId,
+          messageId: last.id,
+          artifact,
+          chatTitle: conversations.find((c) => c.id === conversationId)?.title ?? undefined
+        }
+      ])
+    }
+  }, [messagesByConv, conversations])
+  const dismissReadyArtifact = useCallback((id: string) => {
+    setReadyArtifacts((cards) => cards.filter((card) => card.id !== id))
+  }, [])
+  const openReadyArtifact = useCallback(
+    async (ready: ReadyArtifact) => {
+      dismissReadyArtifact(ready.id)
+      if (ready.conversationId === activeConversationId) {
+        openCanvas(ready.artifact)
+        setCanvasMessageId(ready.messageId)
+        return
+      }
+      pendingCanvasOpen.current = {
+        conversationId: ready.conversationId,
+        artifact: ready.artifact,
+        messageId: ready.messageId
+      }
+      await switchConversation(ready.conversationId)
+    },
+    [activeConversationId, dismissReadyArtifact, openCanvas, switchConversation]
+  )
+
   // A canvas opened from a message follows it: while the answer streams, the artifact is re-read
   // from its content at most twice a second, so the page renders as it is written; when the
   // answer settles, the canvas shows its final artifact. A streaming reply's text lives in the
@@ -4333,7 +4399,7 @@ export function MemoryChat({
                       <button
                         onClick={startNewConversation}
                         className="shrink-0 rounded-md px-2 py-1 text-neutral-500 transition-colors hover:text-green-500"
-                        title="New tab"
+                        title={`New tab (${primaryModifier()}+T)`}
                       >
                         +
                       </button>
@@ -5601,6 +5667,12 @@ export function MemoryChat({
             </Panel>
           ) : null}
         </PanelGroup>
+
+        <ArtifactReadyCards
+          items={readyArtifacts}
+          onOpen={(ready) => void openReadyArtifact(ready)}
+          onDismiss={dismissReadyArtifact}
+        />
 
         <AnimatePresence>
           {/* Canvas — sandboxed render of a model-generated artifact */}

@@ -487,7 +487,7 @@ class VisionHost {
         async ({ adapter: modelAdapter, identity: modelIdentity, decide }) => {
           const contextTokens = resolveComputerUseContextTokens(
             settings.context,
-            llm.effectiveContextSize()
+            await llm.contextWindow()
           )
           const retrievedFacts = [
             ...(defaultBrowser

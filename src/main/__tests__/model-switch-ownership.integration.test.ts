@@ -228,10 +228,10 @@ describe('gateway model choice', () => {
         id: other.id,
         active: true,
         capabilities: ['tools', 'reasoning'],
-        context_length: llm.effectiveContextSize()
+        context_length: llm.engineContextWindow()
       })
       const savedEntry = listed.data.find((entry) => entry.id === saved.id)
-      expect(savedEntry).toMatchObject({ context_length: llm.effectiveContextSize() })
+      expect(savedEntry).toMatchObject({ context_length: llm.engineContextWindow() })
       expect(savedEntry).not.toHaveProperty('capabilities')
       expect(savedEntry).not.toHaveProperty('active')
     } finally {

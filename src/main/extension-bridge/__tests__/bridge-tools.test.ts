@@ -217,11 +217,11 @@ describe('bridge origin with the real tool registry', () => {
         const { name, description, parameters } = tool as Record<string, unknown>
         return { type: 'function', function: { name, description, parameters } }
       })
-    const context = vi.spyOn(llm, 'effectiveContextSize').mockReturnValue(32768)
+    const context = vi.spyOn(llm, 'contextWindow').mockResolvedValue(32768)
     try {
       const normal = await listBridgeTools(task)
       expect(normal.length).toBeGreaterThan(0)
-      context.mockReturnValue(2048)
+      context.mockResolvedValue(2048)
       const budgeted = await listBridgeTools(task)
       expect(budgeted.length).toBeGreaterThan(0)
       expect(budgeted.length).toBeLessThanOrEqual(normal.length)
@@ -261,7 +261,7 @@ describe('bridge origin with the real tool registry', () => {
       isReadOnlyTool: (name: string) => schemas.some((schema) => schema.function.name === name),
       execute: () => 'Found'
     }
-    const context = vi.spyOn(llm, 'effectiveContextSize').mockReturnValue(2048)
+    const context = vi.spyOn(llm, 'contextWindow').mockResolvedValue(2048)
     registerToolExtension(connector)
     try {
       const task = schemas.map((schema) => schema.function.name).join(' ')
@@ -377,22 +377,28 @@ describe('bridge origin with the real tool registry', () => {
     }
   )
 
-  it.each(['bridge', 'desktop'] as const)(
-    'keeps the acting tools required only in agent mode for %s',
-    async (origin) => {
-      const selected = await selectChatTools('zxqvplmn', {
-        origin,
-        assistantOnly: true,
-        allTools: true
-      })
-      const offered = selected.tools.map(
-        (schema) => (schema as { function: { name: string } }).function.name
-      )
-      expect(offered).toContain('web_use')
-      expect(offered.includes('computer_use')).toBe(origin === 'desktop')
-      expect(selected.protectedToolCount).toBe(origin === 'desktop' ? 2 : 1)
-    }
-  )
+  it('keeps web_use required in the extension agent mode', async () => {
+    const selected = await selectChatTools('zxqvplmn', {
+      origin: 'bridge',
+      assistantOnly: true,
+      allTools: true
+    })
+    const offered = selected.tools.map(
+      (schema) => (schema as { function: { name: string } }).function.name
+    )
+    expect(offered).toContain('web_use')
+    expect(offered).not.toContain('computer_use')
+    expect(selected.protectedToolCount).toBe(1)
+  })
+
+  it('requires no acting tool in desktop agent mode: routing offers them per request', async () => {
+    const selected = await selectChatTools('zxqvplmn', {
+      origin: 'desktop',
+      assistantOnly: true,
+      allTools: true
+    })
+    expect(selected.protectedToolCount).toBe(0)
+  })
 
   it('keeps computer control available to desktop plain chat', async () => {
     const selected = await selectChatTools('computer_use', { origin: 'desktop', allTools: true })

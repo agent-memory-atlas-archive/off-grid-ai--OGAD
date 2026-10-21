@@ -2,12 +2,14 @@
 """Replace a source pack's Whisper engine with the pinned CUDA 12.4 build."""
 
 import hashlib
+import json
 import pathlib
 import shutil
 import sys
 import zipfile
 
-EXPECTED_SHA256 = "afef0b881c500958921c3f5523b50e59ee2ec9b6f5cbd25b324c51ed308a957a"
+PINS = json.loads((pathlib.Path(__file__).resolve().parent.parent / "resources" / "engine-pins.json").read_text())
+EXPECTED_SHA256 = PINS["whisper"]["sha256"]["win-cuda"]
 REQUIRED = {
     "whisper-cli.exe",
     "ggml-cuda.dll",

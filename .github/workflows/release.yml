@@ -132,12 +132,16 @@ jobs:
             # binaries below. Fetching everything (~200 MB) blew the org's monthly LFS
             # bandwidth budget and failed the release checkout ("exceeded its LFS budget").
       - name: Pull shipped LFS binaries
-        run: git lfs pull --exclude="resources/bin/llama,resources/bin/llama-prism,resources/bin/whisper,resources/bin/kev-runtime"
+        run: git lfs pull --exclude="resources/bin/llama,resources/bin/llama-prism,resources/bin/whisper,resources/bin/kev-runtime,resources/bin/sd"
+      # The archive is built by build-native-engines.yml; its name and hash live in resources/engine-pins.json.
       - name: Stage pinned macOS native engines
         run: |
+          release=$(node -p "require('./resources/engine-pins.json').archives.release")
+          name=$(node -p "require('./resources/engine-pins.json').archives['mac-native'].name")
+          sha=$(node -p "require('./resources/engine-pins.json').archives['mac-native'].sha256")
           curl -fL --retry 3 -o "$RUNNER_TEMP/mac-native.tar.gz" \
-            'https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/ogad-mac-native-2026-10-v2.tar.gz'
-          echo '50f13dc0b6318eb0c036ccd9ebe0f21d931912992bf828f1cd56de4113e9e48c  '"$RUNNER_TEMP/mac-native.tar.gz" | shasum -a 256 -c -
+            "https://github.com/off-grid-ai/OGAD/releases/download/$release/$name"
+          echo "$sha  $RUNNER_TEMP/mac-native.tar.gz" | shasum -a 256 -c -
           tar -xzf "$RUNNER_TEMP/mac-native.tar.gz" -C resources/bin
       - name: Verify cached macOS engines
         run: |
@@ -151,6 +155,9 @@ jobs:
           test -x resources/bin/whisper/whisper-cli
           otool -l resources/bin/whisper/whisper-cli | grep -q LC_BUILD_VERSION
           DYLD_LIBRARY_PATH=resources/bin/whisper resources/bin/whisper/whisper-cli --help >/dev/null
+          test -x resources/bin/sd/sd-cli
+          test -x resources/bin/sd/sd-server
+          DYLD_LIBRARY_PATH=resources/bin/sd resources/bin/sd/sd-cli --version
       # Compile the native meeting recorder (ScreenCaptureKit + AVFoundation) and stage
       # it into resources/bin so extraResources bundles it at Contents/Resources/bin —
       # the first path recorderBin() resolves in the packaged app (pro meeting-native.ts).
@@ -909,9 +916,13 @@ jobs:
           mv _executorch_speech ../executorch-speech
       - name: Stage pinned Linux native engines
         run: |
+          # Built by build-native-engines.yml; name and hash live in resources/engine-pins.json.
+          release=$(node -p "require('./resources/engine-pins.json').archives.release")
+          name=$(node -p "require('./resources/engine-pins.json').archives['linux-native'].name")
+          sha=$(node -p "require('./resources/engine-pins.json').archives['linux-native'].sha256")
           curl -fL --retry 3 -o "$RUNNER_TEMP/linux-native.tar.gz" \
-            'https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/ogad-linux-native-2026-10-x64-v1.tar.gz'
-          echo 'd043e3d12c68a07a6059a3e62e1283ea2cb2a23bf4a448d742149ad45586a6cf  '"$RUNNER_TEMP/linux-native.tar.gz" | sha256sum -c -
+            "https://github.com/off-grid-ai/OGAD/releases/download/$release/$name"
+          echo "$sha  $RUNNER_TEMP/linux-native.tar.gz" | sha256sum -c -
           mkdir -p build/linux-bin
           tar -xzf "$RUNNER_TEMP/linux-native.tar.gz" -C build/linux-bin
           git lfs pull --include="resources/bin/kev-local-server.py" --exclude=""

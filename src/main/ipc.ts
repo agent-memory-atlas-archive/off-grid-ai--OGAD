@@ -1598,6 +1598,15 @@ export function setupIPC(): void {
   // the headless gateway HTTP admin endpoints). These IPC handlers are thin
   // wrappers; the download one adds a renderer progress broadcast.
   ipcMain.handle('models:catalog', () => import('./models-manager').then((m) => m.getCatalog()))
+  // Models published in OGAD's catalog/models.json, fetched only when someone checks for them.
+  const catalogChanged = (): void =>
+    BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('models:inventory-changed'))
+  void import('./models/remote-catalog').then((m) =>
+    m.initRemoteModelCatalog(app.getPath('userData'), catalogChanged)
+  )
+  ipcMain.handle('models:check-for-new', () =>
+    import('./models/remote-catalog').then((m) => m.checkForNewModels())
+  )
   ipcMain.handle('models:vision-status', () =>
     import('./models-manager').then((m) => m.getVisionStatuses())
   )
@@ -2202,16 +2211,17 @@ export function setupIPC(): void {
   )
 
   // --- LLM inference settings (temperature, context window) ---------------
+  // Settings carry the active model's context window, the same fact chat budgets read.
   ipcMain.handle('llm:get-settings', async () => {
     const { llm } = await import('./llm')
-    return llm.getSettings()
+    return { ...llm.getSettings(), contextWindow: await llm.contextWindowReport() }
   })
   ipcMain.handle('llm:set-settings', async (_e, s: import('./llm').LlmSettings) => {
     const { llm } = await import('./llm')
     const { isSpeedSettingsPatch } = await import('../shared/best-settings')
     if (isSpeedSettingsPatch(s)) (await import('./best-settings')).markSpeedSettingsManual()
     await llm.setSettings(s)
-    return llm.getSettings()
+    return { ...llm.getSettings(), contextWindow: await llm.contextWindowReport() }
   })
   ipcMain.handle('vision:remote-server:get', async () => {
     const { getRemoteVisionServerSettings } = await import('./vision/remote-vision-server')

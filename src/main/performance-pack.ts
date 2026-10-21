@@ -123,12 +123,7 @@ async function digest(file: string): Promise<string> {
   return hash.digest('hex')
 }
 
-async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Promise<void> {
-  const root = packRoot(asset)
-  const parent = path.dirname(root)
-  fs.mkdirSync(parent, { recursive: true })
-  const archive = `${root}.tar.gz.part`
-  const existing = fs.existsSync(archive) ? fs.statSync(archive).size : 0
+async function downloadArchive(asset: PerformancePackAsset, archive: string, existing: number, signal: AbortSignal): Promise<void> {
   const response = await fetch(asset.url, {
     signal,
     headers: existing > 0 ? { Range: `bytes=${existing}-` } : undefined
@@ -170,15 +165,33 @@ async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Prom
     stream.destroy()
     throw error
   }
+}
+
+async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Promise<void> {
+  const root = packRoot(asset)
+  const parent = path.dirname(root)
+  fs.mkdirSync(parent, { recursive: true })
+  const archive = `${root}.tar.gz.part`
+  const existing = fs.existsSync(archive) ? fs.statSync(archive).size : 0
+  // A complete archive left by a failed unpack goes straight to the check; asking for more bytes gets HTTP 416.
+  if (existing === asset.bytes) downloadedBytes = existing
+  else await downloadArchive(asset, archive, existing, signal)
+  // Pause stops the check, the unpack and the install too, not only the download.
+  signal.throwIfAborted()
   if (downloadedBytes !== asset.bytes || (await digest(archive)) !== asset.sha256.toLowerCase()) {
     fs.rmSync(archive, { force: true })
     throw new Error('The downloaded performance files failed the size or hash check.')
   }
+  signal.throwIfAborted()
   const staging = `${root}.staging`
   fs.rmSync(staging, { recursive: true, force: true })
   fs.mkdirSync(staging, { recursive: true })
   try {
-    await execFileAsync('tar', ['-xzf', archive, '-C', staging], { timeout: 300_000 })
+    await execFileAsync('tar', ['--no-same-owner', '-xzf', archive, '-C', staging], {
+      timeout: 30 * 60_000,
+      maxBuffer: 16 * 1024 * 1024,
+      signal
+    })
     const bin = path.join(staging, 'bin')
     const server = path.join(bin, 'llama-cuda', process.platform === 'win32' ? 'llama-server.exe' : 'llama-server')
     if (!fs.statSync(bin).isDirectory() || !fs.statSync(server).isFile()) {
@@ -189,6 +202,7 @@ async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Prom
          !fs.existsSync(path.join(bin, 'onnx-cuda', 'libcudnn.so.9')))) {
       throw new Error('The performance pack is missing its CUDA speech libraries.')
     }
+    signal.throwIfAborted()
     fs.writeFileSync(path.join(staging, 'verified.sha256'), `${asset.sha256.toLowerCase()}\n`)
     fs.rmSync(root, { recursive: true, force: true })
     fs.renameSync(staging, root)

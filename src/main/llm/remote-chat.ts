@@ -15,7 +15,8 @@ export type { RemoteTextModelConnection } from './remote-chat-types'
 
 export interface RemoteChatRequest {
   messages: unknown[]
-  maxTokens: number
+  /** Left out when the server's window is unknown, so the server's own limit applies. */
+  maxTokens?: number
   temperature: number
   topP?: number
   topK?: number
@@ -112,6 +113,12 @@ export function remoteNativeToolCapability(
   return discovered
 }
 
+/** A model server on this machine reached through the remote seam: the local grounding specialist
+ *  (grounder-runtime.ts). It holds memory here, so it is not a remote model. */
+export function isLocalModelServer(remote: RemoteTextModelConnection): boolean {
+  return remote.id.startsWith('local-grounder:')
+}
+
 /** Read the server's model/template facts, never its display name. Failed probes are retried. */
 export async function remoteReasoningCapability(
   remote: RemoteTextModelConnection
@@ -155,6 +162,10 @@ export async function remoteReasoningCapability(
       const body = (await response.json()) as { chat_template?: string }
       return { control: detectThinkingDialect(body.chat_template), tokenBudget: true }
     }
+    // A server error is not an answer. An Off Grid gateway answers 502 until its model loads;
+    // caching that as 'none' dropped the thinking switch for the whole session. Ask again later.
+    if (response.status >= 500)
+      throw new Error(`reasoning metadata unavailable: ${response.status}`)
     // LM Studio accepts this per-request switch even though its model list has no template.
     return { control: remote.provider === 'lmstudio' ? 'enable-thinking' : 'none' }
   })().catch(() => {
@@ -162,6 +173,55 @@ export async function remoteReasoningCapability(
     return { control: remote.provider === 'openrouter' ? 'openrouter' : 'none' } as const
   })
   reasoningCapabilities.set(key, discovered)
+  return discovered
+}
+
+const contextWindows = new Map<string, Promise<number | null>>()
+/** A failed window probe answers unknown for this long, so one turn does not wait on it again. */
+const CONTEXT_PROBE_RETRY_MS = 20_000
+
+function positiveTokens(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : null
+}
+
+/** The context window one request gets on the remote server, or null when it does not say. The
+ *  model list answers first (OpenRouter and Off Grid gateways: `context_length`; vLLM:
+ *  `max_model_len`); a llama.cpp server answers through /props. Failed probes are asked again. */
+export function remoteContextWindow(remote: RemoteTextModelConnection): Promise<number | null> {
+  const key = capabilityKey(remote)
+  const cached = contextWindows.get(key)
+  if (cached !== undefined) return cached
+  const headers: Record<string, string> = remote.apiKey
+    ? { Authorization: `Bearer ${remote.apiKey}` }
+    : {}
+  const discovered = (async (): Promise<number | null> => {
+    const models = await fetch(`${remote.endpoint.replace(/\/$/, '')}/models`, {
+      headers,
+      signal: AbortSignal.timeout(5_000)
+    }).catch(() => null)
+    if (models?.ok) {
+      const body = (await models.json().catch(() => ({}))) as { data?: unknown }
+      const entry = Array.isArray(body.data)
+        ? (body.data as Record<string, unknown>[]).find((model) => model.id === remote.model)
+        : undefined
+      const listed = positiveTokens(entry?.context_length) ?? positiveTokens(entry?.max_model_len)
+      if (listed) return listed
+    }
+    if (remote.provider === 'openrouter' || remote.provider === 'ollama') return null
+    const props = await fetch(`${remote.endpoint.replace(/\/v1\/?$/i, '')}/props`, {
+      headers,
+      signal: AbortSignal.timeout(5_000)
+    })
+    if (props.status >= 500) throw new Error(`context window unavailable: ${props.status}`)
+    if (!props.ok) return null
+    // llama.cpp reports the window one request may use.
+    const body = (await props.json()) as { default_generation_settings?: { n_ctx?: unknown } }
+    return positiveTokens(body.default_generation_settings?.n_ctx)
+  })().catch(() => {
+    setTimeout(() => contextWindows.delete(key), CONTEXT_PROBE_RETRY_MS).unref()
+    return null
+  })
+  contextWindows.set(key, discovered)
   return discovered
 }
 
@@ -286,7 +346,7 @@ function completionRequestBody(
   return JSON.stringify({
     model: remote.model,
     messages: request.messages,
-    max_tokens: request.maxTokens,
+    ...(request.maxTokens === undefined ? {} : { max_tokens: request.maxTokens }),
     temperature: request.temperature,
     ...(request.topP === undefined ? {} : { top_p: request.topP }),
     ...(request.topK === undefined ? {} : { top_k: request.topK }),
@@ -398,13 +458,11 @@ export async function streamRemoteChatCompletion(input: {
 }): Promise<StreamResult> {
   const { remote, request, options } = input
   const log = currentAIRequest()
+  const local = isLocalModelServer(remote)
   log?.update({
     model: remote.model,
-    backend:
-      remote.computeBackend ?? (remote.id.startsWith('local-grounder:') ? 'Unknown' : 'Remote'),
-    ...(remote.id.startsWith('local-grounder:')
-      ? { source: screenTaskRequestSource('Grounding specialist', 'grounding') }
-      : {})
+    backend: remote.computeBackend ?? (local ? 'Unknown' : 'Remote'),
+    ...(local ? { source: screenTaskRequestSource('Grounding specialist', 'grounding') } : {})
   })
   const accumulator = createCompletionStreamAccumulator(
     (text, kind) => {

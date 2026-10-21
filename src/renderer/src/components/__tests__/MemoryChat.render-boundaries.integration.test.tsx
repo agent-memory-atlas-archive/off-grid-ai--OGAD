@@ -184,6 +184,24 @@ it('creates a project from the composer and sends into it', async () => {
   expect(await screen.findByText('The Desktop chat changed.')).toBeTruthy()
 })
 
+it('opens a new chat with Cmd+T or Ctrl+T', async () => {
+  const boundary = new ChatBoundary()
+  await boundary.addRagMessage('conversation-a', 'assistant', 'Answer in the first chat')
+  installBoundary(boundary)
+  const user = userEvent.setup()
+  renderChat({ conversationId: 'conversation-a' })
+
+  expect(await screen.findByText('Answer in the first chat')).toBeTruthy()
+  await user.keyboard('{Meta>}t{/Meta}')
+  expect(await screen.findByText('Start a conversation')).toBeTruthy()
+  expect(screen.queryByText('Answer in the first chat')).toBeNull()
+
+  await user.click(within(screen.getByRole('complementary')).getByText('Conversation A'))
+  expect(await screen.findByText('Answer in the first chat')).toBeTruthy()
+  await user.keyboard('{Control>}t{/Control}')
+  expect(await screen.findByText('Start a conversation')).toBeTruthy()
+})
+
 it('switches between saved chats and shows a peer update to an inactive chat', async () => {
   const boundary = new ChatBoundary()
   await boundary.addRagMessage('conversation-a', 'assistant', 'Answer in the first chat')
@@ -205,7 +223,7 @@ it('switches between saved chats and shows a peer update to an inactive chat', a
   expect(screen.queryByRole('status', { name: 'Loading conversation' })).toBeNull()
   expect(screen.getAllByTitle('Close tab')).toHaveLength(1)
   expect(screen.getByTitle('Close tab').parentElement?.textContent).toContain('Conversation B')
-  await user.click(screen.getByTitle('New tab'))
+  await user.click(screen.getByTitle(/^New tab/))
   expect(await screen.findByText('Start a conversation')).toBeTruthy()
   expect(screen.queryByRole('status', { name: 'Loading conversation' })).toBeNull()
   await user.click(within(conversationList).getByText('Conversation A'))
@@ -271,6 +289,35 @@ it('shows an artifact card while the page is still being written, and the open c
   // Finished: the card is the page's name, with no "Building" line.
   const done = await screen.findByRole('button', { name: 'Liquid Orb' })
   expect(within(done).queryByText(/Building/)).toBeNull()
+})
+
+it('shows a Ready card when another chat finishes an artifact, and opens that chat and its artifact', async () => {
+  const boundary = new ChatBoundary()
+  installBoundary(boundary)
+  const user = userEvent.setup()
+  renderChat({ conversationId: 'conversation-a' })
+
+  await send('Build a page about the orb', user)
+  await waitFor(() => expect(boundary.calls).toHaveLength(1))
+  act(() => boundary.emit(0, 'Here it is:\n```html\n<!doctype html><html><head>'))
+
+  // Move to another chat while the page is still being written.
+  await user.click(within(screen.getByRole('complementary')).getByText('Conversation B'))
+  expect(await screen.findByText('Conversation B baseline')).toBeTruthy()
+
+  await act(async () =>
+    boundary.resolve(
+      0,
+      'Here it is:\n```html\n<!doctype html><html><head><title>Liquid Orb</title></head><body>orb</body></html>\n```'
+    )
+  )
+  const ready = await screen.findByText(/^Ready/)
+  await user.click(ready)
+
+  // The chat it came from is open, with its artifact in the pane.
+  expect(await screen.findByRole('dialog', { name: 'Liquid Orb' })).toBeTruthy()
+  expect(screen.queryByText('Conversation B baseline')).toBeNull()
+  expect(screen.queryByText(/^Ready/)).toBeNull()
 })
 
 it('says an artifact stopped before it finished, and still opens what was made', async () => {

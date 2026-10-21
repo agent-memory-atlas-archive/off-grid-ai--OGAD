@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "llama": {
+    "repo": "ggml-org/llama.cpp",
+    "ref": "b11791",
+    "sha256": {
+      "linux-cuda": "310a852e1cd0e1ba9cf49837ea9b00ccd016e16522946dabccafb655bb38a414",
+      "linux-cudart": "242bc6854d45b1ee90f2adbdbae836d2758fb5fd127cbf273983f0e747bc23d3",
+      "linux-vulkan": "50ef017689cc8070c9b045af24e98789dac02b2b37b8cfd60c8603602aa348c3",
+      "linux-cpu": "ac75208179d00d86f378d5f10c65f9785028ce877cf57279f1a7b8dac54a25ff",
+      "win-cuda": "af5f914ecea272cfad57c33048c3d75012a7778c5dff4bd3cdce160543f8138a",
+      "win-cudart": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+      "win-vulkan": "33efbbc196173d5c48311690c8909653c73134e7ba971e1b21548293bdcbd938",
+      "win-cpu": "2fe8bc3ebd18d8fa978e490fa3bbe663b8842624009c9a199bd1412549895a96"
+    }
+  },
+  "prism": {
+    "repo": "PrismML-Eng/llama.cpp",
+    "ref": "prism-b10787-73bfe6c",
+    "sha256": {
+      "linux-cuda": "f61ac818da2c8cddc47d75c955b6f5bf821738138760842dd50413c5181cdfe1",
+      "linux-vulkan": "4401c665506927f5c2ad44c4e2e139715de5bd5e92b693a0a1f515b9442af9bb",
+      "linux-cpu": "bff69881bdb2b09dcbf5e99a1cb532b2a6821c6dc42d33ac53b2fa2cd3e6f214",
+      "win-cuda": "64ca6810aae0e6bbb28d22f888bd009b9bdd0c24c5af8a6a7490b3eaf75ccd57",
+      "win-vulkan": "16d9482224e53d462eb210a766c8d94f0461cdca4d1c7263b2ba7b97092bf739",
+      "win-cpu": "ab1ea7cfc23fdac244088fd6f1762d0efa24d3d79fe18d4f16c496cc00775728"
+    }
+  },
+  "sd": {
+    "repo": "leejet/stable-diffusion.cpp",
+    "ref": "master-982-0518b34",
+    "commit": "0518b34374761cb82aeda5ad3c2f0686fdad2cec",
+    "sha256": {
+      "linux-vulkan": "8bc413b3e6307fbefdf985cc562f7db1cc4c68e2dc3dca9d69b66ce98b9cbb5a",
+      "win-cuda": "f4dd12ee7fa974f1858ced85191b90e5d3c288dd4b10f296be91175138b5b421",
+      "win-vulkan": "c2ab91b33206beba434f739a9131916539a3d6229da153e6e0311013e6308567",
+      "win-cpu": "4d8ec59037f70d0b61954bcca1a0008dfe238fabd9e21f8d354b16be9e7c3d4b"
+    }
+  },
+  "whisper": {
+    "repo": "ggml-org/whisper.cpp",
+    "ref": "v1.9.5",
+    "commit": "d1be6fde11ac6e0407606b4e42fe72d34add8037",
+    "winRef": "b5454",
+    "sha256": {
+      "win-cuda": "afef0b881c500958921c3f5523b50e59ee2ec9b6f5cbd25b324c51ed308a957a",
+      "win-cpu": "6ba69e3482d7826214f90a6a9c84ca07782aec1e1d0c6a7c30c994fd5d816ccb"
+    }
+  },
+  "nvidia": {
+    "linux": {
+      "nvidia-cuda-runtime": "13.4.92",
+      "nvidia-cublas": "13.8.1.7",
+      "nvidia-curand": "10.4.4.72",
+      "nvidia-cudnn-cu13": "9.27.0.42"
+    },
+    "win": {
+      "nvidia-cublas-cu12": {
+        "version": "12.9.2.10",
+        "sha256": "623f43027d40d44ceadf0043f002bd25cf353e8f13ce90b9a87057019f560661"
+      },
+      "nvidia-cuda-nvrtc-cu12": {
+        "version": "12.9.86",
+        "sha256": "72972ebdcf504d69462d3bcd67e7b81edd25d0fb85a2c46d3ea3517666636349"
+      },
+      "nvidia-cuda-runtime-cu12": {
+        "version": "12.9.79",
+        "sha256": "8e018af8fa02363876860388bd10ccb89eb9ab8fb0aa749aaf58430a9f7c4891"
+      },
+      "nvidia-cudnn-cu12": {
+        "version": "9.27.0.42",
+        "sha256": "06e9b0026f3bad97d2b58666330fabec04fe1672f776661ecb0ce0029c27f142"
+      },
+      "nvidia-cufft-cu12": {
+        "version": "11.4.1.4",
+        "sha256": "8e5bfaac795e93f80611f807d42844e8e27e340e0cde270dcb6c65386d795b80"
+      }
+    }
+  },
+  "archives": {
+    "release": "native-deps-2026-09",
+    "mac-native": {
+      "name": "ogad-mac-native-20261021-r1.tar.gz",
+      "sha256": "bb584b5954a59a52da906ee7ade34295c36c875c21951ae39adb9d9470588558"
+    },
+    "linux-native": {
+      "name": "ogad-linux-native-x64-20261021-r1.tar.gz",
+      "sha256": "42a49ab8af2a866ba3ea0f713cff1aa08b23c9b630ee2090d73779b41d5ae879"
+    },
+    "linux-sd-cuda": {
+      "name": "ogad-sd-master-982-0518b34-linux-x64-cuda12.8-multiarch-20261021-r1.tar.gz",
+      "sha256": "b7ae1bb8a11224f23435510cc0695b38ee3b89cc5c925e4390ef13f877f1e69f"
+    },
+    "linux-whisper": {
+      "name": "ogad-whisper-v1.9.5-linux-x64-cuda12.8-multiarch-v1.tar.gz",
+      "sha256": "3f796596214d2ffff26b641be1ba47f34277b6a6184ea51aa15e5bdd5a833f29"
+    }
+  }
+}

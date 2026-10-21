@@ -5,8 +5,9 @@ set -euo pipefail
 # Pin the Whisper source and FFmpeg release asset so a later upstream build cannot
 # silently change an installer. Stage CUDA, Vulkan, and CPU binaries separately.
 ROOT="${OFFGRID_BUILD_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-WHISPER_REF=v1.9.5
-WHISPER_COMMIT=d1be6fde11ac6e0407606b4e42fe72d34add8037
+PINS="$(cd "$(dirname "$0")/.." && pwd)/resources/engine-pins.json"
+WHISPER_REF="$(node -p "require('$PINS').whisper.ref")"
+WHISPER_COMMIT="$(node -p "require('$PINS').whisper.commit")"
 CUDA_BUILD_IMAGE=nvidia/cuda:12.8.1-devel-ubuntu24.04@sha256:4b9ed5fa8361736996499f64ecebf25d4ec37ff56e4d11323ccde10aa36e0c43
 FFMPEG_ARCHIVE=ffmpeg-n9.0.2-28-g669f5ab083-linux64-lgpl-9.0.tar.xz
 FFMPEG_SHA256=b70078970e033c7e728a0c42d83a39d57f28b471a60866a2c4b0a2f598aec666
@@ -22,8 +23,10 @@ fi
 # Whisper in a fresh runner. Set OFFGRID_BUILD_VOICE_FROM_SOURCE=1 to regenerate it.
 if [ "${OFFGRID_BUILD_VOICE_FROM_SOURCE:-0}" != 1 ] &&
   [ "${OFFGRID_REUSE_STAGED_VOICE:-0}" != 1 ]; then
-  VOICE_ARCHIVE="ogad-whisper-${WHISPER_REF}-linux-x64-cuda12.8-multiarch-v1.tar.gz"
-  VOICE_SHA256=3f796596214d2ffff26b641be1ba47f34277b6a6184ea51aa15e5bdd5a833f29
+  # Our archive, built by build-native-engines.yml from the pinned source.
+  VOICE_ARCHIVE="$(node -p "require('$PINS').archives['linux-whisper'].name")"
+  VOICE_SHA256="$(node -p "require('$PINS').archives['linux-whisper'].sha256")"
+  VOICE_RELEASE="$(node -p "require('$PINS').archives.release")"
   VOICE_WORK="$(mktemp -d)"
   trap 'rm -rf -- "$VOICE_WORK"' EXIT
   if [ -n "${OFFGRID_VOICE_ARCHIVE_CACHE_DIR:-}" ] &&
@@ -31,7 +34,7 @@ if [ "${OFFGRID_BUILD_VOICE_FROM_SOURCE:-0}" != 1 ] &&
     cp "$OFFGRID_VOICE_ARCHIVE_CACHE_DIR/$VOICE_ARCHIVE" "$VOICE_WORK/$VOICE_ARCHIVE"
   else
     curl --fail --location --retry 3 --silent --show-error \
-      "https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/$VOICE_ARCHIVE" \
+      "https://github.com/off-grid-ai/OGAD/releases/download/$VOICE_RELEASE/$VOICE_ARCHIVE" \
       --output "$VOICE_WORK/$VOICE_ARCHIVE"
   fi
   printf '%s  %s\n' "$VOICE_SHA256" "$VOICE_WORK/$VOICE_ARCHIVE" | sha256sum --check --status

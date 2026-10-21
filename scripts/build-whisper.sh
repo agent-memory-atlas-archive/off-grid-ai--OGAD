@@ -22,7 +22,7 @@ set -euo pipefail
 #
 #   WHISPER_REF=v1.9.5 MACOS_DEPLOYMENT_TARGET=13.0 scripts/build-whisper.sh
 
-WHISPER_REF="${WHISPER_REF:-v1.9.5}"                  # whisper.cpp tag with examples/server
+WHISPER_REF="${WHISPER_REF:-$(node -p "require('$(cd "$(dirname "$0")/.." && pwd)/resources/engine-pins.json').whisper.ref")}"
 TARGET="${MACOS_DEPLOYMENT_TARGET:-13.0}"             # runs on macOS 13+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="$ROOT/resources/bin/whisper-server"

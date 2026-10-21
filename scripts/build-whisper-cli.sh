@@ -6,11 +6,12 @@ set -euo pipefail
 # Release CI and the local DMG build both call this script. The committed LFS
 # payload is not trusted as a release input.
 
-WHISPER_REF="${WHISPER_REF:-v1.9.5}"
+ROOT="${OFFGRID_BUILD_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+PINS="$(cd "$(dirname "$0")/.." && pwd)/resources/engine-pins.json"
+WHISPER_REF="${WHISPER_REF:-$(node -p "require('$PINS').whisper.ref")}"
 TARGET="${MACOS_DEPLOYMENT_TARGET:-13.0}"
 # Universal (arm64 + x86_64), like build-sd-macos.sh and build-llama.sh.
 WHISPER_ARCH="${WHISPER_ARCH:-arm64;x86_64}"
-ROOT="${OFFGRID_BUILD_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 DEST="$ROOT/resources/bin/whisper"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

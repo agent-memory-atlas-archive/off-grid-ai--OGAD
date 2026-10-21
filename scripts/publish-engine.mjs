@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 // Publish a staged engine folder to the runtime store and sign the platform's engine index.
 //
-//   node scripts/publish-engine.mjs --platform linux --dir build/engines/linux [--min-app 0.0.56] [--dry-run]
+//   node scripts/publish-engine.mjs --platform darwin|linux|win32 --dir build/engines/linux/llama \
+//     [--index v2|legacy] [--min-app 0.0.56] [--dry-run]
 //
-// The folder comes from scripts/stage-llama-engine.mjs and holds engine.json ({id, version, smokeTest})
-// beside the files the engine runs. Each file is uploaded once under its SHA-256 and never changes;
+// The folder comes from scripts/stage-engines.mjs or scripts/stage-llama-engine.mjs and holds
+// engine.json ({id, version, smokeTest, requires?}) beside the files the engine runs. `--index v2`
+// (the default) writes index-v2.json, which current apps read; `--index legacy` writes index.json,
+// which apps before every engine was updatable read and which should only ever list llama-cuda. Each file is uploaded once under its SHA-256 and never changes;
 // the index for the platform is rewritten with this release in place of the engine's previous one,
 // then signed with ENGINE_SIGNING_PRIVATE_KEY (base64 PKCS#8 Ed25519). The app refuses any index whose
 // signature does not match the public key in src/shared/engine-updates.ts.
@@ -21,13 +24,14 @@ const { values } = parseArgs({
     platform: { type: 'string' },
     dir: { type: 'string' },
     'min-app': { type: 'string' },
+    index: { type: 'string', default: 'v2' },
     'dry-run': { type: 'boolean', default: false }
   }
 })
 const platform = values.platform
-if (!['linux', 'win32'].includes(platform) || !values.dir) {
+if (!['darwin', 'linux', 'win32'].includes(platform) || !values.dir || !['v2', 'legacy'].includes(values.index)) {
   console.error(
-    'Usage: publish-engine.mjs --platform linux|win32 --dir <staged folder> [--min-app <version>] [--dry-run]'
+    'Usage: publish-engine.mjs --platform darwin|linux|win32 --dir <staged folder> [--index v2|legacy] [--min-app <version>] [--dry-run]'
   )
   process.exit(1)
 }
@@ -161,14 +165,26 @@ const release = {
   id: engine.id,
   version: engine.version,
   ...(values['min-app'] ? { minAppVersion: values['min-app'] } : {}),
+  ...(engine.requires ? { requires: engine.requires } : {}),
   smokeTest: engine.smokeTest,
   files: files.map(({ full: _full, ...file }) => file),
   ...(links.length ? { links } : {})
 }
-const indexKey = `desktop/engines/${platform}/index.json`
+const indexKey = `desktop/engines/${platform}/${values.index === 'v2' ? 'index-v2.json' : 'index.json'}`
 
 if (dryRun) {
   console.log(JSON.stringify(release, null, 2))
+  process.exit(0)
+}
+
+const existing = await getText(indexKey)
+const current = existing ? JSON.parse(existing) : { schemaVersion: 1, platform, engines: [] }
+if (current.schemaVersion !== 1 || current.platform !== platform)
+  throw new Error(`${indexKey} is not a v1 ${platform} index`)
+// Publishing the same build again changes nothing, so the index (and every app) is left alone.
+const published = current.engines.find((item) => item.id === engine.id)
+if (published && JSON.stringify(published) === JSON.stringify(release)) {
+  console.log(`${indexKey} already has ${engine.id} ${engine.version}`)
   process.exit(0)
 }
 
@@ -188,14 +204,14 @@ for (const file of files) {
   )
 }
 
-const existing = await getText(indexKey)
-const current = existing ? JSON.parse(existing) : { schemaVersion: 1, platform, engines: [] }
-if (current.schemaVersion !== 1 || current.platform !== platform)
+// Read the index again: another publisher may have written it during the uploads.
+const latest = JSON.parse((await getText(indexKey)) ?? JSON.stringify(current))
+if (latest.schemaVersion !== 1 || latest.platform !== platform)
   throw new Error(`${indexKey} is not a v1 ${platform} index`)
 const index = {
   schemaVersion: 1,
   platform,
-  engines: [...current.engines.filter((item) => item.id !== engine.id), release].sort((a, b) =>
+  engines: [...latest.engines.filter((item) => item.id !== engine.id), release].sort((a, b) =>
     a.id.localeCompare(b.id)
   )
 }

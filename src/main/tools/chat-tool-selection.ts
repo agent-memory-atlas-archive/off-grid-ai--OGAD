@@ -68,8 +68,9 @@ export async function selectChatToolSchemas(
   // catalog and sends only the tools pertinent to this message. If MiniLM cannot
   // load, the lexical fallback fails closed to direct matches.
   let relevantTools: unknown[] = []
+  let rankedByMiniLM = false
   if (rawTools.length > 0) {
-    const { selectRelevantTools } = await import('./tool-ranking')
+    const { selectRelevantTools, terms } = await import('./tool-ranking')
     const lexicalTools = selectRelevantTools(query, rawTools)
     const namedTool = rawTools.some((schema) => {
       const name = (schema as { function?: { name?: unknown } }).function?.name
@@ -83,13 +84,14 @@ export async function selectChatToolSchemas(
         let embed = options.embed
         if (!embed) {
           const { embeddings } = await import('../embeddings')
-          embed = (t: string): Promise<number[]> => embeddings.generateEmbedding(t, { interactive: true })
+          embed = (t: string): Promise<number[]> =>
+            embeddings.generateEmbedding(t, { interactive: true })
         }
         const { contextualToolRoutingText, selectRelevantToolsSemantic } =
           await import('./tool-embedding-ranking')
         const routingText = contextualToolRoutingText(query, history)
         const ranked = await withinRoutingWait(
-          selectRelevantToolsSemantic(routingText, rawTools, { embed }),
+          selectRelevantToolsSemantic(routingText, rawTools, { embed }, query),
           options.semanticWaitMs ??
             ((await routingModelOnDisk()) ? LOCAL_ROUTING_MODEL_WAIT_MS : SEMANTIC_ROUTING_WAIT_MS)
         )
@@ -97,17 +99,24 @@ export async function selectChatToolSchemas(
         // 0.0.55-beta.114 did; the budget below still trims the set to fit the context. Words
         // alone would hide tools a request needs ("remind me" never names reminders_create).
         relevantTools = ranked === ROUTING_MODEL_LOADING ? rawTools : ranked
+        rankedByMiniLM = ranked !== ROUTING_MODEL_LOADING
       } catch {
         // The direct-match selection below remains available offline, and while MiniLM loads.
       }
     }
-    // A semantic score must not hide a direct name or description match. This
-    // also keeps explicit tool requests available when a new embedding model
-    // ranks an unrelated schema first.
-    relevantTools = [
-      ...lexicalTools,
-      ...relevantTools.filter((tool) => !lexicalTools.includes(tool))
-    ]
+    // Shared words decide in full only when MiniLM could not rank: offline, or when the user named
+    // a tool. Once MiniLM has ranked, a word shared with a description adds nothing - a long
+    // request shares "create", "add" or "click" with most tools, and those matches put web_use,
+    // computer_use and generate_image back on an HTML request. A request holding every word of a
+    // tool's name still asks for it: "Read the supplied web addresses... URL" is read_url.
+    const requestTerms = new Set(terms(query))
+    const namedByWords = (tool: unknown): boolean => {
+      const name = (tool as { function?: { name?: unknown } }).function?.name
+      const nameTerms = typeof name === 'string' ? terms(name.replace(/_/g, ' ')) : []
+      return nameTerms.length > 0 && nameTerms.every((term) => requestTerms.has(term))
+    }
+    const wordTools = rankedByMiniLM ? lexicalTools.filter(namedByWords) : lexicalTools
+    relevantTools = [...wordTools, ...relevantTools.filter((tool) => !wordTools.includes(tool))]
   }
   const scopeToolName = options.projectId
     ? 'search_knowledge_base'
@@ -128,9 +137,10 @@ export async function selectChatToolSchemas(
       ...relevantTools.filter((schema) => !explicitNames.has(schema))
     ]
   }
-  // Acting is offered whenever the assistant may act, and the model decides from the prompt
-  // (answer questions; act when asked to do something on a website or in an app). Routing by the
-  // words of the message must not hide it: "can you check this site?" shares no words with it.
+  // Required tools are offered whatever the routing says (the browser extension's agent mode acts
+  // on the page in front of it). Desktop chat requires none: MiniLM offers acting tools when the
+  // request is for them (tool-intent examples); always offering them sent "Make a particle
+  // playground in one HTML file" to web_use.
   if (assistantRequiredTools.length) {
     const acting = new Set(assistantRequiredTools)
     relevantTools = [...assistantRequiredTools, ...relevantTools.filter((t) => !acting.has(t))]

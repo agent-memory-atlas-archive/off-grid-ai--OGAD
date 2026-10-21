@@ -6,8 +6,11 @@ $destination = Join-Path $root 'resources\bin\sd-cuda'
 $temporary = Join-Path $env:TEMP "offgrid-sd-cuda-$([guid]::NewGuid().ToString('N'))"
 $archive = Join-Path $temporary 'sd-cuda.zip'
 $expanded = Join-Path $temporary 'expanded'
-$url = 'https://github.com/leejet/stable-diffusion.cpp/releases/download/master-968-8cd731e/sd-master-8cd731e-bin-win-cuda12-x64.zip'
-$expectedHash = '8b6f311f22b56db02f545a674f7549a0da283f7134d5fd01c42014b81ab78af0'
+$pins = Get-Content (Join-Path $root 'resources/engine-pins.json') -Raw | ConvertFrom-Json
+$sdRef = $pins.sd.ref
+$sdCommit = $sdRef.Split('-')[-1]
+$url = "https://github.com/leejet/stable-diffusion.cpp/releases/download/$sdRef/sd-master-$sdCommit-bin-win-cuda12-x64.zip"
+$expectedHash = $pins.sd.sha256.'win-cuda'
 
 try {
   New-Item -ItemType Directory -Force -Path $temporary, $destination | Out-Null

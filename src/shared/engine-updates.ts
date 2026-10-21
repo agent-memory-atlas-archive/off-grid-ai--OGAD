@@ -1,10 +1,15 @@
 // Engine updates: newer inference engines published to the runtime store between app releases.
 //
 // The store holds one signed index per platform and every engine file once, named by its SHA-256.
-// An engine is a set of files laid out under one bin root (for example `llama-cuda/llama-server`
-// and `cuda-runtime/libcudart.so.12`), so the app installs it as its own folder and searches it
-// before the CUDA pack. Engines are programs the app runs, so the index must carry a valid
-// signature from the publishing key before any file is trusted.
+// An engine is a set of files laid out under one bin root (for example `llama/llama-server`, or
+// `llama-cuda/llama-server` beside `cuda-runtime/libcudart.so.12`), so the app installs it as its
+// own folder and searches it before the CUDA pack and the bundled engines. Engines are programs the
+// app runs, so the index must carry a valid signature from the publishing key before any file is
+// trusted.
+//
+// `index-v2.json` lists every engine (llama.cpp, Prism, stable-diffusion.cpp, whisper.cpp) for
+// macOS, Linux and Windows. Apps before it read `index.json`, which only ever lists the CUDA chat
+// engine, because they install whatever their index lists on an NVIDIA machine.
 //
 // Pure: parsing, signature verification and file planning. The download and install live in
 // src/main/engine-updates.ts.
@@ -16,7 +21,10 @@ export const ENGINE_STORE_ORIGIN = 'https://runtime.getoffgridai.co'
 export const ENGINE_SIGNING_PUBLIC_KEY =
   'MCowBQYDK2VwAyEA1hU10iVoH2X3GLlKKCR5WVDkgu2Id3uDHYzU0JMj1Q0='
 
-export type EnginePlatform = 'linux' | 'win32'
+export type EnginePlatform = 'darwin' | 'linux' | 'win32'
+
+/** Hardware an engine needs before it is worth downloading. */
+export type EngineRequirement = 'nvidia'
 
 export interface EngineFile {
   /** Path under the engine's bin root, always with forward slashes. */
@@ -40,6 +48,8 @@ export interface EngineRelease {
   version: string
   /** The oldest app version that can run this engine. */
   minAppVersion?: string
+  /** Hardware the engine needs; machines without it skip the engine. */
+  requires?: EngineRequirement
   /** The executable used to check the engine starts, relative to the bin root. */
   smokeTest: string
   files: EngineFile[]
@@ -88,7 +98,13 @@ export function safeEnginePath(value: unknown): value is string {
 }
 
 export function engineIndexUrl(platform: EnginePlatform): string {
-  return `${ENGINE_STORE_ORIGIN}/desktop/engines/${platform}/index.json`
+  return `${ENGINE_STORE_ORIGIN}/desktop/engines/${platform}/index-v2.json`
+}
+
+/** Whether a release needs an NVIDIA GPU. The CUDA engines published before `requires` existed
+ *  carry only their `-cuda` id. */
+export function engineNeedsNvidia(release: EngineRelease): boolean {
+  return release.requires === 'nvidia' || release.id.endsWith('-cuda')
 }
 
 export function engineFileUrl(sha256: string): string {
@@ -147,6 +163,7 @@ function parseRelease(value: unknown): EngineRelease | null {
   if (!release || typeof release.id !== 'string' || !SAFE_SEGMENT.test(release.id)) return null
   if (typeof release.version !== 'string' || !SAFE_VERSION.test(release.version)) return null
   if (release.minAppVersion !== undefined && typeof release.minAppVersion !== 'string') return null
+  if (release.requires !== undefined && release.requires !== 'nvidia') return null
   if (!safeEnginePath(release.smokeTest)) return null
   if (!Array.isArray(release.files) || release.files.length === 0) return null
   const files = release.files.map(parseFile)
@@ -160,6 +177,7 @@ function parseRelease(value: unknown): EngineRelease | null {
     id: release.id,
     version: release.version,
     ...(release.minAppVersion ? { minAppVersion: release.minAppVersion } : {}),
+    ...(release.requires ? { requires: release.requires } : {}),
     smokeTest: release.smokeTest,
     files: files as EngineFile[],
     ...(links.length ? { links: links as EngineLink[] } : {})
@@ -197,16 +215,20 @@ export function appVersionAtLeast(appVersion: string, minimum: string): boolean 
   return true
 }
 
-/** The engines this app should install: compatible and not already installed at that version. */
+/** The engines this app should install: compatible, runnable on this machine, and not already
+ *  installed at that version. A CUDA engine is only worth its download with an NVIDIA GPU and the
+ *  CUDA pack it runs beside. */
 export function enginesToInstall(
   index: EngineIndex,
   installed: Record<string, string>,
-  appVersion: string
+  appVersion: string,
+  machine: { nvidia: boolean }
 ): EngineRelease[] {
   return index.engines.filter(
     (engine) =>
       installed[engine.id] !== engine.version &&
-      (!engine.minAppVersion || appVersionAtLeast(appVersion, engine.minAppVersion))
+      (!engine.minAppVersion || appVersionAtLeast(appVersion, engine.minAppVersion)) &&
+      (machine.nvidia || !engineNeedsNvidia(engine))
   )
 }
 

@@ -14,10 +14,7 @@ import { stripChatControlTokens } from '@offgrid/sync'
 import { isMemoryToolAllowed } from './tools/memory-scope'
 import { parseToolCallsFromText, stripQwenToolCallMarkup } from './tools/tool-call-parse'
 import { getSetting, saveSetting, searchProjectConversations } from './database'
-import {
-  projectDocumentsMode,
-  type ProjectDocumentsMode
-} from './documents/project-knowledge-mode'
+import { projectDocumentsMode, type ProjectDocumentsMode } from './documents/project-knowledge-mode'
 import { buildContentParts } from './llm/chat-payload'
 import { readImages } from './llm/read-images'
 import { stripTags, htmlToText, decodeDdgHref } from './tools-parsers'
@@ -485,7 +482,7 @@ const TOOLS: ToolDef[] = [
     // memory mid-loop and risk a nested modality-queue deadlock.
     name: 'generate_image',
     description:
-      'Generate an image on-device from a text prompt. Use when the user asks for a picture/photo/logo/art to be created.',
+      'Generate an image on-device from a text prompt. Use when the user asks for a picture/photo/logo/art to be created. Not for code, an HTML page, a canvas animation or any file the user asks you to write: answer those in the chat.',
     parameters: {
       type: 'object',
       properties: {
@@ -732,12 +729,15 @@ export async function selectChatTools(
         )
       )
     : []
-  const assistantRequiredTools = opts.assistantOnly
-    ? extSchemas.filter((schema) => {
-        const name = (schema as { function?: { name?: unknown } }).function?.name
-        return name === 'web_use' || name === 'computer_use'
-      })
-    : []
+  // Only the browser extension's agent mode requires the acting tools on every turn. Desktop chat
+  // lets MiniLM offer them when the request is for them.
+  const assistantRequiredTools =
+    opts.assistantOnly && opts.origin === 'bridge'
+      ? extSchemas.filter((schema) => {
+          const name = (schema as { function?: { name?: unknown } }).function?.name
+          return name === 'web_use' || name === 'computer_use'
+        })
+      : []
   const otherExtSchemas = extSchemas.filter((schema) => !assistantRequiredTools.includes(schema))
   const rawTools = [...assistantRequiredTools, ...builtins, ...otherExtSchemas]
   const {
@@ -748,7 +748,7 @@ export async function selectChatTools(
     ...opts,
     imageAvailable,
     history,
-    contextSize: llm.effectiveContextSize()
+    contextSize: await llm.contextWindow()
   })
   const relevantNames = new Set(
     relevantTools.flatMap((schema) => {
@@ -913,7 +913,7 @@ export async function toolChat(
     { ...opts, imageAvailable },
     history
   )
-  const ctx = llm.effectiveContextSize()
+  const ctx = await llm.contextWindow()
   if (tools.length) {
     const plannerUnavailable = await llm.toolPlannerPreflight()
     if (plannerUnavailable) {
@@ -1131,6 +1131,15 @@ export async function toolChat(
   }
 
   const settings = llm.getSettings()
+  // A remote server that does not report its window sets the reply length itself: only a Max output
+  // the person chose is sent then, never room worked out from the guessed window.
+  const contextReported = (await llm.contextWindowReport()).reported
+  const sentMaxTokens = (room: number): number | undefined =>
+    contextReported
+      ? room
+      : typeof settings.maxTokens === 'number' && settings.maxTokens > 0
+        ? settings.maxTokens
+        : undefined
   const maxToolCalls = normalizeMaxToolCalls(settings.maxToolCalls)
   const requestedImageCountMatch = query.match(
     /\b(\d+|two|three|four|five|six|seven|eight|nine|ten)\s+(?:distinct\s+|different\s+|separate\s+|unique\s+)?(?:images|pictures|photos|illustrations|variations)\b/i
@@ -1218,7 +1227,7 @@ export async function toolChat(
       temperature: 0.3,
       // Keep the user's lower Max Output setting, but never request more than
       // this round has room to generate inside the configured context window.
-      maxTokens: roundMaxTokens,
+      maxTokens: sentMaxTokens(roundMaxTokens),
       thinking: opts.thinking,
       signal: opts.signal,
       onToolCallStart: (name) =>
@@ -1348,7 +1357,7 @@ export async function toolChat(
         // call order for deferred generation after the turn.
         const rawResult = await runTool(c.name, c.args, toolContext, exts, roundToolNames)
         const resultBudget = toolResultCharBudget({
-          contextLength: llm.effectiveContextSize(),
+          contextLength: ctx,
           promptChars: toolPromptChars(messages, roundTools),
           replyReserveTokens: settings.maxTokens
         })
@@ -1410,13 +1419,18 @@ export async function toolChat(
       const retry = await llm.streamChat(
         [...messages, { role: 'system', content: ANSWER_NOW_INSTRUCTION }],
         onDelta,
-        { temperature: 0.3, maxTokens: roundMaxTokens, thinking: false, signal: opts.signal }
+        {
+          temperature: 0.3,
+          maxTokens: sentMaxTokens(roundMaxTokens),
+          thinking: false,
+          signal: opts.signal
+        }
       )
       const retried = answerFrom(retry.content)
       return resultWithImages({
         answer: retried.trim()
           ? retried
-          : emptyAnswerReason(retry.finishReason ?? finishReason, roundMaxTokens),
+          : emptyAnswerReason(retry.finishReason ?? finishReason, sentMaxTokens(roundMaxTokens)),
         toolCalls,
         unified,
         metrics: retry.metrics ?? metrics
@@ -1428,7 +1442,7 @@ export async function toolChat(
       unified,
       metrics,
       ...(finishReason === 'length'
-        ? { cutoff: { reason: 'max_tokens' as const, maxTokens: roundMaxTokens } }
+        ? { cutoff: { reason: 'max_tokens' as const, maxTokens: sentMaxTokens(roundMaxTokens) } }
         : {})
     })
   }
@@ -1453,7 +1467,7 @@ export async function toolChat(
   const final = await llm.streamChat(finalMessages, onDelta, {
     temperature: 0.3,
     // Forced final answer obeys the same context-bound cap as every tool round.
-    maxTokens: finalMaxTokens,
+    maxTokens: sentMaxTokens(finalMaxTokens),
     thinking: false,
     signal: opts.signal
   })
@@ -1463,7 +1477,7 @@ export async function toolChat(
     unified,
     metrics: final.metrics,
     ...(final.finishReason === 'length'
-      ? { cutoff: { reason: 'max_tokens' as const, maxTokens: finalMaxTokens } }
+      ? { cutoff: { reason: 'max_tokens' as const, maxTokens: sentMaxTokens(finalMaxTokens) } }
       : {})
   })
 }

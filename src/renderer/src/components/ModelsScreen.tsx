@@ -1,5 +1,14 @@
 import { modelShowsOnTab } from '../../../shared/model-settings-rules'
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useContext,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
+import { ToastContext } from '../hooks/useToast'
 import { isDecisionModel, useTaskRoles } from '../lib/task-roles'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
@@ -481,6 +490,31 @@ export function ModelsScreen({
   const [switchError, setSwitchError] = useState<string | null>(null)
   const [ramGb, setRamGb] = useState<number | null>(null)
   const [importing, setImporting] = useState(false)
+  const [checkingCatalog, setCheckingCatalog] = useState(false)
+  const toast = useContext(ToastContext)
+  // The list itself reloads through models:inventory-changed when the check finds a change.
+  const checkForNewModels = async (): Promise<void> => {
+    setCheckingCatalog(true)
+    try {
+      const result: { status: string; newModels: number } = await api.checkForNewModels()
+      toast?.showToast(
+        result.status === 'failed'
+          ? { message: "Couldn't check for new models", tone: 'error' }
+          : result.newModels > 0
+            ? {
+                message: `${result.newModels} new model${result.newModels === 1 ? '' : 's'}`,
+                tone: 'success'
+              }
+            : result.status === 'updated'
+              ? { message: 'Models updated', tone: 'success' }
+              : { message: 'Up to date', tone: 'neutral' }
+      )
+    } catch {
+      toast?.showToast({ message: "Couldn't check for new models", tone: 'error' })
+    } finally {
+      setCheckingCatalog(false)
+    }
+  }
   const [useCase, setUseCase] = useState('all')
   // Capability-tag filter (Light / Photoreal / Fast / Anime …). A model must carry
   // every selected tag. Reset when the tab changes so stale tags don't hide the list.
@@ -1574,25 +1608,40 @@ export function ModelsScreen({
         title="Models"
         description={`Download, switch, and manage the models that run on this ${deviceNoun()}.`}
         actions={
-          <IconTip label={importing ? 'Importing…' : 'Import .gguf'}>
-            <Button
-              size="icon-sm"
-              variant="outline"
-              aria-label={importing ? 'Importing…' : 'Import .gguf'}
-              aria-busy={importing || undefined}
-              onClick={importModel}
-              disabled={importing}
-              className="text-neutral-400 hover:border-green-500/60 hover:text-emerald-500 disabled:opacity-50"
-            >
-              <GlyphSwap glyphKey={importing ? 'busy' : 'idle'}>
-                {importing ? (
-                  <IconLoader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <IconUpload className="h-3.5 w-3.5" />
-                )}
-              </GlyphSwap>
-            </Button>
-          </IconTip>
+          <>
+            <IconTip label={checkingCatalog ? 'Checking…' : 'Check for new models'}>
+              <Button
+                size="icon-sm"
+                variant="outline"
+                aria-label={checkingCatalog ? 'Checking…' : 'Check for new models'}
+                aria-busy={checkingCatalog || undefined}
+                onClick={() => void checkForNewModels()}
+                disabled={checkingCatalog}
+                className="text-neutral-400 hover:border-green-500/60 hover:text-emerald-500 disabled:opacity-50"
+              >
+                <IconRefresh className={`h-3.5 w-3.5${checkingCatalog ? ' animate-spin' : ''}`} />
+              </Button>
+            </IconTip>
+            <IconTip label={importing ? 'Importing…' : 'Import .gguf'}>
+              <Button
+                size="icon-sm"
+                variant="outline"
+                aria-label={importing ? 'Importing…' : 'Import .gguf'}
+                aria-busy={importing || undefined}
+                onClick={importModel}
+                disabled={importing}
+                className="text-neutral-400 hover:border-green-500/60 hover:text-emerald-500 disabled:opacity-50"
+              >
+                <GlyphSwap glyphKey={importing ? 'busy' : 'idle'}>
+                  {importing ? (
+                    <IconLoader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <IconUpload className="h-3.5 w-3.5" />
+                  )}
+                </GlyphSwap>
+              </Button>
+            </IconTip>
+          </>
         }
       />
 

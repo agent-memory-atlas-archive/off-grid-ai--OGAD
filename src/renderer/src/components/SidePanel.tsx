@@ -25,7 +25,7 @@ type SidePanelProps = {
 }
 
 // The renderer's top layer: side panels sit above every other surface, the backdrop just under.
-const PANEL_LAYER = 2147483647
+export const PANEL_LAYER = 2147483647
 
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'

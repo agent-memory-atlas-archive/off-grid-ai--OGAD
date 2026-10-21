@@ -53,7 +53,7 @@ describe.skipIf(!SRC)('fetch-win-binaries.ps1 — stable-diffusion.cpp asset', (
 
 describe.skipIf(!SRC)('fetch-win-binaries.ps1 — Bonsai runtime', () => {
   it('stages pinned Prism CUDA, Vulkan, and CPU runtimes in the directories the model server resolves', () => {
-    expect(SRC).toMatch(/offgrid\.prismLlamaRef/)
+    expect(SRC).toMatch(/\$Pins\.prism\.ref/)
     expect(SRC).toMatch(/PrismML-Eng\/llama\.cpp'\s+'\^llama-\.\+-bin-win-cuda-12\\\.4-x64\\\.zip\$'/)
     expect(SRC).toMatch(/PrismML-Eng\/llama\.cpp'\s+'bin-win-vulkan-x64\\\.zip\$'/)
     expect(SRC).toMatch(/PrismML-Eng\/llama\.cpp'\s+'bin-win-cpu-x64\\\.zip\$'/)

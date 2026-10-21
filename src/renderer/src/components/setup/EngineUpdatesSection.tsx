@@ -8,8 +8,30 @@ import { ArrowsClockwise } from '@phosphor-icons/react'
 import { IconTip } from '../IconTip'
 import { TextShimmer } from '@offgrid/operator-ui/operator/text-shimmer'
 
+// Engine ids are the bin folders they replace; the CPU and CUDA variants share a name.
 const ENGINE_NAMES: Record<string, string> = {
-  'llama-cuda': 'Chat and vision engine'
+  llama: 'Chat',
+  'llama-prism': 'Bonsai',
+  sd: 'Images',
+  whisper: 'Transcription'
+}
+
+function engineName(id: string): string {
+  return ENGINE_NAMES[id.replace(/-(cpu|cuda)$/, '')] ?? id
+}
+
+/** One entry per engine when its variants match; each variant's own version when they differ. */
+function installedLabels(installed: [string, string][]): string[] {
+  const byName = new Map<string, [string, string][]>()
+  for (const entry of installed) {
+    const name = engineName(entry[0])
+    byName.set(name, [...(byName.get(name) ?? []), entry])
+  }
+  return [...byName].flatMap(([name, variants]) =>
+    new Set(variants.map(([, version]) => version)).size === 1
+      ? [`${name}: ${variants[0]![1]}`]
+      : variants.map(([id, version]) => `${name} (${id.match(/-(cpu|cuda)$/)?.[1] ?? 'GPU'}): ${version}`)
+  )
 }
 
 function phaseText(status: EngineUpdateStatus): string {
@@ -52,10 +74,10 @@ export function EngineUpdatesSection(): React.ReactElement | null {
   const installed = Object.entries(status.installed)
 
   return (
-    <div className="mt-3 border-t border-neutral-800 pt-3">
+    <div className="mt-4 border-t border-neutral-800 pt-4">
       <SettingRow
         title="Keep engines up to date"
-        description="Installs newer GPU engines in the background so new models work without waiting for an app update."
+        description="Installs newer chat, image and transcription engines in the background, so new models work without an app update."
         className="py-0"
       >
         <Switch
@@ -79,7 +101,7 @@ export function EngineUpdatesSection(): React.ReactElement | null {
       )}
       {installed.length ? (
         <p className="mt-1 text-[11px] text-neutral-500">
-          {installed.map(([id, version]) => `${ENGINE_NAMES[id] ?? id}: ${version}`).join(' · ')}
+          {installedLabels(installed).join(' · ')}
         </p>
       ) : null}
       {status.enabled ? (

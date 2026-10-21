@@ -3,8 +3,9 @@ set -euo pipefail
 
 # Match the Vulkan image runtime source while adding a separate NVIDIA engine.
 ROOT="${OFFGRID_BUILD_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-SD_REF=master-968-8cd731e
-SD_COMMIT=8cd731e7b4667eb8f40a153315b9a7125d09a58d
+PINS="$(cd "$(dirname "$0")/.." && pwd)/resources/engine-pins.json"
+SD_REF="$(node -p "require('$PINS').sd.ref")"
+SD_COMMIT="$(node -p "require('$PINS').sd.commit")"
 CUDA_BUILD_IMAGE=nvidia/cuda:12.8.1-devel-ubuntu24.04@sha256:4b9ed5fa8361736996499f64ecebf25d4ec37ff56e4d11323ccde10aa36e0c43
 
 if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
@@ -15,8 +16,10 @@ fi
 # Reuse the multi-architecture CUDA engine from a successful pinned Linux CI build.
 # Set OFFGRID_BUILD_IMAGE_CUDA_FROM_SOURCE=1 only when regenerating the archive.
 if [ "${OFFGRID_BUILD_IMAGE_CUDA_FROM_SOURCE:-0}" != 1 ]; then
-  IMAGE_ARCHIVE="ogad-sd-${SD_REF}-linux-x64-cuda12.8-multiarch-v1.tar.gz"
-  IMAGE_SHA256=884872dee1905cf94a99757e54b76120429471453f3c186af8651778ca3de0ff
+  # Our archive, built by build-native-engines.yml from the pinned source.
+  IMAGE_ARCHIVE="$(node -p "require('$PINS').archives['linux-sd-cuda'].name")"
+  IMAGE_SHA256="$(node -p "require('$PINS').archives['linux-sd-cuda'].sha256")"
+  IMAGE_RELEASE="$(node -p "require('$PINS').archives.release")"
   IMAGE_WORK="$(mktemp -d)"
   trap 'rm -rf -- "$IMAGE_WORK"' EXIT
   if [ -n "${OFFGRID_IMAGE_ARCHIVE_CACHE_DIR:-}" ] &&
@@ -24,7 +27,7 @@ if [ "${OFFGRID_BUILD_IMAGE_CUDA_FROM_SOURCE:-0}" != 1 ]; then
     cp "$OFFGRID_IMAGE_ARCHIVE_CACHE_DIR/$IMAGE_ARCHIVE" "$IMAGE_WORK/$IMAGE_ARCHIVE"
   else
     curl --fail --location --retry 3 --silent --show-error \
-      "https://github.com/off-grid-ai/OGAD/releases/download/native-deps-2026-09/$IMAGE_ARCHIVE" \
+      "https://github.com/off-grid-ai/OGAD/releases/download/$IMAGE_RELEASE/$IMAGE_ARCHIVE" \
       --output "$IMAGE_WORK/$IMAGE_ARCHIVE"
   fi
   printf '%s  %s\n' "$IMAGE_SHA256" "$IMAGE_WORK/$IMAGE_ARCHIVE" | sha256sum --check --status

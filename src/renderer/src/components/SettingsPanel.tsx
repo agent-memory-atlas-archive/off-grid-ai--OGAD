@@ -112,6 +112,8 @@ type LlmSettings = {
   effectiveCtxSize?: number // reported by the backend (RAM-clamped); read-only
   modelMaxCtx?: number | null // the model's TRAINED window (GGUF); read-only, bounds the picker
   gpuAccelerator?: EngineAccelerator | null // the engine the backend actually spawned; read-only
+  // The active model's window, the one chat budgets read; a remote server sets its own. Read-only.
+  contextWindow?: { tokens: number; remote: boolean; reported: boolean }
 }
 type Connector = {
   id: number
@@ -389,13 +391,22 @@ export function SettingsPanel({
   const [connectorsEnabled, setConnectorsEnabled] = useState(true)
   const [knowledgeRetrieval, setKnowledgeRetrieval] = useState<
     'when-needed' | 'relevant' | 'every-answer'
-  >(
-    'when-needed'
-  )
+  >('when-needed')
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [connectors, setConnectors] = useState<Connector[]>([])
   const [newConn, setNewConn] = useState({ name: '', url: '' })
   const [activeModelName, setActiveModelName] = useState<string | null>(null)
+  // With a remote model the server sets the window; the local picker would only size this Mac's engine.
+  const remoteContext = s.contextWindow?.remote
+    ? s.contextWindow.reported
+      ? formatContextWindow(s.contextWindow.tokens)
+      : 'Not reported'
+    : null
+  // Max output and Thinking budget live inside the active model's window, remote or local.
+  const budgetSettings: LlmSettings = {
+    ...s,
+    ctxSize: s.contextWindow?.tokens ?? s.ctxSize ?? DEFAULT_CTX_SIZE
+  }
   const [draftModels, setDraftModels] = useState<DraftModelOption[]>([])
   const [dflashModels, setDflashModels] = useState<DraftModelOption[]>([])
   // Default hidden, like mobile: the numbers are for when you go looking, not a permanent fixture.
@@ -711,24 +722,31 @@ export function SettingsPanel({
             <SettingsSection
               id="text.model"
               title="Model and memory"
-              summary={`${activeModelName ?? 'No active model'} · context ${formatContextWindow(s.ctxSize) ?? 'checking'}`}
+              summary={`${activeModelName ?? 'No active model'} · context ${remoteContext ?? formatContextWindow(s.ctxSize) ?? 'checking'}`}
               defaultOpen
             >
               <div className="mb-3" role="status">
                 <AnimatedGroup
                   preset="fade"
-                  className="grid grid-cols-2 gap-px border border-neutral-800 bg-neutral-800 lg:grid-cols-4"
+                  className={`grid grid-cols-2 gap-px border border-neutral-800 bg-neutral-800 ${remoteContext ? 'lg:grid-cols-3' : 'lg:grid-cols-4'}`}
                 >
-                  {[
-                    ['Current model', activeModelName ?? 'No active model'],
-                    ['Configured', formatContextWindow(s.ctxSize) ?? 'Checking'],
-                    ['Running', formatContextWindow(s.effectiveCtxSize) ?? 'Checking'],
-                    [
-                      'Recommended',
-                      formatContextWindow(recommendedContextWindow(s.modelMaxCtx)) ??
-                        'Not supported'
-                    ]
-                  ].map(([label, value]) => (
+                  {(remoteContext
+                    ? [
+                        ['Current model', activeModelName ?? 'No active model'],
+                        ['Context window', remoteContext],
+                        ['Set by', 'Remote server']
+                      ]
+                    : [
+                        ['Current model', activeModelName ?? 'No active model'],
+                        ['Configured', formatContextWindow(s.ctxSize) ?? 'Checking'],
+                        ['Running', formatContextWindow(s.effectiveCtxSize) ?? 'Checking'],
+                        [
+                          'Recommended',
+                          formatContextWindow(recommendedContextWindow(s.modelMaxCtx)) ??
+                            'Not supported'
+                        ]
+                      ]
+                  ).map(([label, value]) => (
                     <Stat
                       key={label}
                       className="h-full rounded-none border-0 bg-neutral-950/90 p-3 shadow-none"
@@ -749,35 +767,45 @@ export function SettingsPanel({
               {/* Order matters: the OUTER budget first, because each inner one is bounded by it.
                 thinking budget within max output within context window (rule in @offgrid/models). */}
               <BackendPreferencesSection modalities={['llm']} />
-              <Row
-                inline
-                label="Context window"
-                controlId="context-window"
-                hint={`${contextWindowHint(s)} 16K is recommended for capture and chat.`}
-              >
-                <SettingsSelect
-                  id="context-window"
+              {remoteContext ? (
+                <Row
+                  inline
                   label="Context window"
-                  value={String(s.ctxSize ?? DEFAULT_CTX_SIZE)}
-                  onValueChange={(value) => set(budgetChange(s, { ctxSize: Number(value) }))}
-                  options={contextWindowOptions(
-                    CTX_OPTIONS,
-                    s.modelMaxCtx,
-                    s.ctxSize ?? DEFAULT_CTX_SIZE
-                  ).map((value) => ({
-                    value: String(value),
-                    label: `${value >= 1024 ? `${value / 1024}K` : value} tokens${
-                      value === s.modelMaxCtx
-                        ? " (model's max)"
-                        : value === DEFAULT_CTX_SIZE
-                          ? ' (recommended)'
-                          : value < MIN_CAPTURE_CTX_SIZE
-                            ? ' (capture unavailable)'
-                            : ''
-                    }`
-                  }))}
-                />
-              </Row>
+                  hint="Set by the remote model server. It applies to every chat on this model."
+                >
+                  <span className="text-xs text-neutral-200">{remoteContext}</span>
+                </Row>
+              ) : (
+                <Row
+                  inline
+                  label="Context window"
+                  controlId="context-window"
+                  hint={`${contextWindowHint(s)} 16K is recommended for capture and chat.`}
+                >
+                  <SettingsSelect
+                    id="context-window"
+                    label="Context window"
+                    value={String(s.ctxSize ?? DEFAULT_CTX_SIZE)}
+                    onValueChange={(value) => set(budgetChange(s, { ctxSize: Number(value) }))}
+                    options={contextWindowOptions(
+                      CTX_OPTIONS,
+                      s.modelMaxCtx,
+                      s.ctxSize ?? DEFAULT_CTX_SIZE
+                    ).map((value) => ({
+                      value: String(value),
+                      label: `${value >= 1024 ? `${value / 1024}K` : value} tokens${
+                        value === s.modelMaxCtx
+                          ? " (model's max)"
+                          : value === DEFAULT_CTX_SIZE
+                            ? ' (recommended)'
+                            : value < MIN_CAPTURE_CTX_SIZE
+                              ? ' (capture unavailable)'
+                              : ''
+                      }`
+                    }))}
+                  />
+                </Row>
+              )}
               <Row
                 inline
                 label="Max output"
@@ -792,12 +820,15 @@ export function SettingsPanel({
                   id="max-output"
                   label="Max output"
                   value={String(s.maxTokens ?? MAX_OUTPUT_AUTO)}
-                  onValueChange={(value) => set(budgetChange(s, { maxTokens: Number(value) }))}
+                  onValueChange={(value) =>
+                    set(budgetChange(budgetSettings, { maxTokens: Number(value) }))
+                  }
                   options={[
                     { value: String(MAX_OUTPUT_AUTO), label: 'Auto (until the model stops)' },
-                    ...optionsWithinCeiling(MAX_OUTPUT_OPTIONS, s.ctxSize ?? DEFAULT_CTX_SIZE).map(
-                      (value) => ({ value: String(value), label: `${value / 1024}K tokens` })
-                    )
+                    ...optionsWithinCeiling(
+                      MAX_OUTPUT_OPTIONS,
+                      budgetSettings.ctxSize ?? DEFAULT_CTX_SIZE
+                    ).map((value) => ({ value: String(value), label: `${value / 1024}K tokens` }))
                   ]}
                 />
               </Row>
@@ -816,9 +847,9 @@ export function SettingsPanel({
                   label="Thinking budget"
                   value={String(s.reasoningBudget ?? REASONING_BUDGET_AUTO)}
                   onValueChange={(value) =>
-                    set(budgetChange(s, { reasoningBudget: Number(value) }))
+                    set(budgetChange(budgetSettings, { reasoningBudget: Number(value) }))
                   }
-                  options={thinkingBudgetOptions(s).map((value) => ({
+                  options={thinkingBudgetOptions(budgetSettings).map((value) => ({
                     value: String(value),
                     label: reasoningBudgetLabel(value)
                   }))}
@@ -1114,7 +1145,9 @@ export function SettingsPanel({
                       aria-label="GPU layers in use"
                       className="text-[12px] tabular-nums text-muted-foreground"
                     >
-                      {s.gpuOffload ? `${s.gpuOffload.layers}/${s.gpuOffload.total}` : 'Set on load'}
+                      {s.gpuOffload
+                        ? `${s.gpuOffload.layers}/${s.gpuOffload.total}`
+                        : 'Set on load'}
                     </span>
                   )}
                   <label className="flex w-fit cursor-pointer items-center gap-3 text-[12px] text-muted-foreground">
@@ -1152,7 +1185,11 @@ export function SettingsPanel({
                   </label>
                 </div>
               </Row>
-              <Row inline label="Batch size" hint="Tokens processed per batch during prompt ingest.">
+              <Row
+                inline
+                label="Batch size"
+                hint="Tokens processed per batch during prompt ingest."
+              >
                 <SettingSlider
                   label="Batch size"
                   value={s.batchSize ?? 512}

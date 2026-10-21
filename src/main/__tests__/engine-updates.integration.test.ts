@@ -64,7 +64,7 @@ function updater(fileIdleTimeoutMs?: number): EngineUpdater {
     setEnabled: (value) => {
       enabled = value
     },
-    hasGpu: () => true,
+    hasNvidiaGpu: () => true,
     packBin: () => packBin || null,
     indexUrl: () => `${base}/index.json`,
     fileUrl: (hash) => `${base}/files/${hash}`,
@@ -109,11 +109,11 @@ afterEach(async () => {
 })
 
 describe('engine updates', () => {
-  it('makes no network request when the CUDA pack was not installed', async () => {
+  it('downloads no CUDA engine when the CUDA pack was not installed', async () => {
     packBin = ''
     publish([{ version: 'b11551', server: engineScript('b11551') }])
     expect((await updater().check()).installed).toEqual({})
-    expect(requested).toEqual([])
+    expect(requested.filter((url) => url.startsWith('/files/'))).toEqual([])
   })
 
   it.each(['headers', 'body'] as const)('recovers after a file stalls at %s', async (stage) => {

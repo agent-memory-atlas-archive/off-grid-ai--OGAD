@@ -1,10 +1,12 @@
-// Keeps the GPU inference engines current between app releases.
+// Keeps the inference engines (llama.cpp, Prism, stable-diffusion.cpp, whisper.cpp) current between
+// app releases, on macOS, Linux and Windows.
 //
 // The runtime store publishes a signed engine index per platform (see src/shared/engine-updates.ts).
 // When "Keep engines up to date" is on (the default), the app checks it shortly after launch and
 // every few hours, downloads only the files it does not already have, starts the new engine once
 // to prove it runs, and then makes it the first engine searched. The previous release stays on
-// disk, and the CUDA pack's own engine stays behind both, so a launch that fails falls back.
+// disk, and the CUDA pack's and the app's own engines stay behind both, so a launch that fails
+// falls back. CUDA engines install only on a machine with an NVIDIA GPU and the CUDA pack.
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -41,8 +43,8 @@ export interface EngineUpdaterDeps {
   appVersion: () => string
   enabled: () => boolean
   setEnabled: (enabled: boolean) => void
-  /** Engines only help machines with an NVIDIA GPU. */
-  hasGpu: () => boolean
+  /** CUDA engines only help machines with an NVIDIA GPU. */
+  hasNvidiaGpu: () => boolean
   /** The installed CUDA pack's bin folder, whose identical files are reused instead of downloaded. */
   packBin: () => string | null
   fetch?: typeof fetch
@@ -78,7 +80,9 @@ async function sha256Of(file: string): Promise<string> {
 export function createEngineUpdater(deps: EngineUpdaterDeps): EngineUpdater {
   const doFetch = deps.fetch ?? fetch
   const platform: EnginePlatform | null =
-    deps.platform === 'linux' || deps.platform === 'win32' ? deps.platform : null
+    deps.platform === 'darwin' || deps.platform === 'linux' || deps.platform === 'win32'
+      ? deps.platform
+      : null
   const root = (): string => path.join(deps.dataDir(), 'engines')
   const filesDir = (): string => path.join(root(), 'files')
   const recordPath = (): string => path.join(root(), 'installed.json')
@@ -129,7 +133,7 @@ export function createEngineUpdater(deps: EngineUpdaterDeps): EngineUpdater {
       ...(lastCheckedAt ? { lastCheckedAt } : {}),
       ...(error ? { error } : {})
     }
-    if (!platform || !deps.hasGpu()) return { ...base, phase: 'unsupported' }
+    if (!platform) return { ...base, phase: 'unsupported' }
     if (!enabled && phase !== 'downloading' && phase !== 'installing') {
       return { ...base, phase: 'disabled' }
     }
@@ -319,13 +323,16 @@ export function createEngineUpdater(deps: EngineUpdaterDeps): EngineUpdater {
   }
 
   async function runCheck(): Promise<EngineUpdateStatus> {
-    if (!platform || !deps.hasGpu() || !deps.packBin() || !deps.enabled()) return status()
+    if (!platform || !deps.enabled()) return status()
     phase = 'checking'
     error = undefined
     publish()
     try {
       const index = await fetchIndex()
-      const pending = index ? enginesToInstall(index, installedVersions(), deps.appVersion()) : []
+      const nvidia = deps.hasNvidiaGpu() && Boolean(deps.packBin())
+      const pending = index
+        ? enginesToInstall(index, installedVersions(), deps.appVersion(), { nvidia })
+        : []
       if (pending.length) {
         downloadedBytes = 0
         totalBytes = pending

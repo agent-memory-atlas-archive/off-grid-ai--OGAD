@@ -132,7 +132,13 @@ export async function startFakeLlamaServer(): Promise<FakeLlamaServer> {
     }
     if (req.method === 'GET' && req.url === '/props') {
       res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ chat_template: '{% if enable_thinking %}<think>{% endif %}' }))
+      // A real llama-server reports the window one request may use, as the app reads it.
+      res.end(
+        JSON.stringify({
+          chat_template: '{% if enable_thinking %}<think>{% endif %}',
+          default_generation_settings: { n_ctx: 16384 }
+        })
+      )
       return
     }
     if (req.method === 'POST' && req.url === '/api/show') {
