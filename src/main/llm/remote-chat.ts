@@ -15,7 +15,8 @@ export type { RemoteTextModelConnection } from './remote-chat-types'
 
 export interface RemoteChatRequest {
   messages: unknown[]
-  maxTokens: number
+  /** Left out when the server's window is unknown, so the server's own limit applies. */
+  maxTokens?: number
   temperature: number
   topP?: number
   topK?: number
@@ -336,7 +337,7 @@ function completionRequestBody(
   return JSON.stringify({
     model: remote.model,
     messages: request.messages,
-    max_tokens: request.maxTokens,
+    ...(request.maxTokens === undefined ? {} : { max_tokens: request.maxTokens }),
     temperature: request.temperature,
     ...(request.topP === undefined ? {} : { top_p: request.topP }),
     ...(request.topK === undefined ? {} : { top_k: request.topK }),

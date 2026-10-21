@@ -2065,7 +2065,7 @@ export class LLMService {
       : null
   }
 
-  private completeRemote(
+  private async completeRemote(
     remote: RemoteTextModelConnection,
     messages: unknown[],
     onDelta: (text: string, kind: 'content' | 'reasoning') => void,
@@ -2087,11 +2087,16 @@ export class LLMService {
       onToolCallReady?: (call: AssembledToolCall) => void
     }
   ): Promise<StreamResult> {
+    // A server that does not report its window sets the reply length itself: a guessed cap could
+    // be more than it accepts.
+    const windowKnown = (await remoteContextWindow(remote)) !== null
     return streamRemoteChatCompletion({
       remote,
       request: {
         messages,
-        maxTokens: maxTokensForWire(resolveMaxTokens(options.maxTokens, this.maxTokens)),
+        maxTokens: windowKnown
+          ? maxTokensForWire(resolveMaxTokens(options.maxTokens, this.maxTokens))
+          : undefined,
         temperature: options.temperature ?? this.temperature,
         topP: options.topP ?? this.topP,
         topK: options.topK ?? this.topK,
