@@ -178,7 +178,10 @@ async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Prom
   fs.rmSync(staging, { recursive: true, force: true })
   fs.mkdirSync(staging, { recursive: true })
   try {
-    await execFileAsync('tar', ['-xzf', archive, '-C', staging], { timeout: 300_000 })
+    await execFileAsync('tar', ['--no-same-owner', '-xzf', archive, '-C', staging], {
+      timeout: 30 * 60_000,
+      maxBuffer: 16 * 1024 * 1024
+    })
     const bin = path.join(staging, 'bin')
     const server = path.join(bin, 'llama-cuda', process.platform === 'win32' ? 'llama-server.exe' : 'llama-server')
     if (!fs.statSync(bin).isDirectory() || !fs.statSync(server).isFile()) {
