@@ -123,12 +123,7 @@ async function digest(file: string): Promise<string> {
   return hash.digest('hex')
 }
 
-async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Promise<void> {
-  const root = packRoot(asset)
-  const parent = path.dirname(root)
-  fs.mkdirSync(parent, { recursive: true })
-  const archive = `${root}.tar.gz.part`
-  const existing = fs.existsSync(archive) ? fs.statSync(archive).size : 0
+async function downloadArchive(asset: PerformancePackAsset, archive: string, existing: number, signal: AbortSignal): Promise<void> {
   const response = await fetch(asset.url, {
     signal,
     headers: existing > 0 ? { Range: `bytes=${existing}-` } : undefined
@@ -170,6 +165,17 @@ async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Prom
     stream.destroy()
     throw error
   }
+}
+
+async function fetchPack(asset: PerformancePackAsset, signal: AbortSignal): Promise<void> {
+  const root = packRoot(asset)
+  const parent = path.dirname(root)
+  fs.mkdirSync(parent, { recursive: true })
+  const archive = `${root}.tar.gz.part`
+  const existing = fs.existsSync(archive) ? fs.statSync(archive).size : 0
+  // A complete archive left by a failed unpack goes straight to the check; asking for more bytes gets HTTP 416.
+  if (existing === asset.bytes) downloadedBytes = existing
+  else await downloadArchive(asset, archive, existing, signal)
   if (downloadedBytes !== asset.bytes || (await digest(archive)) !== asset.sha256.toLowerCase()) {
     fs.rmSync(archive, { force: true })
     throw new Error('The downloaded performance files failed the size or hash check.')
