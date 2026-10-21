@@ -1,9 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'motion/react'
 import { Code, X } from '@phosphor-icons/react'
 import type { Artifact } from '../../ArtifactCanvas'
 import { artifactTitle } from '../../../../../shared/artifact-title'
 import { ARTIFACT_ICON } from './MessageCards'
+import { PANEL_LAYER } from '../../SidePanel'
 
 export interface ReadyArtifact {
   /** One card per finished answer. */
@@ -69,7 +71,11 @@ function ReadyCard({
   )
 }
 
-/** Bottom-right cards for artifacts that just finished, in any open chat. A click opens one. */
+/**
+ * Bottom-right cards for artifacts that just finished, in any open chat. A click opens one.
+ * The side panels (the artifact pane among them) take the top layer, so the cards share it and
+ * move to the end of the page when one arrives: the later element of the same layer paints on top.
+ */
 export function ArtifactReadyCards({
   items,
   onOpen,
@@ -79,13 +85,23 @@ export function ArtifactReadyCards({
   onOpen: (ready: ReadyArtifact) => void
   onDismiss: (id: string) => void
 }>): React.JSX.Element {
-  return (
-    <div className="pointer-events-none fixed right-4 bottom-4 z-50 flex flex-col items-end gap-2">
+  const [layer] = useState(() => document.createElement('div'))
+  const newest = items.at(-1)?.id
+  useLayoutEffect(() => {
+    if (newest) document.body.appendChild(layer)
+  }, [newest, layer])
+  useEffect(() => () => layer.remove(), [layer])
+  return createPortal(
+    <div
+      style={{ zIndex: PANEL_LAYER }}
+      className="pointer-events-none fixed right-4 bottom-4 flex flex-col items-end gap-2"
+    >
       <AnimatePresence initial={false}>
         {items.map((ready) => (
           <ReadyCard key={ready.id} ready={ready} onOpen={onOpen} onDismiss={onDismiss} />
         ))}
       </AnimatePresence>
-    </div>
+    </div>,
+    layer
   )
 }

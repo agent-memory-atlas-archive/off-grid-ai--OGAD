@@ -675,5 +675,14 @@ function partialArtifact(content: string): Artifact | null {
     const code = bare[1]!.trim()
     return { kind: 'html', code, ...(/<\/html>\s*$/i.test(code) ? {} : { partial: true }) }
   }
+  // A reply that is nothing but page markup (`<canvas></canvas><script>…</script>`) is a page too.
+  const markup = content.trim()
+  if (
+    /^<[a-z][\w-]*[\s>]/i.test(markup) &&
+    /<\/[a-z][\w-]*>$/i.test(markup) &&
+    /<(?:script|style|canvas)\b/i.test(markup)
+  ) {
+    return { kind: 'html', code: markup }
+  }
   return null
 }
