@@ -1,12 +1,15 @@
 import { modelSupportsKind } from '@offgrid/models'
+import { isStagedDecisionModel } from './task-model-rules'
 
-/** Desktop Models tab membership, including vision models on Text. */
+/** Desktop Models tab membership, including vision models on Text. A decision model staged for
+ *  evaluation is a task specialist, not a chat model, so it never shows as one. */
 export function modelShowsOnTab(
-  model: { id: string; kind: string; grounder?: boolean },
+  model: { id: string; kind: string; grounder?: boolean; files?: readonly { name: string }[] },
   tab: string
 ): boolean {
   return (
     !model.id.endsWith('+MTP') &&
+    !isStagedDecisionModel(model) &&
     (modelSupportsKind(
       model as Parameters<typeof modelSupportsKind>[0],
       tab as Parameters<typeof modelSupportsKind>[1]
