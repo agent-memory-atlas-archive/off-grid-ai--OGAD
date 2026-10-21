@@ -2041,6 +2041,11 @@ export class LLMService {
     return screenTask ? screenTask.activeServer : getActiveRemoteVisionServer()
   }
 
+  /** Whether text requests go to a remote model server rather than this machine's engine. */
+  usesRemoteTextModel(): boolean {
+    return this.activeRemoteTextModel() !== null
+  }
+
   /** A tool turn must fail before generation when the selected remote model cannot plan actions. */
   async toolPlannerPreflight(): Promise<string | null> {
     const remote = this.activeRemoteTextModel()
@@ -2706,6 +2711,8 @@ export class LLMService {
 }
 
 export const llm = new LLMService()
+// With a remote text model the chat runs on another machine, so chat jobs need no admission here.
+modalityQueue.setRemoteEngine('llm', () => llm.usesRemoteTextModel())
 registerModelEvictor('chat', async () => {
   const result = await llm.unload()
   if (!result.portFree) throw new Error('Chat model did not stop; cannot free memory for Decision.')

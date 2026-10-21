@@ -146,6 +146,8 @@ export class ModalityQueue {
   private running = new Map<string, RunningEntry>()
   private waiting: Waiter[] = []
   private evictables = new Map<string, Evictable>()
+  /** Engines whose model runs on another machine right now (see setRemoteEngine). */
+  private remoteEngines = new Map<string, () => boolean>()
   /** When each engine last ran a job, for least-recently-used eviction. */
   private lastUsedAt = new Map<string, number>()
   private memoryProbe: MemoryProbe | null = null
@@ -190,6 +192,14 @@ export class ModalityQueue {
    *  so an engine that lazily reloaded can't leave two models resident. */
   registerEvictable(id: string, e: Evictable): void {
     this.evictables.set(id, e)
+  }
+
+  /** Tell the queue when an engine's model runs on another machine. Its jobs then hold no memory
+   *  here, so they run at once and side by side: chats against a remote model server no longer
+   *  wait for each other on this Mac. */
+  setRemoteEngine(id: string, isRemote: (() => boolean) | null): void {
+    if (isRemote) this.remoteEngines.set(id, isRemote)
+    else this.remoteEngines.delete(id)
   }
 
   /** Set how live memory is read. Without it, a job frees everything it declares. */
@@ -271,6 +281,8 @@ export class ModalityQueue {
    */
   async run<T>(request: QueueRequest, fn: () => Promise<T>): Promise<T> {
     if (!this.enabled) return fn()
+    // A job on a remote engine uses no memory here: nothing to admit or evict.
+    if (request.uses && this.remoteEngines.get(request.uses.id)?.()) return fn()
 
     // Reentrancy guard: a job started while ALREADY inside a running queued job is
     // sub-work of that job, which already holds a slot. Run it INLINE — re-admitting
