@@ -124,8 +124,11 @@ interface BrowserVisualTaskInput {
 
 /** Runs the browser screenshot -> decision -> action -> verification loop.
  * Session ownership and task status remain in BrowserHost. */
-export function runBrowserVisualTask(input: BrowserVisualTaskInput): Promise<VisionTaskResult> {
+export async function runBrowserVisualTask(
+  input: BrowserVisualTaskInput
+): Promise<VisionTaskResult> {
   const settings = getWebUseSettings()
+  const chatContextTokens = await llm.chatContextSize()
   const executionDevice = getTaskExecutionDevice()
   return runVisionTaskGraph(input.goal, {
     screen: createBrowserVisionScreen({
@@ -147,7 +150,7 @@ export function runBrowserVisualTask(input: BrowserVisualTaskInput): Promise<Vis
     onProgress: input.onProgress,
     onReasoning: input.onReasoning,
     takeGuidance: input.takeGuidance,
-    contextTokens: resolveComputerUseContextTokens(settings.context, llm.effectiveContextSize()),
+    contextTokens: resolveComputerUseContextTokens(settings.context, chatContextTokens),
     checkpointInterval: settings.checkpointInterval,
     visualHistoryFrames: settings.visualHistoryFrames,
     retrievedFacts: settings.retrieveOlderVisuals ? recentVisualFacts(input.taskId) : [],

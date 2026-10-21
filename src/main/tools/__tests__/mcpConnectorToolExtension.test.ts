@@ -12,7 +12,7 @@ vi.mock('../../database', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../database')>()),
   getSetting: (_key: string, fallback: unknown) => fallback
 }))
-vi.mock('../../llm', () => ({ llm: { effectiveContextSize: () => 8192 } }))
+vi.mock('../../llm', () => ({ llm: { effectiveContextSize: () => 8192, chatContextSize: async () => 8192 } }))
 
 import { McpConnectorToolExtension } from '../mcpConnectorToolExtension'
 import {

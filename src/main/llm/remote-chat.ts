@@ -168,6 +168,53 @@ export async function remoteReasoningCapability(
   return discovered
 }
 
+const contextWindows = new Map<string, Promise<number | null>>()
+
+function positiveTokens(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : null
+}
+
+/** The context window one request gets on the remote server, or null when it does not say. The
+ *  model list answers first (OpenRouter and Off Grid gateways: `context_length`; vLLM:
+ *  `max_model_len`); a llama.cpp server answers through /props. Failed probes are asked again. */
+export function remoteContextWindow(remote: RemoteTextModelConnection): Promise<number | null> {
+  const key = capabilityKey(remote)
+  const cached = contextWindows.get(key)
+  if (cached !== undefined) return cached
+  const headers: Record<string, string> = remote.apiKey
+    ? { Authorization: `Bearer ${remote.apiKey}` }
+    : {}
+  const discovered = (async (): Promise<number | null> => {
+    const models = await fetch(`${remote.endpoint.replace(/\/$/, '')}/models`, {
+      headers,
+      signal: AbortSignal.timeout(5_000)
+    }).catch(() => null)
+    if (models?.ok) {
+      const body = (await models.json().catch(() => ({}))) as { data?: unknown }
+      const entry = Array.isArray(body.data)
+        ? (body.data as Record<string, unknown>[]).find((model) => model.id === remote.model)
+        : undefined
+      const listed = positiveTokens(entry?.context_length) ?? positiveTokens(entry?.max_model_len)
+      if (listed) return listed
+    }
+    if (remote.provider === 'openrouter' || remote.provider === 'ollama') return null
+    const props = await fetch(`${remote.endpoint.replace(/\/v1\/?$/i, '')}/props`, {
+      headers,
+      signal: AbortSignal.timeout(5_000)
+    })
+    if (props.status >= 500) throw new Error(`context window unavailable: ${props.status}`)
+    if (!props.ok) return null
+    // llama.cpp reports the window one request may use.
+    const body = (await props.json()) as { default_generation_settings?: { n_ctx?: unknown } }
+    return positiveTokens(body.default_generation_settings?.n_ctx)
+  })().catch(() => {
+    contextWindows.delete(key)
+    return null
+  })
+  contextWindows.set(key, discovered)
+  return discovered
+}
+
 export function nativeToolPlannerUnavailableMessage(
   capability: RemoteNativeToolCapability
 ): string {

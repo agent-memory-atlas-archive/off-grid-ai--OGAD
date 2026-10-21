@@ -91,6 +91,7 @@ import { streamCompletion, type StreamResult } from './llm/stream'
 import type { AssembledToolCall } from './llm/sse-stream'
 import {
   nativeToolPlannerUnavailableMessage,
+  remoteContextWindow,
   remoteNativeToolCapability,
   streamRemoteChatCompletion,
   type RemoteTextModelConnection
@@ -2046,6 +2047,14 @@ export class LLMService {
     return this.activeRemoteTextModel() !== null
   }
 
+  /** The context window a chat turn is budgeted against. A remote model answers with its server's
+   *  window, never this machine's local model's; a server that does not say is not capped here. */
+  async chatContextSize(): Promise<number> {
+    const remote = this.activeRemoteTextModel()
+    if (!remote) return this.effectiveContextSize()
+    return (await remoteContextWindow(remote)) ?? UNKNOWN_REMOTE_CONTEXT_TOKENS
+  }
+
   /** A tool turn must fail before generation when the selected remote model cannot plan actions. */
   async toolPlannerPreflight(): Promise<string | null> {
     const remote = this.activeRemoteTextModel()
@@ -2348,7 +2357,7 @@ export class LLMService {
           })
           return {
             ...withContextMetrics(result, messages, {
-              contextWindowTokens: this.effectiveContextSize(),
+              contextWindowTokens: await this.chatContextSize(),
               computeBackend: 'Remote'
             }),
             maxTokens: resolvedMaxTokens
@@ -2457,7 +2466,7 @@ export class LLMService {
             onToolCallReady: opts.onToolCallReady
           })
           return withContextMetrics(result, messages, {
-            contextWindowTokens: this.effectiveContextSize(),
+            contextWindowTokens: await this.chatContextSize(),
             tools: opts.tools,
             computeBackend: 'Remote'
           })
@@ -2709,6 +2718,9 @@ export class LLMService {
       throw new Error('Server did not come back up — check the model is downloaded')
   }
 }
+
+/** A remote server that does not report its window: budget as if it were 1M tokens. */
+const UNKNOWN_REMOTE_CONTEXT_TOKENS = 1_000_000
 
 export const llm = new LLMService()
 // With a remote text model the chat runs on another machine, so chat jobs need no admission here.

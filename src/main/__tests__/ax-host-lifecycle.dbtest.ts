@@ -32,6 +32,7 @@ vi.mock('../llm', () => ({
   llm: {
     activeModelInfo: () => ({ id: 'offgrid/chat', vision: true }),
     effectiveContextSize: () => 16_384,
+    chatContextSize: async () => 16_384,
     chat: vi.fn(async () => '{"fill":true,"text":"hello","submit":false}')
   }
 }))

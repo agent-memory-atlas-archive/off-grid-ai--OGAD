@@ -751,7 +751,7 @@ export async function selectChatTools(
     ...opts,
     imageAvailable,
     history,
-    contextSize: llm.effectiveContextSize()
+    contextSize: await llm.chatContextSize()
   })
   const relevantNames = new Set(
     relevantTools.flatMap((schema) => {
@@ -916,7 +916,7 @@ export async function toolChat(
     { ...opts, imageAvailable },
     history
   )
-  const ctx = llm.effectiveContextSize()
+  const ctx = await llm.chatContextSize()
   if (tools.length) {
     const plannerUnavailable = await llm.toolPlannerPreflight()
     if (plannerUnavailable) {
@@ -1351,7 +1351,7 @@ export async function toolChat(
         // call order for deferred generation after the turn.
         const rawResult = await runTool(c.name, c.args, toolContext, exts, roundToolNames)
         const resultBudget = toolResultCharBudget({
-          contextLength: llm.effectiveContextSize(),
+          contextLength: ctx,
           promptChars: toolPromptChars(messages, roundTools),
           replyReserveTokens: settings.maxTokens
         })
