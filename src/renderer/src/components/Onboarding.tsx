@@ -197,11 +197,9 @@ export function Onboarding({ onComplete }: OnboardingProps): JSX.Element {
                 transition={{ delay: 0.3, duration: 0.8, ease: 'easeInOut' }}
                 className="text-center"
               >
-                <img
-                  src={logo}
-                  alt=""
-                  className="mx-auto mb-2 size-16 rounded-2xl shadow-[0_0_48px_-8px_rgb(var(--og-rgb-primary)/0.6)] md:size-20"
-                />
+                <div className="mx-auto mb-2 flex size-16 items-center justify-center rounded-2xl border border-green-500/30 bg-neutral-900 shadow-[0_0_48px_-8px_rgb(var(--og-rgb-primary)/0.6)] md:size-20">
+                  <img src={logo} alt="" className="size-9 md:size-11" />
+                </div>
                 <h1 className="bg-gradient-to-br from-white to-neutral-400 py-4 bg-clip-text text-4xl font-semibold tracking-tight text-transparent md:text-7xl">
                   Off Grid AI
                 </h1>
