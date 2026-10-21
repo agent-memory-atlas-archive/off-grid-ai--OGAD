@@ -1146,8 +1146,13 @@ export class LLMService {
     if (launchChanged) this.launchedSlotPlan = null
     if (this.effectiveGatewayMode() !== modeBefore)
       this.gatewayModeListener?.(this.effectiveGatewayMode())
+    // Budgets live inside the active model's window: a remote server's, or this engine's.
     const budgets = budgetChange(
-      { ctxSize: this.ctxSize, maxTokens: this.maxTokens, reasoningBudget: this.reasoningBudget },
+      {
+        ctxSize: await this.contextWindow(),
+        maxTokens: this.maxTokens,
+        reasoningBudget: this.reasoningBudget
+      },
       {}
     )
     this.maxTokens = budgets.maxTokens ?? this.maxTokens

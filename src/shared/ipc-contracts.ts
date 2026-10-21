@@ -49,7 +49,8 @@ export interface RagMessageContract {
 
 export interface ResponseCutoffContract {
   reason: 'max_tokens'
-  maxTokens: number
+  /** The limit sent; absent when the server's own limit applied. */
+  maxTokens?: number
 }
 
 export interface RagChatResultContract {

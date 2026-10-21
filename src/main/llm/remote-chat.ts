@@ -158,7 +158,8 @@ export async function remoteReasoningCapability(
     }
     // A server error is not an answer. An Off Grid gateway answers 502 until its model loads;
     // caching that as 'none' dropped the thinking switch for the whole session. Ask again later.
-    if (response.status >= 500) throw new Error(`reasoning metadata unavailable: ${response.status}`)
+    if (response.status >= 500)
+      throw new Error(`reasoning metadata unavailable: ${response.status}`)
     // LM Studio accepts this per-request switch even though its model list has no template.
     return { control: remote.provider === 'lmstudio' ? 'enable-thinking' : 'none' }
   })().catch(() => {
@@ -170,6 +171,8 @@ export async function remoteReasoningCapability(
 }
 
 const contextWindows = new Map<string, Promise<number | null>>()
+/** A failed window probe answers unknown for this long, so one turn does not wait on it again. */
+const CONTEXT_PROBE_RETRY_MS = 20_000
 
 function positiveTokens(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : null
@@ -209,7 +212,7 @@ export function remoteContextWindow(remote: RemoteTextModelConnection): Promise<
     const body = (await props.json()) as { default_generation_settings?: { n_ctx?: unknown } }
     return positiveTokens(body.default_generation_settings?.n_ctx)
   })().catch(() => {
-    contextWindows.delete(key)
+    setTimeout(() => contextWindows.delete(key), CONTEXT_PROBE_RETRY_MS).unref()
     return null
   })
   contextWindows.set(key, discovered)

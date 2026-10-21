@@ -402,6 +402,11 @@ export function SettingsPanel({
       ? formatContextWindow(s.contextWindow.tokens)
       : 'Not reported'
     : null
+  // Max output and Thinking budget live inside the active model's window, remote or local.
+  const budgetSettings: LlmSettings = {
+    ...s,
+    ctxSize: s.contextWindow?.tokens ?? s.ctxSize ?? DEFAULT_CTX_SIZE
+  }
   const [draftModels, setDraftModels] = useState<DraftModelOption[]>([])
   const [dflashModels, setDflashModels] = useState<DraftModelOption[]>([])
   // Default hidden, like mobile: the numbers are for when you go looking, not a permanent fixture.
@@ -815,12 +820,15 @@ export function SettingsPanel({
                   id="max-output"
                   label="Max output"
                   value={String(s.maxTokens ?? MAX_OUTPUT_AUTO)}
-                  onValueChange={(value) => set(budgetChange(s, { maxTokens: Number(value) }))}
+                  onValueChange={(value) =>
+                    set(budgetChange(budgetSettings, { maxTokens: Number(value) }))
+                  }
                   options={[
                     { value: String(MAX_OUTPUT_AUTO), label: 'Auto (until the model stops)' },
-                    ...optionsWithinCeiling(MAX_OUTPUT_OPTIONS, s.ctxSize ?? DEFAULT_CTX_SIZE).map(
-                      (value) => ({ value: String(value), label: `${value / 1024}K tokens` })
-                    )
+                    ...optionsWithinCeiling(
+                      MAX_OUTPUT_OPTIONS,
+                      budgetSettings.ctxSize ?? DEFAULT_CTX_SIZE
+                    ).map((value) => ({ value: String(value), label: `${value / 1024}K tokens` }))
                   ]}
                 />
               </Row>
@@ -839,9 +847,9 @@ export function SettingsPanel({
                   label="Thinking budget"
                   value={String(s.reasoningBudget ?? REASONING_BUDGET_AUTO)}
                   onValueChange={(value) =>
-                    set(budgetChange(s, { reasoningBudget: Number(value) }))
+                    set(budgetChange(budgetSettings, { reasoningBudget: Number(value) }))
                   }
-                  options={thinkingBudgetOptions(s).map((value) => ({
+                  options={thinkingBudgetOptions(budgetSettings).map((value) => ({
                     value: String(value),
                     label: reasoningBudgetLabel(value)
                   }))}

@@ -120,7 +120,9 @@ function ResponseCutoffNoticeComponent({
       className="mt-2 flex items-start gap-1.5 border-t border-amber-500/20 pt-2 text-[11px] text-amber-400"
     >
       <WarningCircle className="mt-0.5 h-3 w-3 shrink-0" weight="fill" />
-      Response stopped at the configured {cutoff.maxTokens.toLocaleString()}-token limit.
+      {cutoff.maxTokens === undefined
+        ? "Response stopped at the model server's length limit."
+        : `Response stopped at the configured ${cutoff.maxTokens.toLocaleString()}-token limit.`}
     </p>
   )
 }

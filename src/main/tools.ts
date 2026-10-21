@@ -14,10 +14,7 @@ import { stripChatControlTokens } from '@offgrid/sync'
 import { isMemoryToolAllowed } from './tools/memory-scope'
 import { parseToolCallsFromText, stripQwenToolCallMarkup } from './tools/tool-call-parse'
 import { getSetting, saveSetting, searchProjectConversations } from './database'
-import {
-  projectDocumentsMode,
-  type ProjectDocumentsMode
-} from './documents/project-knowledge-mode'
+import { projectDocumentsMode, type ProjectDocumentsMode } from './documents/project-knowledge-mode'
 import { buildContentParts } from './llm/chat-payload'
 import { readImages } from './llm/read-images'
 import { stripTags, htmlToText, decodeDdgHref } from './tools-parsers'
@@ -1433,7 +1430,7 @@ export async function toolChat(
       return resultWithImages({
         answer: retried.trim()
           ? retried
-          : emptyAnswerReason(retry.finishReason ?? finishReason, roundMaxTokens),
+          : emptyAnswerReason(retry.finishReason ?? finishReason, sentMaxTokens(roundMaxTokens)),
         toolCalls,
         unified,
         metrics: retry.metrics ?? metrics
@@ -1445,7 +1442,7 @@ export async function toolChat(
       unified,
       metrics,
       ...(finishReason === 'length'
-        ? { cutoff: { reason: 'max_tokens' as const, maxTokens: roundMaxTokens } }
+        ? { cutoff: { reason: 'max_tokens' as const, maxTokens: sentMaxTokens(roundMaxTokens) } }
         : {})
     })
   }
@@ -1480,7 +1477,7 @@ export async function toolChat(
     unified,
     metrics: final.metrics,
     ...(final.finishReason === 'length'
-      ? { cutoff: { reason: 'max_tokens' as const, maxTokens: finalMaxTokens } }
+      ? { cutoff: { reason: 'max_tokens' as const, maxTokens: sentMaxTokens(finalMaxTokens) } }
       : {})
   })
 }
