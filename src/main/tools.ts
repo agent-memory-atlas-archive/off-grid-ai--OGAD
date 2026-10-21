@@ -732,12 +732,15 @@ export async function selectChatTools(
         )
       )
     : []
-  const assistantRequiredTools = opts.assistantOnly
-    ? extSchemas.filter((schema) => {
-        const name = (schema as { function?: { name?: unknown } }).function?.name
-        return name === 'web_use' || name === 'computer_use'
-      })
-    : []
+  // Only the browser extension's agent mode requires the acting tools on every turn. Desktop chat
+  // lets MiniLM offer them when the request is for them.
+  const assistantRequiredTools =
+    opts.assistantOnly && opts.origin === 'bridge'
+      ? extSchemas.filter((schema) => {
+          const name = (schema as { function?: { name?: unknown } }).function?.name
+          return name === 'web_use' || name === 'computer_use'
+        })
+      : []
   const otherExtSchemas = extSchemas.filter((schema) => !assistantRequiredTools.includes(schema))
   const rawTools = [...assistantRequiredTools, ...builtins, ...otherExtSchemas]
   const {

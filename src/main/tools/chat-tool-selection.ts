@@ -83,7 +83,8 @@ export async function selectChatToolSchemas(
         let embed = options.embed
         if (!embed) {
           const { embeddings } = await import('../embeddings')
-          embed = (t: string): Promise<number[]> => embeddings.generateEmbedding(t, { interactive: true })
+          embed = (t: string): Promise<number[]> =>
+            embeddings.generateEmbedding(t, { interactive: true })
         }
         const { contextualToolRoutingText, selectRelevantToolsSemantic } =
           await import('./tool-embedding-ranking')
@@ -128,9 +129,10 @@ export async function selectChatToolSchemas(
       ...relevantTools.filter((schema) => !explicitNames.has(schema))
     ]
   }
-  // Acting is offered whenever the assistant may act, and the model decides from the prompt
-  // (answer questions; act when asked to do something on a website or in an app). Routing by the
-  // words of the message must not hide it: "can you check this site?" shares no words with it.
+  // Required tools are offered whatever the routing says (the browser extension's agent mode acts
+  // on the page in front of it). Desktop chat requires none: MiniLM offers acting tools when the
+  // request is for them (tool-intent examples); always offering them sent "Make a particle
+  // playground in one HTML file" to web_use.
   if (assistantRequiredTools.length) {
     const acting = new Set(assistantRequiredTools)
     relevantTools = [...assistantRequiredTools, ...relevantTools.filter((t) => !acting.has(t))]
