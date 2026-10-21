@@ -1318,18 +1318,18 @@ describe('<MemoryChat/> chat mode — image intent is decided in ONE place', () 
     expect(assistant.getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('with tools OFF, the same "draw ..." turn auto-routes to direct image generation', async () => {
+  it('with tools OFF, the same "draw ..." turn also goes to the model, not a renderer keyword route', async () => {
     const user = userEvent.setup()
     const { generateImage, toolChat } = installApi({ active: FULL, models: [FULL] })
     renderChat()
 
     await sendChat(user, 'draw a dog')
 
-    // No agent in plain chat — the renderer keyword auto-route generates directly.
-    await waitFor(() => expect(generateImage).toHaveBeenCalledTimes(1))
-    expect(toolChat).not.toHaveBeenCalled()
-    const payload = generateImage.mock.calls[0]![0] as GenPayload
-    expect(payload.prompt).toBe('a dog') // cleanImagePrompt stripped the verb
+    // Every chat turn reaches the model through toolChat; MiniLM offers generate_image when the
+    // request is for a picture and the model calls it. The renderer does not pre-decide by keyword.
+    await waitFor(() => expect(toolChat).toHaveBeenCalledTimes(1))
+    expect(toolChat.mock.calls[0]![0]).toBe('draw a dog')
+    expect(generateImage).not.toHaveBeenCalled()
   })
 
   it('keeps the image tool timeline visible while deferred generation is running', async () => {
