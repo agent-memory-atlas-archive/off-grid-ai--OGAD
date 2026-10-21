@@ -98,6 +98,7 @@ import {
   type VoicePreferences
 } from '@renderer/lib/voice-preferences'
 import { cleanImagePrompt } from '@renderer/lib/image-intent'
+import { primaryModifier } from '@renderer/lib/device'
 import { buildAssistantContext, type AssistantTimelineEntry } from '../../lib/message-persistence'
 import type { GenerationMetrics } from '../../../../shared/generation-metrics'
 import { withGeneratedImageReference } from '../../../../shared/generated-image-reference'
@@ -1559,6 +1560,17 @@ export function MemoryChat({
     setPresetSetup(null)
     setApprovalSetup(null)
   }, [setConvMessages])
+
+  // ⌘T on macOS, Ctrl+T on Windows and Linux: a new chat, like a new browser tab.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 't') return
+      e.preventDefault()
+      startNewConversation()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [startNewConversation])
 
   const deleteConversation = useCallback(
     async (convId: string) => {
@@ -4321,7 +4333,7 @@ export function MemoryChat({
                       <button
                         onClick={startNewConversation}
                         className="shrink-0 rounded-md px-2 py-1 text-neutral-500 transition-colors hover:text-green-500"
-                        title="New tab"
+                        title={`New tab (${primaryModifier()}+T)`}
                       >
                         +
                       </button>
