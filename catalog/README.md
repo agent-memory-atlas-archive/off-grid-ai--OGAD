@@ -5,6 +5,9 @@ clicks **Check for new models** on the Models screen. A model added here reaches
 without a release.
 
 - List only models added after the last release. The app already ships its own catalog.
+- Fast, Balanced and Best are picked on each machine from every model here and in the app, by
+  its own memory. A model needs `quality`, `params`, file `sizeBytes`, and an `org` from the known
+  makers (Qwen, google, meta, mistralai, microsoft, deepseek-ai, openai) to be picked.
 - An entry with the same `id` as a bundled model replaces it. Entries never remove a model.
   To retire one, set `supersededBy`.
 - An entry with a missing or wrong required field is skipped. Required: `id`, `name`, `kind`
