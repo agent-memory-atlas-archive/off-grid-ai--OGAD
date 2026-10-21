@@ -55,18 +55,45 @@
       "nvidia-cudnn-cu13": "9.27.0.42"
     },
     "win": {
-      "nvidia-cublas-cu12": { "version": "12.9.2.10", "sha256": "623f43027d40d44ceadf0043f002bd25cf353e8f13ce90b9a87057019f560661" },
-      "nvidia-cuda-nvrtc-cu12": { "version": "12.9.86", "sha256": "72972ebdcf504d69462d3bcd67e7b81edd25d0fb85a2c46d3ea3517666636349" },
-      "nvidia-cuda-runtime-cu12": { "version": "12.9.79", "sha256": "8e018af8fa02363876860388bd10ccb89eb9ab8fb0aa749aaf58430a9f7c4891" },
-      "nvidia-cudnn-cu12": { "version": "9.27.0.42", "sha256": "06e9b0026f3bad97d2b58666330fabec04fe1672f776661ecb0ce0029c27f142" },
-      "nvidia-cufft-cu12": { "version": "11.4.1.4", "sha256": "8e5bfaac795e93f80611f807d42844e8e27e340e0cde270dcb6c65386d795b80" }
+      "nvidia-cublas-cu12": {
+        "version": "12.9.2.10",
+        "sha256": "623f43027d40d44ceadf0043f002bd25cf353e8f13ce90b9a87057019f560661"
+      },
+      "nvidia-cuda-nvrtc-cu12": {
+        "version": "12.9.86",
+        "sha256": "72972ebdcf504d69462d3bcd67e7b81edd25d0fb85a2c46d3ea3517666636349"
+      },
+      "nvidia-cuda-runtime-cu12": {
+        "version": "12.9.79",
+        "sha256": "8e018af8fa02363876860388bd10ccb89eb9ab8fb0aa749aaf58430a9f7c4891"
+      },
+      "nvidia-cudnn-cu12": {
+        "version": "9.27.0.42",
+        "sha256": "06e9b0026f3bad97d2b58666330fabec04fe1672f776661ecb0ce0029c27f142"
+      },
+      "nvidia-cufft-cu12": {
+        "version": "11.4.1.4",
+        "sha256": "8e5bfaac795e93f80611f807d42844e8e27e340e0cde270dcb6c65386d795b80"
+      }
     }
   },
   "archives": {
     "release": "native-deps-2026-09",
-    "mac-native": { "name": "ogad-mac-native-2026-10-v2.tar.gz", "sha256": "50f13dc0b6318eb0c036ccd9ebe0f21d931912992bf828f1cd56de4113e9e48c" },
-    "linux-native": { "name": "ogad-linux-native-2026-10-x64-v1.tar.gz", "sha256": "d043e3d12c68a07a6059a3e62e1283ea2cb2a23bf4a448d742149ad45586a6cf" },
-    "linux-sd-cuda": { "name": "ogad-sd-master-968-8cd731e-linux-x64-cuda12.8-multiarch-v1.tar.gz", "sha256": "884872dee1905cf94a99757e54b76120429471453f3c186af8651778ca3de0ff" },
-    "linux-whisper": { "name": "ogad-whisper-v1.9.5-linux-x64-cuda12.8-multiarch-v1.tar.gz", "sha256": "3f796596214d2ffff26b641be1ba47f34277b6a6184ea51aa15e5bdd5a833f29" }
+    "mac-native": {
+      "name": "ogad-mac-native-20261021-r1.tar.gz",
+      "sha256": "bb584b5954a59a52da906ee7ade34295c36c875c21951ae39adb9d9470588558"
+    },
+    "linux-native": {
+      "name": "ogad-linux-native-x64-20261021-r1.tar.gz",
+      "sha256": "42a49ab8af2a866ba3ea0f713cff1aa08b23c9b630ee2090d73779b41d5ae879"
+    },
+    "linux-sd-cuda": {
+      "name": "ogad-sd-master-982-0518b34-linux-x64-cuda12.8-multiarch-20261021-r1.tar.gz",
+      "sha256": "b7ae1bb8a11224f23435510cc0695b38ee3b89cc5c925e4390ef13f877f1e69f"
+    },
+    "linux-whisper": {
+      "name": "ogad-whisper-v1.9.5-linux-x64-cuda12.8-multiarch-v1.tar.gz",
+      "sha256": "3f796596214d2ffff26b641be1ba47f34277b6a6184ea51aa15e5bdd5a833f29"
+    }
   }
 }
