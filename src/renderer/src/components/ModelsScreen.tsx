@@ -509,6 +509,8 @@ export function ModelsScreen({
               ? { message: 'Models updated', tone: 'success' }
               : { message: 'Up to date', tone: 'neutral' }
       )
+    } catch {
+      toast?.showToast({ message: "Couldn't check for new models", tone: 'error' })
     } finally {
       setCheckingCatalog(false)
     }

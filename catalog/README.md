@@ -17,30 +17,38 @@ without a release.
 
 ```json
 {
-  "id": "unsloth/Example-4B-GGUF",
-  "name": "Example 4B",
-  "kind": "vision",
-  "org": "example",
-  "description": "Fast reasoning with vision",
-  "params": 4,
-  "minRamGb": 8,
-  "quant": "Q4_K_M",
-  "quality": 30,
-  "releaseDate": "2026-10-20",
-  "isNew": true,
-  "files": [
-    {
-      "name": "Example-4B-Q4_K_M.gguf",
-      "url": "https://huggingface.co/unsloth/Example-4B-GGUF/resolve/main/Example-4B-Q4_K_M.gguf",
-      "sizeBytes": 2500000000,
-      "role": "primary"
-    },
-    {
-      "name": "mmproj-Example-4B-F16.gguf",
-      "url": "https://huggingface.co/unsloth/Example-4B-GGUF/resolve/main/mmproj-F16.gguf",
-      "sizeBytes": 600000000,
-      "role": "mmproj"
-    }
-  ]
+  "schemaVersion": 1,
+  "updatedAt": "2026-10-21",
+  "sections": {
+    "models": [
+      {
+        "id": "unsloth/Example-4B-GGUF",
+        "name": "Example 4B",
+        "kind": "vision",
+        "org": "Qwen",
+        "description": "Fast reasoning with vision",
+        "params": 4,
+        "minRamGb": 8,
+        "quant": "Q4_K_M",
+        "quality": 30,
+        "releaseDate": "2026-10-20",
+        "isNew": true,
+        "files": [
+          {
+            "name": "Example-4B-Q4_K_M.gguf",
+            "url": "https://huggingface.co/unsloth/Example-4B-GGUF/resolve/main/Example-4B-Q4_K_M.gguf",
+            "sizeBytes": 2500000000,
+            "role": "primary"
+          },
+          {
+            "name": "mmproj-Example-4B-F16.gguf",
+            "url": "https://huggingface.co/unsloth/Example-4B-GGUF/resolve/main/mmproj-F16.gguf",
+            "sizeBytes": 600000000,
+            "role": "mmproj"
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
