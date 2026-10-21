@@ -68,6 +68,7 @@ export async function selectChatToolSchemas(
   // catalog and sends only the tools pertinent to this message. If MiniLM cannot
   // load, the lexical fallback fails closed to direct matches.
   let relevantTools: unknown[] = []
+  let rankedByMiniLM = false
   if (rawTools.length > 0) {
     const { selectRelevantTools } = await import('./tool-ranking')
     const lexicalTools = selectRelevantTools(query, rawTools)
@@ -98,17 +99,21 @@ export async function selectChatToolSchemas(
         // 0.0.55-beta.114 did; the budget below still trims the set to fit the context. Words
         // alone would hide tools a request needs ("remind me" never names reminders_create).
         relevantTools = ranked === ROUTING_MODEL_LOADING ? rawTools : ranked
+        rankedByMiniLM = ranked !== ROUTING_MODEL_LOADING
       } catch {
         // The direct-match selection below remains available offline, and while MiniLM loads.
       }
     }
-    // A semantic score must not hide a direct name or description match. This
-    // also keeps explicit tool requests available when a new embedding model
-    // ranks an unrelated schema first.
-    relevantTools = [
-      ...lexicalTools,
-      ...relevantTools.filter((tool) => !lexicalTools.includes(tool))
-    ]
+    // Shared words decide only when MiniLM could not rank: offline, or when the user named a tool.
+    // Once MiniLM has ranked, a word shared with a description adds nothing - a long request
+    // shares "create", "add" or "click" with most tools, and those matches put web_use,
+    // computer_use and generate_image back on an HTML request. Named tools are added below.
+    if (!rankedByMiniLM) {
+      relevantTools = [
+        ...lexicalTools,
+        ...relevantTools.filter((tool) => !lexicalTools.includes(tool))
+      ]
+    }
   }
   const scopeToolName = options.projectId
     ? 'search_knowledge_base'
