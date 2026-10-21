@@ -70,7 +70,7 @@ export async function selectChatToolSchemas(
   let relevantTools: unknown[] = []
   let rankedByMiniLM = false
   if (rawTools.length > 0) {
-    const { selectRelevantTools } = await import('./tool-ranking')
+    const { selectRelevantTools, terms } = await import('./tool-ranking')
     const lexicalTools = selectRelevantTools(query, rawTools)
     const namedTool = rawTools.some((schema) => {
       const name = (schema as { function?: { name?: unknown } }).function?.name
@@ -104,16 +104,19 @@ export async function selectChatToolSchemas(
         // The direct-match selection below remains available offline, and while MiniLM loads.
       }
     }
-    // Shared words decide only when MiniLM could not rank: offline, or when the user named a tool.
-    // Once MiniLM has ranked, a word shared with a description adds nothing - a long request
-    // shares "create", "add" or "click" with most tools, and those matches put web_use,
-    // computer_use and generate_image back on an HTML request. Named tools are added below.
-    if (!rankedByMiniLM) {
-      relevantTools = [
-        ...lexicalTools,
-        ...relevantTools.filter((tool) => !lexicalTools.includes(tool))
-      ]
+    // Shared words decide in full only when MiniLM could not rank: offline, or when the user named
+    // a tool. Once MiniLM has ranked, a word shared with a description adds nothing - a long
+    // request shares "create", "add" or "click" with most tools, and those matches put web_use,
+    // computer_use and generate_image back on an HTML request. A request holding every word of a
+    // tool's name still asks for it: "Read the supplied web addresses... URL" is read_url.
+    const requestTerms = new Set(terms(query))
+    const namedByWords = (tool: unknown): boolean => {
+      const name = (tool as { function?: { name?: unknown } }).function?.name
+      const nameTerms = typeof name === 'string' ? terms(name.replace(/_/g, ' ')) : []
+      return nameTerms.length > 0 && nameTerms.every((term) => requestTerms.has(term))
     }
+    const wordTools = rankedByMiniLM ? lexicalTools.filter(namedByWords) : lexicalTools
+    relevantTools = [...wordTools, ...relevantTools.filter((tool) => !wordTools.includes(tool))]
   }
   const scopeToolName = options.projectId
     ? 'search_knowledge_base'
