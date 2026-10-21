@@ -485,7 +485,7 @@ const TOOLS: ToolDef[] = [
     // memory mid-loop and risk a nested modality-queue deadlock.
     name: 'generate_image',
     description:
-      'Generate an image on-device from a text prompt. Use when the user asks for a picture/photo/logo/art to be created.',
+      'Generate an image on-device from a text prompt. Use when the user asks for a picture/photo/logo/art to be created. Not for code, an HTML page, a canvas animation or any file the user asks you to write: answer those in the chat.',
     parameters: {
       type: 'object',
       properties: {
