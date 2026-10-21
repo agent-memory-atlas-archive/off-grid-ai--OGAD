@@ -39,7 +39,7 @@ function ImageMemoryRetryActionComponent({
   )
 }
 
-const ARTIFACT_ICON = {
+export const ARTIFACT_ICON = {
   html: FileHtml,
   react: Atom,
   svg: FileSvg,
