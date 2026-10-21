@@ -972,7 +972,8 @@ export function ModelsScreen({
           quality: m.quality,
           activeParams: m.activeParams,
           supersededBy: m.supersededBy,
-          nonCommercial: m.nonCommercial
+          nonCommercial: m.nonCommercial,
+          org: m.org
         })),
       ramGb
     )
