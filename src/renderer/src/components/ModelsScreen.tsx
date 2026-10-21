@@ -505,7 +505,9 @@ export function ModelsScreen({
                 message: `${result.newModels} new model${result.newModels === 1 ? '' : 's'}`,
                 tone: 'success'
               }
-            : { message: 'Up to date', tone: 'neutral' }
+            : result.status === 'updated'
+              ? { message: 'Models updated', tone: 'success' }
+              : { message: 'Up to date', tone: 'neutral' }
       )
     } finally {
       setCheckingCatalog(false)

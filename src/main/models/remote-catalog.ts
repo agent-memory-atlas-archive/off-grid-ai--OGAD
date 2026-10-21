@@ -35,6 +35,11 @@ let source: RemoteCatalogSource<DesktopCatalogSections> | null = null
 let inFlight: Promise<CatalogCheckResult> | null = null
 let changed: () => void = () => undefined
 
+/** The entries the last check fetched. */
+export function remoteCatalogModels(): readonly ModelEntry[] {
+  return remoteModels
+}
+
 /** Bundled shared catalog with the fetched entries merged over it. */
 export function baseCatalogModels(): ModelEntry[] {
   return mergeCatalogEntries(CATALOG, remoteModels, (model) => model.id)

@@ -68,7 +68,7 @@ import {
   type ModelEntry,
   type ModelNameSources
 } from '@offgrid/models'
-import { baseCatalogModels } from './models/remote-catalog'
+import { baseCatalogModels, remoteCatalogModels } from './models/remote-catalog'
 import {
   parseRemoteVisionModelId,
   remoteVisionInventoryModels,
@@ -566,9 +566,15 @@ export function kevNeedsOnlyRuntime(modelId: string): boolean {
 const DESKTOP_CATALOG = [BONSAI_2, BONSAI_2_9B, DECIDER_2B, DECIDER_2B_VISION, ...KEV_MODELS]
 const DESKTOP_CATALOG_IDS = new Set(DESKTOP_CATALOG.map((model) => model.id))
 
-/** The shared catalog with the fetched entries merged in; desktop-only entries keep their ids. */
+/** The shared catalog with the fetched entries merged in, without the desktop-only ids. */
 function baseCatalog(): ModelEntry[] {
   return baseCatalogModels().filter((model) => !DESKTOP_CATALOG_IDS.has(model.id))
+}
+
+/** The desktop-only entries, each replaced by a fetched entry with the same id. */
+function desktopEntries(): ModelEntry[] {
+  const fetched = new Map(remoteCatalogModels().map((model) => [model.id, model]))
+  return DESKTOP_CATALOG.map((model) => fetched.get(model.id) ?? model)
 }
 
 export async function desktopCatalog(): Promise<ModelEntry[]> {
@@ -600,7 +606,7 @@ export async function desktopCatalog(): Promise<ModelEntry[]> {
         }
       ]
     : []
-  return [...DESKTOP_CATALOG, ...catalog, ...uiMateMtp]
+  return [...desktopEntries(), ...catalog, ...uiMateMtp]
 }
 
 /** Free bytes on the volume that holds `dir`, or null when the OS will not say. */
@@ -2097,7 +2103,7 @@ export function getLocalModels(dir = llm.getModelsDir()): LocalModel[] {
     ...readDownloaded(dir).flatMap((model) =>
       model.files.map((name) => resolveModelReference(name))
     ),
-    ...[...DESKTOP_CATALOG, ...baseCatalog()].flatMap((model) =>
+    ...[...desktopEntries(), ...baseCatalog()].flatMap((model) =>
       model.files.flatMap((file) =>
         modelReadDirectories().flatMap((root) => {
           const asset = resolveModelAsset(file.name, [root])
