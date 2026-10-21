@@ -2077,15 +2077,21 @@ export class LLMService {
    *  read. A remote model has its server's window (budgeted as 1M when the server does not say);
    *  this machine's engine has its context setting. */
   async contextWindowReport(): Promise<ContextWindowReport> {
-    this.ensureLoaded()
     const remote = this.activeRemoteTextModel()
-    if (!remote) return { tokens: this.ctxSize, remote: false, reported: true }
+    if (!remote) return { tokens: this.engineContextWindow(), remote: false, reported: true }
     const reported = await remoteContextWindow(remote)
     return { tokens: reported ?? UNKNOWN_REMOTE_CONTEXT_TOKENS, remote: true, reported: !!reported }
   }
 
   async contextWindow(): Promise<number> {
     return (await this.contextWindowReport()).tokens
+  }
+
+  /** This machine's llama-server window: what its KV pool holds and what it serves to clients,
+   *  whichever model this app's own chat talks to. */
+  engineContextWindow(): number {
+    this.ensureLoaded()
+    return this.ctxSize
   }
 
   /** A tool turn must fail before generation when the selected remote model cannot plan actions. */

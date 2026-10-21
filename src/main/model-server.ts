@@ -1453,7 +1453,7 @@ async function handleTeamChat(
   const tokens = chatRequestTokens(
     prompt.chars,
     typeof maxTokens === 'number' ? maxTokens : undefined,
-    await llm.contextWindow(),
+    llm.engineContextWindow(),
     { images: prompt.images, thinking: requestedThinking(body) === true }
   )
 
@@ -1704,7 +1704,7 @@ async function handleModelsList(
     text = leadWithActiveChatModel(
       text,
       getActiveModel(),
-      await llm.contextWindow(),
+      llm.engineContextWindow(),
       loadedId && liveCaps ? { id: loadedId, capabilities: liveCaps } : null
     )
   }
