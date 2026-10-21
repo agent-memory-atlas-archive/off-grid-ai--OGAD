@@ -1,0 +1,174 @@
+name: Update engines
+
+# Nightly: moves resources/engine-pins.json to the newest upstream engines (llama.cpp, Prism,
+# stable-diffusion.cpp, whisper.cpp, NVIDIA CUDA libraries), rebuilds and smoke-tests the macOS and
+# Linux engine archives, publishes new CUDA packs for Windows and Linux to R2, and opens a PR with
+# every pin. Windows installers fetch the pinned upstream zips at release time.
+#
+# Settings (repository variables; Settings > Secrets and variables > Actions > Variables):
+#   ENGINE_UPDATE_ENABLED           'false' turns the nightly run off (manual runs still work)
+#   ENGINE_UPDATE_ENGINES           engines to track, default 'llama,prism,sd,whisper,nvidia'
+#   ENGINE_UPDATE_LLAMA_MIN_BUILDS  move llama.cpp only when upstream is this many builds ahead
+#                                   (it tags several a day), default 50
+#   ENGINE_UPDATE_BASE              branch to update and open the PR against, default main
+# Secrets: R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY (the packs), and optionally ENGINE_BOT_TOKEN,
+# a token that can push and open PRs; a PR opened with the default token does not start CI.
+#
+# Packs on R2 are immutable and versioned, so publishing one before the PR merges changes nothing
+# for users: an app only downloads the pack its performance-packs.json names.
+on:
+  schedule:
+    - cron: '30 1 * * *'
+  workflow_dispatch:
+    inputs:
+      engines:
+        description: Engines to track (comma-separated); empty uses ENGINE_UPDATE_ENGINES
+        type: string
+        default: ''
+      llama_min_builds:
+        description: llama.cpp build gap; empty uses ENGINE_UPDATE_LLAMA_MIN_BUILDS
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-engines
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.event_name == 'workflow_dispatch' || vars.ENGINE_UPDATE_ENABLED != 'false'
+    runs-on: ubuntu-24.04
+    outputs:
+      changed: ${{ steps.update.outputs.changed }}
+      branch: ${{ steps.update.outputs.branch }}
+      version: ${{ steps.update.outputs.version }}
+    env:
+      BASE: ${{ vars.ENGINE_UPDATE_BASE || 'main' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ env.BASE }}
+          lfs: false
+          token: ${{ secrets.ENGINE_BOT_TOKEN || github.token }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - id: update
+        name: Move the pins to the newest upstream engines
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ENGINES: ${{ inputs.engines || vars.ENGINE_UPDATE_ENGINES || 'llama,prism,sd,whisper,nvidia' }}
+          LLAMA_MIN_BUILDS: ${{ inputs.llama_min_builds || vars.ENGINE_UPDATE_LLAMA_MIN_BUILDS || '50' }}
+        run: |
+          result=$(node scripts/update-engine-pins.mjs --summary "$RUNNER_TEMP/summary.md" \
+            --engines "$ENGINES" --llama-min-builds "$LLAMA_MIN_BUILDS")
+          echo "$result"
+          cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(node -p "JSON.parse(process.argv[1]).changed.length" "$result")" = 0 ]; then
+            echo changed=false >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          branch=bot/engine-update
+          version="$(date -u +%Y-%m-%d)-auto-r${GITHUB_RUN_NUMBER}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # One rolling branch: a newer night replaces an update nobody merged yet.
+          git switch -C "$branch"
+          git add resources/engine-pins.json
+          git commit -m "Engines: $(node -p "JSON.parse(process.argv[1]).changed.join(', ')" "$result") to the newest upstream releases" \
+            -m "$(cat "$RUNNER_TEMP/summary.md")"
+          git push --force origin "$branch"
+          { echo changed=true; echo "branch=$branch"; echo "version=$version"; } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
+        if: steps.update.outputs.changed == 'true'
+        with:
+          name: engine-update-summary
+          path: ${{ runner.temp }}/summary.md
+
+  build:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    uses: ./.github/workflows/build-native-engines.yml
+    with:
+      ref: ${{ needs.check.outputs.branch }}
+    secrets:
+      PUSH_TOKEN: ${{ secrets.ENGINE_BOT_TOKEN }}
+
+  packs:
+    needs: [check, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux, win32]
+    uses: ./.github/workflows/publish-performance-pack.yml
+    with:
+      platform: ${{ matrix.platform }}
+      version: ${{ needs.check.outputs.version }}
+      ref: ${{ needs.check.outputs.branch }}
+    secrets:
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+  pull-request:
+    needs: [check, packs]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.check.outputs.branch }}
+          lfs: false
+          token: ${{ secrets.ENGINE_BOT_TOKEN || github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: cuda-*-manifest
+          path: ${{ runner.temp }}/artifacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: engine-update-summary
+          path: ${{ runner.temp }}/artifacts/engine-update-summary
+      - name: Pin the new CUDA packs
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs"); const file = "resources/performance-packs.json";
+            const packs = JSON.parse(fs.readFileSync(file, "utf8"));
+            for (const platform of ["linux", "win32"]) {
+              const manifest = `${process.env.RUNNER_TEMP}/artifacts/cuda-${platform}-${process.env.VERSION}-manifest/${process.env.VERSION}.tar.gz.json`;
+              packs.cuda[platform] = JSON.parse(fs.readFileSync(manifest, "utf8"));
+            }
+            fs.writeFileSync(file, JSON.stringify(packs, null, 2) + "\n");
+          '
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add resources/performance-packs.json
+          git commit -m "CUDA packs $VERSION for Windows and Linux"
+          git push origin "HEAD:${{ needs.check.outputs.branch }}"
+      - name: Open or refresh the PR
+        env:
+          GH_TOKEN: ${{ secrets.ENGINE_BOT_TOKEN || github.token }}
+          BASE: ${{ vars.ENGINE_UPDATE_BASE || 'main' }}
+          BRANCH: ${{ needs.check.outputs.branch }}
+        run: |
+          {
+            echo '## Engine update'
+            echo
+            cat "$RUNNER_TEMP/artifacts/engine-update-summary/summary.md"
+            echo
+            echo '**Built and checked by CI**'
+            echo '- macOS archive: llama.cpp, Prism, stable-diffusion.cpp, whisper.cpp from source (universal, macOS 13+); chat and transcription smoke tests'
+            echo '- Linux archive: llama.cpp and Prism (Vulkan, CPU), stable-diffusion.cpp (Vulkan); chat and transcription smoke tests'
+            echo "- CUDA packs \`${{ needs.check.outputs.version }}\` on R2 for Windows and Linux, pinned in \`resources/performance-packs.json\`"
+            echo '- Windows installers fetch the pinned upstream zips (hash-checked) at release time'
+            echo
+            echo '**Before merging:** run a CUDA chat and an image on an NVIDIA machine (CI has no GPU).'
+          } > "$RUNNER_TEMP/body.md"
+          if gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --base "$BASE" --head "$BRANCH" --title 'Engines: newest upstream releases' --body-file "$RUNNER_TEMP/body.md"
+          fi

@@ -1,0 +1,311 @@
+name: Build native engines
+
+# Builds the engine archives that macOS and Linux releases unpack, from the versions pinned in
+# resources/engine-pins.json, and smoke-tests each engine on its own platform:
+#   mac-native     llama.cpp, Prism, stable-diffusion.cpp and whisper.cpp from source (universal,
+#                  macOS 13+), plus the Kev runtime carried over from the current archive
+#   linux-native   upstream llama.cpp and Prism (Vulkan and CPU) and stable-diffusion.cpp (Vulkan),
+#                  plus whisper, FFmpeg, executorch-speech and licences carried over from the
+#                  current archive (or from a new whisper archive when whisper moved)
+#   linux-sd-cuda  stable-diffusion.cpp CUDA 12.8, all GPU architectures, only when sd moved
+#   linux-whisper  whisper.cpp CUDA 12.8 + Vulkan + CPU, only when whisper moved
+# Windows needs no archive: release.yml and the CUDA pack fetch the pinned upstream zips.
+# New archives go to the release named in the pins (names are never reused), and the job commits
+# their names and hashes back to resources/engine-pins.json on the branch it ran on.
+on:
+  workflow_dispatch:
+  # Bootstrap: a new workflow cannot be dispatched until it is on main, so the first run starts from
+  # a push to this branch. Remove this trigger once the workflow has merged.
+  push:
+    branches: [feature/local-model-experience]
+    paths: [.github/workflows/build-native-engines.yml]
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch to build from and commit the new archive pins to
+        type: string
+        required: true
+    secrets:
+      PUSH_TOKEN:
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  # Tiny public models for the smoke tests (llama and Prism chat, whisper transcription).
+  CHAT_MODEL_URL: https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q8_0.gguf
+  WHISPER_MODEL_URL: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+  WHISPER_SAMPLE_URL: https://github.com/ggml-org/whisper.cpp/raw/master/samples/jfk.wav
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      ref: ${{ steps.plan.outputs.ref }}
+      stamp: ${{ steps.plan.outputs.stamp }}
+      sd_cuda: ${{ steps.plan.outputs.sd_cuda }}
+      whisper: ${{ steps.plan.outputs.whisper }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          lfs: false
+          persist-credentials: false
+      - id: plan
+        name: Decide which archives need a rebuild
+        run: |
+          pin() { node -p "require('./resources/engine-pins.json').$1"; }
+          echo "ref=${{ inputs.ref || github.ref_name }}" >> "$GITHUB_OUTPUT"
+          echo "stamp=$(date -u +%Y%m%d)-r${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          # Our CUDA archives carry the engine ref in their names; rebuild only when the pin moved.
+          case "$(pin "archives['linux-sd-cuda'].name")" in
+            *"$(pin sd.ref)"*) echo sd_cuda=false ;; *) echo sd_cuda=true ;;
+          esac >> "$GITHUB_OUTPUT"
+          case "$(pin "archives['linux-whisper'].name")" in
+            *"-$(pin whisper.ref)-"*) echo whisper=false ;; *) echo whisper=true ;;
+          esac >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  linux-sd-cuda:
+    needs: plan
+    if: needs.plan.outputs.sd_cuda == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          lfs: false
+          persist-credentials: false
+      - name: Free runner disk
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Stage the CUDA runtime the engine links against
+        run: LLAMA_ACCELERATOR=cuda bash scripts/build-llama-linux.sh
+      - name: Build stable-diffusion.cpp CUDA from the pinned source
+        run: OFFGRID_BUILD_IMAGE_CUDA_FROM_SOURCE=1 bash scripts/build-image-cuda-linux.sh
+      - name: Package
+        run: |
+          ref=$(node -p "require('./resources/engine-pins.json').sd.ref")
+          name="ogad-sd-$ref-linux-x64-cuda12.8-multiarch-${{ needs.plan.outputs.stamp }}.tar.gz"
+          tar -czf "$RUNNER_TEMP/$name" -C build/linux-bin sd-cuda
+          mkdir -p out && mv "$RUNNER_TEMP/$name" out/
+          (cd out && sha256sum "$name" > linux-sd-cuda.sha256 && echo "$name" > linux-sd-cuda.name)
+      - uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
+        with:
+          name: linux-sd-cuda
+          path: out/
+          retention-days: 3
+
+  linux-whisper:
+    needs: plan
+    if: needs.plan.outputs.whisper == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          lfs: false
+          persist-credentials: false
+      - name: Free runner disk
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Install build dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y cmake libvulkan-dev glslc libgomp1
+      - name: Stage the CUDA runtime the engine links against
+        run: LLAMA_ACCELERATOR=cuda bash scripts/build-llama-linux.sh
+      - name: Build whisper.cpp (CUDA, Vulkan, CPU) from the pinned source
+        run: OFFGRID_BUILD_VOICE_FROM_SOURCE=1 bash scripts/build-voice-linux.sh
+      - name: Smoke-test transcription
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/model.bin" "$WHISPER_MODEL_URL"
+          curl -fsSL -o "$RUNNER_TEMP/jfk.wav" "$WHISPER_SAMPLE_URL"
+          build/linux-bin/whisper-cpu/whisper-cli -m "$RUNNER_TEMP/model.bin" -f "$RUNNER_TEMP/jfk.wav" -nt \
+            | tee "$RUNNER_TEMP/out.txt"
+          grep -qi 'ask not what your country can do for you' "$RUNNER_TEMP/out.txt"
+      - name: Package
+        run: |
+          ref=$(node -p "require('./resources/engine-pins.json').whisper.ref")
+          name="ogad-whisper-$ref-linux-x64-cuda12.8-multiarch-${{ needs.plan.outputs.stamp }}.tar.gz"
+          tar -czf "$RUNNER_TEMP/$name" -C build/linux-bin whisper-cuda whisper whisper-cpu ffmpeg licenses/ffmpeg.txt
+          mkdir -p out && mv "$RUNNER_TEMP/$name" out/
+          (cd out && sha256sum "$name" > linux-whisper.sha256 && echo "$name" > linux-whisper.name)
+      - uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
+        with:
+          name: linux-whisper
+          path: out/
+          retention-days: 3
+
+  linux-native:
+    needs: [plan, linux-whisper]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.linux-whisper.result == 'success' || needs.linux-whisper.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          lfs: false
+          persist-credentials: false
+      - name: Install runtime dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y libgomp1 libvulkan1 unzip
+      - name: Start from the current archive (whisper, FFmpeg, executorch-speech, licences)
+        run: |
+          pin() { node -p "require('./resources/engine-pins.json').$1"; }
+          curl -fL --retry 3 -o "$RUNNER_TEMP/base.tar.gz" \
+            "https://github.com/off-grid-ai/OGAD/releases/download/$(pin archives.release)/$(pin "archives['linux-native'].name")"
+          echo "$(pin "archives['linux-native'].sha256")  $RUNNER_TEMP/base.tar.gz" | sha256sum -c -
+          mkdir -p build/linux-bin
+          tar -xzf "$RUNNER_TEMP/base.tar.gz" -C build/linux-bin --no-same-owner
+      - name: Take whisper from the new whisper archive
+        if: needs.plan.outputs.whisper == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: linux-whisper
+          path: ${{ runner.temp }}/whisper
+      - name: Unpack the new whisper (the release archive carries no CUDA folders)
+        if: needs.plan.outputs.whisper == 'true'
+        run: |
+          rm -rf build/linux-bin/whisper build/linux-bin/whisper-cpu
+          tar -xzf "$RUNNER_TEMP/whisper/$(cat "$RUNNER_TEMP/whisper/linux-whisper.name")" -C build/linux-bin \
+            --no-same-owner --exclude='whisper-cuda'
+      - name: Stage llama.cpp and Prism (Vulkan, CPU) and stable-diffusion.cpp (Vulkan)
+        run: |
+          for variant in standard prism; do
+            for accelerator in vulkan cpu; do
+              LLAMA_VARIANT=$variant LLAMA_ACCELERATOR=$accelerator bash scripts/build-llama-linux.sh
+            done
+          done
+          bash scripts/fetch-image-linux.sh
+      - name: Smoke-test every engine
+        run: |
+          bin=build/linux-bin
+          curl -fsSL -o "$RUNNER_TEMP/chat.gguf" "$CHAT_MODEL_URL"
+          for engine in llama-cpu llama-prism-cpu; do
+            LD_LIBRARY_PATH="$bin/$engine" "$bin/$engine/llama-server" -m "$RUNNER_TEMP/chat.gguf" --port 18080 -c 2048 &
+            pid=$!
+            for _ in $(seq 1 60); do curl -sf localhost:18080/health >/dev/null && break; sleep 1; done
+            curl -sf localhost:18080/v1/chat/completions -H 'content-type: application/json' \
+              -d '{"messages":[{"role":"user","content":"Say hello."}],"max_tokens":16}' \
+              | node -e 'const r=JSON.parse(require("fs").readFileSync(0));const t=r.choices[0].message.content;console.log(t);if(!t.trim())process.exit(1)'
+            kill $pid; wait $pid || true
+          done
+          LD_LIBRARY_PATH="$bin/llama" "$bin/llama/llama-server" --version
+          LD_LIBRARY_PATH="$bin/llama-prism" "$bin/llama-prism/llama-server" --version
+          LD_LIBRARY_PATH="$bin/sd" "$bin/sd/sd-cli" --version
+          curl -fsSL -o "$RUNNER_TEMP/model.bin" "$WHISPER_MODEL_URL"
+          curl -fsSL -o "$RUNNER_TEMP/jfk.wav" "$WHISPER_SAMPLE_URL"
+          "$bin/whisper-cpu/whisper-cli" -m "$RUNNER_TEMP/model.bin" -f "$RUNNER_TEMP/jfk.wav" -nt | tee "$RUNNER_TEMP/out.txt"
+          grep -qi 'ask not what your country can do for you' "$RUNNER_TEMP/out.txt"
+      - name: Package (the release archive carries no CUDA folders)
+        run: |
+          rm -rf build/linux-bin/*-cuda build/linux-bin/cuda-runtime
+          name="ogad-linux-native-x64-${{ needs.plan.outputs.stamp }}.tar.gz"
+          tar -czf "$RUNNER_TEMP/$name" -C build/linux-bin .
+          mkdir -p out && mv "$RUNNER_TEMP/$name" out/
+          (cd out && sha256sum "$name" > linux-native.sha256 && echo "$name" > linux-native.name)
+      - uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
+        with:
+          name: linux-native
+          path: out/
+          retention-days: 3
+
+  mac-native:
+    needs: plan
+    runs-on: macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          lfs: false
+          persist-credentials: false
+      - name: Start from the current archive (Kev runtime)
+        run: |
+          pin() { node -p "require('./resources/engine-pins.json').$1"; }
+          curl -fL --retry 3 -o "$RUNNER_TEMP/base.tar.gz" \
+            "https://github.com/off-grid-ai/OGAD/releases/download/$(pin archives.release)/$(pin "archives['mac-native'].name")"
+          echo "$(pin "archives['mac-native'].sha256")  $RUNNER_TEMP/base.tar.gz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/base"
+          tar -xzf "$RUNNER_TEMP/base.tar.gz" -C "$RUNNER_TEMP/base"
+          rm -rf resources/bin/kev-runtime
+          mv "$RUNNER_TEMP/base/kev-runtime" resources/bin/kev-runtime
+      - name: Build llama.cpp, Prism, stable-diffusion.cpp and whisper.cpp (universal, macOS 13+)
+        run: |
+          rm -rf resources/bin/llama resources/bin/llama-prism resources/bin/sd resources/bin/whisper
+          LLAMA_VARIANT=standard bash scripts/build-llama.sh
+          LLAMA_VARIANT=prism bash scripts/build-llama.sh
+          bash scripts/build-sd-macos.sh
+          bash scripts/build-whisper-cli.sh
+      - name: Smoke-test every engine
+        run: |
+          bin=resources/bin
+          curl -fsSL -o "$RUNNER_TEMP/chat.gguf" "$CHAT_MODEL_URL"
+          for engine in llama llama-prism; do
+            lipo -archs "$bin/$engine/llama-server" | grep -q x86_64
+            lipo -archs "$bin/$engine/llama-server" | grep -q arm64
+            DYLD_LIBRARY_PATH="$bin/$engine" "$bin/$engine/llama-server" -m "$RUNNER_TEMP/chat.gguf" --port 18080 -c 2048 &
+            pid=$!
+            for _ in $(seq 1 90); do curl -sf localhost:18080/health >/dev/null && break; sleep 1; done
+            curl -sf localhost:18080/v1/chat/completions -H 'content-type: application/json' \
+              -d '{"messages":[{"role":"user","content":"Say hello."}],"max_tokens":16}' \
+              | node -e 'const r=JSON.parse(require("fs").readFileSync(0));const t=r.choices[0].message.content;console.log(t);if(!t.trim())process.exit(1)'
+            kill $pid; wait $pid || true
+          done
+          DYLD_LIBRARY_PATH="$bin/sd" "$bin/sd/sd-cli" --version
+          curl -fsSL -o "$RUNNER_TEMP/model.bin" "$WHISPER_MODEL_URL"
+          curl -fsSL -o "$RUNNER_TEMP/jfk.wav" "$WHISPER_SAMPLE_URL"
+          DYLD_LIBRARY_PATH="$bin/whisper" "$bin/whisper/whisper-cli" -m "$RUNNER_TEMP/model.bin" -f "$RUNNER_TEMP/jfk.wav" -nt \
+            | tee "$RUNNER_TEMP/out.txt"
+          grep -qi 'ask not what your country can do for you' "$RUNNER_TEMP/out.txt"
+      - name: Package
+        run: |
+          name="ogad-mac-native-${{ needs.plan.outputs.stamp }}.tar.gz"
+          tar -czf "$RUNNER_TEMP/$name" -C resources/bin llama llama-prism whisper kev-runtime sd
+          mkdir -p out && mv "$RUNNER_TEMP/$name" out/
+          (cd out && shasum -a 256 "$name" > mac-native.sha256 && echo "$name" > mac-native.name)
+      - uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
+        with:
+          name: mac-native
+          path: out/
+          retention-days: 3
+
+  publish:
+    needs: [plan, linux-sd-cuda, linux-whisper, linux-native, mac-native]
+    if: ${{ !cancelled() && needs.linux-native.result == 'success' && needs.mac-native.result == 'success' && needs.linux-sd-cuda.result != 'failure' && needs.linux-whisper.result != 'failure' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          lfs: false
+          token: ${{ secrets.PUSH_TOKEN || github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: ${{ runner.temp }}/archives
+      - name: Upload archives and pin them
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release=$(node -p "require('./resources/engine-pins.json').archives.release")
+          for dir in "$RUNNER_TEMP"/archives/*/; do
+            key=$(basename "$dir")
+            name=$(cat "$dir/$key.name")
+            sha=$(cut -d' ' -f1 "$dir/$key.sha256")
+            # Names carry the date and run number, so an existing asset is never replaced.
+            gh release upload "$release" "$dir/$name" --repo "$GITHUB_REPOSITORY"
+            node -e '
+              const fs = require("fs"); const file = "resources/engine-pins.json";
+              const pins = JSON.parse(fs.readFileSync(file, "utf8"));
+              pins.archives[process.argv[1]] = { name: process.argv[2], sha256: process.argv[3] };
+              fs.writeFileSync(file, JSON.stringify(pins, null, 2) + "\n");
+            ' "$key" "$name" "$sha"
+            echo "- \`$key\`: $name ($sha)" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Commit the new archive pins
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add resources/engine-pins.json
+          git commit -m "Native engine archives ${{ needs.plan.outputs.stamp }}"
+          git push origin "HEAD:${{ needs.plan.outputs.ref }}"
