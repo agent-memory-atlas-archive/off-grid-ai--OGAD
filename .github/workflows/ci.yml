@@ -393,7 +393,9 @@ jobs:
           for report in coverage-native-desktop/*/coverage-final.json; do
             node scripts/normalize-native-coverage.mjs "$report" absolute
           done
-      - name: Coverage gate (new code across all suites)
+      # Report only (maintainer's call, 2026-10-21): new-code coverage is printed for the reviewer but
+      # never blocks a merge. Total coverage is what is tracked.
+      - name: Coverage report (new code across all suites)
         if: ${{ !cancelled() }}
         run: |
           reports="coverage/coverage-final.json coverage-db/coverage-final.json coverage-heavy/coverage-final.json coverage-native-desktop/native-desktop-coverage-ubuntu-latest/coverage-final.json coverage-native-desktop/native-desktop-coverage-windows-2022/coverage-final.json"
@@ -407,10 +409,8 @@ jobs:
           if [ -f coverage-e2e/coverage-final.json ]; then
             coarse="$coarse --coarse=coverage-e2e/coverage-final.json"
           fi
-          node ../shared/scripts/new-code-coverage.mjs . $reports $coarse \
-            --min-statements=78 --min-branches=57 --min-functions=52 --min-lines=78
-          node ../shared/scripts/new-code-coverage.mjs ./pro $reports $coarse \
-            --min-statements=72 --min-branches=45 --min-functions=46 --min-lines=72
+          node ../shared/scripts/new-code-coverage.mjs . $reports $coarse
+          node ../shared/scripts/new-code-coverage.mjs ./pro $reports $coarse
       - name: Upload e2e coverage
         if: ${{ !cancelled() && vars.OFFGRID_CI_E2E == '1' }}
         uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
