@@ -204,10 +204,14 @@ for (const file of files) {
   )
 }
 
+// Read the index again: another publisher may have written it during the uploads.
+const latest = JSON.parse((await getText(indexKey)) ?? JSON.stringify(current))
+if (latest.schemaVersion !== 1 || latest.platform !== platform)
+  throw new Error(`${indexKey} is not a v1 ${platform} index`)
 const index = {
   schemaVersion: 1,
   platform,
-  engines: [...current.engines.filter((item) => item.id !== engine.id), release].sort((a, b) =>
+  engines: [...latest.engines.filter((item) => item.id !== engine.id), release].sort((a, b) =>
     a.id.localeCompare(b.id)
   )
 }

@@ -194,8 +194,10 @@ jobs:
           }
 
   # The Windows CUDA chat engine is staged from its upstream zip, which needs no Windows runner.
+  # It runs after win32 because both rewrite the Windows index.
   win32-cuda-chat:
-    needs: gate
+    needs: [gate, win32]
+    if: ${{ !cancelled() && needs.gate.result == 'success' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

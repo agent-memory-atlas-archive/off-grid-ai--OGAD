@@ -191,7 +191,7 @@ async function updateNvidia() {
     }
   }
   for (const [name, pin] of Object.entries(pins.nvidia.win)) {
-    const latest = await pypiLatest(name, pin.version, /win_amd64\.whl$/)
+    const latest = await pypiLatest(name, pin.version, /-py3-none-win_amd64\.whl$/)
     if (latest && latest.version !== pin.version) {
       lines.push(`| ${name} (Windows) | \`${pin.version}\` | \`${latest.version}\` |`)
       pins.nvidia.win[name] = latest

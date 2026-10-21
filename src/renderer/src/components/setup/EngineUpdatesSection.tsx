@@ -20,6 +20,20 @@ function engineName(id: string): string {
   return ENGINE_NAMES[id.replace(/-(cpu|cuda)$/, '')] ?? id
 }
 
+/** One entry per engine when its variants match; each variant's own version when they differ. */
+function installedLabels(installed: [string, string][]): string[] {
+  const byName = new Map<string, [string, string][]>()
+  for (const entry of installed) {
+    const name = engineName(entry[0])
+    byName.set(name, [...(byName.get(name) ?? []), entry])
+  }
+  return [...byName].flatMap(([name, variants]) =>
+    new Set(variants.map(([, version]) => version)).size === 1
+      ? [`${name}: ${variants[0]![1]}`]
+      : variants.map(([id, version]) => `${name} (${id.match(/-(cpu|cuda)$/)?.[1] ?? 'GPU'}): ${version}`)
+  )
+}
+
 function phaseText(status: EngineUpdateStatus): string {
   switch (status.phase) {
     case 'checking':
@@ -87,9 +101,7 @@ export function EngineUpdatesSection(): React.ReactElement | null {
       )}
       {installed.length ? (
         <p className="mt-1 text-[11px] text-neutral-500">
-          {[...new Map(installed.map(([id, version]) => [engineName(id), version])).entries()]
-            .map(([name, version]) => `${name}: ${version}`)
-            .join(' · ')}
+          {installedLabels(installed).join(' · ')}
         </p>
       ) : null}
       {status.enabled ? (

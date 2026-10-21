@@ -283,8 +283,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           release=$(node -p "require('./resources/engine-pins.json').archives.release")
-          for dir in "$RUNNER_TEMP"/archives/*/; do
-            key=$(basename "$dir")
+          # Only the archive artifacts: a caller's run (update-engines.yml) holds others too.
+          for key in mac-native linux-native linux-sd-cuda linux-whisper; do
+            dir="$RUNNER_TEMP/archives/$key"
+            [ -d "$dir" ] || continue
             name=$(cat "$dir/$key.name")
             sha=$(cut -d' ' -f1 "$dir/$key.sha256")
             # Names carry the date and run number, so an existing asset is never replaced.
