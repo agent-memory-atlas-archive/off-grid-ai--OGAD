@@ -711,6 +711,18 @@ function downloadedVariant(models: DownloadedModel[], id: string): DownloadedMod
   return family.length === 1 ? family[0] : undefined
 }
 
+/** Bytes a download of `model` still needs, when some of its files are already on disk. */
+function missingBytes(model: CatalogEntry, dir: string): { missingBytes?: number } {
+  const files = model.files as { name: string; sizeBytes?: number }[]
+  const onDisk = files.filter((file) => fileSizeOf(dir, file.name) > 0)
+  if (onDisk.length === 0 || onDisk.length === files.length) return {}
+  return {
+    missingBytes: files
+      .filter((file) => !onDisk.includes(file))
+      .reduce((sum, file) => sum + (file.sizeBytes ?? 0), 0)
+  }
+}
+
 export async function getCatalog(): Promise<{ kinds: readonly string[]; models: unknown[] }> {
   const { MODEL_KINDS } = await import('@offgrid/models')
   const CATALOG = await desktopCatalog()
@@ -754,7 +766,13 @@ export async function getCatalog(): Promise<{ kinds: readonly string[]; models: 
   return {
     kinds: MODEL_KINDS,
     models: [
-      ...models.map((model) => ({ ...model, ...traitsById.get((model as CatalogEntry).id) })),
+      ...models.map((model) => ({
+        ...model,
+        ...traitsById.get((model as CatalogEntry).id),
+        // What a download would still fetch: files another model already brought (a shared text
+        // encoder or VAE) are on disk and cost nothing. Absent when nothing is on disk yet.
+        ...missingBytes(model as CatalogEntry, dir)
+      })),
       ...remoteModels
     ].map((model) => ({
       ...model,

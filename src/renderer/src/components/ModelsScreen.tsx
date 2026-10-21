@@ -191,6 +191,8 @@ interface ModelEntry {
   activeParams?: number
   supersededBy?: string
   nonCommercial?: boolean
+  /** Bytes a download still needs when some of its files (a shared encoder or VAE) are on disk. */
+  missingBytes?: number
   minLlamaBuild?: number
 }
 /** What a Hugging Face search adds to a card: other uploads of the model, an MTP head, a newer model. */
@@ -1022,7 +1024,11 @@ export function ModelsScreen({
     const dflashMissing = isInstalled && !!vs?.supportsDflash && !vs.dflashInstalled
     const mtpMissing = isInstalled && !!vs?.supportsMtp && !vs.mtpInstalled
     const bytes = totalBytes(m)
-    const size = formatSize(bytes) || (isHf && m.params ? `~${formatSize(estimatedBytes(m))}` : null)
+    // A model whose shared files another model already brought shows only what is left to fetch.
+    const size =
+      !isInstalled && m.missingBytes !== undefined
+        ? `${formatSize(m.missingBytes)} to add`
+        : formatSize(bytes) || (isHf && m.params ? `~${formatSize(estimatedBytes(m))}` : null)
     const meta = [m.org, m.params ? formatParams(m.params) : null, size]
       .filter(Boolean)
       .join(' · ')
