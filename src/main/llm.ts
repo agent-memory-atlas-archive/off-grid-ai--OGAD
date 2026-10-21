@@ -82,6 +82,7 @@ import { prioritizeBackend, type BackendPreference } from '../shared/backend-pre
 import { streamCompletion, type StreamResult } from './llm/stream'
 import type { AssembledToolCall } from './llm/sse-stream'
 import {
+  isLocalModelServer,
   nativeToolPlannerUnavailableMessage,
   remoteContextWindow,
   remoteNativeToolCapability,
@@ -2075,7 +2076,9 @@ export class LLMService {
 
   /** Whether text requests go to a remote model server rather than this machine's engine. */
   usesRemoteTextModel(): boolean {
-    return this.activeRemoteTextModel() !== null
+    const remote = this.activeRemoteTextModel()
+    // The local grounder comes through the same seam but runs on this Mac: its jobs need admission.
+    return remote !== null && !isLocalModelServer(remote)
   }
 
   /** The active text model's context window, the one fact every budget, the gateway and Settings

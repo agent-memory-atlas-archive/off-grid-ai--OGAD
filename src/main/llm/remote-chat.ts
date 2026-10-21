@@ -113,6 +113,12 @@ export function remoteNativeToolCapability(
   return discovered
 }
 
+/** A model server on this machine reached through the remote seam: the local grounding specialist
+ *  (grounder-runtime.ts). It holds memory here, so it is not a remote model. */
+export function isLocalModelServer(remote: RemoteTextModelConnection): boolean {
+  return remote.id.startsWith('local-grounder:')
+}
+
 /** Read the server's model/template facts, never its display name. Failed probes are retried. */
 export async function remoteReasoningCapability(
   remote: RemoteTextModelConnection
@@ -452,13 +458,11 @@ export async function streamRemoteChatCompletion(input: {
 }): Promise<StreamResult> {
   const { remote, request, options } = input
   const log = currentAIRequest()
+  const local = isLocalModelServer(remote)
   log?.update({
     model: remote.model,
-    backend:
-      remote.computeBackend ?? (remote.id.startsWith('local-grounder:') ? 'Unknown' : 'Remote'),
-    ...(remote.id.startsWith('local-grounder:')
-      ? { source: screenTaskRequestSource('Grounding specialist', 'grounding') }
-      : {})
+    backend: remote.computeBackend ?? (local ? 'Unknown' : 'Remote'),
+    ...(local ? { source: screenTaskRequestSource('Grounding specialist', 'grounding') } : {})
   })
   const accumulator = createCompletionStreamAccumulator(
     (text, kind) => {
