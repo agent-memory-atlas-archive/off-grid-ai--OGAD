@@ -12,7 +12,7 @@ import path from 'path'
 import { getActiveModal } from '../active-models'
 import { binRoots, modelsDir, exe } from '../runtime-env'
 import { modelEntryNames, resolveModelAsset } from '../model-paths'
-import { modelsByKind } from '@offgrid/models'
+import { catalogModelsByKind } from '../models/remote-catalog'
 import { existing } from './bin-resolution'
 import { catalogEngine } from './classify'
 import { decodeToWavArgs, DECODE_TIMEOUT_MS } from './ffmpeg-decode'
@@ -56,7 +56,7 @@ function whisperModelFiles(): string[] {
  *  null so their ONNX files are never handed to whisper. */
 function activeWhisperFile(chosen: string): string | null {
   if (/ggml-.*\.bin$/i.test(chosen)) return chosen
-  const entry = modelsByKind('transcription').find((m) => m.id === chosen)
+  const entry = catalogModelsByKind('transcription').find((m) => m.id === chosen)
   // Only whisper entries feed the whisper model path — a Parakeet id (or no match)
   // resolves to null so its ONNX files are never handed to whisper. Classification is
   // the single source of truth in select.catalogEngine, not a local engine check.

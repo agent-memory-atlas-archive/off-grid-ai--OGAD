@@ -1598,6 +1598,15 @@ export function setupIPC(): void {
   // the headless gateway HTTP admin endpoints). These IPC handlers are thin
   // wrappers; the download one adds a renderer progress broadcast.
   ipcMain.handle('models:catalog', () => import('./models-manager').then((m) => m.getCatalog()))
+  // Models published in OGAD's catalog/models.json, fetched only when someone checks for them.
+  const catalogChanged = (): void =>
+    BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('models:inventory-changed'))
+  void import('./models/remote-catalog').then((m) =>
+    m.initRemoteModelCatalog(app.getPath('userData'), catalogChanged)
+  )
+  ipcMain.handle('models:check-for-new', () =>
+    import('./models/remote-catalog').then((m) => m.checkForNewModels())
+  )
   ipcMain.handle('models:vision-status', () =>
     import('./models-manager').then((m) => m.getVisionStatuses())
   )
