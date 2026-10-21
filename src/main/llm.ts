@@ -2055,6 +2055,12 @@ export class LLMService {
     return (await remoteContextWindow(remote)) ?? UNKNOWN_REMOTE_CONTEXT_TOKENS
   }
 
+  /** False when the remote server does not report its window, so chatContextSize is a guess. */
+  async chatContextReported(): Promise<boolean> {
+    const remote = this.activeRemoteTextModel()
+    return !remote || (await remoteContextWindow(remote)) !== null
+  }
+
   /** A tool turn must fail before generation when the selected remote model cannot plan actions. */
   async toolPlannerPreflight(): Promise<string | null> {
     const remote = this.activeRemoteTextModel()
@@ -2087,16 +2093,14 @@ export class LLMService {
       onToolCallReady?: (call: AssembledToolCall) => void
     }
   ): Promise<StreamResult> {
-    // A server that does not report its window sets the reply length itself: a guessed cap could
-    // be more than it accepts.
-    const windowKnown = (await remoteContextWindow(remote)) !== null
+    // A caller's cap always goes out (a suggestion's 40 tokens). Auto sends none, so the server's
+    // own limit applies instead of a number it may refuse.
+    const maxTokens = resolveMaxTokens(options.maxTokens, this.maxTokens)
     return streamRemoteChatCompletion({
       remote,
       request: {
         messages,
-        maxTokens: windowKnown
-          ? maxTokensForWire(resolveMaxTokens(options.maxTokens, this.maxTokens))
-          : undefined,
+        maxTokens: maxTokens > 0 ? maxTokens : undefined,
         temperature: options.temperature ?? this.temperature,
         topP: options.topP ?? this.topP,
         topK: options.topK ?? this.topK,

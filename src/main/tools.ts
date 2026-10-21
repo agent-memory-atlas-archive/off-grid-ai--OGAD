@@ -1134,6 +1134,15 @@ export async function toolChat(
   }
 
   const settings = llm.getSettings()
+  // A remote server that does not report its window sets the reply length itself: only a Max output
+  // the person chose is sent then, never room worked out from the guessed window.
+  const contextReported = await llm.chatContextReported()
+  const sentMaxTokens = (room: number): number | undefined =>
+    contextReported
+      ? room
+      : typeof settings.maxTokens === 'number' && settings.maxTokens > 0
+        ? settings.maxTokens
+        : undefined
   const maxToolCalls = normalizeMaxToolCalls(settings.maxToolCalls)
   const requestedImageCountMatch = query.match(
     /\b(\d+|two|three|four|five|six|seven|eight|nine|ten)\s+(?:distinct\s+|different\s+|separate\s+|unique\s+)?(?:images|pictures|photos|illustrations|variations)\b/i
@@ -1221,7 +1230,7 @@ export async function toolChat(
       temperature: 0.3,
       // Keep the user's lower Max Output setting, but never request more than
       // this round has room to generate inside the configured context window.
-      maxTokens: roundMaxTokens,
+      maxTokens: sentMaxTokens(roundMaxTokens),
       thinking: opts.thinking,
       signal: opts.signal,
       onToolCallStart: (name) =>
@@ -1413,7 +1422,12 @@ export async function toolChat(
       const retry = await llm.streamChat(
         [...messages, { role: 'system', content: ANSWER_NOW_INSTRUCTION }],
         onDelta,
-        { temperature: 0.3, maxTokens: roundMaxTokens, thinking: false, signal: opts.signal }
+        {
+          temperature: 0.3,
+          maxTokens: sentMaxTokens(roundMaxTokens),
+          thinking: false,
+          signal: opts.signal
+        }
       )
       const retried = answerFrom(retry.content)
       return resultWithImages({
@@ -1456,7 +1470,7 @@ export async function toolChat(
   const final = await llm.streamChat(finalMessages, onDelta, {
     temperature: 0.3,
     // Forced final answer obeys the same context-bound cap as every tool round.
-    maxTokens: finalMaxTokens,
+    maxTokens: sentMaxTokens(finalMaxTokens),
     thinking: false,
     signal: opts.signal
   })
