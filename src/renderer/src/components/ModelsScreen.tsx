@@ -809,6 +809,10 @@ export function ModelsScreen({
   // The image model recommended for this machine's RAM (Light Q4 on <=16GB, full
   // Q8 above) — one pure rule, reused for both the badge and the top-of-list sort.
   const recommendedImageId = useMemo(() => recommendedImageModelId(models, ramGb), [models, ramGb])
+  // One fit rule for every card (shared with the detail panel and the switch warning). A search result
+  // has no file list yet, so its size is estimated from its parameter count at the usual 4-bit size.
+  const estimatedBytes = (m: { files?: ModelFile[]; params?: number }): number =>
+    totalBytes(m) || (m.params ? m.params * 0.6e9 : 0)
   const displayed = useMemo(
     () =>
       filterAndSort(
@@ -860,8 +864,15 @@ export function ModelsScreen({
           newer: r.newer
         })),
         filterState
-      ),
-    [hfResults, filterState, list, deferredQuery]
+      ).filter((r) => {
+        // The size filter holds in search too: a catalog model by its files, a search result by
+        // its parameter count (as its card estimates it). A result of unknown size cannot promise
+        // to fit, so a chosen size hides it.
+        if (sizeBucket == null) return true
+        const bytes = estimatedBytes(list.find((m) => m.id === r.id) ?? { params: r.params ?? undefined })
+        return bytes > 0 && bytes <= sizeBucket * 1e9
+      }),
+    [hfResults, filterState, list, deferredQuery, sizeBucket]
   )
 
   // Tags offered as filter chips — every tag present in this tab's models.
@@ -939,10 +950,6 @@ export function ModelsScreen({
     failed: Object.values(progress).filter((p) => p.status === 'failed').length
   }
 
-  // One fit rule for every card (shared with the detail panel and the switch warning). A search result
-  // has no file list yet, so its size is estimated from its parameter count at the usual 4-bit size.
-  const estimatedBytes = (m: { files?: ModelFile[]; params?: number }): number =>
-    totalBytes(m) || (m.params ? m.params * 0.6e9 : 0)
   const ramTier = (m: { files?: ModelFile[]; params?: number }): FitTier => {
     const gb = estimatedBytes(m) / 1e9
     return ramGb && gb ? fitTier(gb, ramGb) : 'easy'
@@ -1674,22 +1681,20 @@ export function ModelsScreen({
               options={SORT_OPTIONS}
               prefix="Sort: "
             />
-            {!searchingMode && (
-              <Segmented
-                label="Fits in memory"
-                size="sm"
-                tone="quiet"
-                value={sizeBucket === null ? 'any' : String(sizeBucket)}
-                onValueChange={(id) => setSizeBucket(id === 'any' ? null : Number(id))}
-                options={[
-                  { id: 'any', label: 'Any' },
-                  ...(SIZE_BUCKETS as readonly number[]).map((b) => ({
-                    id: String(b),
-                    label: `≤${b}GB`
-                  }))
-                ]}
-              />
-            )}
+            <Segmented
+              label="Fits in memory"
+              size="sm"
+              tone="quiet"
+              value={sizeBucket === null ? 'any' : String(sizeBucket)}
+              onValueChange={(id) => setSizeBucket(id === 'any' ? null : Number(id))}
+              options={[
+                { id: 'any', label: 'Any' },
+                ...(SIZE_BUCKETS as readonly number[]).map((b) => ({
+                  id: String(b),
+                  label: `≤${b}GB`
+                }))
+              ]}
+            />
             {filtersNarrowing && (
               <IconTip label="Clear filters">
                 <Button
