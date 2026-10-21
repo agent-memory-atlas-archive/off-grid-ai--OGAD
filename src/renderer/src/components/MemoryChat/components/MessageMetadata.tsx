@@ -30,15 +30,18 @@ function GenerationMetricsRowComponent({
   const promptTokens = metrics?.promptTokens ?? metrics?.estimatedPromptTokens
   const estimated =
     metrics?.promptTokens === undefined && metrics?.estimatedPromptTokens !== undefined
+  // The reply fills the same window as the prompt, so both count as used.
+  const outputTokens = metrics?.completionTokens ?? 0
+  const usedTokens = promptTokens ? promptTokens + outputTokens : 0
   const contextPercent =
-    promptTokens && contextWindowTokens && contextWindowTokens > 0
-      ? Math.round((promptTokens / contextWindowTokens) * 100)
+    usedTokens && contextWindowTokens && contextWindowTokens > 0
+      ? Math.round((usedTokens / contextWindowTokens) * 100)
       : null
   const contextLabel =
     contextPercent !== null
-      ? `Context: ${estimated ? '~' : ''}${contextPercent}% used (${estimated ? '~' : ''}${promptTokens} prompt tokens / ${contextWindowTokens} context)`
-      : promptTokens
-        ? `Context: ${estimated ? '~' : ''}${promptTokens} tokens used (limit unknown)`
+      ? `Context: ${estimated ? '~' : ''}${contextPercent}% used (${estimated ? '~' : ''}${promptTokens} prompt + ${outputTokens} output / ${contextWindowTokens} context)`
+      : usedTokens
+        ? `Context: ${estimated ? '~' : ''}${usedTokens} tokens used (limit unknown)`
         : null
   if (!parts.length && contextLabel === null) return null
   return (
@@ -53,7 +56,7 @@ function GenerationMetricsRowComponent({
       </CollapsibleTrigger>
       {promptTokens && contextWindowTokens && contextWindowTokens > 0 ? (
         <AIContextMeter
-          used={promptTokens}
+          used={usedTokens}
           limit={contextWindowTokens}
           breakdown={[
             { label: estimated ? 'Prompt (estimated)' : 'Prompt', tokens: promptTokens },

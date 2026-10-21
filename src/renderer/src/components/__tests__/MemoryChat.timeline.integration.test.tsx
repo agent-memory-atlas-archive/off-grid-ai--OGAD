@@ -590,7 +590,7 @@ describe('<MemoryChat/> ordered tool turn', () => {
     expect(screen.queryByText('web_search')).toBeNull()
     expect(
       await screen.findByText(
-        /Context: 24% used \(2888 prompt tokens \/ 12288 context\) · 42\.5 tok\/s · 567 output tokens · 3\.4s total/
+        /Context: 28% used \(2888 prompt \+ 567 output \/ 12288 context\) · 42\.5 tok\/s · 567 output tokens · 3\.4s total/
       )
     ).toBeTruthy()
   })
