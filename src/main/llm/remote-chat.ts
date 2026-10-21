@@ -155,6 +155,9 @@ export async function remoteReasoningCapability(
       const body = (await response.json()) as { chat_template?: string }
       return { control: detectThinkingDialect(body.chat_template), tokenBudget: true }
     }
+    // A server error is not an answer. An Off Grid gateway answers 502 until its model loads;
+    // caching that as 'none' dropped the thinking switch for the whole session. Ask again later.
+    if (response.status >= 500) throw new Error(`reasoning metadata unavailable: ${response.status}`)
     // LM Studio accepts this per-request switch even though its model list has no template.
     return { control: remote.provider === 'lmstudio' ? 'enable-thinking' : 'none' }
   })().catch(() => {
