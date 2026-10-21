@@ -14,11 +14,6 @@ name: Build native engines
 # their names and hashes back to resources/engine-pins.json on the branch it ran on.
 on:
   workflow_dispatch:
-  # Bootstrap: a new workflow cannot be dispatched until it is on main, so the first run starts from
-  # a push to this branch. Remove this trigger once the workflow has merged.
-  push:
-    branches: [feature/local-model-experience]
-    paths: [.github/workflows/build-native-engines.yml]
   workflow_call:
     inputs:
       ref:
