@@ -128,7 +128,7 @@ export async function runBrowserVisualTask(
   input: BrowserVisualTaskInput
 ): Promise<VisionTaskResult> {
   const settings = getWebUseSettings()
-  const chatContextTokens = await llm.chatContextSize()
+  const contextTokens = await llm.contextWindow()
   const executionDevice = getTaskExecutionDevice()
   return runVisionTaskGraph(input.goal, {
     screen: createBrowserVisionScreen({
@@ -150,7 +150,7 @@ export async function runBrowserVisualTask(
     onProgress: input.onProgress,
     onReasoning: input.onReasoning,
     takeGuidance: input.takeGuidance,
-    contextTokens: resolveComputerUseContextTokens(settings.context, chatContextTokens),
+    contextTokens: resolveComputerUseContextTokens(settings.context, contextTokens),
     checkpointInterval: settings.checkpointInterval,
     visualHistoryFrames: settings.visualHistoryFrames,
     retrievedFacts: settings.retrieveOlderVisuals ? recentVisualFacts(input.taskId) : [],

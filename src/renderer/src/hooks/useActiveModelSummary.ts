@@ -53,11 +53,18 @@ export function useActiveModelSummary(refreshWhen: unknown): ActiveModelSummary 
           return
         }
         const activeModel = resolveActiveTextModel(catalog?.models ?? [], activeId, activeIds)
+        // The same window chat budgets read; a remote server that does not report one shows none.
+        const contextWindow = settings?.contextWindow as
+          { tokens: number; remote: boolean; reported: boolean } | undefined
         setSummary({
           name: activeModel.name,
-          ctx: activeModel.remote
-            ? null
-            : formatContextWindow(settings?.effectiveCtxSize ?? settings?.ctxSize),
+          ctx: contextWindow
+            ? contextWindow.reported
+              ? formatContextWindow(contextWindow.tokens)
+              : null
+            : activeModel.remote
+              ? null
+              : formatContextWindow(settings?.effectiveCtxSize ?? settings?.ctxSize),
           configuredCtx: activeModel.remote ? null : formatContextWindow(settings?.ctxSize),
           recommendedCtx: activeModel.remote
             ? null

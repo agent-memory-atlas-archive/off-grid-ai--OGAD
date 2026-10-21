@@ -751,7 +751,7 @@ export async function selectChatTools(
     ...opts,
     imageAvailable,
     history,
-    contextSize: await llm.chatContextSize()
+    contextSize: await llm.contextWindow()
   })
   const relevantNames = new Set(
     relevantTools.flatMap((schema) => {
@@ -916,7 +916,7 @@ export async function toolChat(
     { ...opts, imageAvailable },
     history
   )
-  const ctx = await llm.chatContextSize()
+  const ctx = await llm.contextWindow()
   if (tools.length) {
     const plannerUnavailable = await llm.toolPlannerPreflight()
     if (plannerUnavailable) {
@@ -1136,7 +1136,7 @@ export async function toolChat(
   const settings = llm.getSettings()
   // A remote server that does not report its window sets the reply length itself: only a Max output
   // the person chose is sent then, never room worked out from the guessed window.
-  const contextReported = await llm.chatContextReported()
+  const contextReported = (await llm.contextWindowReport()).reported
   const sentMaxTokens = (room: number): number | undefined =>
     contextReported
       ? room

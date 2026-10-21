@@ -73,7 +73,7 @@ describe('LLMService context ceiling from GGUF', () => {
 
     const svc = new LLMService()
     expect(svc.modelMaxContext()).toBe(8192)
-    expect(svc.effectiveContextSize()).toBe(16384)
+    expect(svc.getSettings().ctxSize).toBe(16384)
   })
 
   it('does NOT cap below the model max when the model trained wider than the default', () => {
@@ -85,7 +85,7 @@ describe('LLMService context ceiling from GGUF', () => {
     const svc = new LLMService()
     expect(svc.modelMaxContext()).toBe(131072)
     // The trained window does not pull the (smaller) requested context down.
-    expect(svc.effectiveContextSize()).toBe(16384)
+    expect(svc.getSettings().ctxSize).toBe(16384)
   })
 
   it('keeps the selected context even when model metadata reports a smaller trained window', () => {
@@ -93,7 +93,7 @@ describe('LLMService context ceiling from GGUF', () => {
     activate('tiny.gguf')
     const svc = new LLMService()
     expect(svc.modelMaxContext()).toBe(1024)
-    expect(svc.effectiveContextSize()).toBe(16384)
+    expect(svc.getSettings().ctxSize).toBe(16384)
   })
 
   it('reports an unknown max (null) and applies no model cap when the GGUF is unreadable', () => {

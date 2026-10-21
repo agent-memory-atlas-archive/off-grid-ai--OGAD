@@ -68,20 +68,12 @@ import {
   readGgufKvShape,
   readGgufMtpSupport
 } from './models/gguf-metadata'
-import {
-  dflashFileName,
-  primaryFileName,
-  type CatalogEntry
-} from './models/catalog-logic'
+import { dflashFileName, primaryFileName, type CatalogEntry } from './models/catalog-logic'
 import { pickFreePort, isPortFree } from './free-port'
 import { postCompletionOnce } from './llm/http-post'
 import { modalityQueue } from './modality-queue/queue'
 import { engineSpawnEnv } from './llm/spawn-env'
-import {
-  gpuDeviceAvailable,
-  offloadedLayerShare,
-  probedGpuMemoryMB
-} from './llm/gpu-device-probe'
+import { gpuDeviceAvailable, offloadedLayerShare, probedGpuMemoryMB } from './llm/gpu-device-probe'
 import { shouldAutoRecover } from './llm/crash-policy'
 import { enginePriority } from './llm/engine-priority'
 import { modelStartupQuietLimit, startupStalled } from './llm/startup-timeout'
@@ -111,6 +103,14 @@ import {
 } from './actions/remote-screen-session'
 
 export type { KvCacheType, PerformanceMode, SpeculativeDecodingMode }
+
+export interface ContextWindowReport {
+  tokens: number
+  /** A remote model server answers chat, so the window is its, not this machine's engine's. */
+  remote: boolean
+  /** False when the remote server does not say; tokens is then the 1M budget. */
+  reported: boolean
+}
 
 export interface LlmSettings {
   performanceMode?: PerformanceMode
@@ -432,7 +432,8 @@ export class LLMService {
       if (typeof s.gpuLayers === 'number') this.gpuLayers = s.gpuLayers
       // Settings saved before GPU placement existed: a layer count other than "all" was the
       // person's own choice, so it stays manual. Everything else starts on Auto.
-      if (s.gpuPlacement === 'auto' || s.gpuPlacement === 'manual') this.gpuPlacement = s.gpuPlacement
+      if (s.gpuPlacement === 'auto' || s.gpuPlacement === 'manual')
+        this.gpuPlacement = s.gpuPlacement
       else if (typeof s.gpuLayers === 'number' && s.gpuLayers !== 99) this.gpuPlacement = 'manual'
       if (typeof s.threads === 'number') this.threads = s.threads
       if (typeof s.batchSize === 'number') this.batchSize = s.batchSize
@@ -448,7 +449,11 @@ export class LLMService {
       if (isGatewayMode(s.gatewayMode)) this.gatewayModeSetting = s.gatewayMode
       if (Number.isInteger(s.gatewayClients) && s.gatewayClients >= 1)
         this.gatewayClientsSetting = s.gatewayClients
-      if (Number.isInteger(s.speculativeDraftMax) && s.speculativeDraftMax >= 0 && s.speculativeDraftMax <= 16)
+      if (
+        Number.isInteger(s.speculativeDraftMax) &&
+        s.speculativeDraftMax >= 0 &&
+        s.speculativeDraftMax <= 16
+      )
         this.speculativeDraftMax = s.speculativeDraftMax
       if (
         s.performanceMode === 'conservative' ||
@@ -611,20 +616,21 @@ export class LLMService {
     return this.port
   }
 
-  /** The selected app context cap for local and remote inference. */
-  effectiveContextSize(): number {
-    this.ensureLoaded()
-    return this.ctxSize
-  }
-
   /** The accelerator the RUNNING engine offloads to, or null when none is up (or when the
    *  platform ships no engine of ours to name). The UI renders this instead of assuming
    *  Metal, which is what made a Windows box claim a Metal GPU. */
   runtimeBackend(): RuntimeBackend {
     const placement = this.initialized ? this.backendPlacement : undefined
     return {
-      id: 'chat', model: this.backendModelPath,
-      state: this.initialized ? 'loaded' : this.isStarting() ? 'loading' : this.lastError() ? 'error' : 'stopped',
+      id: 'chat',
+      model: this.backendModelPath,
+      state: this.initialized
+        ? 'loaded'
+        : this.isStarting()
+          ? 'loading'
+          : this.lastError()
+            ? 'error'
+            : 'stopped',
       backend: placement?.backend,
       device: placement?.device,
       detail: this.lastError() ?? this.backendFallbackReason
@@ -719,7 +725,11 @@ export class LLMService {
   }
 
   /** Under Auto, an MoE whose experts will not fit the GPU gets a wide batch (see spillBatchSize). */
-  private spillBatchFor(effectiveCtxSize: number, gpuLayers: number | 'auto', serverPath?: string): number | null {
+  private spillBatchFor(
+    effectiveCtxSize: number,
+    gpuLayers: number | 'auto',
+    serverPath?: string
+  ): number | null {
     if (gpuLayers !== 'auto' || !this.modelPath) return null
     if (readGgufExpertCount(this.modelPath, fs) <= 0) return null
     const device = this.speedDevice(serverPath)
@@ -798,7 +808,10 @@ export class LLMService {
     const weightsMB = this.localWeightsGb() * 1024
     // The memory this engine may use counts its own model when it is loaded.
     const ownMB = this.initialized ? this.baseResidentMB() : 0
-    const shape = { kvShape: readGgufKvShape(this.modelPath, fs) ?? undefined, architecture: this.modelArchitecture() }
+    const shape = {
+      kvShape: readGgufKvShape(this.modelPath, fs) ?? undefined,
+      architecture: this.modelArchitecture()
+    }
     // localWeightsGb counts the projector and an MTP companion; a draft model sits beside them too.
     const draftMB =
       this.speculativeDecoding === 'draft' || this.speculativeDecoding === 'dflash'
@@ -824,7 +837,9 @@ export class LLMService {
     const { availableMB, totalMB } = liveMemory()
     // Metal's recommended working set is about three quarters of unified memory.
     const usable =
-      process.platform === 'darwin' ? Math.min(totalMB * 0.75, availableMB + ownMB) : availableMB + ownMB
+      process.platform === 'darwin'
+        ? Math.min(totalMB * 0.75, availableMB + ownMB)
+        : availableMB + ownMB
     return {
       slotPlatform: process.platform === 'darwin' ? 'apple-unified' : 'other',
       ...common,
@@ -854,7 +869,8 @@ export class LLMService {
     const before = this.effectiveGatewayMode()
     this.gatewayLaunchOverride = { ...override }
     this.launchedSlotPlan = null
-    if (this.effectiveGatewayMode() !== before) this.gatewayModeListener?.(this.effectiveGatewayMode())
+    if (this.effectiveGatewayMode() !== before)
+      this.gatewayModeListener?.(this.effectiveGatewayMode())
   }
 
   /** Hear when the gateway mode in effect changes. */
@@ -894,9 +910,7 @@ export class LLMService {
   gatewaySlots(): number {
     this.ensureLoaded()
     if (this.effectiveGatewayMode() !== 'team') return 1
-    return (
-      this.launchedSlotPlan?.slots ?? this.unlaunchedSlotPlan().slots
-    )
+    return this.launchedSlotPlan?.slots ?? this.unlaunchedSlotPlan().slots
   }
 
   /** The memory rule's safe maximum for team mode ("Auto"); 1 in single mode. */
@@ -913,7 +927,7 @@ export class LLMService {
       ctxSize: this.ctxSize,
       speculativeDecoding: this.effectiveSpeculativeDecoding(),
       totalMemoryGb: totalmem() / 1024 ** 3,
-...this.requestedSlotsInput()
+      ...this.requestedSlotsInput()
     })
   }
 
@@ -1002,8 +1016,12 @@ export class LLMService {
   /** Update inference settings; respawns the server if any launch-time arg changed
    *  (context, KV-cache type, flash-attn, GPU layers, threads, batch). */
   async setSettings(s: LlmSettings, options: LlmSettingsUpdateOptions = {}): Promise<void> {
-    if (s.speculativeDraftMax !== undefined &&
-      (!Number.isInteger(s.speculativeDraftMax) || s.speculativeDraftMax < 0 || s.speculativeDraftMax > 16)) {
+    if (
+      s.speculativeDraftMax !== undefined &&
+      (!Number.isInteger(s.speculativeDraftMax) ||
+        s.speculativeDraftMax < 0 ||
+        s.speculativeDraftMax > 16)
+    ) {
       throw new Error('Draft token limit must be Auto (0) or a whole number from 1 to 16.')
     }
     this.ensureLoaded()
@@ -1577,14 +1595,15 @@ export class LLMService {
         return process.platform === 'darwin' ? 'metal' : 'vulkan'
       }
     )
-    const candidates = preference === 'cpu'
-      ? ordered.map((serverPath) => ({ serverPath, cpuOnly: true }))
-      : [
-          ...ordered.map((serverPath) => ({ serverPath, cpuOnly: false })),
-          ...ordered
-            .filter((p) => !p.includes('llama-cpu') && !p.includes('llama-prism-cpu'))
-            .map((serverPath) => ({ serverPath, cpuOnly: true }))
-        ]
+    const candidates =
+      preference === 'cpu'
+        ? ordered.map((serverPath) => ({ serverPath, cpuOnly: true }))
+        : [
+            ...ordered.map((serverPath) => ({ serverPath, cpuOnly: false })),
+            ...ordered
+              .filter((p) => !p.includes('llama-cpu') && !p.includes('llama-prism-cpu'))
+              .map((serverPath) => ({ serverPath, cpuOnly: true }))
+          ]
     for (const { serverPath, cpuOnly } of candidates) {
       if (generation !== this.launchGeneration) return false
       if (!serverPath) continue
@@ -1621,8 +1640,12 @@ export class LLMService {
         // The six-token Qwen3.5 9B gain was measured with stock llama.cpp on
         // Metal. Preserve the existing limit for other engines and backends.
         const draftMaxIndex = args.indexOf('--spec-draft-n-max')
-        if (draftMaxIndex >= 0 && this.speculativeDecoding === 'mtp' && this.speculativeDraftMax === 0 &&
-          (engineDir !== 'llama' || cpuOnly || process.platform !== 'darwin')) {
+        if (
+          draftMaxIndex >= 0 &&
+          this.speculativeDecoding === 'mtp' &&
+          this.speculativeDraftMax === 0 &&
+          (engineDir !== 'llama' || cpuOnly || process.platform !== 'darwin')
+        ) {
           args[draftMaxIndex + 1] = '2'
         }
         // Captured in the same step as the arguments: a save can land during init's earlier awaits,
@@ -1637,7 +1660,8 @@ export class LLMService {
         }
         if (generation !== this.launchGeneration) return false
         const failure = classifyLlamaError(this.stderrTail.join('\n'))
-        this.backendFallbackReason = failure?.reason ?? 'The previous engine could not load the model.'
+        this.backendFallbackReason =
+          failure?.reason ?? 'The previous engine could not load the model.'
         if (failure?.code === 'speculation_unsupported') {
           console.warn(
             `[LLMService] ${failure.reason} Retrying the selected model with speculative decoding off.`
@@ -1761,7 +1785,8 @@ export class LLMService {
       const deliberateClose = wasIntentional
       if (!deliberateClose && !this.paused) {
         const failure = classifyLlamaError(this.stderrTail.join('\n'))
-        this.backendFallbackReason = failure?.reason ?? 'The previous engine could not load the model.'
+        this.backendFallbackReason =
+          failure?.reason ?? 'The previous engine could not load the model.'
         // Health shows an engine with no error as simply not loaded, so an unexpected exit
         // always leaves a reason.
         this.lastErrorMsg = failure?.reason ?? 'The chat model stopped unexpectedly.'
@@ -1899,7 +1924,8 @@ export class LLMService {
       await this.init()
     } catch (error) {
       console.error('[LLMService] recovery startup failed:', error)
-      if (generation === this.launchGeneration && !(this.server as ChildProcess | null)) await this.handleCrash(code)
+      if (generation === this.launchGeneration && !(this.server as ChildProcess | null))
+        await this.handleCrash(code)
     }
   }
 
@@ -2047,18 +2073,19 @@ export class LLMService {
     return this.activeRemoteTextModel() !== null
   }
 
-  /** The context window a chat turn is budgeted against. A remote model answers with its server's
-   *  window, never this machine's local model's; a server that does not say is not capped here. */
-  async chatContextSize(): Promise<number> {
+  /** The active text model's context window, the one fact every budget, the gateway and Settings
+   *  read. A remote model has its server's window (budgeted as 1M when the server does not say);
+   *  this machine's engine has its context setting. */
+  async contextWindowReport(): Promise<ContextWindowReport> {
+    this.ensureLoaded()
     const remote = this.activeRemoteTextModel()
-    if (!remote) return this.effectiveContextSize()
-    return (await remoteContextWindow(remote)) ?? UNKNOWN_REMOTE_CONTEXT_TOKENS
+    if (!remote) return { tokens: this.ctxSize, remote: false, reported: true }
+    const reported = await remoteContextWindow(remote)
+    return { tokens: reported ?? UNKNOWN_REMOTE_CONTEXT_TOKENS, remote: true, reported: !!reported }
   }
 
-  /** False when the remote server does not report its window, so chatContextSize is a guess. */
-  async chatContextReported(): Promise<boolean> {
-    const remote = this.activeRemoteTextModel()
-    return !remote || (await remoteContextWindow(remote)) !== null
+  async contextWindow(): Promise<number> {
+    return (await this.contextWindowReport()).tokens
   }
 
   /** A tool turn must fail before generation when the selected remote model cannot plan actions. */
@@ -2366,7 +2393,7 @@ export class LLMService {
           })
           return {
             ...withContextMetrics(result, messages, {
-              contextWindowTokens: await this.chatContextSize(),
+              contextWindowTokens: await this.contextWindow(),
               computeBackend: 'Remote'
             }),
             maxTokens: resolvedMaxTokens
@@ -2407,7 +2434,7 @@ export class LLMService {
           })
           return {
             ...withContextMetrics(result, messages, {
-              contextWindowTokens: this.effectiveContextSize(),
+              contextWindowTokens: await this.contextWindow(),
               computeBackend: this.activeAccelerator()
             }),
             maxTokens: resolvedMaxTokens
@@ -2475,7 +2502,7 @@ export class LLMService {
             onToolCallReady: opts.onToolCallReady
           })
           return withContextMetrics(result, messages, {
-            contextWindowTokens: await this.chatContextSize(),
+            contextWindowTokens: await this.contextWindow(),
             tools: opts.tools,
             computeBackend: 'Remote'
           })
@@ -2525,7 +2552,7 @@ export class LLMService {
             onToolCallReady: opts.onToolCallReady
           })
           return withContextMetrics(result, messages, {
-            contextWindowTokens: this.effectiveContextSize(),
+            contextWindowTokens: await this.contextWindow(),
             tools: opts.tools,
             computeBackend: this.activeAccelerator()
           })
@@ -2646,7 +2673,9 @@ export class LLMService {
   private async pauseAndWait(): Promise<void> {
     const { portFree } = await this.unload(true)
     if (!portFree) {
-      throw new Error('The chat model port is still occupied; image generation cannot start safely.')
+      throw new Error(
+        'The chat model port is still occupied; image generation cannot start safely.'
+      )
     }
   }
 
@@ -2677,9 +2706,7 @@ export class LLMService {
       footprintMB: () => (this.server && this.initialized ? this.expectedResidentMB() : 0),
       expectedMB: () => this.expectedResidentMB(),
       evict: () =>
-        this.evictionGate
-          ? this.evictionGate(() => this.pauseAndWait())
-          : this.pauseAndWait(),
+        this.evictionGate ? this.evictionGate(() => this.pauseAndWait()) : this.pauseAndWait(),
       release: () => {
         this.releasePause()
       }

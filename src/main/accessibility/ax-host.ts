@@ -582,7 +582,7 @@ class AxRailHost {
     }
     const contextTokens = resolveComputerUseContextTokens(
       settings.context,
-      await llm.chatContextSize()
+      await llm.contextWindow()
     )
     const retrievedFacts = settings.retrieveOlderVisuals ? recentVisualFacts(taskId) : []
     const sessionDeadline = options.sessionLimitMs ? Date.now() + options.sessionLimitMs : undefined

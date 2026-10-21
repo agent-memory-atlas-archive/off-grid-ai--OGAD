@@ -155,7 +155,7 @@ describe('agentic tool loop — real toolChat + real LLMService over a fake llam
       await toolChat('hi', [])
       const maxTokens = (fake.requests[0] as { max_tokens?: number }).max_tokens
       expect(maxTokens).toBeGreaterThan(1024)
-      expect(maxTokens).toBeLessThan(llm.effectiveContextSize())
+      expect(maxTokens).toBeLessThan(await llm.contextWindow())
     } finally {
       svc.maxTokens = prev
     }

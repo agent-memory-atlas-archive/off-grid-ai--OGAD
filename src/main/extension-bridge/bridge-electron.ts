@@ -299,7 +299,7 @@ export async function listBridgeTools(task?: string): Promise<unknown[]> {
   const selected = [...direct, ...semantic.filter((tool) => !direct.includes(tool))]
   const cap = Math.max(
     1024,
-    Math.min(Math.floor((await llm.chatContextSize()) * 0.4), MAX_TOOL_TOKENS)
+    Math.min(Math.floor((await llm.contextWindow()) * 0.4), MAX_TOOL_TOKENS)
   )
   const budgeted = budgetTools(selected, cap, 0)
   return budgeted.tools.map((tool) => {

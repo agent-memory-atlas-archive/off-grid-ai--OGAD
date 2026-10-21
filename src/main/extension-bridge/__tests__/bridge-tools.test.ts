@@ -217,7 +217,7 @@ describe('bridge origin with the real tool registry', () => {
         const { name, description, parameters } = tool as Record<string, unknown>
         return { type: 'function', function: { name, description, parameters } }
       })
-    const context = vi.spyOn(llm, 'chatContextSize').mockResolvedValue(32768)
+    const context = vi.spyOn(llm, 'contextWindow').mockResolvedValue(32768)
     try {
       const normal = await listBridgeTools(task)
       expect(normal.length).toBeGreaterThan(0)
@@ -261,7 +261,7 @@ describe('bridge origin with the real tool registry', () => {
       isReadOnlyTool: (name: string) => schemas.some((schema) => schema.function.name === name),
       execute: () => 'Found'
     }
-    const context = vi.spyOn(llm, 'chatContextSize').mockResolvedValue(2048)
+    const context = vi.spyOn(llm, 'contextWindow').mockResolvedValue(2048)
     registerToolExtension(connector)
     try {
       const task = schemas.map((schema) => schema.function.name).join(' ')

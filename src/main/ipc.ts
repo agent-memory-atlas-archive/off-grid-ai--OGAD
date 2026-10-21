@@ -2211,16 +2211,17 @@ export function setupIPC(): void {
   )
 
   // --- LLM inference settings (temperature, context window) ---------------
+  // Settings carry the active model's context window, the same fact chat budgets read.
   ipcMain.handle('llm:get-settings', async () => {
     const { llm } = await import('./llm')
-    return llm.getSettings()
+    return { ...llm.getSettings(), contextWindow: await llm.contextWindowReport() }
   })
   ipcMain.handle('llm:set-settings', async (_e, s: import('./llm').LlmSettings) => {
     const { llm } = await import('./llm')
     const { isSpeedSettingsPatch } = await import('../shared/best-settings')
     if (isSpeedSettingsPatch(s)) (await import('./best-settings')).markSpeedSettingsManual()
     await llm.setSettings(s)
-    return llm.getSettings()
+    return { ...llm.getSettings(), contextWindow: await llm.contextWindowReport() }
   })
   ipcMain.handle('vision:remote-server:get', async () => {
     const { getRemoteVisionServerSettings } = await import('./vision/remote-vision-server')
