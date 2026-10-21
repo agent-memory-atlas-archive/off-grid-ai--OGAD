@@ -8,9 +8,11 @@
 // request sits closer to its examples than to the chat answers. Extend the examples to teach it;
 // do not add word rules.
 
-/** Requests the model answers in the chat, with no tool. */
-export const ANSWER_IN_CHAT = [
-  // Code and pages the model writes itself
+/** Code and pages the model writes itself, in the chat. A long request is also matched against
+ *  these sentence by sentence: "Make an interactive fireworks show in one small HTML file… Dark
+ *  night sky. Use vanilla JavaScript and canvas" averages out to a picture as a whole, but its
+ *  last sentence is plainly code. */
+export const BUILD_IN_CHAT = [
   'write an HTML file with a canvas animation',
   'build a three.js scene in a single HTML page',
   'create a small javascript game in one file',
@@ -33,7 +35,12 @@ export const ANSWER_IN_CHAT = [
   'build an audio visualiser with the web audio api',
   'make a drawing app with a canvas and brush sizes',
   'write a function that resizes images',
-  'refactor this function to be faster',
+  'refactor this function to be faster'
+]
+
+/** Requests the model answers in the chat, with no tool. */
+export const ANSWER_IN_CHAT = [
+  ...BUILD_IN_CHAT,
   // Writing, questions and conversation
   'write an essay about climate change',
   'write a poem about the sea',
@@ -172,13 +179,17 @@ async function closest(
 }
 
 /** The routed tools (by name) this request is for, with their scores. `query` is the request's
- *  embedding. Tools without examples are not judged here. */
+ *  embedding; `sentences` are the embeddings of its sentences, each matched against the code
+ *  examples. Tools without examples are not judged here. */
 export async function toolIntents(
   query: number[],
   embed: Embed,
-  names: readonly string[] = Object.keys(TOOL_INTENT_EXAMPLES)
+  names: readonly string[] = Object.keys(TOOL_INTENT_EXAMPLES),
+  sentences: readonly number[][] = []
 ): Promise<Map<string, number>> {
-  const chat = await closest(query, ANSWER_IN_CHAT, embed)
+  let chat = await closest(query, ANSWER_IN_CHAT, embed)
+  for (const sentence of sentences)
+    chat = Math.max(chat, await closest(sentence, BUILD_IN_CHAT, embed))
   const picked = new Map<string, number>()
   for (const name of names) {
     const examples = TOOL_INTENT_EXAMPLES[name]
@@ -187,6 +198,15 @@ export async function toolIntents(
     if (score >= TOOL_INTENT_FLOOR && score > chat + TOOL_INTENT_MARGIN) picked.set(name, score)
   }
   return picked
+}
+
+/** The request's sentences, for toolIntents. A one-sentence request has none beyond itself. */
+export function requestSentences(request: string): string[] {
+  const sentences = request
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 3)
+  return sentences.length > 1 ? sentences.slice(0, 12) : []
 }
 
 /** Test-only: forget cached example embeddings. */

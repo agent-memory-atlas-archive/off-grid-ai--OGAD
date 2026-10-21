@@ -91,7 +91,7 @@ export async function selectChatToolSchemas(
           await import('./tool-embedding-ranking')
         const routingText = contextualToolRoutingText(query, history)
         const ranked = await withinRoutingWait(
-          selectRelevantToolsSemantic(routingText, rawTools, { embed }),
+          selectRelevantToolsSemantic(routingText, rawTools, { embed }, query),
           options.semanticWaitMs ??
             ((await routingModelOnDisk()) ? LOCAL_ROUTING_MODEL_WAIT_MS : SEMANTIC_ROUTING_WAIT_MS)
         )
