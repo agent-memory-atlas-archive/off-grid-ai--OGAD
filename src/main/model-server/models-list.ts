@@ -39,7 +39,8 @@ export function specialistModelEntries(
   return catalog
     .filter((model) => model.kind === 'computer_use' && installed.includes(model.id))
     .map((model) =>
-      modelEntry(model.id, model.tags?.includes('Decision') ? 'chat' : 'vision', now, {
+      // Declared for what they are, so no client lists a specialist as a chat model.
+      modelEntry(model.id, model.tags?.includes('Decision') ? 'decision_specialist' : 'grounding_specialist', now, {
         name: model.name,
         ...(model.tags?.includes('Decision') ? {} : { capabilities: ['vision'] }),
         architecture: {

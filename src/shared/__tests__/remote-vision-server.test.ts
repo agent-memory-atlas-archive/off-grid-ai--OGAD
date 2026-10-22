@@ -179,6 +179,12 @@ describe('isRemoteChatModel', () => {
     expect(remoteCatalogRole(qwen)).toBeNull()
   })
 
+  it('trusts the role an Off Grid gateway declares, whatever the model is named', () => {
+    const declared = { id: 'acme/clicker-7b', kind: 'text' as const, role: 'grounding' as const }
+    expect(isRemoteChatModel(declared)).toBe(false)
+    expect(remoteCatalogRole(declared)).toBe('grounding')
+  })
+
   it('keeps image, voice and transcription models out of chat', () => {
     expect(isRemoteChatModel({ id: 'qwen_image_2.1-Q4_K.gguf', kind: 'image' })).toBe(false)
   })

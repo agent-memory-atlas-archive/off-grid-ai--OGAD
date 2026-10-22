@@ -443,8 +443,16 @@ export async function testRemoteVisionServer(
       const supportedParameters = Array.isArray(entry.supported_parameters)
         ? entry.supported_parameters.filter((value): value is string => typeof value === 'string')
         : []
+      const role: RemoteVisionTaskRole | undefined =
+        kind === 'grounding_specialist'
+          ? 'grounding'
+          : kind === 'decision_specialist'
+            ? 'decision'
+            : undefined
       const modality: RemoteVisionModality =
-        kind === 'image'
+        role
+          ? 'text'
+          : kind === 'image'
           ? 'image'
           : kind === 'transcription'
             ? 'transcription'
@@ -470,6 +478,7 @@ export async function testRemoteVisionServer(
           id,
           name: typeof entry.name === 'string' ? entry.name : id,
           kind: modality,
+          ...(role ? { role } : {}),
           inputModalities: inputs.filter((value): value is string => typeof value === 'string'),
           outputModalities: outputs.filter((value): value is string => typeof value === 'string'),
           supportedParameters,

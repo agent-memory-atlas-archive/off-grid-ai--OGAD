@@ -19,6 +19,9 @@ export interface RemoteVisionCatalogModel {
   id: string
   name: string
   kind: RemoteVisionModality
+  /** A Computer Use specialist's role, as an Off Grid gateway declares it (its kind
+   *  `grounding_specialist` or `decision_specialist`). */
+  role?: RemoteVisionTaskRole
   inputModalities?: string[]
   outputModalities?: string[]
   supportedParameters?: string[]
@@ -27,13 +30,14 @@ export interface RemoteVisionCatalogModel {
 
 /**
  * The Computer Use role a remote server's model plays, or null for a chat model. A server lists its
- * Computer Use specialists beside its chat models (an Off Grid gateway labels a grounder "vision"
- * and a decider "chat"), so the label alone cannot tell them apart: a decider produces decisions,
- * a grounder is named by the shared grounder rule.
+ * Computer Use specialists beside its chat models. An Off Grid gateway declares each one's role;
+ * for other servers a decider produces decisions and a grounder is named by the shared grounder rule.
  */
 export function remoteCatalogRole(
-  model: Pick<RemoteVisionCatalogModel, 'id' | 'outputModalities'>
+  model: Pick<RemoteVisionCatalogModel, 'id' | 'role' | 'outputModalities'>
 ): RemoteVisionTaskRole | null {
+  if (model.role) return model.role
+  // Servers that do not declare roles (other apps, catalogs saved before roles were declared).
   if (model.outputModalities?.includes('decisions')) return 'decision'
   if (isGrounderModel(model.id)) return 'grounding'
   return null
@@ -41,7 +45,7 @@ export function remoteCatalogRole(
 
 /** A remote model a person can chat with: a text model that is not a Computer Use specialist. */
 export function isRemoteChatModel(
-  model: Pick<RemoteVisionCatalogModel, 'id' | 'kind' | 'outputModalities'>
+  model: Pick<RemoteVisionCatalogModel, 'id' | 'kind' | 'role' | 'outputModalities'>
 ): boolean {
   return model.kind === 'text' && remoteCatalogRole(model) === null
 }
