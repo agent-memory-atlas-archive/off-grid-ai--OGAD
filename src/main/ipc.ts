@@ -2118,6 +2118,7 @@ export function setupIPC(): void {
       return `${server.name} is turned off. Turn it on in Settings, or pick another model for this pane.`
     return `${server.name} no longer offers this pane’s model. Pick another model for this pane.`
   }
+  // eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- the turn's result type is the tools:chat contract, inferred from its many returns
   async function toolsChatTurn(
     event: Electron.IpcMainInvokeEvent,
     query: string,

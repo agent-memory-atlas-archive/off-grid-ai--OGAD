@@ -1866,13 +1866,7 @@ export async function getActiveModelIds(): Promise<string[]> {
             if (model.kind === 'computer_use') return false
             const modality =
               model.kind === 'vision' ? 'text' : model.kind === 'speech' ? 'voice' : model.kind
-            return (
-              (modality === 'text' ||
-                modality === 'image' ||
-                modality === 'voice' ||
-                modality === 'transcription') &&
-              remoteServerIdFor(modality) === server.id
-            )
+            return remoteServerIdFor(modality) === server.id
           })
           .map((model) => model.id)
   )

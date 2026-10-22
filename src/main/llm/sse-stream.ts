@@ -170,9 +170,10 @@ export function parseSseLine(rawLine: string): SseFrame | null {
       const message = parsed.error?.message ?? parsed.error
       return { delta: {}, finishReason: null, error: String(message) }
     }
-    const status = parsed?.offgrid_status as SseWaitStatus | undefined
-    if (status && (status.phase === 'queued' || status.phase === 'loading')) {
-      return { delta: {}, finishReason: null, status }
+    // Read from the wire: only a phase this client knows is a wait status.
+    const status = parsed?.offgrid_status as { phase?: unknown } | undefined
+    if (status?.phase === 'queued' || status?.phase === 'loading') {
+      return { delta: {}, finishReason: null, status: status as SseWaitStatus }
     }
     const choice = parsed?.choices?.[0]
     if (!choice || typeof choice !== 'object') {

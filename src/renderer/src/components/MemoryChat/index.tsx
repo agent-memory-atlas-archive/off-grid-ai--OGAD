@@ -3107,7 +3107,7 @@ export function MemoryChat({
     sharedComposerSlot ? createPortal(composer, sharedComposerSlot) : composer
   const submitFromComposer = (): void => {
     const text = draftStore.getSnapshot().trim()
-    if (hostsSharedComposer && text) publishChatBroadcast(paneKey ?? '', text)
+    if (hostsSharedComposer && text) publishChatBroadcast(paneKey, text)
     void sendMessage()
   }
 

@@ -28,7 +28,7 @@ export function openEarlyStream(res: http.ServerResponse, requestId: string): Ea
   const timer = setInterval(() => {
     if (!res.writableEnded) res.write(': waiting\n\n')
   }, KEEP_ALIVE_MS)
-  timer.unref?.()
+  timer.unref()
   let last = ''
   return {
     status(phase, detail = {}) {
