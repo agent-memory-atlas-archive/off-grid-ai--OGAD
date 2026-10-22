@@ -2721,6 +2721,29 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
       if (model && port !== null && keepLoadedServes(model))
         return proxyToLlama(req, res, undefined, 0, undefined, port)
     }
+    // Rendering a kept model's prompt (a client checking how its template opens thinking) goes to
+    // the router too; the model is named in the body.
+    if (url === '/apply-template' && method === 'POST') {
+      void (async () => {
+        let bytes: Buffer
+        try {
+          bytes = await readBody(req, MAX_UPLOAD)
+        } catch {
+          return json(res, 413, errBody('Request too large.'))
+        }
+        let model: unknown
+        try {
+          model = (JSON.parse(bytes.toString('utf8')) as { model?: unknown }).model
+        } catch {
+          model = undefined
+        }
+        const port = keepLoadedPort()
+        if (typeof model === 'string' && port !== null && keepLoadedServes(model))
+          return proxyToLlama(req, res, bytes, 0, undefined, port)
+        proxyToLlama(req, res, bytes)
+      })()
+      return
+    }
     // Non-inference routes pass through without generating activity rows.
     proxyToLlama(req, res)
   }))
