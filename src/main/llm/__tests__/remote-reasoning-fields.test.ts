@@ -19,4 +19,11 @@ describe('remoteReasoningFields', () => {
     expect(remoteReasoningFields(undefined, 512, { control: 'openrouter' })).toEqual({})
     expect(remoteReasoningFields(false, 512, { control: 'none' })).toEqual({})
   })
+
+  it('still caps thinking on a llama.cpp model whose template has no thinking switch', () => {
+    expect(remoteReasoningFields(true, 512, { control: 'none', tokenBudget: true })).toEqual({
+      reasoning_budget_tokens: 512
+    })
+    expect(remoteReasoningFields(true, 512, { control: 'none' })).toEqual({})
+  })
 })

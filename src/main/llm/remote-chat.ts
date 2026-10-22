@@ -306,24 +306,30 @@ export function remoteReasoningFields(
 ): Record<string, unknown> {
   const ollamaEffort =
     budget > 0 ? (budget <= 1024 ? 'low' : budget <= 4096 ? 'medium' : 'high') : 'medium'
-  return thinking === undefined || capability.control === 'none'
+  return thinking === undefined
     ? {}
-    : capability.control === 'openrouter'
-      ? thinking
-        ? openRouterReasoningPayload(true, budget)
-        : capability.mandatory
-          ? {}
-          : { reasoning: { effort: 'none' } }
-      : capability.control === 'ollama'
-        ? { reasoning_effort: thinking ? ollamaEffort : 'none' }
-        : capability.control === 'reasoning-strength'
-          ? { chat_template_kwargs: { reasoning_strength: thinking ? 'high' : 'none' } }
-          : {
-              chat_template_kwargs: { enable_thinking: thinking },
-              ...(thinking && capability.tokenBudget && budget > 0
-                ? { reasoning_budget_tokens: budget }
-                : {})
-            }
+    : capability.control === 'none'
+      ? // No switch in the template (Flint thinks in <think> tags with no enable_thinking), but
+        // llama.cpp still caps whatever thinking it finds, and ignores the cap where there is none.
+        thinking && capability.tokenBudget && budget > 0
+        ? { reasoning_budget_tokens: budget }
+        : {}
+      : capability.control === 'openrouter'
+        ? thinking
+          ? openRouterReasoningPayload(true, budget)
+          : capability.mandatory
+            ? {}
+            : { reasoning: { effort: 'none' } }
+        : capability.control === 'ollama'
+          ? { reasoning_effort: thinking ? ollamaEffort : 'none' }
+          : capability.control === 'reasoning-strength'
+            ? { chat_template_kwargs: { reasoning_strength: thinking ? 'high' : 'none' } }
+            : {
+                chat_template_kwargs: { enable_thinking: thinking },
+                ...(thinking && capability.tokenBudget && budget > 0
+                  ? { reasoning_budget_tokens: budget }
+                  : {})
+              }
 }
 
 /** The OpenAI-compatible request body. Pure: what we send, with nothing about how we send it. */
