@@ -19,6 +19,8 @@ export interface ActiveModelSummary {
   configuredCtx: string | null
   /** Capture-safe recommendation for this model. */
   recommendedCtx: string | null
+  /** The model runs on a remote server, whose own setting decides its window. */
+  remote?: boolean
 }
 
 /** Read the active text model + its running context window for the composer indicator.
@@ -68,7 +70,8 @@ export function useActiveModelSummary(refreshWhen: unknown): ActiveModelSummary 
           configuredCtx: activeModel.remote ? null : formatContextWindow(settings?.ctxSize),
           recommendedCtx: activeModel.remote
             ? null
-            : formatContextWindow(recommendedContextWindow(settings?.modelMaxCtx))
+            : formatContextWindow(recommendedContextWindow(settings?.modelMaxCtx)),
+          remote: Boolean(activeModel.remote)
         })
       } catch {
         if (request.active)
