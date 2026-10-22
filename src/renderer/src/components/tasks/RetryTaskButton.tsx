@@ -37,6 +37,7 @@ export function RetryTaskButton({
 }>): React.JSX.Element | null {
   const [availability, setAvailability] = useState<RetryAvailability | null>(null)
   const [retrying, setRetrying] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
   const reduceMotion = useReducedMotion()
   const retrySupported = Boolean(window.api.tasks?.retryAvailability && window.api.tasks.retry)
 
@@ -75,6 +76,7 @@ export function RetryTaskButton({
     const retry = window.api.tasks?.retry
     if (!retry) return
     setRetrying(true)
+    setFailure(null)
     void retry(task.taskId, phaseIndex)
       .then((result) => {
         if (result.taskId) {
@@ -85,10 +87,10 @@ export function RetryTaskButton({
         }
       })
       .catch(() => {
-        setAvailability({
-          available: false,
-          reason: 'The task could not continue. Try again on the execution device.'
-        })
+        const reason = 'The task could not continue. Try again on the execution device.'
+        setAvailability({ available: false, reason })
+        // An answer to the person's own click shows where they clicked, never only in a tooltip.
+        setFailure(reason)
       })
       .finally(() => setRetrying(false))
   }
@@ -189,11 +191,12 @@ export function RetryTaskButton({
           ) : null}
         </div>
       </TooltipProvider>
-      {!reasonInTooltip &&
-      resolvedAvailability?.available === false &&
-      resolvedAvailability.reason ? (
+      {failure ||
+      (!reasonInTooltip &&
+        resolvedAvailability?.available === false &&
+        resolvedAvailability.reason) ? (
         <p role="alert" className="mt-1.5 text-[10px] text-red-500">
-          {resolvedAvailability.reason}
+          {failure ?? resolvedAvailability?.reason}
         </p>
       ) : null}
     </div>
