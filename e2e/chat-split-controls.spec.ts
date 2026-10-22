@@ -2,7 +2,8 @@
  * Chat's split view: the controls (back to one chat, pane count, send to all) sit in the top-right
  * pane and stay at the window's top-right corner while panes are added, instead of jumping with the
  * first pane as the grid changes from two to three columns and back. Every pane can pick its own
- * model. Real app; nothing faked.
+ * model, gallery and tasks; the app-wide Active models and Settings show once. Real app; nothing
+ * faked.
  */
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs'
@@ -66,8 +67,14 @@ test('split controls stay in the top-right corner as panes are added', async () 
   }
   await page.screenshot({ path: 'e2e/screenshots/chat-split-controls.png' })
 
-  // Each pane has its own model picker.
+  // Each pane has its own model picker, gallery and tasks (they follow the pane's chat). The
+  // app-wide Active models and Settings show once, with the split controls.
+  const panes = page.locator('[data-chat-pane]')
   await expect(page.getByRole('combobox', { name: 'Model for this pane' })).toHaveCount(5)
+  await expect(panes.getByRole('button', { name: 'Gallery' })).toHaveCount(5)
+  await expect(panes.getByRole('button', { name: /^Tasks/ })).toHaveCount(5)
+  await expect(panes.getByRole('button', { name: 'Active models' })).toHaveCount(1)
+  await expect(panes.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(1)
 
   await page.getByRole('button', { name: 'One chat' }).click()
   await expect(page.locator('[data-chat-pane]')).toHaveCount(0)

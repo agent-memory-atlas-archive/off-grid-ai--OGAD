@@ -4389,7 +4389,10 @@ export function MemoryChat({
             )}
           </div>
 
-          {/* Active models and Settings: the same drawers in Chat and God (God runs tasks too). */}
+          {/* Active models and Settings: the same drawers in Chat and God (God runs tasks too). They
+              are app-wide, so a split view shows them once, in the pane that holds its controls. */}
+          {(!split || onToggleSplit) && (
+            <>
           {/* Active models — pick the model per modality (text/image/voice/STT) */}
           <Tooltip>
             <TooltipTrigger asChild>
@@ -4424,6 +4427,8 @@ export function MemoryChat({
             </TooltipTrigger>
             <TooltipContent>Settings</TooltipContent>
           </Tooltip>
+            </>
+          )}
           {/* God has no image gallery. */}
           {!god && (
             <>
