@@ -1213,22 +1213,16 @@ async function handleChat(
     body.stream === true && !parseRemoteVisionModelId(requestedModel) && !isAsync(req, body)
       ? openEarlyStream(res, rid)
       : null
-  let admitted = false
-  // Jobs running or queued ahead of this one; it is itself the last in the queue when it joins.
-  const reportQueue = (state: { running: unknown[]; queued: unknown[] }, joining = false): void => {
-    if (admitted || !early) return
-    const ahead = state.running.length + Math.max(0, state.queued.length - (joining ? 0 : 1))
-    if (ahead > 0) early.status('queued', { ahead })
-  }
-  const stopQueueReports = early ? modalityQueue.onChange((state) => reportQueue(state)) : () => {}
-  if (early) reportQueue(modalityQueue.getState(), true)
-  res.once('close', () => {
-    stopQueueReports()
-    early?.stop()
-  })
-  await modalityQueue.run(CHAT_JOB, async () => {
-    admitted = true
-    stopQueueReports()
+  res.once('close', () => early?.stop())
+  const job = early
+    ? {
+        ...CHAT_JOB,
+        onWait: (ahead: number) => {
+          if (ahead > 0) early.status('queued', { ahead })
+        }
+      }
+    : CHAT_JOB
+  await modalityQueue.run(job, async () => {
     const requested = requestedModel
     if (requested && !parseRemoteVisionModelId(requested)) {
       const { getCatalog, listInstalled, setActiveModel, displayModelName } = await import('./models-manager')
