@@ -90,11 +90,25 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
       focus: () => textareaRef.current?.focus()
     }))
 
+    // Fit the box to its text. A hidden box (a split pane while one input serves every pane) has
+    // no layout and would measure 0, so it is measured again once it is shown or resized.
     useEffect(() => {
       const textarea = textareaRef.current
       if (!textarea) return
-      textarea.style.height = 'auto'
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 208)}px`
+      const fit = (): void => {
+        if (textarea.clientWidth === 0) return
+        textarea.style.height = 'auto'
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 208)}px`
+      }
+      fit()
+      let width = textarea.clientWidth
+      const observer = new ResizeObserver(() => {
+        if (textarea.clientWidth === width) return
+        width = textarea.clientWidth
+        fit()
+      })
+      observer.observe(textarea)
+      return () => observer.disconnect()
     }, [value])
 
     const completeSkill = (skill: SkillOption): void => {
