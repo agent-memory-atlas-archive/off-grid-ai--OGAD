@@ -1242,18 +1242,23 @@ async function handleChat(
     : CHAT_JOB
   await modalityQueue.run(job, async () => {
     const requested = requestedModel
-    if (requested && !parseRemoteVisionModelId(requested)) {
+    if (!parseRemoteVisionModelId(requested)) {
       const { getCatalog, listInstalled, loadLocalChatModelForRequest, displayModelName } = await import('./models-manager')
       const installed = await listInstalled()
       const catalog = (await getCatalog()).models as { id: string; kind: string; remoteServerId?: string }[]
-      const selected = catalog.find((model) => model.id === requested && !model.remoteServerId &&
+      const selected = !!requested && catalog.some((model) => model.id === requested && !model.remoteServerId &&
         (model.kind === 'text' || model.kind === 'vision') && installed.includes(model.id))
       if (selected && llm.activeModelInfo()?.id !== requested) {
         early?.status('loading', { model: displayModelName(requested) ?? requested })
         const result = await loadLocalChatModelForRequest(requested)
         if (!result.success) { json(res, 400, errBody(result.error ?? 'Model could not be selected.')); return }
       }
-      if (selected) await llm.init()
+      // A request that names no model takes this Mac's chat model, loaded if it is not yet.
+      if ((selected || !requested) && llm.modelsExist()) {
+        const active = llm.activeModelInfo()?.id
+        if (!llm.isReady() && active) early?.status('loading', { model: displayModelName(active) ?? active })
+        await llm.init()
+      }
     }
   try {
     let changed = await inlineChatImages(body)
