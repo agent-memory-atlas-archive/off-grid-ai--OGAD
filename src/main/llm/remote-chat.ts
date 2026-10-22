@@ -56,6 +56,8 @@ export interface RemoteReasoningCapability {
   control: RemoteReasoningControl
   mandatory?: boolean
   tokenBudget?: boolean
+  /** llama.cpp reports the template reads the standard `reasoning_effort` (its chat_template_caps). */
+  reasoningEffort?: boolean
 }
 const reasoningCapabilities = new Map<string, Promise<RemoteReasoningCapability>>()
 
@@ -162,8 +164,16 @@ export async function remoteReasoningCapability(
       { signal: AbortSignal.timeout(5_000) }
     )
     if (response.ok) {
-      const body = (await response.json()) as { chat_template?: string }
-      return { control: detectThinkingDialect(body.chat_template), tokenBudget: true }
+      const body = (await response.json()) as {
+        chat_template?: string
+        chat_template_caps?: { supports_reasoning_effort?: boolean }
+      }
+      const reasoningEffort = body.chat_template_caps?.supports_reasoning_effort === true
+      return {
+        control: detectThinkingDialect(body.chat_template),
+        tokenBudget: true,
+        reasoningEffort
+      }
     }
     // A server error is not an answer. An Off Grid gateway answers 502 until its model loads;
     // caching that as 'none' dropped the thinking switch for the whole session. Ask again later.
@@ -306,30 +316,33 @@ export function remoteReasoningFields(
 ): Record<string, unknown> {
   const ollamaEffort =
     budget > 0 ? (budget <= 1024 ? 'low' : budget <= 4096 ? 'medium' : 'high') : 'medium'
+  // llama.cpp's own controls: it reads enable_thinking itself, maps the standard reasoning_effort
+  // into whichever variable the template uses ("none" switches thinking off), and caps whatever
+  // thinking it finds with the budget. Templates with no switch at all (Flint) still get the cap.
+  const llamaCpp = (on: boolean): Record<string, unknown> => ({
+    chat_template_kwargs: { enable_thinking: on },
+    ...(capability.reasoningEffort ? { reasoning_effort: on ? 'high' : 'none' } : {}),
+    ...(on && budget > 0 ? { reasoning_budget_tokens: budget } : {})
+  })
   return thinking === undefined
     ? {}
-    : capability.control === 'none'
-      ? // No switch in the template (Flint thinks in <think> tags with no enable_thinking), but
-        // llama.cpp still caps whatever thinking it finds, and ignores the cap where there is none.
-        thinking && capability.tokenBudget && budget > 0
-        ? { reasoning_budget_tokens: budget }
-        : {}
-      : capability.control === 'openrouter'
-        ? thinking
-          ? openRouterReasoningPayload(true, budget)
-          : capability.mandatory
-            ? {}
-            : { reasoning: { effort: 'none' } }
-        : capability.control === 'ollama'
-          ? { reasoning_effort: thinking ? ollamaEffort : 'none' }
-          : capability.control === 'reasoning-strength'
-            ? { chat_template_kwargs: { reasoning_strength: thinking ? 'high' : 'none' } }
-            : {
-                chat_template_kwargs: { enable_thinking: thinking },
-                ...(thinking && capability.tokenBudget && budget > 0
-                  ? { reasoning_budget_tokens: budget }
-                  : {})
-              }
+    : capability.tokenBudget &&
+        (capability.control === 'none' || capability.control === 'enable-thinking')
+      ? llamaCpp(thinking)
+      : capability.control === 'none'
+        ? {}
+        : capability.control === 'openrouter'
+          ? thinking
+            ? openRouterReasoningPayload(true, budget)
+            : capability.mandatory
+              ? {}
+              : { reasoning: { effort: 'none' } }
+          : capability.control === 'ollama'
+            ? { reasoning_effort: thinking ? ollamaEffort : 'none' }
+            : capability.control === 'reasoning-strength'
+              ? { chat_template_kwargs: { reasoning_strength: thinking ? 'high' : 'none' } }
+              : // LM Studio: the per-request switch, without llama.cpp's budget.
+                { chat_template_kwargs: { enable_thinking: thinking } }
 }
 
 /** The OpenAI-compatible request body. Pure: what we send, with nothing about how we send it. */
