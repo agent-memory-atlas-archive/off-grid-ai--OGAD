@@ -24,6 +24,7 @@ import {
 import { getAllActiveModals } from './active-models'
 import { getGatewayPort } from './model-server'
 import { deviceNoun } from '../shared/device'
+import { remoteVisionModelId } from '../shared/remote-vision-server'
 import type {
   SystemHealthComponentContract,
   SystemHealthComponentStatusContract,
@@ -99,7 +100,12 @@ export async function getChatHealth(): Promise<HealthComponent> {
   const activeModel = getActiveModel()
   const modelsExist = llm.modelsExist()
   const llamaHealth = await pingJson(llm.getPort())
+  const { getActiveRemoteVisionServer } = await import('./vision/remote-vision-server')
+  const remote = getActiveRemoteVisionServer()
   const { status, detail } = decideChatStatus({
+    remote: remote
+      ? `${displayModelName(remoteVisionModelId(remote.id, remote.model)) ?? remote.model} · ${remote.name}`
+      : null,
     // A healthy socket is not sufficient: another app/profile can own this port.
     healthy: !!llamaHealth && llm.isReady(),
     loading: llm.isStarting(),

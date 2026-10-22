@@ -1611,8 +1611,9 @@ export function setupIPC(): void {
 
   ipcMain.handle('model:check-status', async () => {
     const { llm } = await import('./llm')
+    // A chat model on a remote server is as ready as one on disk.
     return {
-      downloaded: llm.modelsExist(),
+      downloaded: llm.modelsExist() || llm.usesRemoteTextModel(),
       modelsDir: llm.getModelsDir()
     }
   })
