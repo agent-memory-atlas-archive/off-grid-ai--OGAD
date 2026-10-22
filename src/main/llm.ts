@@ -3,6 +3,7 @@ import { cpuQuota, usableCpuCount } from './cpu-cores'
 import { settingsChanged } from './settings-version'
 import { budgetChange, speculativePatch, speculativeOptions } from '../shared/text-settings-rules'
 import type { RuntimeBackend } from '../shared/runtime-backends'
+import { remoteTextVision } from '../shared/model-settings-rules'
 import { parseNativeBackend } from './runtime-backends'
 import { spawn, execSync, ChildProcess } from 'child_process'
 import { Mutex } from 'async-mutex'
@@ -1371,7 +1372,27 @@ export class LLMService {
   // it only adds image input; a vision model still runs text without it. (Gating
   // on mmproj wrongly kept "Setup Required" up for an activated vision model.)
   /** Whether the active chat model can read images (has a vision projector / mmproj). */
-  hasVision(): boolean {
+  /**
+   * Whether the model text goes to reads images: a remote model when its server's model list
+   * says so, a local one when its vision file is on disk. Screen frames go to a remote server
+   * only when the person allowed screen images for it.
+   */
+  hasVision(input: 'attachments' | 'screen' = 'attachments'): boolean {
+    const remote = this.activeRemoteTextModel() as
+      | (RemoteTextModelConnection & {
+          modelCatalog?: { id: string; inputModalities?: string[] }[]
+          screenFramesAllowed?: boolean
+        })
+      | null
+    if (remote && !isLocalModelServer(remote)) {
+      if (input === 'screen' && remote.screenFramesAllowed !== true) return false
+      return remoteTextVision(remote.modelCatalog?.find((model) => model.id === remote.model))
+    }
+    return this.localHasVision()
+  }
+
+  /** This machine's engine reads images: the loaded model's vision file is on disk. */
+  localHasVision(): boolean {
     this.ensureLoaded()
     this.resolveModel()
     return !!this.mmProjPath && fs.existsSync(this.mmProjPath)
@@ -1382,7 +1403,7 @@ export class LLMService {
    *  invoking chat; this remains the engine-boundary invariant that protects every
    *  explicit image entry point if selection changes between capability check and use. */
   private assertImageInputSupported(images: string[]): void {
-    if (images.length > 0 && !this.hasVision()) {
+    if (images.length > 0 && !this.localHasVision()) {
       throw new Error('Active chat model does not support image input (no vision projector)')
     }
   }
