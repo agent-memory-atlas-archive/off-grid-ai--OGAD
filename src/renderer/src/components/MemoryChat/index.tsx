@@ -259,6 +259,7 @@ import { ConversationSidebar } from './components/ConversationSidebar'
 import {
   applyStreamViewEvent,
   clearStreamViewMessage,
+  releaseStreamViewApplier,
   resetStreamViewMessage,
   seedStreamViewMessage,
   streamViewMessage,
@@ -1068,6 +1069,8 @@ export function MemoryChat({
     new Map<string, (request: { prompt: string; enhancePrompt?: boolean }) => void>()
   )
   const streamConvRef = useRef<Map<string, string>>(new Map())
+  // This view's identity in the shared stream view store: one view applies each stream's events.
+  const [streamApplier] = useState(() => ({}))
   // The async sender survives navigation. Its listener owns cancellation and the final
   // save; mounted views only observe it. No model "done" event releases this reservation.
 
@@ -3776,7 +3779,7 @@ export function MemoryChat({
         answerByStream.current[data.streamId] =
           (answerByStream.current[data.streamId] || '') + (data.text || '')
       }
-      applyStreamViewEvent(data.streamId, data)
+      applyStreamViewEvent(data.streamId, data, streamApplier)
     })
     void (window.api.getActiveRagStreams?.() ?? Promise.resolve([]))
       .then(async (streams) => {
@@ -3814,6 +3817,7 @@ export function MemoryChat({
     return () => {
       disposed = true
       off()
+      releaseStreamViewApplier(streamApplier)
     }
   }, [activeConversationId, markGenerating, setConvMessages, paneKey, openTabsKey])
 

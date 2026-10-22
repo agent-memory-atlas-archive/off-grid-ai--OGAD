@@ -4,6 +4,9 @@ import type { ChatMessage } from './types'
 
 const streamMessages = new Map<string, ChatMessage>()
 const streamListeners = new Map<string, Set<() => void>>()
+// The one chat view that applies each stream's events. Every view showing the chat (two split-view
+// panes on one chat) hears each event; applying them all would write every token once per view.
+const streamAppliers = new Map<string, object>()
 
 function notifyStream(streamId: string): void {
   for (const listener of streamListeners.get(streamId) ?? []) listener()
@@ -40,9 +43,16 @@ export function streamViewMessage(streamId: string): ChatMessage | undefined {
   return streamMessages.get(streamId)
 }
 
-export function applyStreamViewEvent(streamId: string, event: StreamEvent): void {
+export function applyStreamViewEvent(
+  streamId: string,
+  event: StreamEvent,
+  applier: object
+): void {
   const current = streamMessages.get(streamId)
   if (!current) return
+  const owner = streamAppliers.get(streamId)
+  if (owner && owner !== applier) return
+  if (!owner) streamAppliers.set(streamId, applier)
   streamMessages.set(streamId, applyStreamEvent(current, event) as ChatMessage)
   scheduleNotify(streamId)
 }
@@ -63,6 +73,14 @@ export function resetStreamViewMessage(streamId: string): void {
 
 export function clearStreamViewMessage(streamId: string): void {
   streamMessages.delete(streamId)
+  streamAppliers.delete(streamId)
+}
+
+/** A view stopped hearing stream events: the next view that hears one applies it. */
+export function releaseStreamViewApplier(applier: object): void {
+  for (const [streamId, owner] of streamAppliers) {
+    if (owner === applier) streamAppliers.delete(streamId)
+  }
 }
 
 export function useStreamViewMessage(message: ChatMessage): ChatMessage {
