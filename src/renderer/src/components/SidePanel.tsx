@@ -22,6 +22,8 @@ type SidePanelProps = {
   style?: CSSProperties
   restoreFocusRef?: RefObject<HTMLElement | null>
   modal?: boolean
+  /** Mount inside this element instead of the document body. */
+  container?: HTMLElement | null
 }
 
 // The renderer's top layer: side panels sit above every other surface, the backdrop just under.
@@ -75,7 +77,8 @@ export function SidePanel({
   className = '',
   style,
   restoreFocusRef,
-  modal = true
+  modal = true,
+  container
 }: SidePanelProps): React.JSX.Element {
   useEscapeToClose(onClose)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -113,7 +116,7 @@ export function SidePanel({
 
   return (
     <Sheet open modal={false} onOpenChange={(open) => !open && onClose()}>
-      <SheetPortal>
+      <SheetPortal container={container ?? undefined}>
         {modal && <SidePanelBackdrop onClose={onClose} />}
         <SheetContent
           ref={panelRef}

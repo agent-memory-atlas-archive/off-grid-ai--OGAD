@@ -94,7 +94,8 @@ export function ArtifactCanvas({
   onClose,
   onBack,
   width,
-  onResize
+  onResize,
+  container
 }: {
   artifact: Artifact
   onClose: () => void
@@ -102,6 +103,8 @@ export function ArtifactCanvas({
   onBack?: () => void
   width?: number | null
   onResize?: (w: number) => void
+  /** Open inside this element (a split-view pane) instead of over the whole window. */
+  container?: HTMLElement | null
 }): React.JSX.Element {
   // Runtime libraries are tagged with the kind they were loaded for, so a kind change never
   // builds a preview with the previous kind's libraries.
@@ -520,8 +523,9 @@ else { __ogShow('No React component found — define a component named App or a 
       modal={false}
       ariaLabel={artifact.title || artifactTitle(artifact.kind, artifact.code)}
       onClose={onClose}
-      className="min-w-[360px] max-w-[90vw]"
-      style={{ width: width ? `${width}px` : '30vw' }}
+      container={container}
+      className={container ? 'min-w-0' : 'min-w-[360px] max-w-[90vw]'}
+      style={{ width: container ? '100%' : width ? `${width}px` : '30vw' }}
     >
       {/* Resize handle: drag the left edge to slide the canvas wider or narrower. The pill grows
           and glows under the pointer exactly as the library's resizable divider does. */}
