@@ -108,6 +108,7 @@ describe('remote Computer Use sampling transport', () => {
       request: {
         messages: [{ role: 'user', content: 'think briefly' }],
         maxTokens: 32,
+        temperature: 0.7,
         thinking: true,
         reasoningBudget: 512
       },
@@ -181,6 +182,7 @@ describe('remote Computer Use sampling transport', () => {
       request: {
         messages: [{ role: 'user', content: 'primes?' }],
         maxTokens: 64,
+        temperature: 0.7,
         thinking: true,
         reasoningBudget: 512
       },
@@ -213,7 +215,12 @@ describe('remote Computer Use sampling transport', () => {
         model: 'hy-like-2',
         apiKey: ''
       },
-      request: { messages: [{ role: 'user', content: 'primes?' }], maxTokens: 64, thinking: true },
+      request: {
+        messages: [{ role: 'user', content: 'primes?' }],
+        maxTokens: 64,
+        temperature: 0.7,
+        thinking: true
+      },
       onDelta: () => undefined,
       options: { timeoutMs: 5_000 }
     })
