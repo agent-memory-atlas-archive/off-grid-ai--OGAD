@@ -456,6 +456,7 @@ export async function testRemoteVisionServer(
       kind?: unknown
       supported_parameters?: unknown
       reasoning?: unknown
+      capabilities?: unknown
       architecture?: { input_modalities?: unknown; output_modalities?: unknown }
     }> = [
       ...new Map(
@@ -472,9 +473,13 @@ export async function testRemoteVisionServer(
       const outputs = Array.isArray(entry.architecture?.output_modalities)
         ? entry.architecture.output_modalities
         : []
+      const capabilities = Array.isArray(entry.capabilities) ? entry.capabilities : []
+      // An Off Grid gateway says a chat model reads images by its kind or capabilities.
       const inputs = Array.isArray(entry.architecture?.input_modalities)
         ? entry.architecture.input_modalities
-        : []
+        : kind === 'vision' || capabilities.includes('vision')
+          ? ['text', 'image']
+          : []
       const supportedParameters = Array.isArray(entry.supported_parameters)
         ? entry.supported_parameters.filter((value): value is string => typeof value === 'string')
         : []
