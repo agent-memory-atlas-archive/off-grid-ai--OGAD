@@ -4,6 +4,7 @@ import { IconExternalLink, IconServer2 } from '@tabler/icons-react'
 import { GATEWAY_HOST, GATEWAY_PORT } from '@offgrid/core/shared/ports'
 import { CopyButton } from './ui/CopyButton'
 import { GatewayApiKeysSettings } from './GatewayApiKeysSettings'
+import { GatewayKeepLoaded } from './GatewayKeepLoaded'
 import { Segmented } from '@offgrid/operator-ui/operator/segmented'
 import { AnimatedGroup } from '@offgrid/operator-ui/operator/motion/animated-group'
 import { PageHeader, Section } from '@offgrid/operator-ui/operator/experience'
@@ -267,6 +268,12 @@ export function GatewayScreen(): React.ReactElement {
             <Section label="Clients">
               <section aria-label="Clients">
                 <GatewayModeControl />
+              </section>
+            </Section>
+
+            <Section label="Keep loaded">
+              <section aria-label="Keep loaded">
+                <GatewayKeepLoaded />
               </section>
             </Section>
 
