@@ -105,7 +105,7 @@ export function RetryTaskButton({
   const glyph = retrying || checking ? 'busy' : task.status === 'stopped' ? 'continue' : 'retry'
 
   return (
-    <div className="mt-2">
+    <div>
       {/* Its own provider: task details also render outside the app shell's provider. */}
       <TooltipProvider delayDuration={300}>
         <div className="flex items-stretch">
