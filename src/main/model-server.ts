@@ -1771,7 +1771,9 @@ async function handleModelsList(
     text = [
       {
         id: remoteVisionModelId(activeRemote.id, activeRemote.model),
-        name: activeRemote.model,
+        name:
+          activeRemote.modelCatalog?.find((model) => model.id === activeRemote.model)?.name ??
+          activeRemote.model,
         object: 'model',
         created: now,
         owned_by: activeRemote.name,
@@ -1854,7 +1856,10 @@ async function handleModelsList(
   const { desktopCatalog, listInstalled, getCatalog, getActiveModel } = await import('./models-manager')
   const installed = await listInstalled()
   const catalog = (await getCatalog()).models as { id: string; name: string; kind: string; remoteServerId?: string }[]
-  if (!activeRemote) {
+  if (activeRemote) {
+    // This Mac's own models stay listed after the remote one: a request naming one loads it here.
+    text = [...text, ...installedTextModelEntries(catalog, installed, now)]
+  } else {
     const downloaded = installedTextModelEntries(catalog, installed, now)
     if (downloaded.length) text = downloaded
     // Only the model llama-server is serving has known capabilities; the rest stay unknown.
