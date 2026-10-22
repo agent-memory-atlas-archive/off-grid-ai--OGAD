@@ -93,7 +93,7 @@ describe('Settings pro-section registry seam (D31)', () => {
     render(<Settings />)
 
     await user.click(screen.getByText('Remote model server'))
-    expect(await screen.findByRole('switch', { name: 'Use remote server' })).toBeTruthy()
+    expect(await screen.findByRole('switch', { name: 'Use this server' })).toBeTruthy()
     // The status line swaps its words after the previous ones fade out.
     expect(await screen.findByText('Local model is active.')).toBeTruthy()
     expect(screen.queryByText(/OpenRouter/i)).toBeNull()
