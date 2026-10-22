@@ -2,7 +2,8 @@ name: Publish engine update
 
 # Publishes every inference engine pinned in resources/engine-pins.json (llama.cpp, Prism,
 # stable-diffusion.cpp, whisper.cpp; CPU, Vulkan, Metal and CUDA builds) to the runtime store's
-# signed engine indexes for macOS, Linux and Windows. Apps with "Keep engines up to date" on (the
+# signed engine indexes for macOS, Linux and Windows, and names the CUDA pack pinned in
+# resources/performance-packs.json in the Linux and Windows indexes. Apps with "Keep engines up to date" on (the
 # default) install them in the background, without an app release. Only files the store does not
 # already hold are uploaded, and an engine already published at its pinned build is left alone.
 #
@@ -39,7 +40,7 @@ on:
         required: true
   push:
     branches: [main]
-    paths: [resources/engine-pins.json]
+    paths: [resources/engine-pins.json, resources/performance-packs.json]
 
 permissions:
   contents: read
@@ -216,3 +217,24 @@ jobs:
           node scripts/stage-llama-engine.mjs --platform win32 --ref "$ref" --out "$RUNNER_TEMP/llama-cuda"
           node scripts/publish-engine.mjs --platform win32 --dir "$RUNNER_TEMP/llama-cuda" ${MIN_APP_VERSION:+--min-app "$MIN_APP_VERSION"}
           node scripts/publish-engine.mjs --platform win32 --dir "$RUNNER_TEMP/llama-cuda" --index legacy
+
+  # Runs last because every job above rewrites the Linux or Windows index.
+  performance-pack:
+    needs: [gate, linux, win32-cuda-chat]
+    if: ${{ !cancelled() && needs.gate.result == 'success' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          lfs: false
+          persist-credentials: false
+      - name: Name the pinned CUDA packs
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ENGINE_SIGNING_PRIVATE_KEY: ${{ secrets.ENGINE_SIGNING_PRIVATE_KEY }}
+        run: |
+          for platform in linux win32; do
+            node scripts/publish-engine.mjs --platform "$platform" --pack resources/performance-packs.json
+          done

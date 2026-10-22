@@ -3,6 +3,7 @@
 //
 //   node scripts/publish-engine.mjs --platform darwin|linux|win32 --dir build/engines/linux/llama \
 //     [--index v2|legacy] [--min-app 0.0.56] [--dry-run]
+//   node scripts/publish-engine.mjs --platform linux|win32 --pack resources/performance-packs.json
 //
 // The folder comes from scripts/stage-engines.mjs or scripts/stage-llama-engine.mjs and holds
 // engine.json ({id, version, smokeTest, requires?}) beside the files the engine runs. `--index v2`
@@ -11,6 +12,9 @@
 // the index for the platform is rewritten with this release in place of the engine's previous one,
 // then signed with ENGINE_SIGNING_PRIVATE_KEY (base64 PKCS#8 Ed25519). The app refuses any index whose
 // signature does not match the public key in src/shared/engine-updates.ts.
+//
+// `--pack` names the platform's CUDA pack from the manifest in index-v2.json instead, so apps move to
+// a new pack without an app release. The pack itself is already on the store (update-engines.yml).
 //
 // Environment: R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, ENGINE_SIGNING_PRIVATE_KEY.
 import { createHash, createHmac, createPrivateKey, sign } from 'node:crypto'
@@ -23,20 +27,25 @@ const { values } = parseArgs({
   options: {
     platform: { type: 'string' },
     dir: { type: 'string' },
+    pack: { type: 'string' },
     'min-app': { type: 'string' },
     index: { type: 'string', default: 'v2' },
     'dry-run': { type: 'boolean', default: false }
   }
 })
 const platform = values.platform
-if (!['darwin', 'linux', 'win32'].includes(platform) || !values.dir || !['v2', 'legacy'].includes(values.index)) {
+const packMode = Boolean(values.pack)
+if (
+  !['darwin', 'linux', 'win32'].includes(platform) ||
+  (packMode ? platform === 'darwin' || values.dir : !values.dir) ||
+  !['v2', 'legacy'].includes(values.index)
+) {
   console.error(
-    'Usage: publish-engine.mjs --platform darwin|linux|win32 --dir <staged folder> [--index v2|legacy] [--min-app <version>] [--dry-run]'
+    'Usage: publish-engine.mjs --platform darwin|linux|win32 --dir <staged folder> [--index v2|legacy] [--min-app <version>] [--dry-run]\n' +
+      '       publish-engine.mjs --platform linux|win32 --pack <performance-packs.json>'
   )
   process.exit(1)
 }
-const dir = path.resolve(values.dir)
-const engine = JSON.parse(fs.readFileSync(path.join(dir, 'engine.json'), 'utf8'))
 const dryRun = values['dry-run']
 const env = (name) => {
   const value = process.env[name]
@@ -51,6 +60,8 @@ async function sha256Of(file) {
   return hash.digest('hex')
 }
 
+const dir = packMode ? null : path.resolve(values.dir)
+const engine = packMode ? null : JSON.parse(fs.readFileSync(path.join(dir, 'engine.json'), 'utf8'))
 const files = []
 const links = []
 async function walk(folder, prefix = '') {
@@ -78,9 +89,11 @@ async function walk(folder, prefix = '') {
     }
   }
 }
-await walk(dir)
-if (!files.some((file) => file.path === engine.smokeTest))
-  throw new Error(`${engine.smokeTest} is not in ${dir}`)
+if (!packMode) {
+  await walk(dir)
+  if (!files.some((file) => file.path === engine.smokeTest))
+    throw new Error(`${engine.smokeTest} is not in ${dir}`)
+}
 
 // ---- R2 (S3 API, SigV4) ------------------------------------------------------------------------
 const endpoint = env('R2_ENDPOINT').replace(/\/$/, '')
@@ -155,6 +168,57 @@ async function put(key, body, size, contentType, cacheControl) {
   if (!response.ok) throw new Error(`PUT ${key}: HTTP ${response.status} ${await response.text()}`)
 }
 
+// ---- Sign ---------------------------------------------------------------------------------------
+async function writeIndex(indexKey, index, summary) {
+  const body = Buffer.from(`${JSON.stringify(index, null, 2)}\n`)
+  const privateKey = createPrivateKey({
+    key: Buffer.from(env('ENGINE_SIGNING_PRIVATE_KEY'), 'base64'),
+    format: 'der',
+    type: 'pkcs8'
+  })
+  const signature = Buffer.from(`${sign(null, body, privateKey).toString('base64')}\n`)
+  // The app fetches both and refuses a pair that does not match, so a reader between these two writes
+  // only waits for its next check.
+  await put(`${indexKey}.sig`, signature, signature.length, 'text/plain', 'public, max-age=60')
+  await put(indexKey, body, body.length, 'application/json', 'public, max-age=60')
+  console.log(`published ${indexKey} with ${summary}`)
+}
+
+async function readIndex(indexKey) {
+  const existing = await getText(indexKey)
+  const index = existing ? JSON.parse(existing) : { schemaVersion: 1, platform, engines: [] }
+  if (index.schemaVersion !== 1 || index.platform !== platform)
+    throw new Error(`${indexKey} is not a v1 ${platform} index`)
+  return index
+}
+
+// ---- Publish the CUDA pack ----------------------------------------------------------------------
+if (packMode) {
+  const asset = JSON.parse(fs.readFileSync(values.pack, 'utf8')).cuda?.[platform]
+  if (
+    !asset ||
+    new URL(asset.url).origin !== 'https://runtime.getoffgridai.co' ||
+    new URL(asset.url).pathname !== `/desktop/cuda/${platform}/${asset.version}.tar.gz` ||
+    !/^[a-f0-9]{64}$/i.test(asset.sha256) ||
+    !Number.isSafeInteger(asset.bytes) ||
+    asset.bytes <= 0
+  )
+    throw new Error(`${values.pack} has no valid ${platform} CUDA pack`)
+  const performancePack = { url: asset.url, sha256: asset.sha256, bytes: asset.bytes, version: asset.version }
+  if (dryRun) {
+    console.log(JSON.stringify(performancePack, null, 2))
+    process.exit(0)
+  }
+  const indexKey = `desktop/engines/${platform}/index-v2.json`
+  const index = await readIndex(indexKey)
+  if (JSON.stringify(index.performancePack) === JSON.stringify(performancePack)) {
+    console.log(`${indexKey} already has CUDA pack ${asset.version}`)
+    process.exit(0)
+  }
+  await writeIndex(indexKey, { ...index, performancePack }, `CUDA pack ${asset.version}`)
+  process.exit(0)
+}
+
 // ---- Publish ------------------------------------------------------------------------------------
 const totalBytes = files.reduce((sum, file) => sum + file.size, 0)
 console.log(
@@ -177,10 +241,7 @@ if (dryRun) {
   process.exit(0)
 }
 
-const existing = await getText(indexKey)
-const current = existing ? JSON.parse(existing) : { schemaVersion: 1, platform, engines: [] }
-if (current.schemaVersion !== 1 || current.platform !== platform)
-  throw new Error(`${indexKey} is not a v1 ${platform} index`)
+const current = await readIndex(indexKey)
 // Publishing the same build again changes nothing, so the index (and every app) is left alone.
 const published = current.engines.find((item) => item.id === engine.id)
 if (published && JSON.stringify(published) === JSON.stringify(release)) {
@@ -205,25 +266,12 @@ for (const file of files) {
 }
 
 // Read the index again: another publisher may have written it during the uploads.
-const latest = JSON.parse((await getText(indexKey)) ?? JSON.stringify(current))
-if (latest.schemaVersion !== 1 || latest.platform !== platform)
-  throw new Error(`${indexKey} is not a v1 ${platform} index`)
+const latest = await readIndex(indexKey)
+// Fields beside the engines (the CUDA pack) are kept.
 const index = {
-  schemaVersion: 1,
-  platform,
+  ...latest,
   engines: [...latest.engines.filter((item) => item.id !== engine.id), release].sort((a, b) =>
     a.id.localeCompare(b.id)
   )
 }
-const body = Buffer.from(`${JSON.stringify(index, null, 2)}\n`)
-const privateKey = createPrivateKey({
-  key: Buffer.from(env('ENGINE_SIGNING_PRIVATE_KEY'), 'base64'),
-  format: 'der',
-  type: 'pkcs8'
-})
-const signature = Buffer.from(`${sign(null, body, privateKey).toString('base64')}\n`)
-// The app fetches both and refuses a pair that does not match, so a reader between these two writes
-// only waits for its next check.
-await put(`${indexKey}.sig`, signature, signature.length, 'text/plain', 'public, max-age=60')
-await put(indexKey, body, body.length, 'application/json', 'public, max-age=60')
-console.log(`published ${indexKey} with ${engine.id} ${engine.version}`)
+await writeIndex(indexKey, index, `${engine.id} ${engine.version}`)
