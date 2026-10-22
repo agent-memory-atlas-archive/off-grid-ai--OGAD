@@ -350,7 +350,9 @@ export function MemoryChat({
     }
   })
   const [paneModelOptions, setPaneModelOptions] = useState<{ value: string; label: string }[]>([])
-  useEffect(() => {
+  // Read when the pane opens and again each time its picker is about to open, so a model the
+  // server gained since (a new download, a saved Test connection) is offered without a reload.
+  const loadPaneModelOptions = useCallback(() => {
     if (!paneKey) return
     void window.api
       .getRemoteVisionServer()
@@ -373,6 +375,7 @@ export function MemoryChat({
       })
       .catch(() => undefined)
   }, [paneKey])
+  useEffect(() => loadPaneModelOptions(), [loadPaneModelOptions])
   const choosePaneModel = (value: string): void => {
     setPaneModel(value)
     try {
@@ -4372,7 +4375,11 @@ export function MemoryChat({
                 <span className="truncate">In {activeProjectName}</span>
               </button>
             ) : paneKey ? (
-              <div className="w-72 min-w-0">
+              <div
+                className="w-72 min-w-0"
+                onPointerDownCapture={loadPaneModelOptions}
+                onKeyDownCapture={loadPaneModelOptions}
+              >
                 <SettingsSelect
                   id={`chat-model-${paneKey}`}
                   label="Model for this pane"
