@@ -137,7 +137,7 @@ async function createWindow(): Promise<void> {
     width: workAreaSize.width,
     height: workAreaSize.height,
     // The old default is now the floor: below this the dense layouts stop working.
-    minWidth: 900,
+    minWidth: 450,
     minHeight: 670,
     show: false,
     title: PRODUCT_NAME,
