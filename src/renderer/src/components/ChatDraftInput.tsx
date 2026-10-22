@@ -118,6 +118,18 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
 
     const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
       if (event.nativeEvent.isComposing || event.keyCode === 229) return
+      // ⌘⇧V pastes plain text into the box, however long, instead of attaching it as
+      // "Pasted text". insertText keeps it on the undo stack like typing.
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'v') {
+        event.preventDefault()
+        void window.api
+          .readClipboardText()
+          .then((text) => {
+            if (text) document.execCommand('insertText', false, text)
+          })
+          .catch(() => undefined)
+        return
+      }
       // Tab on an offered suggestion and Escape are TextareaInlineCompletion's (onAccept/onDismiss).
       if (matches.length > 0 && !event.metaKey && !event.ctrlKey) {
         const query = value.slice(value.lastIndexOf('/') + 1).toLowerCase()

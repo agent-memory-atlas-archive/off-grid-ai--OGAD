@@ -1872,6 +1872,8 @@ export function setupIPC(): void {
   )
   // Whether the active chat model can read images (gate image attachments on this).
   ipcMain.handle('model:chat-vision', () => import('./llm').then((m) => m.llm.hasVision()))
+  // The clipboard's text, for ⌘⇧V plain paste: the renderer is not allowed to read it.
+  ipcMain.handle('clipboard:read-text', () => clipboard.readText())
   // Reliable text→clipboard (the renderer's navigator.clipboard is flaky in Electron).
   ipcMain.handle('clipboard:write-text', (_e, text?: string) => {
     try {
