@@ -95,6 +95,7 @@ export function activityLabel(activity?: {
   if (activity.kind === 'reading')
     return `Reading the page${(activity.counts?.urls ?? 0) > 1 ? 's' : ''}…`
   if (activity.kind === 'documents') return activity.label || 'Reading documents…'
+  if (activity.kind === 'waiting_server') return activity.label || 'Waiting for the model server…'
   if (activity.kind === 'searching') return 'Searching your memory…'
   if (activity.kind === 'memory') {
     const counts = activity.counts || {}
