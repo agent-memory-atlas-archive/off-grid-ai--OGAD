@@ -4929,11 +4929,13 @@ export function MemoryChat({
                       )}
                     </div>
                     {showScrollToBottom ? (
+                      // Centred with margins, not translate: buttons lift with `translate` on hover,
+                      // which would replace a -50% centring and jump the button sideways.
                       <Button
                         type="button"
                         size="icon"
                         variant="secondary"
-                        className="absolute bottom-3 left-1/2 z-10 h-7 w-7 -translate-x-1/2 rounded-full border border-border shadow-sm transition-all duration-150 active:scale-95"
+                        className="absolute inset-x-0 bottom-3 z-10 mx-auto h-7 w-7 rounded-full border border-border shadow-sm transition-all duration-150 active:scale-95"
                         aria-label="Scroll to latest message"
                         title="Scroll to latest message"
                         onClick={() => scrollToBottom(reduceWorkspaceMotion ? 'auto' : 'smooth')}
