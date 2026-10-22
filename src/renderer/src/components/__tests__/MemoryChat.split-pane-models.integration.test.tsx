@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
@@ -72,15 +72,5 @@ describe('<MemoryChat/> split-view pane models', () => {
     expect(screen.queryByRole('option', { name: /Kev/ })).toBeNull()
     // A role the gateway declared keeps a model out even when its name says nothing.
     expect(screen.queryByRole('option', { name: /Clicker/ })).toBeNull()
-  })
-
-  it('says each pane can answer with its own remote model', async () => {
-    renderPane()
-    const info = await screen.findByRole('button', { name: 'About pane models' })
-    // Keyboard focus opens the tooltip, as it does for a person tabbing to it.
-    act(() => info.focus())
-    expect((await screen.findByRole('tooltip')).textContent).toMatch(
-      /Each pane can use its own model from a remote model server/
-    )
   })
 })

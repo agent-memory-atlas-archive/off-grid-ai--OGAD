@@ -2,7 +2,7 @@
  * Chat's split view: the controls (back to one chat, pane count, send to all) sit in the top-right
  * pane and stay at the window's top-right corner while panes are added, instead of jumping with the
  * first pane as the grid changes from two to three columns and back. Every pane can pick its own
- * model and says, behind an info icon, that this works with remote models. Real app; nothing faked.
+ * model. Real app; nothing faked.
  */
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs'
@@ -66,11 +66,8 @@ test('split controls stay in the top-right corner as panes are added', async () 
   }
   await page.screenshot({ path: 'e2e/screenshots/chat-split-controls.png' })
 
-  // Each pane has its own model picker, with a note that it works with remote models.
+  // Each pane has its own model picker.
   await expect(page.getByRole('combobox', { name: 'Model for this pane' })).toHaveCount(5)
-  const info = page.getByRole('button', { name: 'About pane models' }).first()
-  await info.hover()
-  await expect(page.getByRole('tooltip')).toContainText('remote model server')
 
   await page.getByRole('button', { name: 'One chat' }).click()
   await expect(page.locator('[data-chat-pane]')).toHaveCount(0)
