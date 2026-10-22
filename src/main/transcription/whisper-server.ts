@@ -20,7 +20,7 @@ import { beginRuntimeBackend } from '../runtime-backends'
 import { spawn, type ChildProcess, execSync } from 'child_process'
 import path from 'path'
 import fs from 'fs'
-import os from 'os'
+import { usableCpuCount } from '../cpu-cores'
 import { isPackaged } from '../runtime-env'
 import { findWhisperBinary, whisperRuntimeLibraryEnv } from './whisper-runtime'
 import { getBackendPreference } from '../backend-preferences'
@@ -66,7 +66,7 @@ export function buildWhisperServerArgs(ctx: WhisperServerContext): string[] {
     '--port',
     String(ctx.port ?? WHISPER_SERVER_PORT),
     '-t',
-    String(ctx.threads ?? Math.max(1, os.cpus().length - 2))
+    String(ctx.threads ?? Math.max(1, usableCpuCount() - 2))
   ]
   return args
 }

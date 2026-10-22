@@ -1,4 +1,5 @@
 import { totalmem } from 'os'
+import { cpuQuota, usableCpuCount } from './cpu-cores'
 import { settingsChanged } from './settings-version'
 import { budgetChange, speculativePatch, speculativeOptions } from '../shared/text-settings-rules'
 import type { RuntimeBackend } from '../shared/runtime-backends'
@@ -771,7 +772,11 @@ export class LLMService {
       spillBatch: this.spillBatchFor(effectiveCtxSize, gpuLayers, serverPath),
       flashAttn: this.flashAttn,
       kvCacheType: this.kvCacheType,
-      threads: this.threads,
+      // Unset, llama.cpp takes the host's physical cores; under a container CPU quota that
+      // oversubscribes it and every thread is throttled, so plan from the quota instead.
+      threads:
+        this.threads ??
+        (cpuQuota() === null ? undefined : Math.max(1, Math.floor(usableCpuCount() / 2))),
       batchSize: this.batchSize,
       speculativeDraftMax: this.speculativeDraftMax,
       speculativeDecoding: useSelectedModelSpeculation

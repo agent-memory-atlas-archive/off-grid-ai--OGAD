@@ -3,6 +3,7 @@
 // hardware facts and writes the chosen settings through each owner's own setter.
 
 import os from 'node:os'
+import { usableCpuCount } from './cpu-cores'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -49,7 +50,7 @@ function nativeGpu(engine: string | undefined): NativeGpu | null {
 
 export async function detectMachine(): Promise<MachineProfile> {
   const cpus = os.cpus()
-  const logical = os.availableParallelism()
+  const logical = usableCpuCount()
   const performance = process.platform === 'darwin' ? await applePerformanceCores() : null
   const engine = process.platform === 'darwin' ? undefined : await selectLocalEngine('auto')
   const gpu = nativeGpu(engine)

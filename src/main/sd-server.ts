@@ -21,7 +21,7 @@ import { beginRuntimeBackend } from './runtime-backends'
 import { spawn, type ChildProcess, execSync } from 'child_process'
 import path from 'path'
 import fs from 'fs'
-import os from 'os'
+import { usableCpuCount } from './cpu-cores'
 import { isPackaged } from './runtime-env'
 import { killOrphansOnPort as reapOrphansOnPort } from './kill-orphan-port'
 import { findSdBinaries, sdRuntimeLibraryEnv } from './imagegen/sd-runtime'
@@ -89,7 +89,7 @@ export function buildSdServerContextArgs(ctx: SdServerContext): string[] {
   if (ctx.vaePath) args.push('--vae', ctx.vaePath)
   if (ctx.diffusionFa) args.push('--diffusion-fa')
   if (ctx.taesdPath) args.push('--taesd', ctx.taesdPath)
-  args.push('-t', String(ctx.threads ?? Math.max(1, os.cpus().length - 2)))
+  args.push('-t', String(ctx.threads ?? Math.max(1, usableCpuCount() - 2)))
   return args
 }
 
