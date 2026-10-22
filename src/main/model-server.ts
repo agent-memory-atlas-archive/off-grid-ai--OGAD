@@ -1343,7 +1343,9 @@ async function handleKeptModelChat(
 ): Promise<void> {
   const model = body.model as string
   const port = keepLoadedPort()
-  const early = body.stream === true && !isAsync(req, body) ? openEarlyStream(res, rid) : null
+  let early: EarlyStream | null = null
+  const waitingStream = (): EarlyStream | null =>
+    body.stream === true && !isAsync(req, body) ? (early ??= openEarlyStream(res, rid)) : null
   res.once('close', () => early?.stop())
   let forward: Buffer = buf
   try {
@@ -1391,7 +1393,7 @@ async function handleKeptModelChat(
     )
     return
   }
-  const release = await admitTeamRequest(keepLoadedLimiter(model), res, 0, 'caller', early)
+  const release = await admitTeamRequest(keepLoadedLimiter(model), res, 0, 'caller', waitingStream)
   if (!release) return
   proxyToLlama(req, res, forward, Date.now() + 45_000, activity, port, true, release, early)
 }
@@ -1531,17 +1533,17 @@ async function admitTeamRequest(
   /** 'client': the turn ends when the client's response closes. 'caller': the caller ends it
    *  (proxyToLlama, once llama-server has let go of the request too). */
   holdUntil: 'client' | 'caller' = 'client',
-  early?: EarlyStream | null
+  /** A streaming request that has to wait answers at once (see openEarlyStream); one that runs
+   *  at once or is refused keeps its ordinary response. */
+  waitingStream?: () => EarlyStream | null
 ): Promise<Release | null> {
   const gone = new AbortController()
   const onClose = (): void => gone.abort()
   res.once('close', onClose)
   try {
-    // Every slot is taken: an answered stream says it waits, and how many wait before it.
-    const line = limiter.status()
-    if (early && line.running >= line.capacity)
-      early.status('queued', line.waiting > 0 ? { ahead: line.waiting } : {})
-    const release = await limiter.acquire(gone.signal, tokens)
+    const release = await limiter.acquire(gone.signal, tokens, (ahead) =>
+      waitingStream?.()?.status('queued', ahead > 0 ? { ahead } : {})
+    )
     if (res.destroyed) {
       release()
       return null
@@ -1570,13 +1572,17 @@ async function handleTeamChat(
 ): Promise<void> {
   const requested = typeof body.model === 'string' ? body.model : ''
   const remote = !!requested && !!parseRemoteVisionModelId(requested)
-  // A streaming chat for a model here answers at once and says what it waits for.
-  const early = body.stream === true && !remote && !isAsync(req, body) ? openEarlyStream(res, rid) : null
+  // A streaming chat for a model here that has to wait answers at once and says what it waits for.
+  let early: EarlyStream | null = null
+  const waitingStream = (): EarlyStream | null =>
+    body.stream === true && !remote && !isAsync(req, body)
+      ? (early ??= openEarlyStream(res, rid))
+      : null
   res.once('close', () => early?.stop())
   if (!remote) {
     try {
       const failure = await prepareTeamChatModel(requested, (model) =>
-        early?.status('loading', { model })
+        waitingStream()?.status('loading', { model })
       )
       if (failure) {
         json(res, 400, errBody(failure))
@@ -1651,7 +1657,7 @@ async function handleTeamChat(
     ? await admitTeamRequest(teamLimiter('remote'), res)
     : await admitOnRequestedModel(
         requested,
-        () => admitTeamRequest(teamLimiter('chat'), res, tokens, 'caller', early),
+        () => admitTeamRequest(teamLimiter('chat'), res, tokens, 'caller', waitingStream),
         res
       )
   if (!release) return

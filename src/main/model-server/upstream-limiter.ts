@@ -99,8 +99,13 @@ export class UpstreamLimiter {
     }
   }
 
-  /** Wait for a turn. Resolves with the release to call when the request ends (idempotent). */
-  acquire(signal?: AbortSignal, tokens = 0): Promise<Release> {
+  /** Wait for a turn. Resolves with the release to call when the request ends (idempotent).
+   *  `onQueued` hears, once, that the request joined the line and how many wait before it. */
+  acquire(
+    signal?: AbortSignal,
+    tokens = 0,
+    onQueued?: (ahead: number) => void
+  ): Promise<Release> {
     if (signal?.aborted) return Promise.reject(signal.reason ?? new Error('aborted'))
     const decision = limiterAdmission({
       active: this.active,
@@ -133,6 +138,7 @@ export class UpstreamLimiter {
       }
       signal?.addEventListener('abort', onAbort, { once: true })
       this.waiting.push(waiter)
+      onQueued?.(this.waiting.length - 1)
     })
   }
 
