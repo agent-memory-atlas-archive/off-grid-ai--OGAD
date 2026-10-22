@@ -185,7 +185,8 @@ import {
   Square,
   Textbox,
   SquaresFour,
-  Minus
+  Minus,
+  Info
 } from '@phosphor-icons/react'
 import {
   publishChatBroadcast,
@@ -4371,15 +4372,32 @@ export function MemoryChat({
                 <span className="truncate">In {activeProjectName}</span>
               </button>
             ) : paneKey ? (
-              <div className="w-72 min-w-0">
-                <SettingsSelect
-                  id={`chat-model-${paneKey}`}
-                  label="Model for this pane"
-                  value={paneModel}
-                  options={paneModelOptions}
-                  searchable
-                  onValueChange={choosePaneModel}
-                />
+              <div className="flex min-w-0 items-center gap-1.5">
+                <div className="w-72 min-w-0">
+                  <SettingsSelect
+                    id={`chat-model-${paneKey}`}
+                    label="Model for this pane"
+                    value={paneModel}
+                    options={paneModelOptions}
+                    searchable
+                    onValueChange={choosePaneModel}
+                  />
+                </div>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="About pane models"
+                      className="shrink-0 rounded-full p-1 text-neutral-500 transition-colors hover:text-neutral-200"
+                    >
+                      <Info className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-64">
+                    Each pane can use its own model from a remote model server, and the panes
+                    answer at the same time. Connect one in Settings › Remote model server.
+                  </TooltipContent>
+                </Tooltip>
               </div>
             ) : (
               <p className="truncate text-xs text-neutral-500">
