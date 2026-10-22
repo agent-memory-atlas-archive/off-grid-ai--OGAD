@@ -91,7 +91,7 @@ function previousPack(): { bin: string; version: string } | null {
   } catch {
     return null
   }
-  for (const entry of entries.filter((name) => /^cuda-.+-[a-f0-9]{12}$/.test(name)).sort().reverse()) {
+  for (const entry of entries.filter((name) => /^cuda-.+-[a-f0-9]{12}$/.test(name)).sort((a, b) => b.localeCompare(a))) {
     const root = path.join(packsDir(), entry)
     const bin = path.join(root, 'bin')
     if (fs.existsSync(path.join(root, 'verified.sha256')) && fs.existsSync(bin)) {
@@ -133,7 +133,7 @@ export function activateInstalledPerformancePack(): void {
   const bin = activeBin(asset)
   if (bin) process.env.OFFGRID_PERFORMANCE_PACK_BIN = bin
   else delete process.env.OFFGRID_PERFORMANCE_PACK_BIN
-  if (!task) pruneOldPacks(asset, bin)
+  if (task === null) pruneOldPacks(asset, bin)
 }
 
 /**
