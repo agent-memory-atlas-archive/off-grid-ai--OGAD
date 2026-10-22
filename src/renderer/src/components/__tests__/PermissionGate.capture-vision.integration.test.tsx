@@ -14,7 +14,14 @@ const MODEL_ID = `model-package-v1:${'a'.repeat(64)}`
 const MODEL_NAME = 'Gemma 4 E2B'
 let visionStatus: Record<string, { supportsVision: boolean; projectorInstalled: boolean }>
 let downloadModel: ReturnType<typeof vi.fn>
-let captureStatus: { running: boolean; paused: boolean; visionReady: boolean }
+let captureStatus: {
+  running: boolean
+  paused: boolean
+  visionReady: boolean
+  framesNeedingVision?: number
+  visionBlocker?: string | null
+  visionServer?: string | null
+}
 let proListeners: Map<string, () => void>
 let modelProgress:
   | ((progress: {
@@ -95,10 +102,10 @@ describe('<PermissionGate/> Pro capture vision recovery', () => {
       </PermissionGate>
     )
 
-    expect(await screen.findByText('Capture needs a vision model')).toBeTruthy()
+    expect(await screen.findByText('Some moments need a vision model')).toBeTruthy()
     expect(
       screen.getByText(
-        `${MODEL_NAME} cannot analyze Replay frames. Choose a vision-capable chat model.`
+        `Moments without on-screen text wait. ${MODEL_NAME} reads text only; pick one that reads images.`
       )
     ).toBeTruthy()
     expect(screen.queryByText(new RegExp(MODEL_ID))).toBeNull()
@@ -117,12 +124,53 @@ describe('<PermissionGate/> Pro capture vision recovery', () => {
     )
 
     await screen.findByText('App shell')
-    expect(screen.queryByText('Capture needs a vision model')).toBeNull()
+    expect(screen.queryByText('Some moments need a vision model')).toBeNull()
 
     captureStatus = { running: true, paused: false, visionReady: false }
     proListeners.get('capture:changed')?.()
 
-    expect(await screen.findByText('Capture needs a vision model')).toBeTruthy()
+    expect(await screen.findByText('Some moments need a vision model')).toBeTruthy()
+  })
+
+  it('says how many moments wait, and sends a remote server without screen images to its settings', async () => {
+    captureStatus = {
+      running: true,
+      paused: false,
+      visionReady: false,
+      framesNeedingVision: 60,
+      visionBlocker: 'screen-images-off',
+      visionServer: 'RTX Pro 6000'
+    }
+    const openSettings = vi.fn()
+    window.addEventListener('og:open-model-settings-panel', openSettings)
+    const user = userEvent.setup()
+    render(
+      <PermissionGate>
+        <div>App shell</div>
+      </PermissionGate>
+    )
+
+    expect(await screen.findByText('Allow screen images')).toBeTruthy()
+    expect(
+      screen.getByText(
+        '60 moments without on-screen text wait. Allow screen images for RTX Pro 6000 to analyze them there.'
+      )
+    ).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Open settings' }))
+    expect((openSettings.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({ tab: 'remote' })
+    window.removeEventListener('og:open-model-settings-panel', openSettings)
+  })
+
+  it('stays quiet when no moment needs a vision model', async () => {
+    captureStatus = { running: true, paused: false, visionReady: false, framesNeedingVision: 0 }
+    render(
+      <PermissionGate>
+        <div>App shell</div>
+      </PermissionGate>
+    )
+
+    await screen.findByText('App shell')
+    await waitFor(() => expect(screen.queryByText('Some moments need a vision model')).toBeNull())
   })
 
   it('does not misdirect a configured vision model during a transient pipeline mismatch', async () => {
@@ -135,7 +183,7 @@ describe('<PermissionGate/> Pro capture vision recovery', () => {
 
     await screen.findByText('App shell')
     await waitFor(() => {
-      expect(screen.queryByText('Capture needs a vision model')).toBeNull()
+      expect(screen.queryByText('Some moments need a vision model')).toBeNull()
       expect(screen.queryByText('Capture needs vision support')).toBeNull()
     })
   })
