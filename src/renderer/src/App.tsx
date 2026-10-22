@@ -366,6 +366,19 @@ function AppContent(): React.JSX.Element {
   // we drive the install explicitly instead of waiting for one.
   const [updateReady, setUpdateReady] = useState<string | null>(null)
   const [installing, setInstalling] = useState(false)
+  // A newer llama.cpp is installed for the gateway's kept models; they move on "Restart models".
+  const [keptEngineReady, setKeptEngineReady] = useState(false)
+  const [restartingKept, setRestartingKept] = useState(false)
+  useEffect(() => {
+    // Checked on load too: an engine that installed before this window opened still shows.
+    window.api
+      .keepLoadedEngineUpdateReady()
+      .then((ready: boolean) => {
+        if (ready) setKeptEngineReady(true)
+      })
+      .catch(() => {})
+    return window.api.onKeepLoadedEngineUpdate(() => setKeptEngineReady(true))
+  }, [])
   const [selectedEntityId, setSelectedEntityId] = useState<number | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -1237,37 +1250,76 @@ function AppContent(): React.JSX.Element {
       {/* Update ready — a new version downloaded and is staged. The button drives
           the install (quit + swap + relaunch); a plain quit/force-kill would leave
           it unapplied. */}
-      {updateReady && (
-        <div className="absolute right-4 top-4 z-50 flex items-center gap-3 rounded-md border border-green-500/40 bg-neutral-900/95 px-3.5 py-2 font-mono text-xs text-neutral-200 shadow-xl backdrop-blur">
-          <IconDownload className="h-4 w-4 text-green-500" />
-          <span>Update {updateReady} is ready</span>
-          <button
-            onClick={async () => {
-              setInstalling(true)
-              try {
-                await window.api.installUpdate()
-              } catch {
-                // quitAndInstall normally never returns (the app exits). If it
-                // rejects, unlock the button so the user can retry.
-                setInstalling(false)
-                addNotification({
-                  type: 'info',
-                  title: 'Update restart failed',
-                  message: 'Try again from the update banner.'
-                })
-              }
-            }}
-            disabled={installing}
-            className="flex items-center gap-1.5 rounded-sm border border-green-500/50 bg-green-500/10 px-2.5 py-1 text-emerald-400 hover:bg-green-500/20 disabled:opacity-60"
-          >
-            {installing ? (
-              <>
-                <IconLoader2 className="h-3.5 w-3.5 animate-spin" /> Restarting…
-              </>
-            ) : (
-              'Restart to update'
-            )}
-          </button>
+      {(updateReady || keptEngineReady) && (
+        <div className="absolute right-4 top-4 z-50 flex flex-col items-end gap-2">
+          {updateReady && (
+            <div className="flex items-center gap-3 rounded-md border border-green-500/40 bg-neutral-900/95 px-3.5 py-2 font-mono text-xs text-neutral-200 shadow-xl backdrop-blur">
+              <IconDownload className="h-4 w-4 text-green-500" />
+              <span>Update {updateReady} is ready</span>
+              <button
+                onClick={async () => {
+                  setInstalling(true)
+                  try {
+                    await window.api.installUpdate()
+                  } catch {
+                    // quitAndInstall normally never returns (the app exits). If it
+                    // rejects, unlock the button so the user can retry.
+                    setInstalling(false)
+                    addNotification({
+                      type: 'info',
+                      title: 'Update restart failed',
+                      message: 'Try again from the update banner.'
+                    })
+                  }
+                }}
+                disabled={installing}
+                className="flex items-center gap-1.5 rounded-sm border border-green-500/50 bg-green-500/10 px-2.5 py-1 text-emerald-400 hover:bg-green-500/20 disabled:opacity-60"
+              >
+                {installing ? (
+                  <>
+                    <IconLoader2 className="h-3.5 w-3.5 animate-spin" /> Restarting…
+                  </>
+                ) : (
+                  'Restart to update'
+                )}
+              </button>
+            </div>
+          )}
+          {/* A newer llama.cpp for the gateway's kept models. They keep serving on the old one
+              until the person restarts them, so no answer is cut off. */}
+          {keptEngineReady && (
+            <div className="flex items-center gap-3 rounded-md border border-green-500/40 bg-neutral-900/95 px-3.5 py-2 font-mono text-xs text-neutral-200 shadow-xl backdrop-blur">
+              <IconDownload className="h-4 w-4 text-green-500" />
+              <span>Engine update ready for kept models</span>
+              <button
+                onClick={async () => {
+                  setRestartingKept(true)
+                  try {
+                    await window.api.restartKeepLoadedModels()
+                    setKeptEngineReady(false)
+                  } catch {
+                    addNotification({
+                      type: 'info',
+                      title: 'Kept models did not restart',
+                      message: 'Try again from the update card.'
+                    })
+                  } finally {
+                    setRestartingKept(false)
+                  }
+                }}
+                disabled={restartingKept}
+                className="flex items-center gap-1.5 rounded-sm border border-green-500/50 bg-green-500/10 px-2.5 py-1 text-emerald-400 hover:bg-green-500/20 disabled:opacity-60"
+              >
+                {restartingKept ? (
+                  <>
+                    <IconLoader2 className="h-3.5 w-3.5 animate-spin" /> Restarting…
+                  </>
+                ) : (
+                  'Restart models'
+                )}
+              </button>
+            </div>
+          )}
         </div>
       )}
       {/* The background is the library LivingField (mounted in main.tsx): one breathing layer

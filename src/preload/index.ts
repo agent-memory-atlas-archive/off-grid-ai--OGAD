@@ -398,6 +398,15 @@ const offGridApi = {
     ipcRenderer.invoke('gateway:keep-loaded:preview', ids),
   setKeepLoadedModels: (ids: string[]): Promise<KeepLoadedStateContract> =>
     ipcRenderer.invoke('gateway:keep-loaded:set', ids),
+  keepLoadedEngineUpdateReady: (): Promise<boolean> =>
+    ipcRenderer.invoke('gateway:keep-loaded:engine-update-ready'),
+  restartKeepLoadedModels: (): Promise<KeepLoadedStateContract> =>
+    ipcRenderer.invoke('gateway:keep-loaded:restart'),
+  onKeepLoadedEngineUpdate: (callback: () => void): (() => void) => {
+    const subscription = (): void => callback()
+    ipcRenderer.on('gateway:keep-loaded:engine-update', subscription)
+    return unsubscribe('gateway:keep-loaded:engine-update', subscription)
+  },
   getSettings: () => ipcRenderer.invoke('settings:get'),
   aiLogsList: (
     query: import('../shared/ai-request-log').AILogQuery = {}

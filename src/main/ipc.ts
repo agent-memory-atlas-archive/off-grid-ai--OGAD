@@ -544,11 +544,14 @@ export function setupIPC(): void {
     BrowserWindow.getAllWindows().forEach((window) =>
       window.webContents.send('engine-updates:changed', status)
     )
-    // The gateway's kept models move to a newly installed llama.cpp at once.
+    // A newer llama.cpp for the gateway's kept models waits for the person to restart them.
     if (status.phase === 'up-to-date')
-      void import('./model-server/keep-loaded').then((keepLoaded) =>
-        keepLoaded.keepLoadedEnginesChanged()
-      )
+      void import('./model-server/keep-loaded').then((keepLoaded) => {
+        if (!keepLoaded.keepLoadedEnginesChanged()) return
+        BrowserWindow.getAllWindows().forEach((window) =>
+          window.webContents.send('gateway:keep-loaded:engine-update')
+        )
+      })
   })
   ipcMain.handle('engine-updates:status', () => engineUpdater.status())
   ipcMain.handle('engine-updates:check', () => engineUpdater.check())
@@ -1351,6 +1354,12 @@ export function setupIPC(): void {
   )
   ipcMain.handle('gateway:keep-loaded:set', async (_, ids: string[]) =>
     (await import('./model-server/keep-loaded')).setKeptModels(ids)
+  )
+  ipcMain.handle('gateway:keep-loaded:engine-update-ready', async () =>
+    (await import('./model-server/keep-loaded')).keepLoadedEngineUpdateReady()
+  )
+  ipcMain.handle('gateway:keep-loaded:restart', async () =>
+    (await import('./model-server/keep-loaded')).restartKeepLoaded()
   )
 
   // === SETTINGS HANDLERS ===

@@ -176,6 +176,8 @@ export interface KeepLoadedStateContract {
     state: 'off' | 'starting' | 'running' | 'error'
     message: string | null
     port: number | null
+    /** A newer llama.cpp is installed; the router moves to it when restarted. */
+    engineUpdateReady: boolean
   }
   models: KeepLoadedModelStatusContract[]
 }
