@@ -170,6 +170,8 @@ export interface RemoteVisionServerUpdate {
   apiKey?: string
   clearApiKey?: boolean
   screenFramesAllowed?: boolean
+  /** This server's own on/off; off keeps it saved and leaves the other servers alone. */
+  enabled?: boolean
 }
 
 export interface RemoteVisionConnectionResult {

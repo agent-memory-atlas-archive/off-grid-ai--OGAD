@@ -108,8 +108,7 @@ function isStoredConfig(
 function readStored(): StoredRemoteVisionConfig {
   try {
     const value = JSON.parse(fs.readFileSync(configPath(), 'utf8')) as
-      | StoredRemoteVisionConfig
-      | LegacyStoredRemoteVisionServer
+      StoredRemoteVisionConfig | LegacyStoredRemoteVisionServer
     if (isStoredConfig(value)) {
       const servers = value.servers.flatMap((server) => {
         const normalized = normalizeServer(server)
@@ -183,8 +182,7 @@ export function getRemoteVisionServerSettings(): RemoteVisionServerSettings {
 }
 
 export function getActiveRemoteVisionServer():
-  | (StoredRemoteVisionServer & { apiKey: string })
-  | null {
+  (StoredRemoteVisionServer & { apiKey: string }) | null {
   if (!remoteModelSelected('text')) return null
   const stored = readStored()
   const active = stored.servers.find(
@@ -309,7 +307,7 @@ export function setRemoteVisionServerSettings(
     provider: update.provider,
     endpoint,
     model: mediaModels.text?.trim() ?? '',
-    enabled: true,
+    enabled: update.enabled !== false,
     mediaModels,
     roleModels,
     modelCatalog:
@@ -321,7 +319,13 @@ export function setRemoteVisionServerSettings(
     : [...stored.servers, next]
   if (update.clearApiKey) deleteSecret(secretKey(id))
   else if (update.apiKey?.trim()) setSecret(secretKey(id), update.apiKey.trim())
-  writeStored({ version: CONFIG_VERSION, activeServerId: id, servers })
+  // Turning one server off leaves the others as they were; the active one hands over to the next.
+  const activeServerId = next.enabled
+    ? id
+    : stored.activeServerId === id
+      ? (servers.find((server) => server.id !== id && server.enabled !== false)?.id ?? null)
+      : stored.activeServerId
+  writeStored({ version: CONFIG_VERSION, activeServerId, servers })
   if (isNewServer) {
     setRemoteModelSelected('text', Boolean(mediaModels.text))
     setRemoteModelSelected('image', false)
