@@ -27,10 +27,13 @@ const STOPPING_RECHECK_MS = 500
 /** One retry control for task details and linked Chat work cards. */
 export function RetryTaskButton({
   task,
-  onStarted
+  onStarted,
+  reasonInTooltip = false
 }: Readonly<{
   task: TaskSession
   onStarted?: (taskId: string) => void
+  /** In a header row: why it cannot continue goes in the tooltip, not a line of text below. */
+  reasonInTooltip?: boolean
 }>): React.JSX.Element | null {
   const [availability, setAvailability] = useState<RetryAvailability | null>(null)
   const [retrying, setRetrying] = useState(false)
@@ -145,7 +148,11 @@ export function RetryTaskButton({
                 </AnimatePresence>
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{label}</TooltipContent>
+            <TooltipContent>
+              {reasonInTooltip && resolvedAvailability?.available === false
+                ? (resolvedAvailability.reason ?? label)
+                : label}
+            </TooltipContent>
           </Tooltip>
           {earlierPhases.length > 0 ? (
             <DropdownMenu>
@@ -182,7 +189,9 @@ export function RetryTaskButton({
           ) : null}
         </div>
       </TooltipProvider>
-      {resolvedAvailability?.available === false && resolvedAvailability.reason ? (
+      {!reasonInTooltip &&
+      resolvedAvailability?.available === false &&
+      resolvedAvailability.reason ? (
         <p role="alert" className="mt-1.5 text-[10px] text-red-500">
           {resolvedAvailability.reason}
         </p>
