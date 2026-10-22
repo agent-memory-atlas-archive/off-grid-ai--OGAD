@@ -2,6 +2,7 @@
 import { app } from 'electron'
 import { createEngineUpdater } from './engine-updates'
 import { getSetting, saveSetting } from './database'
+import { offerPerformancePack } from './performance-pack'
 import { dataDir } from './runtime-env'
 import { hasLinuxNvidiaDriver, hasWindowsNvidiaDriver } from './transcription/whisper-runtime'
 
@@ -18,5 +19,6 @@ export const engineUpdater = createEngineUpdater({
     process.platform === 'win32'
       ? hasWindowsNvidiaDriver()
       : process.platform === 'linux' && hasLinuxNvidiaDriver(),
-  packBin: () => process.env.OFFGRID_PERFORMANCE_PACK_BIN ?? null
+  packBin: () => process.env.OFFGRID_PERFORMANCE_PACK_BIN ?? null,
+  onPerformancePack: offerPerformancePack
 })
