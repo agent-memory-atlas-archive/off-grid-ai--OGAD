@@ -99,6 +99,7 @@ import { emitChangedLlmSettings } from './sync-mutation'
 import { loadGatedVisionModelAdapter } from './vision/model-adapters/registry'
 import type { VisionModelArtifacts } from './vision/model-adapters/types'
 import { getActiveRemoteVisionServer } from './vision/remote-vision-server'
+import { currentChatModel } from './llm/chat-model-scope'
 import {
   currentRemoteScreenTaskSession,
   screenTaskRequestSource
@@ -2076,7 +2077,8 @@ export class LLMService {
    * method uses this seam, so no caller needs local/remote branches. */
   private activeRemoteTextModel(): RemoteTextModelConnection | null {
     const screenTask = currentRemoteScreenTaskSession()
-    return screenTask ? screenTask.activeServer : getActiveRemoteVisionServer()
+    if (screenTask) return screenTask.activeServer
+    return currentChatModel() ?? getActiveRemoteVisionServer()
   }
 
   /** Whether text requests go to a remote model server rather than this machine's engine. */

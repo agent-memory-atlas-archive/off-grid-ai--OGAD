@@ -736,6 +736,8 @@ const offGridApi = {
       thinking?: boolean
       context?: string
       rules?: readonly string[]
+      /** A split-view pane's own remote model, for this turn only. */
+      modelReference?: string
       /** Documents attached to this message; earlier ones are read from the conversation. */
       documents?: {
         documentId?: string
