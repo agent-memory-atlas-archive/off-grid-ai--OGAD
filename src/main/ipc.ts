@@ -544,6 +544,11 @@ export function setupIPC(): void {
     BrowserWindow.getAllWindows().forEach((window) =>
       window.webContents.send('engine-updates:changed', status)
     )
+    // The gateway's kept models move to a newly installed llama.cpp at once.
+    if (status.phase === 'up-to-date')
+      void import('./model-server/keep-loaded').then((keepLoaded) =>
+        keepLoaded.keepLoadedEnginesChanged()
+      )
   })
   ipcMain.handle('engine-updates:status', () => engineUpdater.status())
   ipcMain.handle('engine-updates:check', () => engineUpdater.check())

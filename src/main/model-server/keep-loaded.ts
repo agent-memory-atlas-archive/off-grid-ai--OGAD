@@ -54,6 +54,8 @@ let message: string | undefined
 let serving = new Set<string>()
 let restarts = 0
 let generation = 0
+/** The llama-server the router last launched with (null when it has not launched). */
+let launchedWith: string | null = null
 const limiters = new Map<string, UpstreamLimiter>()
 
 /** The saved set of models to keep loaded. */
@@ -363,6 +365,7 @@ export async function applyKeepLoaded(): Promise<void> {
   }
   router = proc
   routerPort = port
+  launchedWith = serverPath
   const stderrTail: string[] = []
   proc.stderr?.setEncoding('utf8')
   proc.stderr?.on('data', (chunk: string) => {
@@ -412,7 +415,22 @@ export async function setKeptModels(ids: string[]): Promise<KeepLoadedStateContr
 /** Stop the router (the gateway is stopping). */
 export function shutdownKeepLoaded(): void {
   stopRouter()
+  launchedWith = null
   state = 'off'
+}
+
+/**
+ * The engines changed. An update installs each llama.cpp release in its own folder, so a router
+ * still on the binary it launched with is on the old release (a model with a newer architecture
+ * fails there): restart it on the new one.
+ */
+export function keepLoadedEnginesChanged(): void {
+  if (state === 'off' || launchedWith === null) return
+  const current = routerServerPath()
+  if (!current || current === launchedWith) return
+  console.warn(`[keep-loaded] llama engine changed to ${current}; restarting the router`)
+  restarts = 0
+  void applyKeepLoaded().catch((error) => console.error('[keep-loaded] restart failed:', error))
 }
 
 /** The installed chat models the person may keep loaded. */
