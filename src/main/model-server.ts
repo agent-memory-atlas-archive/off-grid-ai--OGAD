@@ -1217,12 +1217,6 @@ async function handleChat(
     json(res, failure.status, errBody(failure.message, failure.type))
     return
   }
-  // A request that names no model goes where this Mac's chat goes: its remote server, when the
-  // person chose one, never this Mac's engine that the remote choice unloaded.
-  if (!body.model) {
-    const remote = getActiveRemoteVisionServer()
-    if (remote) body.model = remoteVisionModelId(remote.id, remote.model)
-  }
   if (typeof body.model === 'string' && keepLoadedServes(body.model))
     return handleKeptModelChat(req, res, rid, body, buf)
   if (teamMode()) return handleTeamChat(req, res, rid, body, buf)
