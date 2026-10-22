@@ -125,7 +125,9 @@ import {
 } from './model-server/team-runtimes'
 import type { GatewayRuntime } from '@offgrid/models'
 import { pipeline } from 'stream'
+import { remoteTextVision } from '../shared/model-settings-rules'
 import {
+  remoteNativeToolCapability,
   remoteReasoningCapability,
   remoteReasoningFields,
   remoteTextModelProviderError
@@ -1724,6 +1726,11 @@ async function handleModelsList(
   if (activeRemote) {
     const reasoning = await remoteReasoningCapability(activeRemote)
     const supportsReasoning = reasoning.control !== 'none'
+    // What the server's own model list says, as Desktop's chat reads it: never assumed.
+    const vision = remoteTextVision(
+      activeRemote.modelCatalog?.find((model) => model.id === activeRemote.model)
+    )
+    const tools = (await remoteNativeToolCapability(activeRemote)).status !== 'unsupported'
     text = [
       {
         id: remoteVisionModelId(activeRemote.id, activeRemote.model),
@@ -1733,10 +1740,13 @@ async function handleModelsList(
         owned_by: activeRemote.name,
         kind: 'chat',
         remote: true,
-        // The Desktop gateway has already validated this OpenAI-compatible route.
         // Mobile must not probe the local llama /props endpoint for capabilities of
         // this remote model, because that reports the wrong active model.
-        capabilities: ['vision', 'tools', ...(supportsReasoning ? ['reasoning'] : [])],
+        capabilities: [
+          ...(vision ? ['vision'] : []),
+          ...(tools ? ['tools'] : []),
+          ...(supportsReasoning ? ['reasoning'] : [])
+        ],
         ...(supportsReasoning ? { reasoning: { mandatory: reasoning.mandatory === true } } : {})
       }
     ]
