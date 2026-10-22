@@ -1225,14 +1225,14 @@ async function handleChat(
   await modalityQueue.run(job, async () => {
     const requested = requestedModel
     if (requested && !parseRemoteVisionModelId(requested)) {
-      const { getCatalog, listInstalled, setActiveModel, displayModelName } = await import('./models-manager')
+      const { getCatalog, listInstalled, loadLocalChatModelForRequest, displayModelName } = await import('./models-manager')
       const installed = await listInstalled()
       const catalog = (await getCatalog()).models as { id: string; kind: string; remoteServerId?: string }[]
       const selected = catalog.find((model) => model.id === requested && !model.remoteServerId &&
         (model.kind === 'text' || model.kind === 'vision') && installed.includes(model.id))
       if (selected && llm.activeModelInfo()?.id !== requested) {
         early?.status('loading', { model: displayModelName(requested) ?? requested })
-        const result = await setActiveModel(requested)
+        const result = await loadLocalChatModelForRequest(requested)
         if (!result.success) { json(res, 400, errBody(result.error ?? 'Model could not be selected.')); return }
       }
       if (selected) await llm.init()
@@ -1405,8 +1405,8 @@ async function prepareTeamChatModel(requested: string): Promise<string | null> {
   await modalityQueue.run(CHAT_JOB, () =>
     chatLimiter().exclusive(async () => {
       if (swap && llm.activeModelInfo()?.id !== requested) {
-        const { setActiveModel } = await import('./models-manager')
-        const result = await setActiveModel(requested)
+        const { loadLocalChatModelForRequest } = await import('./models-manager')
+        const result = await loadLocalChatModelForRequest(requested)
         if (!result.success) {
           failure = result.error ?? 'Model could not be selected.'
           return
@@ -1924,18 +1924,20 @@ async function handleTranscription(
 
 // ─── Per-request model choice for media modalities ──────────────────────────
 /** A request naming an installed image, voice or transcription model makes it that modality's
- *  active model, as a chat request naming an installed model does for Text. */
+ *  local model, as a chat request naming an installed model does for Text. */
 async function selectRequestedModal(
   modality: 'image' | 'speech' | 'transcription',
   requested: unknown
 ): Promise<void> {
   if (typeof requested !== 'string' || !requested || parseRemoteVisionModelId(requested)) return
-  const remote = getActiveRemoteVisionServerForModality(modality === 'speech' ? 'voice' : modality)
+  // A modality the person put on a remote server stays there: a request moves only a local pick.
+  // Switching it is /v1/models/activate, an explicit choice.
+  if (getActiveRemoteVisionServerForModality(modality === 'speech' ? 'voice' : modality)) return
   const manager = await import('./models-manager')
   if (modality === 'image') {
     if (!listImageModels().includes(requested) || activeImageModel() === requested) return
   } else {
-    if (!remote && getActiveModal(modality) === requested) return
+    if (getActiveModal(modality) === requested) return
     const catalog = (await manager.getCatalog()).models as { id: string; kind: string }[]
     const entry = catalog.find((model) => model.id === requested)
     if (!entry || modalityForKind(entry.kind) !== modality) return

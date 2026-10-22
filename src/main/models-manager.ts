@@ -1748,6 +1748,19 @@ async function setActiveLlamaModel(
   return { success: true }
 }
 
+/**
+ * Load a local chat model a gateway request names (a phone on this Mac's server). It becomes the
+ * local chat model, but a person who chose a remote server for chat stays on it: only they move
+ * chat between local and remote.
+ */
+export async function loadLocalChatModelForRequest(
+  modelId: string
+): Promise<{ success: boolean; error?: string }> {
+  const result = await setActiveLlamaModel(modelId, isChatLoadable, 'the chat LLM')
+  settingsChanged()
+  return result
+}
+
 /** Set the chat LLM (text/vision). Writes active-model.json + reloads llama-server. */
 export async function setActiveModel(
   modelId: string
