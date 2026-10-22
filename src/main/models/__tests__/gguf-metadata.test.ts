@@ -260,7 +260,8 @@ describe('readGgufKvShape', () => {
       attentionLayers: 8,
       kvHeads: 4,
       keyDim: 256,
-      valueDim: 256
+      valueDim: 256,
+      blocks: 33
     })
   })
 
@@ -280,7 +281,8 @@ describe('readGgufKvShape', () => {
       attentionLayers: 4,
       kvHeads: 2,
       keyDim: 512,
-      valueDim: 512
+      valueDim: 512,
+      blocks: 42
     })
   })
 
@@ -296,7 +298,8 @@ describe('readGgufKvShape', () => {
       attentionLayers: 32,
       kvHeads: 8,
       keyDim: 128,
-      valueDim: 128
+      valueDim: 128,
+      blocks: 32
     })
   })
 
