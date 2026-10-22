@@ -9,6 +9,27 @@ function notifyStream(streamId: string): void {
   for (const listener of streamListeners.get(streamId) ?? []) listener()
 }
 
+// Every repaint re-renders the whole answer so far (its Markdown parsed from the start), so token
+// events repaint in batches. The gap grows with the answers on screen: one chat stays smooth, and
+// six split-view panes streaming at once no longer saturate the renderer.
+const PAINT_MS_PER_STREAM = 33
+const pendingStreams = new Set<string>()
+let paintTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleNotify(streamId: string): void {
+  pendingStreams.add(streamId)
+  if (paintTimer) return
+  paintTimer = setTimeout(
+    () => {
+      paintTimer = null
+      const ids = [...pendingStreams]
+      pendingStreams.clear()
+      for (const id of ids) notifyStream(id)
+    },
+    PAINT_MS_PER_STREAM * Math.max(1, streamListeners.size)
+  )
+}
+
 export function seedStreamViewMessage(message: ChatMessage): void {
   streamMessages.set(message.id, message)
   notifyStream(message.id)
@@ -23,7 +44,7 @@ export function applyStreamViewEvent(streamId: string, event: StreamEvent): void
   const current = streamMessages.get(streamId)
   if (!current) return
   streamMessages.set(streamId, applyStreamEvent(current, event) as ChatMessage)
-  notifyStream(streamId)
+  scheduleNotify(streamId)
 }
 
 export function resetStreamViewMessage(streamId: string): void {
