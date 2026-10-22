@@ -86,6 +86,7 @@ import {
   type ModelSettingsPanelTab
 } from './lib/model-settings-panel'
 import { callHook } from './bootstrap/hookRegistry'
+import { markTasksSeen } from './lib/task-side-panel'
 import { internalTabLocation, internalTabPath, isInternalTabView } from './lib/internal-tab-route'
 import {
   NOTIFICATION_OPEN_TARGET_CHANNEL,
@@ -346,6 +347,12 @@ function AppContent(): React.JSX.Element {
 
   // Open on Day only where the catalog supports it.
   const [viewMode, commitViewMode] = useState<ViewMode>(landingView(currentPlatform(), isPro))
+  // Visiting the Tasks screen counts as seeing them, on the way in and on the way out.
+  useEffect(() => {
+    if (viewMode !== 'tasks') return
+    markTasksSeen()
+    return () => markTasksSeen()
+  }, [viewMode])
   const [settingsSection, setSettingsSection] = useState<string | null>(null)
   const [settingsNavigationKey, setSettingsNavigationKey] = useState(0)
   const [navigationSubroute, setNavigationSubroute] = useState<string | null>(null)
