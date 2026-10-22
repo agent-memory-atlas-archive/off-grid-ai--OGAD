@@ -1,3 +1,4 @@
+import { openModelSettingsPanel } from '@renderer/lib/model-settings-panel'
 import { replaceAppLocation } from '@renderer/lib/app-location'
 import { modelDisplayName } from '@offgrid/models'
 import { useState, useEffect, useCallback } from 'react'
@@ -29,9 +30,18 @@ interface PermissionGateProps {
   children: React.ReactNode
 }
 
+// Capture reads on-screen text without vision. Only moments with too little text wait for a
+// model that reads images, so every issue carries how many wait (`count`).
 type VisionIssue =
-  | { kind: 'missing-projector'; modelId: string; modelName: string }
-  | { kind: 'choose-vision-model'; modelId: string | null; modelName: string | null }
+  | { kind: 'missing-projector'; modelId: string; modelName: string; count?: number }
+  | {
+      kind: 'choose-vision-model'
+      modelId: string | null
+      modelName: string | null
+      count?: number
+    }
+  | { kind: 'remote-screen-images'; modelId?: undefined; modelName: string; count?: number }
+  | { kind: 'remote-no-vision'; modelId?: undefined; modelName: string; count?: number }
 
 export function PermissionGate({ children }: PermissionGateProps): React.JSX.Element {
   const { isPro } = useRendererEntitlement()
@@ -76,9 +86,30 @@ export function PermissionGate({ children }: PermissionGateProps): React.JSX.Ele
         window.api.getModelCatalog().catch(() => undefined)
       ])
       const status = capture as
-        { running?: boolean; paused?: boolean; visionReady?: boolean } | undefined
-      if (!status?.running || status.paused || status.visionReady) {
+        | {
+            running?: boolean
+            paused?: boolean
+            visionReady?: boolean
+            framesNeedingVision?: number
+            visionBlocker?: 'screen-images-off' | 'no-image-input' | null
+            visionServer?: string | null
+          }
+        | undefined
+      const count = status?.framesNeedingVision
+      if (!status?.running || status.paused || status.visionReady || count === 0) {
         setVisionIssue(null)
+        return
+      }
+      // Chat runs on a remote server: main says what stops it reading screen frames.
+      if (status.visionBlocker) {
+        setVisionIssue({
+          kind:
+            status.visionBlocker === 'screen-images-off'
+              ? 'remote-screen-images'
+              : 'remote-no-vision',
+          modelName: status.visionServer ?? 'Your model server',
+          count
+        })
         return
       }
       const activeStatus = activeId ? statuses?.[activeId] : undefined
@@ -90,7 +121,8 @@ export function PermissionGate({ children }: PermissionGateProps): React.JSX.Ele
         setVisionIssue({
           kind: 'missing-projector',
           modelId: activeId,
-          modelName: activeModelName ?? activeId
+          modelName: activeModelName ?? activeId,
+          count
         })
         return
       }
@@ -101,7 +133,8 @@ export function PermissionGate({ children }: PermissionGateProps): React.JSX.Ele
       setVisionIssue({
         kind: 'choose-vision-model',
         modelId: activeId ?? null,
-        modelName: activeModelName
+        modelName: activeModelName,
+        count
       })
     } catch (error) {
       console.error('Failed to check capture vision readiness:', error)
@@ -174,6 +207,10 @@ export function PermissionGate({ children }: PermissionGateProps): React.JSX.Ele
         })
       return
     }
+    if (visionIssue?.kind === 'remote-screen-images' || visionIssue?.kind === 'remote-no-vision') {
+      openModelSettingsPanel('remote')
+      return
+    }
     openModels()
   }
 
@@ -224,6 +261,7 @@ export function PermissionGate({ children }: PermissionGateProps): React.JSX.Ele
               key="vision-nudge"
               issue={visionIssue.kind}
               modelName={visionIssue.modelName}
+              waiting={visionIssue.count}
               progress={visionDownloadProgress}
               failure={visionDownloadFailure}
               onOpen={handleVisionAction}
@@ -331,6 +369,7 @@ function SetupNudge({
   missingLocalNetwork,
   issue,
   modelName,
+  waiting,
   progress,
   failure,
   onOpen,
@@ -340,6 +379,8 @@ function SetupNudge({
   missingLocalNetwork?: boolean
   issue?: VisionIssue['kind']
   modelName?: string | null
+  /** Moments that wait for a model that reads images. */
+  waiting?: number
   progress?: ProgressLike | null
   failure?: string | null
   onOpen: () => void
@@ -369,26 +410,36 @@ function SetupNudge({
   // Model-first wording. Missing a model is the thing that actually blocks you, and
   // "Configure for me" handles it in one click — so lead with that for both tiers.
   // Capture permissions (Pro-only) are the secondary, optional step.
+  const moments =
+    waiting === undefined
+      ? 'Moments without on-screen text'
+      : `${waiting.toLocaleString()} moment${waiting === 1 ? '' : 's'} without on-screen text`
   const title =
     issue === 'missing-projector'
       ? 'Capture needs vision support'
-      : issue === 'choose-vision-model'
-        ? 'Capture needs a vision model'
-        : missingModel
-          ? 'Set up your local AI'
-          : missingLocalNetwork
-            ? 'Allow Local Network access'
-            : 'Finish setting up capture'
+      : issue === 'choose-vision-model' || issue === 'remote-no-vision'
+        ? 'Some moments need a vision model'
+        : issue === 'remote-screen-images'
+          ? 'Allow screen images'
+          : missingModel
+            ? 'Set up your local AI'
+            : missingLocalNetwork
+              ? 'Allow Local Network access'
+              : 'Finish setting up capture'
   const detail =
     issue === 'missing-projector'
-      ? `${modelName ?? 'The active model'} can read images after its vision projector is downloaded.`
+      ? `${moments} wait. ${modelName ?? 'The active model'} reads them after its vision support downloads.`
       : issue === 'choose-vision-model'
-        ? `${modelName ?? 'The active model'} cannot analyze Replay frames. Choose a vision-capable chat model.`
-        : missingModel
-          ? `Pick a model yourself, or let Off Grid AI configure one for your ${deviceNoun()}.`
-          : missingLocalNetwork
-            ? `Allow this ${deviceNoun()} to find and sync directly with your devices.`
-            : 'Grant screen and accessibility access so Off Grid AI can see and remember.'
+        ? `${moments} wait. ${modelName ?? 'The active model'} reads text only; pick one that reads images.`
+        : issue === 'remote-no-vision'
+          ? `${moments} wait. The chat model on ${modelName ?? 'your server'} reads text only.`
+          : issue === 'remote-screen-images'
+            ? `${moments} wait. Allow screen images for ${modelName ?? 'your server'} to analyze them there.`
+            : missingModel
+              ? `Pick a model yourself, or let Off Grid AI configure one for your ${deviceNoun()}.`
+              : missingLocalNetwork
+                ? `Allow this ${deviceNoun()} to find and sync directly with your devices.`
+                : 'Grant screen and accessibility access so Off Grid AI can see and remember.'
   const presentedProgress = progress ? projectProgress(progress) : null
   const cta =
     progress != null
@@ -399,9 +450,11 @@ function SetupNudge({
         ? 'Download vision support'
         : issue === 'choose-vision-model'
           ? 'Choose model'
-          : missingModel
-            ? 'Configure'
-            : 'Set up'
+          : issue === 'remote-screen-images' || issue === 'remote-no-vision'
+            ? 'Open settings'
+            : missingModel
+              ? 'Configure'
+              : 'Set up'
   // When Tasks consumes the whole usable workspace, defer this non-blocking
   // prompt. In split mode, keep it wholly inside Chat and away from native
   // browser content.
