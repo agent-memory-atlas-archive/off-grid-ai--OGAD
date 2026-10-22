@@ -44,6 +44,9 @@ export async function runChatWithFallback<T>(
     onModelChanged?: (failed: string, next: string) => void
   } = {}
 ): Promise<{ result: T; modelName?: string }> {
+  // A turn on its own model (a split-view pane) answers with that model or fails as that model:
+  // switching would change the app-wide model and answer with one nobody picked.
+  const pinned = Boolean((await import('./llm/chat-model-scope')).currentChatModel())
   let failures = 0
   let modelName: string | undefined
   let documentScale: number | undefined
@@ -58,7 +61,8 @@ export async function runChatWithFallback<T>(
       const step = nextChatFallbackStep({
         kind,
         failures,
-        localAlternatives: failures === 2 && kind !== 'overflow' ? await localAlternatives() : []
+        localAlternatives:
+          !pinned && failures === 2 && kind !== 'overflow' ? await localAlternatives() : []
       })
       if (step.action === 'fail') throw error
       if (step.action === 'retry-same') continue
@@ -66,6 +70,7 @@ export async function runChatWithFallback<T>(
         documentScale = step.scale
         continue
       }
+      if (pinned) throw error
       const models = await import('./models-manager')
       const failed = await selectedName()
       let activated = false
