@@ -53,6 +53,8 @@ let state: RouterState = 'off'
 let message: string | undefined
 /** The ids the running router serves (the saved set once it started). */
 let serving = new Set<string>()
+/** Each served model's context window, as its plan loaded it. */
+let servingContext = new Map<string, number>()
 let restarts = 0
 let generation = 0
 /** The llama-server the router last launched with (null when it has not launched). */
@@ -70,6 +72,11 @@ export function keptModelIds(): string[] {
 /** Whether the router serves this model id now. */
 export function keepLoadedServes(modelId: string): boolean {
   return state !== 'off' && state !== 'error' && routerPort !== null && serving.has(modelId)
+}
+
+/** The context window a kept model runs with, or null when the router does not serve it. */
+export function keepLoadedContextLength(modelId: string): number | null {
+  return keepLoadedServes(modelId) ? (servingContext.get(modelId) ?? null) : null
 }
 
 export function keepLoadedPort(): number | null {
@@ -406,6 +413,7 @@ export async function applyKeepLoaded(): Promise<void> {
     return
   }
   serving = new Set(facts.map((fact) => fact.model.id))
+  servingContext = new Map(plan.models.map((model) => [model.id, model.ctxSize]))
   state = 'running'
   await loadMissing([...serving])
 }

@@ -73,6 +73,7 @@ import {
   applyKeepLoaded,
   keepLoadedLimiter,
   keepLoadedPort,
+  keepLoadedContextLength,
   keepLoadedServes,
   keptModelIds,
   shutdownKeepLoaded
@@ -1860,7 +1861,13 @@ async function handleModelsList(
   const catalog = (await getCatalog()).models as { id: string; name: string; kind: string; remoteServerId?: string }[]
   if (activeRemote) {
     // This Mac's own models stay listed after the remote one: a request naming one loads it here.
-    text = [...text, ...installedTextModelEntries(catalog, installed, now)]
+    text = [
+      ...text,
+      ...installedTextModelEntries(catalog, installed, now).map((entry) => ({
+        ...entry,
+        context_length: llm.engineContextWindow()
+      }))
+    ]
   } else {
     const downloaded = installedTextModelEntries(catalog, installed, now)
     if (downloaded.length) text = downloaded
@@ -1874,6 +1881,11 @@ async function handleModelsList(
       loadedId && liveCaps ? { id: loadedId, capabilities: liveCaps } : null
     )
   }
+  // A kept model runs with the window its router plan gave it, not this Mac's engine setting.
+  text = text.map((entry) => {
+    const kept = typeof entry.id === 'string' ? keepLoadedContextLength(entry.id) : null
+    return kept === null ? entry : { ...entry, context_length: kept }
+  })
   const specialists = specialistModelEntries(await desktopCatalog(), installed, now)
   const data: Record<string, unknown>[] = [
     ...text,
