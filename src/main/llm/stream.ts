@@ -119,6 +119,7 @@ export function createCompletionStreamAccumulator(
       if (buffer) {
         push('\n')
       }
+      splitter.end()
       markup.end()
       reasoningMarkup.end()
       tools.end()

@@ -87,6 +87,15 @@ function runSplit(chunks: string[]): { events: StreamEvent[]; answer: string } {
 }
 
 describe('createThinkSplitter', () => {
+  it('finds a think tag split across chunks', () => {
+    const { events, answer } = runSplit(['<thi', 'nk>reasoning</thi', 'nk>answer'])
+    expect(events).toEqual([
+      { text: 'reasoning', kind: 'reasoning' },
+      { text: 'answer', kind: 'content' }
+    ])
+    expect(answer).toBe('answer')
+  })
+
   it('routes plain content (no think tags) entirely to content and accumulates it', () => {
     const { events, answer } = runSplit(['Hello ', 'world'])
     expect(events).toEqual([
