@@ -76,7 +76,9 @@ describe('remote Computer Use sampling transport', () => {
           return
         }
         response.writeHead(200, { 'Content-Type': 'application/json' })
-        response.end(JSON.stringify({ chat_template: '{% if enable_thinking %}<think>{% endif %}' }))
+        response.end(
+          JSON.stringify({ chat_template: '{% if enable_thinking %}<think>{% endif %}' })
+        )
         return
       }
       let raw = ''
@@ -117,5 +119,105 @@ describe('remote Computer Use sampling transport', () => {
       chat_template_kwargs: { enable_thinking: true },
       reasoning_budget_tokens: 512
     })
+  })
+
+  // A template that switches thinking with reasoning_effort and opens <think> in the prompt
+  // (Hunyuan's, among others): llama.cpp does not recognise it, so the reply carries the thinking
+  // in content and only closes the block.
+  function promptOpensThinkingServer(stream: string, seen: Record<string, unknown>[]): http.Server {
+    return http.createServer((request, response) => {
+      const url = new URL(request.url ?? '/', 'http://fixture')
+      let raw = ''
+      request.on('data', (chunk) => {
+        raw += String(chunk)
+      })
+      request.on('end', () => {
+        if (request.method === 'GET' && url.pathname === '/props') {
+          response.writeHead(200, { 'Content-Type': 'application/json' })
+          response.end(
+            JSON.stringify({
+              chat_template: '{{ reasoning_effort }}<think>',
+              chat_template_caps: { supports_reasoning_effort: true }
+            })
+          )
+          return
+        }
+        if (url.pathname === '/apply-template') {
+          response.writeHead(200, { 'Content-Type': 'application/json' })
+          response.end(JSON.stringify({ prompt: '<user>Hi<assistant><think>' }))
+          return
+        }
+        seen.push(JSON.parse(raw) as Record<string, unknown>)
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        response.end(stream)
+      })
+    })
+  }
+
+  const sse = (...parts: string[]): string =>
+    parts
+      .map((text) => `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`)
+      .join('') + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+
+  it('reads thinking that the prompt opened as reasoning, and the rest as the answer', async () => {
+    const seen: Record<string, unknown>[] = []
+    server = promptOpensThinkingServer(
+      sse('The user asks about ', 'primes.</thi', 'nk>There are 10.'),
+      seen
+    )
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
+    const port = (server.address() as import('node:net').AddressInfo).port
+    const reasoning: string[] = []
+
+    const result = await streamRemoteChatCompletion({
+      remote: {
+        id: 'router',
+        name: 'Router',
+        provider: 'ogad',
+        endpoint: `http://127.0.0.1:${port}/v1`,
+        model: 'hy-like',
+        apiKey: ''
+      },
+      request: {
+        messages: [{ role: 'user', content: 'primes?' }],
+        maxTokens: 64,
+        thinking: true,
+        reasoningBudget: 512
+      },
+      onDelta: (text, kind) => {
+        if (kind === 'reasoning') reasoning.push(text)
+      },
+      options: { timeoutMs: 5_000 }
+    })
+
+    expect(seen[0]).toMatchObject({
+      reasoning_effort: 'high',
+      chat_template_kwargs: { enable_thinking: true }
+    })
+    expect(reasoning.join('')).toBe('The user asks about primes.')
+    expect(result.content).toBe('There are 10.')
+  })
+
+  it('keeps the answer when the prompt opened thinking but the model never closed it', async () => {
+    const seen: Record<string, unknown>[] = []
+    server = promptOpensThinkingServer(sse('There are ', '10.'), seen)
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
+    const port = (server.address() as import('node:net').AddressInfo).port
+
+    const result = await streamRemoteChatCompletion({
+      remote: {
+        id: 'router',
+        name: 'Router',
+        provider: 'ogad',
+        endpoint: `http://127.0.0.1:${port}/v1`,
+        model: 'hy-like-2',
+        apiKey: ''
+      },
+      request: { messages: [{ role: 'user', content: 'primes?' }], maxTokens: 64, thinking: true },
+      onDelta: () => undefined,
+      options: { timeoutMs: 5_000 }
+    })
+
+    expect(result.content).toBe('There are 10.')
   })
 })

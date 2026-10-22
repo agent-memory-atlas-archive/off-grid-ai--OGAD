@@ -58,6 +58,9 @@ export interface RemoteReasoningCapability {
   tokenBudget?: boolean
   /** llama.cpp reports the template reads the standard `reasoning_effort` (its chat_template_caps). */
   reasoningEffort?: boolean
+  /** With thinking on, the rendered prompt already opens the <think> block: the reply starts inside
+   *  it and only closes it. llama.cpp splits that out itself only for templates it recognises. */
+  thinkingOpensInPrompt?: boolean
 }
 const reasoningCapabilities = new Map<string, Promise<RemoteReasoningCapability>>()
 
@@ -121,6 +124,32 @@ export function isLocalModelServer(remote: RemoteTextModelConnection): boolean {
   return remote.id.startsWith('local-grounder:')
 }
 
+/** Whether llama.cpp renders a thinking-on prompt that ends inside an open <think> block. Asked of
+ *  the server (/apply-template), so it holds for any template that does this, whatever its family. */
+async function promptOpensThinking(
+  remote: RemoteTextModelConnection,
+  reasoningEffort: boolean
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${remote.endpoint.replace(/\/v1\/?$/i, '')}/apply-template`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: remote.model,
+        messages: [{ role: 'user', content: 'Hi' }],
+        chat_template_kwargs: { enable_thinking: true },
+        ...(reasoningEffort ? { reasoning_effort: 'high' } : {})
+      }),
+      signal: AbortSignal.timeout(5_000)
+    })
+    if (!response.ok) return false
+    const { prompt } = (await response.json()) as { prompt?: unknown }
+    return typeof prompt === 'string' && /<think[^>]*>\s*$/.test(prompt)
+  } catch {
+    return false
+  }
+}
+
 /** Read the server's model/template facts, never its display name. Failed probes are retried. */
 export async function remoteReasoningCapability(
   remote: RemoteTextModelConnection
@@ -172,7 +201,8 @@ export async function remoteReasoningCapability(
       return {
         control: detectThinkingDialect(body.chat_template),
         tokenBudget: true,
-        reasoningEffort
+        reasoningEffort,
+        thinkingOpensInPrompt: await promptOpensThinking(remote, reasoningEffort)
       }
     }
     // A server error is not an answer. An Off Grid gateway answers 502 until its model loads;
@@ -514,6 +544,8 @@ export async function streamRemoteChatCompletion(input: {
         ? { control: 'none' as const }
         : await remoteReasoningCapability(remote)
     const body = completionRequestBody(remote, request, reasoning)
+    if (request.thinking && 'thinkingOpensInPrompt' in reasoning && reasoning.thinkingOpensInPrompt)
+      accumulator.startInsideThinking()
     log?.update({ effectiveRequest: JSON.parse(body) })
     const response = await fetch(`${remote.endpoint}/chat/completions`, {
       method: 'POST',

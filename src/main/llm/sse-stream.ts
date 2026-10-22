@@ -268,16 +268,27 @@ export function createThinkSplitter(emit: (ev: StreamEvent) => void): {
   /** Flush a held tail that turned out not to be a tag. Call once, after the last push. */
   end: () => void
   answer: () => string
+  /** The prompt opened the <think> block (the template ends with it), so the reply starts inside. */
+  startInsideThinking: () => void
+  /** The server separates reasoning itself (reasoning_content), so content is the answer. */
+  leaveThinking: () => void
 } {
   let inThink = false
   let answer = ''
+  let pushed = false
   // A tag can arrive split across chunks ("</thi" then "nk>"): hold a tail that may start one.
   let pending = ''
+  // Thinking the prompt opened that never closed: the model answered without thinking, so what
+  // streamed as reasoning is the answer after all.
+  let openedByPrompt = false
+  let closed = false
+  let unclosed = ''
 
   const out = (text: string): void => {
     if (!text) return
     if (inThink) {
       emit({ text, kind: 'reasoning' })
+      if (openedByPrompt && !closed) unclosed += text
     } else {
       answer += text
       emit({ text, kind: 'content' })
@@ -285,6 +296,7 @@ export function createThinkSplitter(emit: (ev: StreamEvent) => void): {
   }
 
   const push = (text: string): void => {
+    pushed = true
     pending += text
     while (pending) {
       const tag = inThink ? '</think>' : '<think>'
@@ -297,6 +309,7 @@ export function createThinkSplitter(emit: (ev: StreamEvent) => void): {
       }
       out(pending.slice(0, at))
       pending = pending.slice(at + tag.length)
+      if (inThink) closed = true
       inThink = !inThink
     }
   }
@@ -307,6 +320,16 @@ export function createThinkSplitter(emit: (ev: StreamEvent) => void): {
       out(pending)
       pending = ''
     },
-    answer: () => answer
+    answer: () => (openedByPrompt && !closed && !answer ? unclosed : answer),
+    startInsideThinking: () => {
+      if (pushed) return
+      inThink = true
+      openedByPrompt = true
+    },
+    leaveThinking: () => {
+      if (!openedByPrompt || closed) return
+      inThink = false
+      openedByPrompt = false
+    }
   }
 }

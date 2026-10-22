@@ -51,6 +51,8 @@ export interface StreamOptions {
 export interface CompletionStreamAccumulator {
   push(chunk: string): void
   finish(): StreamResult
+  /** The prompt opened the <think> block, so the reply starts inside it (see createThinkSplitter). */
+  startInsideThinking(): void
 }
 
 /** Transport-neutral OpenAI SSE projection. Local HTTP and selected remote
@@ -97,7 +99,11 @@ export function createCompletionStreamAccumulator(
       // Reasoning counts: it is the first thing the model produces and the first thing the user
       // sees move, so a thinking model's TTFT would otherwise read as the whole thinking pass.
       if ((reasoning || frame.delta.content) && firstTokenAtMs === undefined) firstTokenAtMs = now()
-      if (reasoning) reasoningMarkup.push(reasoning)
+      if (reasoning) {
+        // The server separates reasoning itself, so content is the answer.
+        splitter.leaveThinking()
+        reasoningMarkup.push(reasoning)
+      }
       if (frame.delta.content) splitter.push(frame.delta.content)
       if (frame.delta.tool_calls) {
         if (!toolCallStarted) {
@@ -113,6 +119,7 @@ export function createCompletionStreamAccumulator(
 
   return {
     push,
+    startInsideThinking: splitter.startInsideThinking,
     finish() {
       // A conforming SSE stream ends frames with a newline. Parse a final line
       // defensively because remote OpenAI-compatible providers can omit it.
