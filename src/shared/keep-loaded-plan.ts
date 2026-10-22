@@ -11,6 +11,7 @@ import {
   GPU_FIT_MARGIN_GB,
   KV_GB_PER_1K_TOKENS,
   LLM_COMPUTE_BUFFER_MB,
+  METAL_WORKING_SET_SHARE,
   kvBytesPerToken,
   type KvShape
 } from '@offgrid/models'
@@ -47,6 +48,37 @@ export interface KeepLoadedMachine {
   reservedGpuGb?: number
   /** RAM other engines already hold, GB. */
   reservedRamGb?: number
+}
+
+/** A GPU that reports at least this share of the machine's RAM shares that memory with the CPU
+ *  (a DGX Spark's GB10 reports the whole 128 GB). */
+export const SHARED_GPU_RAM_SHARE = 0.85
+
+/**
+ * The GPU memory the planner may use, and whether the CPU shares it. A Mac and a board whose GPU
+ * reports about all of the machine's RAM (DGX Spark) share one memory: the GPU gets the working-set
+ * share of RAM and spilling to the CPU frees nothing. An ARM Linux GPU that reports no memory is
+ * taken as shared too (nvidia-smi gives none on GB10). Counting such memory twice, once as VRAM and
+ * once as RAM, would plan a launch that runs out of memory.
+ */
+export function keepLoadedGpuMemory(input: {
+  platform: string
+  arch: string
+  /** A GPU engine found a usable device. */
+  gpuPresent: boolean
+  /** The memory the GPU reports, GB, or null when it reports none. */
+  reportedGpuGb: number | null
+  totalRamGb: number
+}): Pick<KeepLoadedMachine, 'gpuMemoryGb' | 'unifiedMemory'> {
+  const shared = { gpuMemoryGb: input.totalRamGb * METAL_WORKING_SET_SHARE, unifiedMemory: true }
+  if (input.platform === 'darwin') return shared
+  if (!input.gpuPresent) return { gpuMemoryGb: null, unifiedMemory: false }
+  if (input.reportedGpuGb === null)
+    return input.platform === 'linux' && input.arch === 'arm64'
+      ? shared
+      : { gpuMemoryGb: null, unifiedMemory: false }
+  if (input.reportedGpuGb >= input.totalRamGb * SHARED_GPU_RAM_SHARE) return shared
+  return { gpuMemoryGb: input.reportedGpuGb, unifiedMemory: false }
 }
 
 export interface KeepLoadedModel {

@@ -8,9 +8,9 @@ import fs from 'fs'
 import http from 'http'
 import os from 'os'
 import path from 'path'
-import { METAL_WORKING_SET_SHARE } from '@offgrid/models'
 import {
   KEEP_LOADED_CTX_SIZE,
+  keepLoadedGpuMemory,
   keepLoadedPresetIni,
   planKeepLoaded,
   type KeepLoadedFiles,
@@ -98,29 +98,32 @@ function routerServerPath(): string | null {
 
 async function machineFacts(serverPath: string | null): Promise<KeepLoadedMachine> {
   const totalRamGb = os.totalmem() / 1024 ** 3
-  const base = { totalRamGb, usableCores: usableCpuCount() }
-  // The chat engine keeps its own model loaded beside the router.
-  const chatGb = llm.isReady() ? llm.localWeightsGb() : 0
-  if (process.platform === 'darwin') {
-    return {
-      ...base,
-      gpuMemoryGb: totalRamGb * METAL_WORKING_SET_SHARE,
-      unifiedMemory: true,
-      reservedGpuGb: chatGb
-    }
-  }
   const priority = serverPath ? enginePriority(serverPath) : 2
+  let gpuPresent = false
   let gpuMb: number | null = null
-  if (serverPath && priority < 2) {
+  if (process.platform !== 'darwin' && serverPath && priority < 2) {
     const backend = priority === 0 ? 'CUDA' : 'Vulkan'
-    if (await gpuDeviceAvailable(serverPath, backend, process.platform))
+    gpuPresent = await gpuDeviceAvailable(serverPath, backend, process.platform)
+    if (gpuPresent)
       gpuMb =
         probedGpuMemoryMB(serverPath, backend) ??
         (backend === 'CUDA' ? (cudaVramMB()?.totalMB ?? null) : null)
   }
-  if (gpuMb === null)
-    return { ...base, gpuMemoryGb: null, unifiedMemory: false, reservedRamGb: chatGb }
-  return { ...base, gpuMemoryGb: gpuMb / 1024, unifiedMemory: false, reservedGpuGb: chatGb }
+  const memory = keepLoadedGpuMemory({
+    platform: process.platform,
+    arch: process.arch,
+    gpuPresent,
+    reportedGpuGb: gpuMb === null ? null : gpuMb / 1024,
+    totalRamGb
+  })
+  // The chat engine keeps its own model loaded beside the router.
+  const chatGb = llm.isReady() ? llm.localWeightsGb() : 0
+  return {
+    ...memory,
+    totalRamGb,
+    usableCores: usableCpuCount(),
+    ...(memory.gpuMemoryGb === null ? { reservedRamGb: chatGb } : { reservedGpuGb: chatGb })
+  }
 }
 
 const sizeGb = (file: string | null | undefined): number => {

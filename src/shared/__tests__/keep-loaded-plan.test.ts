@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   ALL_GPU_LAYERS,
+  keepLoadedGpuMemory,
   keepLoadedPresetIni,
   keepLoadedThreads,
   planKeepLoaded,
@@ -142,6 +143,51 @@ describe('planKeepLoaded', () => {
     expect(plan.fits).toBe(true)
     expect(plan.models).toEqual([])
     expect(plan.threadsTotal).toBe(0)
+  })
+})
+
+describe('keepLoadedGpuMemory', () => {
+  const linux = { platform: 'linux', arch: 'x64', gpuPresent: true, totalRamGb: 1500 }
+
+  it('takes a discrete card at the memory it reports', () => {
+    expect(keepLoadedGpuMemory({ ...linux, reportedGpuGb: 96 })).toEqual({
+      gpuMemoryGb: 96,
+      unifiedMemory: false
+    })
+  })
+
+  it('counts a DGX Spark once: its GPU reports the whole shared 128 GB', () => {
+    const spark = { ...linux, arch: 'arm64', totalRamGb: 128 }
+    expect(keepLoadedGpuMemory({ ...spark, reportedGpuGb: 119 })).toEqual({
+      gpuMemoryGb: 96,
+      unifiedMemory: true
+    })
+    // nvidia-smi reports no memory on GB10: still one shared memory.
+    expect(keepLoadedGpuMemory({ ...spark, reportedGpuGb: null })).toMatchObject({
+      unifiedMemory: true
+    })
+  })
+
+  it('shares memory on a Mac and has no GPU when no engine found one', () => {
+    expect(
+      keepLoadedGpuMemory({ ...linux, platform: 'darwin', reportedGpuGb: null, totalRamGb: 64 })
+    ).toEqual({ gpuMemoryGb: 48, unifiedMemory: true })
+    expect(keepLoadedGpuMemory({ ...linux, gpuPresent: false, reportedGpuGb: null })).toEqual({
+      gpuMemoryGb: null,
+      unifiedMemory: false
+    })
+  })
+
+  it('never spills experts on shared memory, so a Spark-sized set is not planned twice', () => {
+    const spark = keepLoadedGpuMemory({
+      ...linux,
+      arch: 'arm64',
+      totalRamGb: 128,
+      reportedGpuGb: 119
+    })
+    const plan = planKeepLoaded({ ...spark, totalRamGb: 128, usableCores: 20 }, sixModels)
+    expect(plan.fits).toBe(false)
+    expect(plan.models.every((m) => m.nCpuMoe === 0)).toBe(true)
   })
 })
 
