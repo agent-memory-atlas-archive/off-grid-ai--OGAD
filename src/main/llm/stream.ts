@@ -16,7 +16,8 @@ import {
   type AssembledToolCall,
   type SseReasoningDetail,
   type SseTimings,
-  type SseUsage
+  type SseUsage,
+  type SseWaitStatus
 } from './sse-stream'
 import { modelRequestOptions, serverResponseError } from './http-post'
 import { generationMetrics, type GenerationMetrics } from '../../shared/generation-metrics'
@@ -61,7 +62,9 @@ export interface CompletionStreamAccumulator {
 export function createCompletionStreamAccumulator(
   onDelta: (text: string, kind: 'content' | 'reasoning') => void,
   onToolCallStart?: (name?: string) => void,
-  onToolCallReady?: (call: AssembledToolCall) => void
+  onToolCallReady?: (call: AssembledToolCall) => void,
+  /** A gateway's word on what a waiting request waits for, before its first token. */
+  onWaitStatus?: (status: SseWaitStatus) => void
 ): CompletionStreamAccumulator {
   let buffer = ''
   let finishReason: string | null = null
@@ -89,6 +92,11 @@ export function createCompletionStreamAccumulator(
       buffer = buffer.slice(newline + 1)
       const frame = parseSseLine(line)
       if (!frame) continue
+      if (frame.error) throw new Error(frame.error)
+      if (frame.status) {
+        onWaitStatus?.(frame.status)
+        continue
+      }
       if (frame.finishReason) finishReason = frame.finishReason
       if (frame.usage) usage = frame.usage
       if (frame.timings) timings = frame.timings

@@ -78,11 +78,21 @@ export interface SseTimings {
   predicted_per_second?: number
 }
 
+/** What an Off Grid gateway says a waiting request is waiting for (see model-server/early-stream). */
+export interface SseWaitStatus {
+  phase: 'queued' | 'loading'
+  ahead?: number
+  model?: string
+}
+
 export interface SseFrame {
   delta: SseDelta
   finishReason: string | null
   usage?: SseUsage
   timings?: SseTimings
+  status?: SseWaitStatus
+  /** An error the server reported inside the stream, after its headers had gone out. */
+  error?: string
 }
 
 /** A fully-assembled tool call (after accumulating its streamed fragments). */
@@ -156,6 +166,14 @@ export function parseSseLine(rawLine: string): SseFrame | null {
     // no idea how fast anything generated.
     const usage = (parsed?.usage ?? undefined) as SseUsage | undefined
     const timings = (parsed?.timings ?? undefined) as SseTimings | undefined
+    if (parsed?.error) {
+      const message = parsed.error?.message ?? parsed.error
+      return { delta: {}, finishReason: null, error: String(message) }
+    }
+    const status = parsed?.offgrid_status as SseWaitStatus | undefined
+    if (status && (status.phase === 'queued' || status.phase === 'loading')) {
+      return { delta: {}, finishReason: null, status }
+    }
     const choice = parsed?.choices?.[0]
     if (!choice || typeof choice !== 'object') {
       return usage || timings ? { delta: {}, finishReason: null, usage, timings } : null

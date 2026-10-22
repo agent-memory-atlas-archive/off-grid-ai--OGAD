@@ -19,6 +19,22 @@ import {
 } from '../sse-stream'
 
 describe('parseSseLine', () => {
+  it("reads a gateway's wait status from a frame with no choices", () => {
+    expect(
+      parseSseLine(
+        'data: {"object":"chat.completion.chunk","choices":[],"offgrid_status":{"phase":"queued","ahead":2}}'
+      )
+    ).toEqual({ delta: {}, finishReason: null, status: { phase: 'queued', ahead: 2 } })
+  })
+
+  it('reads an error the server reports inside the stream', () => {
+    expect(parseSseLine('data: {"error":{"message":"Model could not be selected."}}')).toEqual({
+      delta: {},
+      finishReason: null,
+      error: 'Model could not be selected.'
+    })
+  })
+
   it('parses a normal content delta frame', () => {
     const d = parseSseLine('data: {"choices":[{"delta":{"content":"hi"}}]}')
     expect(d).toEqual({ delta: { content: 'hi' }, finishReason: null })
