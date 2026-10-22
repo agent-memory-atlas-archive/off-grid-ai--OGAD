@@ -465,10 +465,15 @@ export async function testRemoteVisionServer(
           .map((entry) => [String(entry.id ?? entry.model ?? ''), entry] as const)
       ).values()
     ]
+    // A server relaying a model from one of this app's own servers (this Mac's gateway relaying
+    // its remote chat model) would list it twice, once by a longer road.
+    const ownServers = new Set(readStored().servers.map((server) => server.id))
     const models = entries.flatMap((entry) => {
       const id =
         typeof entry.id === 'string' ? entry.id : typeof entry.model === 'string' ? entry.model : ''
       if (!id) return []
+      const relayed = parseRemoteVisionModelId(id)
+      if (relayed && ownServers.has(relayed.serverId)) return []
       const kind = entry.kind
       const outputs = Array.isArray(entry.architecture?.output_modalities)
         ? entry.architecture.output_modalities
