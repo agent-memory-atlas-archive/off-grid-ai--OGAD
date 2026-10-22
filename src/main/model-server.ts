@@ -77,7 +77,7 @@ import {
   keptModelIds,
   shutdownKeepLoaded
 } from './model-server/keep-loaded'
-import { endStreamWithError, openEarlyStream } from './model-server/early-stream'
+import { endStreamWithError, openEarlyStream, type EarlyStream } from './model-server/early-stream'
 import { handleExtensionBridge, handleExtensionUpgrade } from './extension-bridge/bridge-http'
 import { isAsync, matchPollRoute } from './model-server/async-request'
 import {
@@ -493,7 +493,10 @@ function proxyToLlama(
   pooled = false,
   /** Team mode: the slot's turn, ended once llama-server has finished with the request (not as
    *  soon as the client leaves, while the engine may still hold the slot). */
-  release?: Release
+  release?: Release,
+  /** A stream that already answered keeps its connection alive until the engine answers: a long
+   *  prompt or a router loading the model can take minutes. */
+  early?: EarlyStream | null
 ): void {
   const headers = { ...req.headers, host: `${UPSTREAM_HOST}:${targetPort ?? upstreamPort()}` }
   let responded = false
@@ -528,6 +531,7 @@ function proxyToLlama(
         },
         (proxyRes) => {
           responded = true
+          early?.stop()
           const safeResponse = safeProxyResponse(proxyRes.statusCode, proxyRes.headers)
           if (res.headersSent && safeResponse.statusCode !== 200) {
             // The stream already answered while it waited: pass the engine's error on in-stream.
@@ -1306,11 +1310,10 @@ async function handleChat(
 
   // Sync: stream straight through. Retry for up to 45s if llama-server is mid-reload
   // (e.g. just after an image generation freed and is respawning it, ~16s).
-  early?.stop()
   await new Promise<void>((resolve) => {
     res.once('close', resolve)
     res.once('finish', resolve)
-    proxyToLlama(req, res, forward, Date.now() + 45_000, activity)
+    proxyToLlama(req, res, forward, Date.now() + 45_000, activity, undefined, false, undefined, early)
   })
   }).catch((error) => {
     if (!res.writableEnded && !res.destroyed) {
@@ -1333,6 +1336,8 @@ async function handleKeptModelChat(
 ): Promise<void> {
   const model = body.model as string
   const port = keepLoadedPort()
+  const early = body.stream === true && !isAsync(req, body) ? openEarlyStream(res, rid) : null
+  res.once('close', () => early?.stop())
   let forward: Buffer = buf
   try {
     let changed = await inlineChatImages(body)
@@ -1341,7 +1346,7 @@ async function handleKeptModelChat(
   } catch {
     // Image fetch failed — forward the original request so the model returns its own error.
   }
-  res.setHeader('X-Request-Id', rid)
+  if (!res.headersSent) res.setHeader('X-Request-Id', rid)
   const activity = new AIRequestHandle({
     modality: 'text',
     source: 'API chat',
@@ -1378,9 +1383,9 @@ async function handleKeptModelChat(
     )
     return
   }
-  const release = await admitTeamRequest(keepLoadedLimiter(model), res, 0, 'caller')
+  const release = await admitTeamRequest(keepLoadedLimiter(model), res, 0, 'caller', early)
   if (!release) return
-  proxyToLlama(req, res, forward, Date.now() + 45_000, activity, port, true, release)
+  proxyToLlama(req, res, forward, Date.now() + 45_000, activity, port, true, release, early)
 }
 
 // ─── Team-mode chat ──────────────────────────────────────────────────────────
@@ -1409,7 +1414,10 @@ async function localChatModelIds(): Promise<Set<string>> {
 /** Load or swap the local chat model when this request needs it. Only that goes through the
  *  app-wide queue, with the engine to itself: running streams finish first. Returns an error to
  *  send, or null when the model is ready to take the request. */
-async function prepareTeamChatModel(requested: string): Promise<string | null> {
+async function prepareTeamChatModel(
+  requested: string,
+  onLoading?: (model: string) => void
+): Promise<string | null> {
   const active = llm.activeModelInfo()?.id
   if (llm.isReady() && (!requested || requested === active)) return null
   const selected = !!requested && (await localChatModelIds()).has(requested)
@@ -1418,8 +1426,10 @@ async function prepareTeamChatModel(requested: string): Promise<string | null> {
   let failure: string | null = null
   await modalityQueue.run(CHAT_JOB, () =>
     chatLimiter().exclusive(async () => {
+      const { loadLocalChatModelForRequest, displayModelName } = await import('./models-manager')
+      const loading = swap ? requested : llm.activeModelInfo()?.id
+      if (loading && (swap || !llm.isReady())) onLoading?.(displayModelName(loading) ?? loading)
       if (swap && llm.activeModelInfo()?.id !== requested) {
-        const { loadLocalChatModelForRequest } = await import('./models-manager')
         const result = await loadLocalChatModelForRequest(requested)
         if (!result.success) {
           failure = result.error ?? 'Model could not be selected.'
@@ -1455,7 +1465,7 @@ async function admitOnRequestedModel(
     release()
     const failure = await prepareTeamChatModel(requested)
     if (failure) {
-      if (res && !res.headersSent) json(res, 400, errBody(failure))
+      if (res && !res.writableEnded) json(res, 400, errBody(failure))
       return null
     }
   }
@@ -1500,7 +1510,7 @@ function gatewayStatus(): Record<string, unknown> {
 
 /** The client waited too long in line: tell it when to come back. */
 function sendLimiterFull(res: http.ServerResponse, error: LimiterFullError): void {
-  res.setHeader('Retry-After', String(error.retryAfterSeconds))
+  if (!res.headersSent) res.setHeader('Retry-After', String(error.retryAfterSeconds))
   json(res, 429, errBody(error.message, 'rate_limit_error'))
 }
 
@@ -1512,12 +1522,17 @@ async function admitTeamRequest(
   tokens = 0,
   /** 'client': the turn ends when the client's response closes. 'caller': the caller ends it
    *  (proxyToLlama, once llama-server has let go of the request too). */
-  holdUntil: 'client' | 'caller' = 'client'
+  holdUntil: 'client' | 'caller' = 'client',
+  early?: EarlyStream | null
 ): Promise<Release | null> {
   const gone = new AbortController()
   const onClose = (): void => gone.abort()
   res.once('close', onClose)
   try {
+    // Every slot is taken: an answered stream says it waits, and how many wait before it.
+    const line = limiter.status()
+    if (early && line.running >= line.capacity)
+      early.status('queued', line.waiting > 0 ? { ahead: line.waiting } : {})
     const release = await limiter.acquire(gone.signal, tokens)
     if (res.destroyed) {
       release()
@@ -1547,9 +1562,14 @@ async function handleTeamChat(
 ): Promise<void> {
   const requested = typeof body.model === 'string' ? body.model : ''
   const remote = !!requested && !!parseRemoteVisionModelId(requested)
+  // A streaming chat for a model here answers at once and says what it waits for.
+  const early = body.stream === true && !remote && !isAsync(req, body) ? openEarlyStream(res, rid) : null
+  res.once('close', () => early?.stop())
   if (!remote) {
     try {
-      const failure = await prepareTeamChatModel(requested)
+      const failure = await prepareTeamChatModel(requested, (model) =>
+        early?.status('loading', { model })
+      )
       if (failure) {
         json(res, 400, errBody(failure))
         return
@@ -1571,7 +1591,7 @@ async function handleTeamChat(
   } catch {
     // Image fetch failed — forward the original request so the model returns its own error.
   }
-  res.setHeader('X-Request-Id', rid)
+  if (!res.headersSent) res.setHeader('X-Request-Id', rid)
   // What this request may take from the shared KV pool: its prompt (images by their token cost,
   // not their encoded size) and its reply cap, which thinking makes longer when none is set.
   const maxTokens = body.max_tokens ?? body.max_completion_tokens
@@ -1623,7 +1643,7 @@ async function handleTeamChat(
     ? await admitTeamRequest(teamLimiter('remote'), res)
     : await admitOnRequestedModel(
         requested,
-        () => admitTeamRequest(teamLimiter('chat'), res, tokens, 'caller'),
+        () => admitTeamRequest(teamLimiter('chat'), res, tokens, 'caller', early),
         res
       )
   if (!release) return
@@ -1635,7 +1655,7 @@ async function handleTeamChat(
   })
   activity.update({ effectiveRequest: body, backend: llm.activeAccelerator() ?? 'Unknown' })
   if (proxyToSelectedRemote(res, body, activity, true)) return
-  proxyToLlama(req, res, forward, Date.now() + 45_000, activity, undefined, true, release)
+  proxyToLlama(req, res, forward, Date.now() + 45_000, activity, undefined, true, release, early)
 }
 
 /** /v1/completions in team mode: a turn on the local limiter, the chat retry window, pooled. */
