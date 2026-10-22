@@ -404,7 +404,8 @@ function AppContent(): React.JSX.Element {
     setChatPanes((current) => {
       if (current) return null
       const tabs = readOpenChatTabs().slice(0, 6)
-      const panes = tabs.length >= 2 ? tabs : [...tabs, ''].slice(0, 2)
+      // At least two panes: with fewer open tabs, the rest start on a new chat.
+      const panes = [...tabs, '', ''].slice(0, Math.max(2, tabs.length))
       panes.forEach((conversationId, index) => {
         try {
           window.localStorage.setItem(
