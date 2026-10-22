@@ -28,6 +28,18 @@ describe('external model discovery', () => {
     expect(fs.readdirSync(folder)).toHaveLength(3)
   })
 
+  it('does not offer Decider weights or files in hidden folders as chat models', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'og-external-'))
+    roots.push(home)
+    const storage = path.join(home, 'models')
+    gguf(path.join(storage, 'decision-eval', 'decider-2b-v10-q8_0.gguf'))
+    gguf(path.join(storage, 'decision-eval', 'decider-0.8b-q8_0.gguf'))
+    gguf(path.join(storage, '.offgrid-model-transfers', 'abc', 'SmolVLM-256M-Instruct-f16.gguf'))
+    gguf(path.join(storage, 'chats', 'chat.gguf'))
+    const models = discoverExternalModels(home, path.join(home, 'missing'), storage)
+    expect(models.map((item) => item.name)).toEqual(['Chat'])
+  })
+
   it('finds LM Studio GGUF files in place and skips projectors', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'og-external-'))
     roots.push(home)
