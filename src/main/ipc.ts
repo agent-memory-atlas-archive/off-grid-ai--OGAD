@@ -2100,9 +2100,23 @@ export function setupIPC(): void {
   ipcMain.handle('tools:chat', async (...args: Parameters<typeof toolsChatTurn>) => {
     const { runWithChatModel } = await import('./llm/chat-model-scope')
     const { getRemoteVisionServerForModel } = await import('./vision/remote-vision-server')
-    const model = getRemoteVisionServerForModel(args[3]?.modelReference)
+    const reference = args[3]?.modelReference
+    const model = getRemoteVisionServerForModel(reference)
+    // A pane's model whose server was turned off or removed fails as that model: it never runs
+    // on the app-wide model in its place.
+    if (reference && !model) throw new Error(await missingPaneModelMessage(reference))
     return runWithChatModel(model, () => toolsChatTurn(...args))
   })
+  async function missingPaneModelMessage(reference: string): Promise<string> {
+    const { parseRemoteVisionModelId } = await import('../shared/remote-vision-server')
+    const { getRemoteVisionServerSettings } = await import('./vision/remote-vision-server')
+    const serverId = parseRemoteVisionModelId(reference)?.serverId
+    const server = getRemoteVisionServerSettings().servers.find(({ id }) => id === serverId)
+    if (!server) return 'This pane’s model server was removed. Pick another model for this pane.'
+    if (server.enabled === false)
+      return `${server.name} is turned off. Turn it on in Settings, or pick another model for this pane.`
+    return `${server.name} no longer offers this pane’s model. Pick another model for this pane.`
+  }
   async function toolsChatTurn(
     event: Electron.IpcMainInvokeEvent,
     query: string,
