@@ -6,7 +6,7 @@ import {
   type CompletionStreamAccumulator,
   type StreamResult
 } from './stream'
-import type { AssembledToolCall } from './sse-stream'
+import type { AssembledToolCall, SseWaitStatus } from './sse-stream'
 import { writeDiagnosticLog } from '../diagnostics-log'
 import { currentAIRequest } from '../ai-request-log'
 import { screenTaskRequestSource } from '../actions/remote-screen-session'
@@ -36,6 +36,16 @@ export interface RemoteChatOptions {
   timeoutMs?: number
   onToolCallStart?: (name?: string) => void
   onToolCallReady?: (call: AssembledToolCall) => void
+  /** What the server says the request waits for, as a line to show: its turn, a model loading. */
+  onWaitStatus?: (label: string) => void
+}
+
+/** "Waiting for RTX Pro 6000 · 2 ahead", "RTX Pro 6000 is loading Flint…". */
+export function remoteWaitLabel(serverName: string, status: SseWaitStatus): string {
+  if (status.phase === 'loading') return `${serverName} is loading ${status.model || 'the model'}…`
+  return status.ahead
+    ? `Waiting for ${serverName} · ${status.ahead} ahead`
+    : `Waiting for ${serverName}…`
 }
 
 export interface RemoteNativeToolCapability {
@@ -537,7 +547,10 @@ export async function streamRemoteChatCompletion(input: {
       input.onDelta(text, kind)
     },
     options.onToolCallStart,
-    options.onToolCallReady
+    options.onToolCallReady,
+    options.onWaitStatus
+      ? (status) => options.onWaitStatus?.(remoteWaitLabel(remote.name, status))
+      : undefined
   )
   if (options.signal?.aborted) return accumulator.finish()
 

@@ -258,3 +258,73 @@ describe('remote context window', () => {
     expect(await remoteContextWindow(remote)).toBe(262_144)
   })
 })
+
+describe('a request waiting on an Off Grid gateway', () => {
+  const gateway = (stream: string): Promise<string> => {
+    server = http.createServer((request, response) => {
+      request.resume()
+      request.on('end', () => {
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        response.end(stream)
+      })
+    })
+    return new Promise((resolve) =>
+      server!.listen(0, '127.0.0.1', () =>
+        resolve(`http://127.0.0.1:${(server!.address() as import('node:net').AddressInfo).port}/v1`)
+      )
+    )
+  }
+  const frame = (body: unknown): string => `data: ${JSON.stringify(body)}\n\n`
+  const request = {
+    messages: [{ role: 'user', content: 'hi' }],
+    maxTokens: 32,
+    temperature: 0.7
+  }
+
+  it('says what it waits for, then answers', async () => {
+    const endpoint = await gateway(
+      ': waiting\n\n' +
+        frame({ choices: [], offgrid_status: { phase: 'queued', ahead: 2 } }) +
+        frame({ choices: [], offgrid_status: { phase: 'loading', model: 'Flint' } }) +
+        frame({ choices: [{ delta: { content: 'hello' }, finish_reason: 'stop' }] }) +
+        'data: [DONE]\n\n'
+    )
+    const lines: string[] = []
+    const result = await streamRemoteChatCompletion({
+      remote: {
+        id: 'pod',
+        name: 'RTX Pro 6000',
+        provider: 'custom',
+        endpoint,
+        model: 'flint',
+        apiKey: ''
+      },
+      request,
+      onDelta: () => undefined,
+      options: { timeoutMs: 5_000, onWaitStatus: (line) => lines.push(line) }
+    })
+    expect(lines).toEqual(['Waiting for RTX Pro 6000 · 2 ahead', 'RTX Pro 6000 is loading Flint…'])
+    expect(result.content).toBe('hello')
+  })
+
+  it('fails when the gateway reports an error inside the stream', async () => {
+    const endpoint = await gateway(
+      frame({ error: { message: 'Model could not be selected.' } }) + 'data: [DONE]\n\n'
+    )
+    await expect(
+      streamRemoteChatCompletion({
+        remote: {
+          id: 'pod',
+          name: 'RTX Pro 6000',
+          provider: 'custom',
+          endpoint,
+          model: 'flint',
+          apiKey: ''
+        },
+        request,
+        onDelta: () => undefined,
+        options: { timeoutMs: 5_000 }
+      })
+    ).rejects.toThrow('Model could not be selected.')
+  })
+})
