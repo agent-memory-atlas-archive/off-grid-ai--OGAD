@@ -333,13 +333,19 @@ async function liveGatewayModalities(imageAvailable: boolean): Promise<GatewayMo
   }
   const transcription = getActiveModal('transcription')
   const speech = getActiveModal('speech')
-  const chat = llm.modelsExist()
+  // Each modality is ready on this Mac or on the remote server the person chose for it.
+  const chat = llm.modelsExist() || !!getActiveRemoteVisionServer()
   return buildGatewayModalities({
     chat,
     vision: chat && llm.hasVision(),
     embeddings: true,
-    transcription: !!whisperModel() || (!!transcription && installed.includes(transcription)),
-    speech: !!speech && installed.includes(speech),
+    transcription:
+      !!getActiveRemoteVisionServerForModality('transcription') ||
+      !!whisperModel() ||
+      (!!transcription && installed.includes(transcription)),
+    speech:
+      !!getActiveRemoteVisionServerForModality('voice') ||
+      (!!speech && installed.includes(speech)),
     image: imageAvailable
   })
 }
@@ -1204,6 +1210,12 @@ async function handleChat(
     const failure = errMeta(error)
     json(res, failure.status, errBody(failure.message, failure.type))
     return
+  }
+  // A request that names no model goes where this Mac's chat goes: its remote server, when the
+  // person chose one, never this Mac's engine that the remote choice unloaded.
+  if (!body.model) {
+    const remote = getActiveRemoteVisionServer()
+    if (remote) body.model = remoteVisionModelId(remote.id, remote.model)
   }
   if (typeof body.model === 'string' && keepLoadedServes(body.model))
     return handleKeptModelChat(req, res, rid, body, buf)
