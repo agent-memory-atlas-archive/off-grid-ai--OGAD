@@ -28,13 +28,13 @@
   },
   "sd": {
     "repo": "leejet/stable-diffusion.cpp",
-    "ref": "master-982-0518b34",
-    "commit": "0518b34374761cb82aeda5ad3c2f0686fdad2cec",
+    "ref": "master-987-a77d362",
+    "commit": "a77d3623180b2bc1886f3dd04c0aa04156a987ef",
     "sha256": {
-      "linux-vulkan": "8bc413b3e6307fbefdf985cc562f7db1cc4c68e2dc3dca9d69b66ce98b9cbb5a",
-      "win-cuda": "f4dd12ee7fa974f1858ced85191b90e5d3c288dd4b10f296be91175138b5b421",
-      "win-vulkan": "c2ab91b33206beba434f739a9131916539a3d6229da153e6e0311013e6308567",
-      "win-cpu": "4d8ec59037f70d0b61954bcca1a0008dfe238fabd9e21f8d354b16be9e7c3d4b"
+      "linux-vulkan": "f65d726b226c17344774eaa38173a5e811f9ab59b12bc37d0e3f3683d0ffa1f1",
+      "win-cuda": "eb4cc6be2d365258a8f4380f8ac8473090d93810f32dfc15b3d90914483b817c",
+      "win-vulkan": "a8b58fa44f2574534a61e9fa778e7fa4fede9c1e51e638e44059d43531824f07",
+      "win-cpu": "06d896f6098365ecd2979c2f9ed2790beadfc07fdcd5ccd85e0f5b4f84414a4d"
     }
   },
   "whisper": {
