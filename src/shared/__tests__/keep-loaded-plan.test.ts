@@ -3,6 +3,7 @@ import {
   ALL_GPU_LAYERS,
   keepLoadedGpuMemory,
   keepLoadedPresetIni,
+  routerModelName,
   keepLoadedThreads,
   planKeepLoaded,
   type KeepLoadedMachine,
@@ -220,6 +221,14 @@ describe('keepLoadedPresetIni', () => {
     expect(ini).toContain('load-on-startup = true')
     // A model with no files is left out.
     expect(ini).not.toContain('[flint]')
+  })
+
+  it('names a model whose id has a colon so the router keeps the name as written', () => {
+    const [plan] = planKeepLoaded(pod, [dense('model-package-v1:0fd0', 4, 32)]).models
+    const ini = keepLoadedPresetIni([plan!], { 'model-package-v1:0fd0': { model: '/models/x' } })
+    expect(ini).toContain('[model-package-v1--0fd0]')
+    expect(routerModelName('model-package-v1:0fd0')).toBe('model-package-v1--0fd0')
+    expect(routerModelName('unsloth/gemma-4-E4B-it-GGUF')).toBe('unsloth/gemma-4-E4B-it-GGUF')
   })
 
   it('keeps every value on its own line', () => {

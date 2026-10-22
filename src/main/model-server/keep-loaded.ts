@@ -12,6 +12,7 @@ import {
   KEEP_LOADED_CTX_SIZE,
   keepLoadedGpuMemory,
   keepLoadedPresetIni,
+  routerModelName,
   planKeepLoaded,
   type KeepLoadedFiles,
   type KeepLoadedMachine,
@@ -264,8 +265,12 @@ async function loadMissing(ids: string[]): Promise<void> {
   const status = await routerModelStatus()
   await Promise.all(
     ids
-      .filter((id) => status.has(id) && status.get(id) !== 'loaded' && status.get(id) !== 'loading')
-      .map((id) => routerPost('/models/load', { model: id }).catch(() => {}))
+      .map(routerModelName)
+      .filter(
+        (name) =>
+          status.has(name) && status.get(name) !== 'loaded' && status.get(name) !== 'loading'
+      )
+      .map((name) => routerPost('/models/load', { model: name }).catch(() => {}))
   )
 }
 
@@ -477,7 +482,7 @@ export async function keepLoadedState(ids = keptModelIds()): Promise<KeepLoadedS
   const models = ids.map((id) => ({
     id,
     status: (serving.has(id)
-      ? (live.get(id) ?? 'loading')
+      ? (live.get(routerModelName(id)) ?? 'loading')
       : 'unloaded') as KeepLoadedModelStatusContract['status']
   }))
   return {

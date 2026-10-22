@@ -317,8 +317,17 @@ function iniValue(value: string | number | boolean): string {
 }
 
 /**
+ * The name the router knows a kept model by. llama.cpp's preset reader rewrites what follows a
+ * colon in a section name (it upper-cases "model-package-v1:0fd0…"), so a request naming the id
+ * would not find it; colons become "--" here and the gateway names the model the same way.
+ */
+export function routerModelName(id: string): string {
+  return id.replace(/[[\]]/g, '').replace(/:/g, '--')
+}
+
+/**
  * The router's preset file (llama-server --models-preset): one section per kept model, named by
- * its model id so the gateway forwards requests unchanged. Each loads at startup with one slot.
+ * routerModelName(id). Each loads at startup with one slot.
  */
 export function keepLoadedPresetIni(
   plans: KeepLoadedModelPlan[],
@@ -344,7 +353,7 @@ export function keepLoadedPresetIni(
       ['jinja', true],
       ['load-on-startup', true]
     ]
-    lines.push(`[${iniValue(plan.id).replace(/[[\]]/g, '')}]`)
+    lines.push(`[${routerModelName(iniValue(plan.id))}]`)
     for (const [key, value] of keys) lines.push(`${key} = ${iniValue(value)}`)
     lines.push('')
   }

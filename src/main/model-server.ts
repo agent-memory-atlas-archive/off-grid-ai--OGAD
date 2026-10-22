@@ -125,6 +125,7 @@ import {
 } from './model-server/team-runtimes'
 import type { GatewayRuntime } from '@offgrid/models'
 import { pipeline } from 'stream'
+import { routerModelName } from '../shared/keep-loaded-plan'
 import { remoteTextVision } from '../shared/model-settings-rules'
 import {
   remoteNativeToolCapability,
@@ -1345,12 +1346,13 @@ async function handleKeptModelChat(
   res.once('close', () => early?.stop())
   let forward: Buffer = buf
   try {
-    let changed = await inlineChatImages(body)
-    if (sanitizeChatMessages(body)) changed = true
-    if (changed) forward = Buffer.from(JSON.stringify(body))
+    await inlineChatImages(body)
+    sanitizeChatMessages(body)
   } catch {
-    // Image fetch failed — forward the original request so the model returns its own error.
+    // Image fetch failed — forward the request as it is so the model returns its own error.
   }
+  // The router knows the model by its router name.
+  forward = Buffer.from(JSON.stringify({ ...body, model: routerModelName(model) }))
   if (!res.headersSent) res.setHeader('X-Request-Id', rid)
   const activity = new AIRequestHandle({
     modality: 'text',
@@ -2810,8 +2812,10 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
     if (url === '/props' && method === 'GET') {
       const model = new URLSearchParams(req.url?.split('?')[1]).get('model')
       const port = keepLoadedPort()
-      if (model && port !== null && keepLoadedServes(model))
+      if (model && port !== null && keepLoadedServes(model)) {
+        req.url = `/props?model=${encodeURIComponent(routerModelName(model))}`
         return proxyToLlama(req, res, undefined, 0, undefined, port)
+      }
     }
     // Rendering a kept model's prompt (a client checking how its template opens thinking) goes to
     // the router too; the model is named in the body.
@@ -2830,8 +2834,11 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
           model = undefined
         }
         const port = keepLoadedPort()
-        if (typeof model === 'string' && port !== null && keepLoadedServes(model))
-          return proxyToLlama(req, res, bytes, 0, undefined, port)
+        if (typeof model === 'string' && port !== null && keepLoadedServes(model)) {
+          const named = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>
+          const routed = Buffer.from(JSON.stringify({ ...named, model: routerModelName(model) }))
+          return proxyToLlama(req, res, routed, 0, undefined, port)
+        }
         proxyToLlama(req, res, bytes)
       })()
       return
