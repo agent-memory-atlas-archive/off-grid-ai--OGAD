@@ -148,8 +148,17 @@ export function PermissionGate({ children }: PermissionGateProps): React.JSX.Ele
 
   useEffect(() => {
     if (!isPro) return
-    const offCapture = window.api.proOn?.('capture:changed', () => void checkCaptureVision())
+    // Capture announces every frame change; the check reads the model catalog, so it runs at most
+    // every few seconds, always once after the last change.
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const offCapture = window.api.proOn?.('capture:changed', () => {
+      timer ??= setTimeout(() => {
+        timer = null
+        void checkCaptureVision()
+      }, 5_000)
+    })
     return () => {
+      if (timer) clearTimeout(timer)
       if (typeof offCapture === 'function') offCapture()
     }
   }, [checkCaptureVision, isPro])
