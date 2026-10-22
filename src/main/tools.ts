@@ -903,8 +903,9 @@ export async function toolChat(
   let imageAvailable = opts.imageAvailable ?? false
   if ((!opts.assistantOnly || toolsEnabled) && opts.imageAvailable === undefined) {
     try {
-      const { activeImageModel } = await import('./imagegen')
-      imageAvailable = !!activeImageModel()
+      // The same answer the renderer reads: a runtime and a model, here or on a remote server.
+      const { imageGenStatus } = await import('./imagegen')
+      imageAvailable = imageGenStatus().available
     } catch {
       /* no image runtime -> stay false */
     }
