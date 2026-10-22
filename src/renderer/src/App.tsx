@@ -1459,53 +1459,59 @@ function AppContent(): React.JSX.Element {
                       )
                     ) : viewMode === 'memory-chat' && chatPanes ? (
                       <div className="flex h-full min-h-0 flex-col bg-neutral-950">
-                      <div
-                        className={`grid min-h-0 flex-1 gap-px bg-neutral-800 ${chatPanes.length >= 5 ? 'grid-cols-3 grid-rows-2' : chatPanes.length === 4 ? 'grid-cols-2 grid-rows-2' : chatPanes.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}
-                      >
-                        {chatPanes.map((_, index) => (
-                          <div
-                            key={index}
-                            data-chat-pane={`pane-${index}`}
-                            // Contains fixed-position panels (artifacts) so they open within the pane.
-                            className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-neutral-950 [contain:layout_paint]"
-                          >
-                            <MemoryChat
-                              paneKey={`pane-${index}`}
-                              split
-                              onToggleSplit={toggleChatSplit}
-                              broadcast={chatBroadcast}
-                              onToggleBroadcast={index === 0 ? toggleChatBroadcast : undefined}
-                              paneCount={index === 0 ? chatPanes.length : undefined}
-                              onPaneCountChange={index === 0 ? setChatPaneCount : undefined}
-                              onNavigateToMemory={handleSelectMemory}
-                              onNavigateToChat={handleSelectChat}
-                              onNavigateToMeeting={(meetingId) =>
-                                handleProNavigate({ view: 'meetings', meetingId })
-                              }
-                              onNavigateToEntity={handleSelectEntity}
-                              onOpenProject={(id) => {
-                                navigateTo('projects', () => setSelectedProjectId(id))
-                              }}
-                              onSeekReplay={(ts) => {
-                                navigateTo('replay', () => setReplayTarget(ts || Date.now()))
-                              }}
-                              onOpenSkillPreset={handleOpenSkillPreset}
-                              onOpenConnectors={() => navigateTo('connectors')}
-                              onOpenAssistantUpgrade={() => navigateTo('tasks')}
-                              openTarget={index === 0 ? chatTarget : null}
-                              onTargetConsumed={() => setChatTarget(null)}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                      {chatBroadcast && (
-                        // The first pane renders its own composer here (see MemoryChat).
                         <div
-                          id={SHARED_COMPOSER_SLOT_ID}
-                          data-testid="chat-broadcast-composer"
-                          className="border-t border-neutral-800 p-3"
-                        />
-                      )}
+                          className={`grid min-h-0 flex-1 gap-px bg-neutral-800 ${chatPanes.length >= 5 ? 'grid-cols-3 grid-rows-2' : chatPanes.length === 4 ? 'grid-cols-2 grid-rows-2' : chatPanes.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}
+                        >
+                          {chatPanes.map((_, index) => {
+                            // The split controls live in the top-right pane: its header ends at the
+                            // window's edge, so they stay put when panes are added or removed.
+                            const controls =
+                              index === (chatPanes.length === 4 || chatPanes.length === 2 ? 1 : 2)
+                            return (
+                              <div
+                                key={index}
+                                data-chat-pane={`pane-${index}`}
+                                // Contains fixed-position panels (artifacts) so they open within the pane.
+                                className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-neutral-950 [contain:layout_paint]"
+                              >
+                                <MemoryChat
+                                  paneKey={`pane-${index}`}
+                                  split
+                                  onToggleSplit={controls ? toggleChatSplit : undefined}
+                                  broadcast={chatBroadcast}
+                                  onToggleBroadcast={controls ? toggleChatBroadcast : undefined}
+                                  paneCount={controls ? chatPanes.length : undefined}
+                                  onPaneCountChange={controls ? setChatPaneCount : undefined}
+                                  onNavigateToMemory={handleSelectMemory}
+                                  onNavigateToChat={handleSelectChat}
+                                  onNavigateToMeeting={(meetingId) =>
+                                    handleProNavigate({ view: 'meetings', meetingId })
+                                  }
+                                  onNavigateToEntity={handleSelectEntity}
+                                  onOpenProject={(id) => {
+                                    navigateTo('projects', () => setSelectedProjectId(id))
+                                  }}
+                                  onSeekReplay={(ts) => {
+                                    navigateTo('replay', () => setReplayTarget(ts || Date.now()))
+                                  }}
+                                  onOpenSkillPreset={handleOpenSkillPreset}
+                                  onOpenConnectors={() => navigateTo('connectors')}
+                                  onOpenAssistantUpgrade={() => navigateTo('tasks')}
+                                  openTarget={index === 0 ? chatTarget : null}
+                                  onTargetConsumed={() => setChatTarget(null)}
+                                />
+                              </div>
+                            )
+                          })}
+                        </div>
+                        {chatBroadcast && (
+                          // The first pane renders its own composer here (see MemoryChat).
+                          <div
+                            id={SHARED_COMPOSER_SLOT_ID}
+                            data-testid="chat-broadcast-composer"
+                            className="border-t border-neutral-800 p-3"
+                          />
+                        )}
                       </div>
                     ) : viewMode === 'memory-chat' ? (
                       <MemoryChat
