@@ -131,3 +131,16 @@ describe('applyStreamEvent', () => {
     ).toBe(true)
   })
 })
+
+describe('a turn that waited on its server', () => {
+  it('drops the wait line once the model starts thinking', () => {
+    const waiting = applyStreamEvent<StreamedMessage>(
+      { content: '' },
+      { type: 'step', step: { kind: 'waiting_server', label: 'RTX Pro 6000 is loading Flint…' } }
+    )
+    expect(waiting.activity).toMatchObject({ kind: 'waiting_server' })
+    expect(
+      applyStreamEvent(waiting, { type: 'reasoning', text: 'The user' }).activity
+    ).toBeUndefined()
+  })
+})
