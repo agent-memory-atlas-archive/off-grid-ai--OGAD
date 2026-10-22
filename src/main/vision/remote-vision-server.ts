@@ -20,7 +20,7 @@ import {
   type RemoteVisionServerSettings,
   type RemoteVisionServerUpdate
 } from '../../shared/remote-vision-server'
-import { parseRemoteVisionModelId } from '../../shared/remote-vision-server'
+import { isRemoteChatModel, parseRemoteVisionModelId } from '../../shared/remote-vision-server'
 
 const LEGACY_API_KEY_SECRET = 'remote-vision-server:api-key'
 const CONFIG_VERSION = 3
@@ -208,6 +208,8 @@ export function getRemoteVisionServerForModel(
   if (role && server.roleModels?.[role] !== reference.modelId) return null
   const catalogModel = server.modelCatalog?.find((model) => model.id === reference.modelId)
   if (catalogModel && catalogModel.kind !== 'text') return null
+  // Chat never runs on a server's grounder or decider; their roles reach them by name.
+  if (!role && catalogModel && !isRemoteChatModel(catalogModel)) return null
   return {
     ...server,
     model: reference.modelId,

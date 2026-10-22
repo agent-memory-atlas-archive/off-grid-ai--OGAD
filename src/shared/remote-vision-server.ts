@@ -1,4 +1,4 @@
-import { describeModel, remoteServerDisplayName } from '@offgrid/models'
+import { describeModel, isGrounderModel, remoteServerDisplayName } from '@offgrid/models'
 
 export const REMOTE_VISION_PROVIDERS = [
   'local',
@@ -23,6 +23,27 @@ export interface RemoteVisionCatalogModel {
   outputModalities?: string[]
   supportedParameters?: string[]
   reasoning?: boolean
+}
+
+/**
+ * The Computer Use role a remote server's model plays, or null for a chat model. A server lists its
+ * Computer Use specialists beside its chat models (an Off Grid gateway labels a grounder "vision"
+ * and a decider "chat"), so the label alone cannot tell them apart: a decider produces decisions,
+ * a grounder is named by the shared grounder rule.
+ */
+export function remoteCatalogRole(
+  model: Pick<RemoteVisionCatalogModel, 'id' | 'outputModalities'>
+): RemoteVisionTaskRole | null {
+  if (model.outputModalities?.includes('decisions')) return 'decision'
+  if (isGrounderModel(model.id)) return 'grounding'
+  return null
+}
+
+/** A remote model a person can chat with: a text model that is not a Computer Use specialist. */
+export function isRemoteChatModel(
+  model: Pick<RemoteVisionCatalogModel, 'id' | 'kind' | 'outputModalities'>
+): boolean {
+  return model.kind === 'text' && remoteCatalogRole(model) === null
 }
 
 export interface RemoteVisionSavedServer {

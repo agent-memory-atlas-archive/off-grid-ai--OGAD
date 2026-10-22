@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { isGrounderModel, modelDisplayName } from '@offgrid/models'
+import { modelDisplayName } from '@offgrid/models'
 import {
   remoteVisionApiBase,
+  isRemoteChatModel,
+  remoteCatalogRole,
   remoteVisionModelId,
   remoteVisionProviderForEndpoint,
   type RemoteVisionConnectionResult,
@@ -177,9 +179,7 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
     return models
       .filter(
         (model) =>
-          model.kind === 'text' &&
-          !model.outputModalities?.includes('decisions') &&
-          !isGrounderModel(model.id) &&
+          isRemoteChatModel(model) &&
           (!query ||
             `${model.name} ${model.id} ${catalogModelName(models, model.id)}`
               .toLowerCase()
@@ -221,7 +221,7 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
       }
       const discovered = result.models ?? []
       const nextModel = discovered.some(
-        (model) => model.id === selectedModel && model.kind === 'text'
+        (model) => model.id === selectedModel && isRemoteChatModel(model)
       )
         ? selectedModel
         : ''
@@ -661,9 +661,7 @@ export function RemoteVisionSettingsTab(): React.JSX.Element {
                   { value: '', label: `No remote ${role} model` },
                   ...models
                     .filter((model) => {
-                      if (model.kind !== 'text') return false
-                      const decision = model.outputModalities?.includes('decisions') === true
-                      return role === 'decision' ? decision : !decision && isGrounderModel(model.id)
+                      return model.kind === 'text' && remoteCatalogRole(model) === role
                     })
                     .map((model) => ({ value: model.id, label: model.name }))
                 ]}

@@ -200,6 +200,7 @@ import {
 import { createPortal } from 'react-dom'
 import type { MemoryChatProps } from './interfaces'
 import {
+  isRemoteChatModel,
   remoteVisionModelId,
   type RemoteVisionSavedServer
 } from '../../../../shared/remote-vision-server'
@@ -358,7 +359,7 @@ export function MemoryChat({
         const options = (settings.servers ?? [])
           .filter((server) => server.enabled !== false)
           .flatMap((server) => {
-            const textModels = server.modelCatalog?.filter((model) => model.kind === 'text') ?? []
+            const textModels = server.modelCatalog?.filter(isRemoteChatModel) ?? []
             const models = textModels.length
               ? textModels.map((model) => ({ id: model.id, name: model.name || model.id }))
               : server.model
