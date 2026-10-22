@@ -98,7 +98,7 @@ export async function prepareTurnDocuments(input: {
     includeProject: projectDocuments !== 'when-needed'
   })
   if (!sources.length) return null
-  const { getActiveRemoteVisionServer } = await import('../vision/remote-vision-server')
+  const { llm } = await import('../llm')
   const result = await documentTurns.prepare({
     ...scope,
     current,
@@ -115,7 +115,8 @@ export async function prepareTurnDocuments(input: {
     budget: {
       ...input.budget,
       prefillTokensPerSecond: documentPrefillRate(),
-      remote: !!getActiveRemoteVisionServer()
+      // The model this turn runs on: a pane's own model counts, not only the app's.
+      remote: llm.usesRemoteTextModel()
     }
   })
   if (!result) return null

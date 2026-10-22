@@ -879,8 +879,8 @@ export async function toolChat(
       }
     }
   }
-  // A selected remote model does not need the local server to be installed or warm.
-  if (!(await import('./vision/remote-vision-server')).getActiveRemoteVisionServer()) {
+  // A remote model (the app's, or this pane's own) does not need the local server warm.
+  if (!llm.usesRemoteTextModel()) {
     await llm.init() // respects pause; ensures the local server is up
   }
   const onDelta = opts.onDelta ?? ((): void => {})
