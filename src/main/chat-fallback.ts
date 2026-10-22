@@ -1,36 +1,15 @@
 // Applies the shared chat fallback policy (@offgrid/models nextChatFallbackStep): a request that
-// does not fit or was refused fails once; a server that could not answer is retried on the same
-// model, then on at most one other local model, with one notice. It no longer walks every
-// installed model and remote server.
+// does not fit or was refused fails once; a server that could not answer is retried once on the
+// same model. It never moves to another model: only the person changes the model, so a failed
+// turn fails as the model they picked instead of switching the whole app to one nobody chose.
 
 import { nextChatFallbackStep, type ChatFailureKind } from '@offgrid/models'
 import { ModelServerError } from './llm/http-post'
-import { parseRemoteVisionModelId, remoteVisionModelId } from '../shared/remote-vision-server'
 
 function failureKind(error: unknown): ChatFailureKind {
   if (error instanceof ModelServerError) return error.kind
   if (error instanceof Error && error.name === 'AbortError') return 'aborted'
   return 'unknown'
-}
-
-async function localAlternatives(): Promise<string[]> {
-  const models = await import('./models-manager')
-  const selected = models.getActiveModel()
-  return (await models.getStorageInfo()).models
-    .filter((model) => (model.kind === 'text' || model.kind === 'vision') && model.id !== selected)
-    .map((model) => model.id)
-    .filter((id) => !parseRemoteVisionModelId(id))
-}
-
-async function selectedName(): Promise<string> {
-  const models = await import('./models-manager')
-  const { getRemoteVisionServerSettings } = await import('./vision/remote-vision-server')
-  const remote = getRemoteVisionServerSettings()
-  const selectedRemote = remote.servers.find((server) => server.id === remote.activeServerId)
-  const selected = selectedRemote
-    ? remoteVisionModelId(selectedRemote.id, selectedRemote.model)
-    : models.getActiveModel()
-  return models.displayModelName(selected) ?? 'Selected model'
 }
 
 /** Retry a failed model round without re-running any tool call that already started. */
@@ -44,44 +23,25 @@ export async function runChatWithFallback<T>(
     onModelChanged?: (failed: string, next: string) => void
   } = {}
 ): Promise<{ result: T; modelName?: string }> {
-  // A turn on its own model (a split-view pane) answers with that model or fails as that model:
-  // switching would change the app-wide model and answer with one nobody picked.
-  const pinned = Boolean((await import('./llm/chat-model-scope')).currentChatModel())
   let failures = 0
-  let modelName: string | undefined
   let documentScale: number | undefined
   for (;;) {
     try {
-      const result = await run(documentScale === undefined ? {} : { documentScale })
-      return modelName ? { result, modelName } : { result }
+      return { result: await run(documentScale === undefined ? {} : { documentScale }) }
     } catch (error) {
       if (options.signal?.aborted || options.canRetry?.() === false) throw error
       failures++
-      const kind = failureKind(error)
       const step = nextChatFallbackStep({
-        kind,
+        kind: failureKind(error),
         failures,
-        localAlternatives:
-          !pinned && failures === 2 && kind !== 'overflow' ? await localAlternatives() : []
+        localAlternatives: []
       })
-      if (step.action === 'fail') throw error
       if (step.action === 'retry-same') continue
       if (step.action === 'retry-smaller') {
         documentScale = step.scale
         continue
       }
-      if (pinned) throw error
-      const models = await import('./models-manager')
-      const failed = await selectedName()
-      let activated = false
-      try {
-        activated = (await models.activateModel(step.to, 'text')).success
-      } catch {
-        activated = false
-      }
-      if (!activated || options.signal?.aborted) throw error
-      modelName = models.displayModelName(step.to) ?? step.to
-      options.onModelChanged?.(failed, modelName)
+      throw error
     }
   }
 }
