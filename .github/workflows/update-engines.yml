@@ -13,8 +13,8 @@ name: Update engines
 # Settings (repository variables; Settings > Secrets and variables > Actions > Variables):
 #   ENGINE_UPDATE_ENABLED           'false' turns the nightly run off (manual runs still work)
 #   ENGINE_UPDATE_ENGINES           engines to track, default 'llama,prism,sd,whisper,nvidia'
-#   ENGINE_UPDATE_LLAMA_MIN_BUILDS  move llama.cpp only when upstream is this many builds ahead
-#                                   (it tags several a day), default 50
+#   ENGINE_UPDATE_LLAMA_MIN_BUILDS  move llama.cpp only when upstream is this many builds ahead,
+#                                   default 1 (any newer build)
 #   ENGINE_UPDATE_BASE              branch to update and open the PR against, default main
 #   ENGINE_UPDATE_CHANNEL           'on-merge' (default) or 'nightly', above
 # Secrets: R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY (packs and engines), ENGINE_SIGNING_PRIVATE_KEY
@@ -69,7 +69,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           ENGINES: ${{ inputs.engines || vars.ENGINE_UPDATE_ENGINES || 'llama,prism,sd,whisper,nvidia' }}
-          LLAMA_MIN_BUILDS: ${{ inputs.llama_min_builds || vars.ENGINE_UPDATE_LLAMA_MIN_BUILDS || '50' }}
+          LLAMA_MIN_BUILDS: ${{ inputs.llama_min_builds || vars.ENGINE_UPDATE_LLAMA_MIN_BUILDS || '1' }}
         run: |
           result=$(node scripts/update-engine-pins.mjs --summary "$RUNNER_TEMP/summary.md" \
             --engines "$ENGINES" --llama-min-builds "$LLAMA_MIN_BUILDS")
