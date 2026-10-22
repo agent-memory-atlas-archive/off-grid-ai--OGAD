@@ -5,6 +5,11 @@ import { CommandPalette } from './components/CommandPalette'
 import logo from './assets/logo.png'
 import { useMeetingRecorder } from './useMeetingRecorder'
 import { MemoryChat } from './components/MemoryChat'
+import {
+  ACTIVE_CHAT_TAB_KEY,
+  OPEN_CHAT_TABS_KEY,
+  readOpenChatTabs
+} from './components/MemoryChat/utlis'
 import type { DemoPreset } from './components/explore/presetCatalog'
 import { Settings, SETTINGS_DESTINATIONS } from './components/Settings'
 import { SettingsPanel } from './components/SettingsPanel'
@@ -74,6 +79,7 @@ import { NavHighlight, ScreenTransition } from '@offgrid/operator-ui/operator/ex
 import { SidebarNavigationMenu } from './components/navigation/SidebarNavigationMenu'
 import { StartupNotice } from './components/StartupNotice'
 import { CHAT_VIEW, setCurrentView } from './lib/current-view'
+import { SHARED_COMPOSER_SLOT_ID } from './lib/chat-broadcast'
 import {
   OPEN_ACTIVE_MODELS_PANEL_EVENT,
   OPEN_MODEL_SETTINGS_PANEL_EVENT,
@@ -372,6 +378,49 @@ function AppContent(): React.JSX.Element {
   // When set, the Actions to-do list opens filtered to this entity (from clicking
   // a person chip on a to-do — "all to-dos for Ali").
   const [actionsEntity, setActionsEntity] = useState<{ id: number; name: string } | null>(null)
+  // Chat's split view: one pane per open tab (up to six), each keeping its own tabs.
+  const [chatPanes, setChatPanes] = useState<string[] | null>(null)
+  // On by default: the first question goes to every pane's model; follow-ups can go to one pane.
+  const [chatBroadcast, setChatBroadcast] = useState(true)
+  const toggleChatBroadcast = useCallback(() => setChatBroadcast((on) => !on), [])
+  // Add or remove the last pane (two to six). A new pane starts on a new chat; a pane's model choice is kept.
+  const setChatPaneCount = useCallback((count: number) => {
+    setChatPanes((current) => {
+      if (!current) return current
+      const next = Math.min(6, Math.max(2, count))
+      if (next <= current.length) return current.slice(0, next)
+      for (let index = current.length; index < next; index++) {
+        try {
+          window.localStorage.setItem(`${OPEN_CHAT_TABS_KEY}:pane-${index}`, '[]')
+          window.localStorage.removeItem(`${ACTIVE_CHAT_TAB_KEY}:pane-${index}`)
+        } catch {
+          // The pane still opens, on a new chat.
+        }
+      }
+      return [...current, ...Array<string>(next - current.length).fill('')]
+    })
+  }, [])
+  const toggleChatSplit = useCallback(() => {
+    setChatPanes((current) => {
+      if (current) return null
+      const tabs = readOpenChatTabs().slice(0, 6)
+      const panes = tabs.length >= 2 ? tabs : [...tabs, ''].slice(0, 2)
+      panes.forEach((conversationId, index) => {
+        try {
+          window.localStorage.setItem(
+            `${OPEN_CHAT_TABS_KEY}:pane-${index}`,
+            JSON.stringify(conversationId ? [conversationId] : [])
+          )
+          if (conversationId)
+            window.localStorage.setItem(`${ACTIVE_CHAT_TAB_KEY}:pane-${index}`, conversationId)
+          else window.localStorage.removeItem(`${ACTIVE_CHAT_TAB_KEY}:pane-${index}`)
+        } catch {
+          // Each pane still opens, on a new chat.
+        }
+      })
+      return panes
+    })
+  }, [])
   // Target chat to open in the main Chat screen (from the Projects tab): an
   // existing conversation, or a request to start a new chat scoped to a project.
   const [chatTarget, setChatTarget] = useState<{
@@ -1408,8 +1457,59 @@ function AppContent(): React.JSX.Element {
                       ) : (
                         <UpgradeScreen feature={getProFeature('explore')} />
                       )
+                    ) : viewMode === 'memory-chat' && chatPanes ? (
+                      <div className="flex h-full min-h-0 flex-col bg-neutral-950">
+                      <div
+                        className={`grid min-h-0 flex-1 gap-px bg-neutral-800 ${chatPanes.length >= 5 ? 'grid-cols-3 grid-rows-2' : chatPanes.length === 4 ? 'grid-cols-2 grid-rows-2' : chatPanes.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}
+                      >
+                        {chatPanes.map((_, index) => (
+                          <div
+                            key={index}
+                            data-chat-pane={`pane-${index}`}
+                            // Contains fixed-position panels (artifacts) so they open within the pane.
+                            className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-neutral-950 [contain:layout_paint]"
+                          >
+                            <MemoryChat
+                              paneKey={`pane-${index}`}
+                              split
+                              onToggleSplit={toggleChatSplit}
+                              broadcast={chatBroadcast}
+                              onToggleBroadcast={index === 0 ? toggleChatBroadcast : undefined}
+                              paneCount={index === 0 ? chatPanes.length : undefined}
+                              onPaneCountChange={index === 0 ? setChatPaneCount : undefined}
+                              onNavigateToMemory={handleSelectMemory}
+                              onNavigateToChat={handleSelectChat}
+                              onNavigateToMeeting={(meetingId) =>
+                                handleProNavigate({ view: 'meetings', meetingId })
+                              }
+                              onNavigateToEntity={handleSelectEntity}
+                              onOpenProject={(id) => {
+                                navigateTo('projects', () => setSelectedProjectId(id))
+                              }}
+                              onSeekReplay={(ts) => {
+                                navigateTo('replay', () => setReplayTarget(ts || Date.now()))
+                              }}
+                              onOpenSkillPreset={handleOpenSkillPreset}
+                              onOpenConnectors={() => navigateTo('connectors')}
+                              onOpenAssistantUpgrade={() => navigateTo('tasks')}
+                              openTarget={index === 0 ? chatTarget : null}
+                              onTargetConsumed={() => setChatTarget(null)}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      {chatBroadcast && (
+                        // The first pane renders its own composer here (see MemoryChat).
+                        <div
+                          id={SHARED_COMPOSER_SLOT_ID}
+                          data-testid="chat-broadcast-composer"
+                          className="border-t border-neutral-800 p-3"
+                        />
+                      )}
+                      </div>
                     ) : viewMode === 'memory-chat' ? (
                       <MemoryChat
+                        onToggleSplit={toggleChatSplit}
                         onNavigateToMemory={handleSelectMemory}
                         onNavigateToChat={handleSelectChat}
                         onNavigateToMeeting={(meetingId) =>

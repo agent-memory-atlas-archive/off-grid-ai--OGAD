@@ -180,9 +180,28 @@ import {
   Stop,
   SidebarSimple,
   Gear,
-  Images
+  Images,
+  SquareSplitHorizontal,
+  Square,
+  Textbox,
+  SquaresFour,
+  Minus
 } from '@phosphor-icons/react'
+import {
+  publishChatBroadcast,
+  publishChatStop,
+  reportPaneGenerating,
+  SHARED_COMPOSER_SLOT_ID,
+  subscribeChatBroadcast,
+  subscribeChatStop,
+  useAnyPaneGenerating
+} from '@renderer/lib/chat-broadcast'
+import { createPortal } from 'react-dom'
 import type { MemoryChatProps } from './interfaces'
+import {
+  remoteVisionModelId,
+  type RemoteVisionSavedServer
+} from '../../../../shared/remote-vision-server'
 import { announceAssistantActivity, announceAssistantListening } from '../../lib/assistant-activity'
 import { playChime } from '../../lib/chime'
 import { useReplySound } from '../../lib/reply-sound'
@@ -308,13 +327,62 @@ export function MemoryChat({
   onTargetConsumed,
   onActiveConversationChange,
   onTaskDetailModeChange,
-  god
+  god,
+  paneKey,
+  split,
+  onToggleSplit,
+  broadcast,
+  onToggleBroadcast,
+  paneCount,
+  onPaneCountChange
 }: MemoryChatProps): React.JSX.Element {
   const { isPro } = useRendererEntitlement()
   // God's chat keeps its own conversations, tabs and layout; Chat leaves God's to God.
   const surface = god ? 'god' : 'chat'
-  const openTabsKey = god ? `${OPEN_CHAT_TABS_KEY}:god` : OPEN_CHAT_TABS_KEY
-  const activeTabKey = god ? `${ACTIVE_CHAT_TAB_KEY}:god` : ACTIVE_CHAT_TAB_KEY
+  // A split-view pane can answer with its own remote model; empty = the active model.
+  const paneModelKey = `offgrid:chat:model:${paneKey}`
+  const [paneModel, setPaneModel] = useState<string>(() => {
+    try {
+      return (paneKey && window.localStorage.getItem(paneModelKey)) || ''
+    } catch {
+      return ''
+    }
+  })
+  const [paneModelOptions, setPaneModelOptions] = useState<{ value: string; label: string }[]>([])
+  useEffect(() => {
+    if (!paneKey) return
+    void window.api
+      .getRemoteVisionServer()
+      .then((settings: { servers?: RemoteVisionSavedServer[] }) => {
+        const options = (settings.servers ?? [])
+          .filter((server) => server.enabled !== false)
+          .flatMap((server) => {
+            const textModels = server.modelCatalog?.filter((model) => model.kind === 'text') ?? []
+            const models = textModels.length
+              ? textModels.map((model) => ({ id: model.id, name: model.name || model.id }))
+              : server.model
+                ? [{ id: server.model, name: server.model }]
+                : []
+            return models.map((model) => ({
+              value: remoteVisionModelId(server.id, model.id),
+              label: `${model.name} · ${server.name}`
+            }))
+          })
+        setPaneModelOptions([{ value: '', label: 'Active model' }, ...options])
+      })
+      .catch(() => undefined)
+  }, [paneKey])
+  const choosePaneModel = (value: string): void => {
+    setPaneModel(value)
+    try {
+      window.localStorage.setItem(paneModelKey, value)
+    } catch {
+      // The pane still uses the model for this session.
+    }
+  }
+  const tabsScope = god ? ':god' : paneKey ? `:${paneKey}` : ''
+  const openTabsKey = `${OPEN_CHAT_TABS_KEY}${tabsScope}`
+  const activeTabKey = `${ACTIVE_CHAT_TAB_KEY}${tabsScope}`
   // Messages are kept PER CONVERSATION so a background tab keeps its own thread and
   // an in-flight stream can't leak into whatever tab you switch to. `messages` (below,
   // after activeConversationId) is the active tab's slice; sends target their own conv.
@@ -1581,12 +1649,17 @@ export function MemoryChat({
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
       if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 't') return
+      // In the split view only the pane you are typing in starts the new chat.
+      const focusedPane =
+        document.activeElement?.closest('[data-chat-pane]')?.getAttribute('data-chat-pane') ??
+        (split ? 'pane-0' : '')
+      if (split && focusedPane !== (paneKey ?? '')) return
       e.preventDefault()
       startNewConversation()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [startNewConversation])
+  }, [startNewConversation, split, paneKey])
 
   const deleteConversation = useCallback(
     async (convId: string) => {
@@ -2373,7 +2446,8 @@ export function MemoryChat({
           ...(turnDocuments.length ? { documents: turnDocuments } : {}),
           imageAvailable,
           streamId: toolStreamId,
-          thinking: god ? true : thinkingEnabled
+          thinking: god ? true : thinkingEnabled,
+          ...(paneModel ? { modelReference: paneModel } : {})
         })
         .catch(async (error) => {
           earlyComicCancelled = true
@@ -3004,10 +3078,44 @@ export function MemoryChat({
     drainQueue(conversationId)
   }
 
+  // Split view with "send to all panes" on: the first pane's own composer moves into the shared
+  // slot under the grid and its sends go to every pane; the other panes' composers hide. Off,
+  // each pane takes its own follow-ups.
+  const broadcasting = Boolean(split && broadcast && paneKey)
+  const hostsSharedComposer = broadcasting && paneKey === 'pane-0'
+  const [sharedComposerSlot, setSharedComposerSlot] = useState<HTMLElement | null>(null)
+  useEffect(() => {
+    setSharedComposerSlot(
+      hostsSharedComposer ? document.getElementById(SHARED_COMPOSER_SLOT_ID) : null
+    )
+  }, [hostsSharedComposer])
+  // A split-view pane keeps its artifacts inside itself.
+  const [paneRoot, setPaneRoot] = useState<HTMLElement | null>(null)
+  useEffect(() => {
+    setPaneRoot(
+      split && paneKey ? document.querySelector<HTMLElement>(`[data-chat-pane="${paneKey}"]`) : null
+    )
+  }, [split, paneKey])
+  const hostComposer = (composer: React.ReactNode): React.ReactNode =>
+    sharedComposerSlot ? createPortal(composer, sharedComposerSlot) : composer
+  const submitFromComposer = (): void => {
+    const text = draftStore.getSnapshot().trim()
+    if (hostsSharedComposer && text) publishChatBroadcast(paneKey ?? '', text)
+    void sendMessage()
+  }
+
   useEffect(() => {
     const onSettled = (event: Event): void => {
       const detail = (event as CustomEvent<RunEvent>).detail
       if (detail.owner === streamConvRef.current) return
+      // A split-view pane follows only its own chats; following the other panes' runs too would
+      // apply every token once per pane.
+      if (
+        paneKey &&
+        detail.conversationId !== '*' &&
+        !readOpenChatTabs(openTabsKey).includes(detail.conversationId)
+      )
+        return
       if (detail.action === 'started' && detail.messages) {
         const streaming = detail.messages.find((message) => message.streaming)
         if (!streaming) return
@@ -3029,7 +3137,9 @@ export function MemoryChat({
     // preparation and final database writes must keep a remounted composer busy.
     const discovery: RunEvent = { action: 'query', conversationId: '*', conversations: [] }
     window.dispatchEvent(new CustomEvent('offgrid:chat-run', { detail: discovery }))
+    const paneChats = paneKey ? new Set(readOpenChatTabs(openTabsKey)) : null
     for (const cid of new Set(discovery.conversations)) {
+      if (paneChats && !paneChats.has(cid)) continue
       attachRendererRun(cid)
       markGenerating(cid, true)
     }
@@ -3100,6 +3210,12 @@ export function MemoryChat({
   const godRequestCount = useRef(god?.request.count ?? 0)
   const sendMessageRef = useRef(sendMessage)
   sendMessageRef.current = sendMessage
+  useEffect(() => {
+    if (!broadcasting) return
+    return subscribeChatBroadcast((from, text) => {
+      if (from !== paneKey) void sendMessageRef.current(text, { asUserInput: true })
+    })
+  }, [broadcasting, paneKey])
   const godRequest = god?.request
 
   const onGodStateChange = god?.onStateChange
@@ -3177,6 +3293,27 @@ export function MemoryChat({
       preserveQueue,
       requestedTarget
     )
+
+  // Send-to-all: this pane reports whether it is answering, and stops when the shared Stop is pressed.
+  const paneGenerating = Boolean(activeConversationId && generatingConvs.has(activeConversationId))
+  const anyPaneGenerating = useAnyPaneGenerating()
+  const stopThisPane = (): void => {
+    void stopGeneration(
+      activeConversationId,
+      guidanceTaskForJourney(getTaskSessionState().tasks, activeConversationId)
+    )
+  }
+  const stopThisPaneRef = useRef(stopThisPane)
+  stopThisPaneRef.current = stopThisPane
+  useEffect(() => {
+    if (!broadcasting || !paneKey) return
+    reportPaneGenerating(paneKey, paneGenerating)
+    return () => reportPaneGenerating(paneKey, false)
+  }, [broadcasting, paneKey, paneGenerating])
+  useEffect(() => {
+    if (!broadcasting) return
+    return subscribeChatStop(() => stopThisPaneRef.current())
+  }, [broadcasting])
 
   useEffect(() => {
     if (!godRequest || godRequest.count === godRequestCount.current) return
@@ -3641,7 +3778,16 @@ export function MemoryChat({
       .then(async (streams) => {
         await queueStore.ready
         if (disposed) return
+        // A split-view pane reattaches only its own chats' streams; taking the other panes'
+        // too would apply every token once per pane.
+        const paneChats = paneKey ? new Set(readOpenChatTabs(openTabsKey)) : null
         for (const stream of streams) {
+          if (
+            paneChats &&
+            stream.conversationId !== activeConversationId &&
+            !paneChats.has(stream.conversationId)
+          )
+            continue
           attachRendererRun(stream.conversationId)
           streamConvRef.current.set(stream.streamId, stream.conversationId)
           reasoningByStream.current[stream.streamId] = stream.reasoning
@@ -3665,7 +3811,7 @@ export function MemoryChat({
       disposed = true
       off()
     }
-  }, [activeConversationId, markGenerating, setConvMessages])
+  }, [activeConversationId, markGenerating, setConvMessages, paneKey, openTabsKey])
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const copyText = useCallback(async (t: string, key?: string) => {
@@ -4205,8 +4351,10 @@ export function MemoryChat({
             <TooltipContent>{conversationsToggleLabel}</TooltipContent>
           </Tooltip>
           {/* No decorative chat tile here: the sidebar already says where you are. */}
-          <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-medium tracking-wide text-neutral-200">
+          <div
+            className={`min-w-0 flex-1 ${paneKey && !god && !activeProjectId ? 'flex items-center gap-3' : ''}`}
+          >
+            <h2 className="shrink-0 text-sm font-medium tracking-wide text-neutral-200">
               {god ? god.name : 'Off Grid AI'}
             </h2>
             {god ? (
@@ -4222,6 +4370,17 @@ export function MemoryChat({
                 <FolderOpen className="h-3 w-3 shrink-0" />
                 <span className="truncate">In {activeProjectName}</span>
               </button>
+            ) : paneKey ? (
+              <div className="w-72 min-w-0">
+                <SettingsSelect
+                  id={`chat-model-${paneKey}`}
+                  label="Model for this pane"
+                  value={paneModel}
+                  options={paneModelOptions}
+                  searchable
+                  onValueChange={choosePaneModel}
+                />
+              </div>
             ) : (
               <p className="truncate text-xs text-neutral-500">
                 Private and on this device. Chat, generate, and build.
@@ -4281,6 +4440,82 @@ export function MemoryChat({
             <TooltipContent>Gallery</TooltipContent>
           </Tooltip>
             </>
+          )}
+          {onToggleSplit && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onToggleSplit}
+                  className={`rounded-md border p-1.5 transition-colors ${split ? 'border-green-500 text-green-500' : 'border-neutral-800 text-neutral-500 hover:text-neutral-300'}`}
+                  aria-label={split ? 'One chat' : 'Open tabs side by side'}
+                >
+                  {split ? <Square className="h-4 w-4" /> : <SquareSplitHorizontal className="h-4 w-4" />}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>{split ? 'One chat' : 'Open tabs side by side'}</TooltipContent>
+            </Tooltip>
+          )}
+          {split && paneCount !== undefined && onPaneCountChange && (
+            <div className="flex items-center rounded-md border border-neutral-800 text-neutral-500">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => onPaneCountChange(paneCount - 1)}
+                    disabled={paneCount <= 2}
+                    className="p-1.5 transition-colors hover:text-neutral-300 disabled:opacity-40"
+                    aria-label="Remove the last pane"
+                  >
+                    <Minus className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Remove the last pane</TooltipContent>
+              </Tooltip>
+              <span className="min-w-4 text-center text-xs tabular-nums text-neutral-300">
+                {paneCount}
+              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => onPaneCountChange(paneCount + 1)}
+                    disabled={paneCount >= 6}
+                    className="p-1.5 transition-colors hover:text-neutral-300 disabled:opacity-40"
+                    aria-label="Add a pane"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Add a pane</TooltipContent>
+              </Tooltip>
+            </div>
+          )}
+          {split && onToggleBroadcast && (
+            <div
+              role="radiogroup"
+              aria-label="Chat inputs"
+              className="flex items-center rounded-md border border-neutral-800"
+            >
+              {[
+                { shared: true, label: 'One input for every pane', Icon: Textbox },
+                { shared: false, label: 'An input in each pane', Icon: SquaresFour }
+              ].map(({ shared, label, Icon }) => (
+                <Tooltip key={label}>
+                  <TooltipTrigger asChild>
+                    <button
+                      role="radio"
+                      aria-checked={Boolean(broadcast) === shared}
+                      aria-label={label}
+                      onClick={() => {
+                        if (Boolean(broadcast) !== shared) onToggleBroadcast()
+                      }}
+                      className={`p-1.5 transition-colors ${Boolean(broadcast) === shared ? 'text-green-500' : 'text-neutral-500 hover:text-neutral-300'}`}
+                    >
+                      <Icon className="h-4 w-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>{label}</TooltipContent>
+                </Tooltip>
+              ))}
+            </div>
           )}
           <TaskPanelTrigger conversationId={activeConversationId} />
         </header>
@@ -4921,7 +5156,7 @@ export function MemoryChat({
                       {/* Unified composer — the SAME toolbar (attach / image / project /
                   skills / tools / memory scope / thinking) serves chat and voice
                   mode; only the input surface (textarea vs. mic) differs. */}
-                      <div
+                      {hostComposer(<div
                         data-testid="chat-composer"
                         data-focus-surface="chat-composer"
                         onDragOver={(e) => {
@@ -4936,7 +5171,7 @@ export function MemoryChat({
                           setDragOver(false)
                           if (e.dataTransfer.files.length) void addFiles(e.dataTransfer.files)
                         }}
-                        className="relative"
+                        className={broadcasting && !hostsSharedComposer ? 'hidden' : 'relative'}
                       >
                         {dragOver ? (
                           <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center rounded-xl bg-card/80 text-xs text-primary">
@@ -5109,7 +5344,7 @@ export function MemoryChat({
                               (attachment) => attachment.status === 'loading'
                             )}
                             onPaste={handlePaste}
-                            onSubmit={() => void sendMessage()}
+                            onSubmit={submitFromComposer}
                             onSendNow={() => void sendMessage(undefined, { sendNow: true })}
                             busy={Boolean(activeConversationId && generatingConvs.has(activeConversationId))}
                           />
@@ -5552,8 +5787,7 @@ export function MemoryChat({
                         "Searching your memory…" phase as well as a live token stream —
                         so an in-flight turn is always cancellable. Image gen has its own
                         labeled Stop just below, so skip this icon in that mode. */}
-                            {!!activeConversationId &&
-                              generatingConvs.has(activeConversationId) &&
+                            {(hostsSharedComposer ? anyPaneGenerating : paneGenerating) &&
                               !(loading && generatingImage) && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
@@ -5562,12 +5796,7 @@ export function MemoryChat({
                                       variant="outline"
                                       size="icon"
                                       aria-label="Stop generating"
-                                      onClick={() =>
-                                        void stopGeneration(
-                                          activeConversationId,
-                                          guidanceTaskForJourney(getTaskSessionState().tasks, activeConversationId)
-                                        )
-                                      }
+                                      onClick={hostsSharedComposer ? publishChatStop : stopThisPane}
                                       className="size-8 rounded-full border-red-500/50 text-red-400 hover:bg-red-500/10"
                                     >
                                       <svg
@@ -5610,13 +5839,13 @@ export function MemoryChat({
                                 attachmentPending={attachments.some(
                                   (attachment) => attachment.status === 'loading'
                                 )}
-                                onSubmit={() => void sendMessage()}
+                                onSubmit={submitFromComposer}
                               />
                             )}
                           </div>
                         </PromptInputFooter>
                         </PromptInput>
-                      </div>
+                      </div>)}
                     </div>
                   </div>
                 </div>
@@ -5691,6 +5920,7 @@ export function MemoryChat({
               }
               width={canvasWidth}
               onResize={setCanvasWidth}
+              container={paneRoot}
             />
           )}
 
