@@ -69,6 +69,14 @@ import {
   toDataUrl
 } from './model-server/data-url'
 import { errBody, errMeta } from './model-server/errors'
+import {
+  applyKeepLoaded,
+  keepLoadedLimiter,
+  keepLoadedPort,
+  keepLoadedServes,
+  keptModelIds,
+  shutdownKeepLoaded
+} from './model-server/keep-loaded'
 import { handleExtensionBridge, handleExtensionUpgrade } from './extension-bridge/bridge-http'
 import { isAsync, matchPollRoute } from './model-server/async-request'
 import {
@@ -1175,6 +1183,8 @@ async function handleChat(
     json(res, failure.status, errBody(failure.message, failure.type))
     return
   }
+  if (typeof body.model === 'string' && keepLoadedServes(body.model))
+    return handleKeptModelChat(req, res, rid, body, buf)
   if (teamMode()) return handleTeamChat(req, res, rid, body, buf)
   await modalityQueue.run(CHAT_JOB, async () => {
     const requested = typeof body.model === 'string' ? body.model : ''
@@ -1256,6 +1266,69 @@ async function handleChat(
       json(res, failure.status, errBody(failure.message, failure.type))
     }
   })
+}
+
+// ─── Kept-loaded models ──────────────────────────────────────────────────────
+
+/** A request for a model the gateway keeps loaded goes to the model router, one at a time per
+ *  model, with no model swap and no wait behind the chat engine. */
+async function handleKeptModelChat(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  rid: string,
+  body: Record<string, unknown>,
+  buf: Buffer
+): Promise<void> {
+  const model = body.model as string
+  const port = keepLoadedPort()
+  let forward: Buffer = buf
+  try {
+    let changed = await inlineChatImages(body)
+    if (sanitizeChatMessages(body)) changed = true
+    if (changed) forward = Buffer.from(JSON.stringify(body))
+  } catch {
+    // Image fetch failed — forward the original request so the model returns its own error.
+  }
+  res.setHeader('X-Request-Id', rid)
+  const activity = new AIRequestHandle({
+    modality: 'text',
+    source: 'API chat',
+    model,
+    request: body
+  })
+  activity.update({ effectiveRequest: body, backend: 'Model router' })
+  if (port === null) {
+    activity.finish(undefined, new Error('The model router is not running.'))
+    json(res, 503, errBody('The model router is not running.'))
+    return
+  }
+  if (isAsync(req, body)) {
+    await serve(
+      res,
+      rid,
+      'chat',
+      '/v1/chat/completions',
+      true,
+      async () => {
+        const release = await keepLoadedLimiter(model).acquire()
+        try {
+          const result = await callLlamaJson(body, Date.now() + 45_000, port, true)
+          activity.finish(result)
+          return result
+        } catch (error) {
+          activity.finish(undefined, error)
+          throw error
+        } finally {
+          release()
+        }
+      },
+      () => {}
+    )
+    return
+  }
+  const release = await admitTeamRequest(keepLoadedLimiter(model), res, 0, 'caller')
+  if (!release) return
+  proxyToLlama(req, res, forward, Date.now() + 45_000, activity, port, true, release)
 }
 
 // ─── Team-mode chat ──────────────────────────────────────────────────────────
@@ -1345,7 +1418,8 @@ function gatewayStatus(): Record<string, unknown> {
     object: 'gateway.status',
     mode,
     requests_at_once: llm.gatewayClients() ?? 'auto',
-    slots: llm.gatewaySlots()
+    slots: llm.gatewaySlots(),
+    kept_models: keptModelIds()
   }
   if (mode === 'team') return { ...base, runtimes: teamRuntimeStatus() }
   const queue = modalityQueue.getState()
@@ -2269,6 +2343,9 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
     setDecisionGatewayModeSource(() => llm.gatewayMode())
   )
 
+  // The models the person keeps loaded start with the gateway, in their own router.
+  void applyKeepLoaded().catch((error) => console.error('[keep-loaded] start failed:', error))
+
   // Each request runs in its own scope, so the records it starts can name its API key.
   server = http.createServer((req, res) => void withGatewayRequestScope(async () => {
     const origin = req.headers.origin
@@ -2688,6 +2765,7 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
 }
 
 export function stopModelServer(): void {
+  shutdownKeepLoaded()
   server?.close()
   server = null
   keepAwake?.release()

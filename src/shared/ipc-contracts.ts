@@ -1,5 +1,6 @@
 /** Electron IPC payloads shared by main, preload, and renderer type-checks. */
 import type { GenerationMetrics } from './generation-metrics'
+import type { KeepLoadedPlan } from './keep-loaded-plan'
 
 export interface UserProfileContract {
   role?: string
@@ -153,4 +154,28 @@ export interface GatewayApiKeyContract {
 export interface GatewayApiKeySettingsContract {
   enabled: boolean
   keys: GatewayApiKeyContract[]
+}
+
+/** A chat model the gateway can keep loaded. */
+export interface KeepLoadedCandidateContract {
+  id: string
+  name: string
+}
+
+export interface KeepLoadedModelStatusContract {
+  id: string
+  status: 'loaded' | 'loading' | 'unloaded' | 'failed'
+}
+
+/** The gateway's "keep loaded" set: the saved models, their memory plan and the router's state. */
+export interface KeepLoadedStateContract {
+  selected: string[]
+  candidates: KeepLoadedCandidateContract[]
+  plan: KeepLoadedPlan
+  router: {
+    state: 'off' | 'starting' | 'running' | 'error'
+    message: string | null
+    port: number | null
+  }
+  models: KeepLoadedModelStatusContract[]
 }

@@ -10,6 +10,7 @@ import {
   type RagChatResultContract,
   type SystemHealthComponentContract,
   type GatewayApiKeySettingsContract,
+  type KeepLoadedStateContract,
   type SystemHealthContract
 } from '../shared/ipc-contracts'
 import type {
@@ -391,6 +392,12 @@ const offGridApi = {
     ipcRenderer.invoke('gateway:keys:create', name, expiresAt, replaceId),
   revokeGatewayApiKey: (id: string): Promise<GatewayApiKeySettingsContract> =>
     ipcRenderer.invoke('gateway:keys:revoke', id),
+  keepLoadedModels: (): Promise<KeepLoadedStateContract> =>
+    ipcRenderer.invoke('gateway:keep-loaded:get'),
+  previewKeepLoadedModels: (ids: string[]): Promise<KeepLoadedStateContract> =>
+    ipcRenderer.invoke('gateway:keep-loaded:preview', ids),
+  setKeepLoadedModels: (ids: string[]): Promise<KeepLoadedStateContract> =>
+    ipcRenderer.invoke('gateway:keep-loaded:set', ids),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   aiLogsList: (
     query: import('../shared/ai-request-log').AILogQuery = {}

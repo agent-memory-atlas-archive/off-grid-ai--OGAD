@@ -1336,6 +1336,17 @@ export function setupIPC(): void {
   ipcMain.handle('gateway:keys:revoke', async (_, id: string) =>
     (await import('./model-server')).revokeGatewayApiKey(id)
   )
+  // The models the gateway keeps loaded together: the saved set with its plan, a preview of a set's
+  // plan before it is applied, and saving a set (which restarts the router).
+  ipcMain.handle('gateway:keep-loaded:get', async () =>
+    (await import('./model-server/keep-loaded')).keepLoadedState()
+  )
+  ipcMain.handle('gateway:keep-loaded:preview', async (_, ids: string[]) =>
+    (await import('./model-server/keep-loaded')).keepLoadedState(Array.isArray(ids) ? ids : [])
+  )
+  ipcMain.handle('gateway:keep-loaded:set', async (_, ids: string[]) =>
+    (await import('./model-server/keep-loaded')).setKeptModels(ids)
+  )
 
   // === SETTINGS HANDLERS ===
 
