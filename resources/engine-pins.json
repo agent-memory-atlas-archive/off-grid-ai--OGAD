@@ -2,16 +2,16 @@
   "schemaVersion": 1,
   "llama": {
     "repo": "ggml-org/llama.cpp",
-    "ref": "b11791",
+    "ref": "b11819",
     "sha256": {
-      "linux-cuda": "310a852e1cd0e1ba9cf49837ea9b00ccd016e16522946dabccafb655bb38a414",
-      "linux-cudart": "242bc6854d45b1ee90f2adbdbae836d2758fb5fd127cbf273983f0e747bc23d3",
-      "linux-vulkan": "50ef017689cc8070c9b045af24e98789dac02b2b37b8cfd60c8603602aa348c3",
-      "linux-cpu": "ac75208179d00d86f378d5f10c65f9785028ce877cf57279f1a7b8dac54a25ff",
-      "win-cuda": "af5f914ecea272cfad57c33048c3d75012a7778c5dff4bd3cdce160543f8138a",
+      "linux-cuda": "5940eaa8b4fdd9a9e050a70baaeded3c69d269abbea2565641c2510fc3891e04",
+      "linux-cudart": "02ff066492d56206ad7e8d4fb7163c5f79b80db07d477e82b3e7d8060efcf01b",
+      "linux-vulkan": "9b363badcca7cf040dec5f2a8453963b96e01de4e4a59d2fc7cb5989ac21c397",
+      "linux-cpu": "98800bd7b1b7bd5f17ff32c0ee6ce2ea6dbcfe77eb58ff9fd96bdad967a4f286",
+      "win-cuda": "b3605e2d0eacfc02694d4f476571facb42e6587f7c4b0d33e812f2959ebfb2da",
       "win-cudart": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
-      "win-vulkan": "33efbbc196173d5c48311690c8909653c73134e7ba971e1b21548293bdcbd938",
-      "win-cpu": "2fe8bc3ebd18d8fa978e490fa3bbe663b8842624009c9a199bd1412549895a96"
+      "win-vulkan": "c3b2484d18258425fe3f69d0b6d07dce01501d6e010578dad3e53150a30df557",
+      "win-cpu": "312d9925881131d4c9caa7282b3c738cc5084cfc8286e04eecd8a8d19eebb2dc"
     }
   },
   "prism": {
@@ -28,13 +28,13 @@
   },
   "sd": {
     "repo": "leejet/stable-diffusion.cpp",
-    "ref": "master-982-0518b34",
-    "commit": "0518b34374761cb82aeda5ad3c2f0686fdad2cec",
+    "ref": "master-987-a77d362",
+    "commit": "a77d3623180b2bc1886f3dd04c0aa04156a987ef",
     "sha256": {
-      "linux-vulkan": "8bc413b3e6307fbefdf985cc562f7db1cc4c68e2dc3dca9d69b66ce98b9cbb5a",
-      "win-cuda": "f4dd12ee7fa974f1858ced85191b90e5d3c288dd4b10f296be91175138b5b421",
-      "win-vulkan": "c2ab91b33206beba434f739a9131916539a3d6229da153e6e0311013e6308567",
-      "win-cpu": "4d8ec59037f70d0b61954bcca1a0008dfe238fabd9e21f8d354b16be9e7c3d4b"
+      "linux-vulkan": "f65d726b226c17344774eaa38173a5e811f9ab59b12bc37d0e3f3683d0ffa1f1",
+      "win-cuda": "eb4cc6be2d365258a8f4380f8ac8473090d93810f32dfc15b3d90914483b817c",
+      "win-vulkan": "a8b58fa44f2574534a61e9fa778e7fa4fede9c1e51e638e44059d43531824f07",
+      "win-cpu": "06d896f6098365ecd2979c2f9ed2790beadfc07fdcd5ccd85e0f5b4f84414a4d"
     }
   },
   "whisper": {
@@ -80,16 +80,16 @@
   "archives": {
     "release": "native-deps-2026-09",
     "mac-native": {
-      "name": "ogad-mac-native-20261021-r1.tar.gz",
-      "sha256": "bb584b5954a59a52da906ee7ade34295c36c875c21951ae39adb9d9470588558"
+      "name": "ogad-mac-native-20261022-r2.tar.gz",
+      "sha256": "758a43af2aa95658638d3672f05ebfecaed5ddaf7e17b0067958677afa96a687"
     },
     "linux-native": {
-      "name": "ogad-linux-native-x64-20261021-r1.tar.gz",
-      "sha256": "42a49ab8af2a866ba3ea0f713cff1aa08b23c9b630ee2090d73779b41d5ae879"
+      "name": "ogad-linux-native-x64-20261022-r2.tar.gz",
+      "sha256": "1ffa648fb2ef3c1b6d4bb84db5b5a6511418a83d32f841c3afeae9505e24e959"
     },
     "linux-sd-cuda": {
-      "name": "ogad-sd-master-982-0518b34-linux-x64-cuda12.8-multiarch-20261021-r1.tar.gz",
-      "sha256": "b7ae1bb8a11224f23435510cc0695b38ee3b89cc5c925e4390ef13f877f1e69f"
+      "name": "ogad-sd-master-987-a77d362-linux-x64-cuda12.8-multiarch-20261022-r1.tar.gz",
+      "sha256": "6f8cabf247165f2061710858ed96fc38ee5d6fa6ca885bf189347c132d6ac0cc"
     },
     "linux-whisper": {
       "name": "ogad-whisper-v1.9.5-linux-x64-cuda12.8-multiarch-v1.tar.gz",
