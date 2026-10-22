@@ -538,3 +538,25 @@ export async function testRemoteVisionServer(
     }
   }
 }
+
+/**
+ * Read each enabled server's model list again and keep it, so what its models can do (read
+ * images, use tools) stays current without the person pressing Test connection. A server that
+ * does not answer keeps the list it had.
+ */
+export async function refreshRemoteServerCatalogs(): Promise<void> {
+  for (const server of readStored().servers) {
+    if (server.enabled === false) continue
+    const result = await testRemoteVisionServer({ ...server, serverId: server.id })
+    if (!result.ok || !result.models?.length) continue
+    const stored = readStored()
+    if (!stored.servers.some(({ id }) => id === server.id)) continue
+    writeStored({
+      ...stored,
+      servers: stored.servers.map((saved) =>
+        saved.id === server.id ? { ...saved, modelCatalog: result.models } : saved
+      )
+    })
+    ;(await import('../llm/remote-chat')).forgetRemoteServerFacts(server.endpoint)
+  }
+}
