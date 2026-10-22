@@ -62,4 +62,60 @@ describe('remote Computer Use sampling transport', () => {
       repetition_penalty: 1
     })
   })
+
+  it('sends the thinking budget to a server that describes each of its models only on request', async () => {
+    // An Off Grid gateway keeping several models loaded (a llama.cpp router behind it) has no one
+    // local model to describe: /props answers per model and 502s without one.
+    let requestBody: Record<string, unknown> = {}
+    server = http.createServer((request, response) => {
+      const url = new URL(request.url ?? '/', 'http://fixture')
+      if (request.method === 'GET' && url.pathname === '/props') {
+        if (url.searchParams.get('model') !== 'kept-model') {
+          response.writeHead(502, { 'Content-Type': 'application/json' })
+          response.end('{"error":{"message":"Local model not ready"}}')
+          return
+        }
+        response.writeHead(200, { 'Content-Type': 'application/json' })
+        response.end(JSON.stringify({ chat_template: '{% if enable_thinking %}<think>{% endif %}' }))
+        return
+      }
+      let raw = ''
+      request.on('data', (chunk) => {
+        raw += String(chunk)
+      })
+      request.on('end', () => {
+        requestBody = JSON.parse(raw) as Record<string, unknown>
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        response.end(
+          'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+        )
+      })
+    })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
+    const port = (server.address() as import('node:net').AddressInfo).port
+
+    await streamRemoteChatCompletion({
+      remote: {
+        id: 'gateway',
+        name: 'Gateway',
+        provider: 'ogad',
+        endpoint: `http://127.0.0.1:${port}/v1`,
+        model: 'kept-model',
+        apiKey: ''
+      },
+      request: {
+        messages: [{ role: 'user', content: 'think briefly' }],
+        maxTokens: 32,
+        thinking: true,
+        reasoningBudget: 512
+      },
+      onDelta: () => undefined,
+      options: { timeoutMs: 5_000 }
+    })
+
+    expect(requestBody).toMatchObject({
+      chat_template_kwargs: { enable_thinking: true },
+      reasoning_budget_tokens: 512
+    })
+  })
 })

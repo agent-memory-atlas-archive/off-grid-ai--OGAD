@@ -155,9 +155,12 @@ export async function remoteReasoningCapability(
         /\.Think|\.Thinking|\.IsThinkSet/.test(template)
       return { control: supportsThinking ? 'ollama' : 'none' }
     }
-    const response = await fetch(`${remote.endpoint.replace(/\/v1\/?$/i, '')}/props`, {
-      signal: AbortSignal.timeout(5_000)
-    })
+    // Ask about this model: a server holding several (a llama.cpp router, an Off Grid gateway
+    // keeping models loaded) answers /props per model; a single-model server ignores the query.
+    const response = await fetch(
+      `${remote.endpoint.replace(/\/v1\/?$/i, '')}/props?model=${encodeURIComponent(remote.model)}`,
+      { signal: AbortSignal.timeout(5_000) }
+    )
     if (response.ok) {
       const body = (await response.json()) as { chat_template?: string }
       return { control: detectThinkingDialect(body.chat_template), tokenBudget: true }

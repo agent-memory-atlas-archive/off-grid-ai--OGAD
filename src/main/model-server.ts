@@ -2712,6 +2712,15 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
       })()
       return
     }
+    // A kept model's /props (its chat template, so a client knows its thinking controls) comes
+    // from the router that serves it; without this a client asking about it gets the local
+    // llama-server's 502 and drops thinking and its budget.
+    if (url === '/props' && method === 'GET') {
+      const model = new URLSearchParams(req.url?.split('?')[1]).get('model')
+      const port = keepLoadedPort()
+      if (model && port !== null && keepLoadedServes(model))
+        return proxyToLlama(req, res, undefined, 0, undefined, port)
+    }
     // Non-inference routes pass through without generating activity rows.
     proxyToLlama(req, res)
   }))

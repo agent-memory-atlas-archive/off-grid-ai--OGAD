@@ -130,7 +130,7 @@ export async function startFakeLlamaServer(): Promise<FakeLlamaServer> {
       )
       return
     }
-    if (req.method === 'GET' && req.url === '/props') {
+    if (req.method === 'GET' && req.url?.split('?')[0] === '/props') {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       // A real llama-server reports the window one request may use, as the app reads it.
       res.end(
