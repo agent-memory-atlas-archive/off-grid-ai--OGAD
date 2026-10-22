@@ -5601,8 +5601,9 @@ export function MemoryChat({
                             {/* God is set up already: its model, thinking and voice come from God's own settings. */}
 {!god && (
 <>{/* Active model + context window — click to change (opens the same
-                        ModelPicker as the header). Mirrors what the Active-models panel shows. */}
-                            {modelSummary.name && (
+                        ModelPicker as the header). Mirrors what the Active-models panel shows. A split
+                        pane picks its model in its own header, so it has no chip here. */}
+                            {modelSummary.name && !paneKey && (
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <Button
