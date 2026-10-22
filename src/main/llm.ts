@@ -2139,6 +2139,7 @@ export class LLMService {
       toolChoice?: string
       onToolCallStart?: (name?: string) => void
       onToolCallReady?: (call: AssembledToolCall) => void
+      onWaitStatus?: (label: string) => void
     }
   ): Promise<StreamResult> {
     // A caller's cap always goes out (a suggestion's 40 tokens). Auto sends none, so the server's
@@ -2168,7 +2169,8 @@ export class LLMService {
         signal: options.signal,
         timeoutMs: options.timeoutMs,
         onToolCallStart: options.onToolCallStart,
-        onToolCallReady: options.onToolCallReady
+        onToolCallReady: options.onToolCallReady,
+        onWaitStatus: options.onWaitStatus
       }
     })
   }
@@ -2491,6 +2493,8 @@ export class LLMService {
       responseFormat?: unknown
       onToolCallStart?: (name?: string) => void
       onToolCallReady?: (call: AssembledToolCall) => void
+      /** A remote server is still queueing this turn or loading its model. */
+      onWaitStatus?: (label: string) => void
     } = {},
     timeoutMs?: number
   ): Promise<StreamResult> {
@@ -2520,7 +2524,8 @@ export class LLMService {
             tools: opts.tools,
             toolChoice: opts.toolChoice,
             onToolCallStart: opts.onToolCallStart,
-            onToolCallReady: opts.onToolCallReady
+            onToolCallReady: opts.onToolCallReady,
+            onWaitStatus: opts.onWaitStatus
           })
           return withContextMetrics(result, messages, {
             contextWindowTokens: await this.contextWindow(),

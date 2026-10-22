@@ -126,6 +126,8 @@ export type ToolCallStatus = 'completed' | 'failed' | 'pending'
 export type ToolActivity =
   | { kind: 'planning'; label: 'Planning next action…' }
   | { kind: 'preparing_tool_calls'; label: 'Preparing actions…'; name?: string }
+  /** A remote server holds the turn: queued behind others, or loading the model. */
+  | { kind: 'waiting_server'; label: string }
   /** `summary` stands in for every earlier turn; the app keeps it with the conversation. */
   | { kind: 'compacted'; label: 'Compacted'; summary?: string }
   /** Reading the conversation's attached documents, then what was read. */
@@ -1232,6 +1234,7 @@ export async function toolChat(
       signal: opts.signal,
       onToolCallStart: (name) =>
         opts.onActivity?.({ kind: 'preparing_tool_calls', label: 'Preparing actions…', name }),
+      onWaitStatus: (label) => opts.onActivity?.({ kind: 'waiting_server', label }),
       onToolCallReady:
         opts.onImageRequest &&
         roundTools.some(
