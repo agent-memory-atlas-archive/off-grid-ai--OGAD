@@ -39,7 +39,10 @@ describe('<RemoteVisionSettingsTab/>', () => {
         name?: string
         mediaModels?: Record<string, string>
         modelCatalog?: unknown[]
+        enabled?: boolean
       }) => {
+        // As the main process saves it: off keeps the server, and the local model takes over.
+        const enabled = update.enabled !== false
         saved =
           update.provider === 'local'
             ? {
@@ -53,7 +56,7 @@ describe('<RemoteVisionSettingsTab/>', () => {
                 endpoint: update.endpoint,
                 model: update.model,
                 hasApiKey: false,
-                activeServerId: 'media-server',
+                activeServerId: enabled ? 'media-server' : null,
                 servers: [
                   {
                     id: 'media-server',
@@ -63,7 +66,7 @@ describe('<RemoteVisionSettingsTab/>', () => {
                     model: update.model,
                     mediaModels: update.mediaModels,
                     modelCatalog: update.modelCatalog,
-                    enabled: true,
+                    enabled,
                     hasApiKey: false,
                     screenFramesAllowed: false
                   }
@@ -106,11 +109,11 @@ describe('<RemoteVisionSettingsTab/>', () => {
       (screen.getByRole('combobox', { name: 'voice model' }) as HTMLInputElement).value
     ).toContain('Speaker')
 
-    fireEvent.click(screen.getByRole('switch', { name: 'Use remote server' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Use this server' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await screen.findByText('Local model is active.')
+    await screen.findByText('Server saved and off.')
     expect(
-      screen.getByRole('switch', { name: 'Use remote server' }).getAttribute('aria-checked')
+      screen.getByRole('switch', { name: 'Use this server' }).getAttribute('aria-checked')
     ).toBe('false')
   })
 
@@ -210,7 +213,8 @@ describe('<RemoteVisionSettingsTab/>', () => {
         name: 'Models example',
         serverId: 'server-1',
         apiKey: 'private-key',
-        screenFramesAllowed: true
+        screenFramesAllowed: true,
+        enabled: true
       })
     )
     expect((screen.getByLabelText('API key (optional)') as HTMLInputElement).value).toBe('')
@@ -263,15 +267,8 @@ describe('<RemoteVisionSettingsTab/>', () => {
     ).toContain('Image Maker')
   })
 
-  it('keeps local models active until the user enables a remote server', async () => {
-    const setRemoteVisionServer = vi.fn(async () => ({
-      provider: 'local',
-      endpoint: '',
-      model: '',
-      hasApiKey: false,
-      activeServerId: null,
-      servers: []
-    }))
+  it('keeps local models active while no remote server is saved', async () => {
+    const setRemoteVisionServer = vi.fn()
     ;(window as unknown as { api: Record<string, unknown> }).api = {
       getRemoteVisionServer: vi.fn(async () => ({
         provider: 'local',
@@ -289,18 +286,10 @@ describe('<RemoteVisionSettingsTab/>', () => {
     render(<RemoteVisionSettingsTab />)
 
     expect(await screen.findByText('Local model is active.')).toBeTruthy()
-    expect(screen.queryByLabelText('Address')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-
-    await waitFor(() =>
-      expect(setRemoteVisionServer).toHaveBeenCalledWith({
-        provider: 'local',
-        endpoint: '',
-        model: ''
-      })
-    )
-
-    fireEvent.click(screen.getByRole('switch', { name: 'Use remote server' }))
     expect(screen.getByPlaceholderText('https://models.example')).toBeTruthy()
+    // An empty form saves nothing: the local model stays active.
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('Enter a server name first.')).toBeTruthy()
+    expect(setRemoteVisionServer).not.toHaveBeenCalled()
   })
 })
