@@ -19,8 +19,6 @@ import {
 } from './models/download-queue'
 import {
   getAllActiveModals,
-  remoteModelSelected,
-  remoteVoiceSelected,
   setActiveModal as setModal,
   setRemoteModelSelected,
   type Modality
@@ -78,7 +76,8 @@ import {
   activateRemoteVisionModel,
   activateRemoteVisionMediaModel,
   deactivateRemoteVisionMediaModel,
-  getRemoteVisionServerSettings
+  getRemoteVisionServerSettings,
+  remoteServerIdFor
 } from './vision/remote-vision-server'
 import { getComputerUseSettings, setComputerUseSettings } from './computer-use-settings'
 import { getWebUseSettings, setWebUseSettings } from './web-use-settings'
@@ -1833,7 +1832,7 @@ export async function reconcileActiveModelProjector(): Promise<boolean> {
 export async function getActiveModelIds(): Promise<string[]> {
   const info = await getStorageInfo()
   const settings = getRemoteVisionServerSettings()
-  const remote = settings.servers.find((server) => server.id === settings.activeServerId)
+  const textOnRemote = Boolean(remoteServerIdFor('text'))
   const activeChatId = getActiveModel()
   // Computer Use models are active by the role Tasks gives them (below), not by a pick of their
   // own: the Models screens then show exactly what Tasks > Computer Use and Web Use will run.
@@ -1842,21 +1841,28 @@ export async function getActiveModelIds(): Promise<string[]> {
       (model) =>
         model.active &&
         model.kind !== 'computer_use' &&
-        (!remote || !remoteModelSelected('text') || model.id !== activeChatId)
+        (!textOnRemote || model.id !== activeChatId)
     )
     .map((model) => model.id)
-  const remoteIds =
-    remote && remote.enabled !== false
-      ? remoteVisionInventoryModels([remote])
-          .filter(
-            (model) =>
-              model.kind !== 'computer_use' &&
-              remoteModelSelected(
-                model.kind === 'vision' ? 'text' : model.kind === 'speech' ? 'voice' : model.kind
-              )
-          )
+  // Each modality's model, from the server that modality runs on.
+  const remoteIds = settings.servers.flatMap((server) =>
+    server.enabled === false
+      ? []
+      : remoteVisionInventoryModels([server])
+          .filter((model) => {
+            if (model.kind === 'computer_use') return false
+            const modality =
+              model.kind === 'vision' ? 'text' : model.kind === 'speech' ? 'voice' : model.kind
+            return (
+              (modality === 'text' ||
+                modality === 'image' ||
+                modality === 'voice' ||
+                modality === 'transcription') &&
+              remoteServerIdFor(modality) === server.id
+            )
+          })
           .map((model) => model.id)
-      : []
+  )
   return [...new Set([...localIds, ...remoteIds, ...(await taskRoleModelIds())])]
 }
 
@@ -2034,22 +2040,19 @@ export async function setActiveModalChoice(
 
 export function getActiveModalities(): { text: string | null } & Record<Modality, string | null> {
   const settings = getRemoteVisionServerSettings()
-  const remote = settings.servers.find(
-    (server) => server.id === settings.activeServerId && server.enabled !== false
-  )
+  // Each modality's model comes from the server that modality runs on, or is local.
   const remoteId = (modality: 'text' | 'image' | 'transcription' | 'voice'): string | null => {
+    const remote = settings.servers.find((server) => server.id === remoteServerIdFor(modality))
     const model =
       remote?.mediaModels?.[modality] ?? (modality === 'text' ? remote?.model : undefined)
     return remote && model ? remoteVisionModelId(remote.id, model) : null
   }
   return {
-    text: (remoteModelSelected('text') ? remoteId('text') : null) ?? getActiveModel(),
+    text: remoteId('text') ?? getActiveModel(),
     ...getAllActiveModals(),
-    image: (remoteModelSelected('image') ? remoteId('image') : null) ?? getAllActiveModals().image,
-    speech: (remoteVoiceSelected() ? remoteId('voice') : null) ?? getAllActiveModals().speech,
-    transcription:
-      (remoteModelSelected('transcription') ? remoteId('transcription') : null) ??
-      getAllActiveModals().transcription
+    image: remoteId('image') ?? getAllActiveModals().image,
+    speech: remoteId('voice') ?? getAllActiveModals().speech,
+    transcription: remoteId('transcription') ?? getAllActiveModals().transcription
   }
 }
 

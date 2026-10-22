@@ -95,11 +95,25 @@ export function getAllActiveModals(): Record<Modality, string | null> {
 /** Text remains remote for existing remote profiles; added media choices start local. */
 export function remoteModelSelected(modality: RemoteModelModality): boolean {
   const selected = activeModalStore.get(remoteSelectionKey(modality))
-  return selected === null ? modality === 'text' : selected === 'true'
+  return selected === null ? modality === 'text' : selected !== 'false'
 }
 
-export function setRemoteModelSelected(modality: RemoteModelModality, selected: boolean): void {
-  activeModalStore.set(remoteSelectionKey(modality), selected ? 'true' : 'false')
+/**
+ * The server a remote modality runs on. Each modality keeps its own, so choosing an image model
+ * on one server never moves chat to it. Null for a selection saved before servers were recorded
+ * per modality: it follows the shared active server.
+ */
+export function remoteModelServerId(modality: RemoteModelModality): string | null {
+  const selected = activeModalStore.get(remoteSelectionKey(modality))
+  return selected && selected !== 'true' && selected !== 'false' ? selected : null
+}
+
+export function setRemoteModelSelected(
+  modality: RemoteModelModality,
+  selected: boolean,
+  serverId?: string
+): void {
+  activeModalStore.set(remoteSelectionKey(modality), selected ? (serverId ?? 'true') : 'false')
 }
 
 export function remoteVoiceSelected(): boolean {

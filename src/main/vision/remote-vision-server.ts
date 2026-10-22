@@ -2,7 +2,12 @@ import { settingsChanged } from '../settings-version'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { remoteModelSelected, setRemoteModelSelected } from '../active-models'
+import {
+  remoteModelSelected,
+  remoteModelServerId,
+  setRemoteModelSelected,
+  type RemoteModelModality
+} from '../active-models'
 import { modelsDir } from '../runtime-env'
 import { deleteSecret, getSecret, setSecret } from '../secrets'
 import {
@@ -166,11 +171,41 @@ function publicServer(server: StoredRemoteVisionServer): RemoteVisionSavedServer
   return { ...server, hasApiKey: Boolean(serverApiKey(server.id)) }
 }
 
+const MODALITIES: RemoteModelModality[] = ['text', 'image', 'voice', 'transcription']
+
+/** The enabled server a modality's remote selection names, or null when it runs locally. */
+function selectedServer(
+  stored: StoredRemoteVisionConfig,
+  modality: RemoteModelModality
+): StoredRemoteVisionServer | null {
+  if (!remoteModelSelected(modality)) return null
+  const serverId = remoteModelServerId(modality) ?? stored.activeServerId
+  return (
+    stored.servers.find((server) => server.id === serverId && server.enabled !== false) ?? null
+  )
+}
+
+/** Id of the server a modality runs on, or null when it runs locally. */
+export function remoteServerIdFor(modality: RemoteModelModality): string | null {
+  return selectedServer(readStored(), modality)?.id ?? null
+}
+
+// A selection saved before servers were recorded per modality follows the shared active server.
+// Name its server before that changes, so the change cannot carry it along.
+function pinLegacySelections(stored: StoredRemoteVisionConfig): void {
+  for (const modality of MODALITIES) {
+    if (!remoteModelSelected(modality) || remoteModelServerId(modality)) continue
+    const server = selectedServer(stored, modality)
+    if (server) setRemoteModelSelected(modality, true, server.id)
+  }
+}
+
 export function getRemoteVisionServerSettings(): RemoteVisionServerSettings {
   const stored = readStored()
-  const active = stored.servers.find(
-    (server) => server.id === stored.activeServerId && server.enabled !== false
-  )
+  // The server Settings marks active is the one chat runs on, when chat is remote.
+  const active =
+    selectedServer(stored, 'text') ??
+    stored.servers.find((server) => server.id === stored.activeServerId && server.enabled !== false)
   return {
     provider: active?.provider ?? 'local',
     endpoint: active?.endpoint ?? '',
@@ -183,12 +218,8 @@ export function getRemoteVisionServerSettings(): RemoteVisionServerSettings {
 
 export function getActiveRemoteVisionServer():
   (StoredRemoteVisionServer & { apiKey: string }) | null {
-  if (!remoteModelSelected('text')) return null
-  const stored = readStored()
-  const active = stored.servers.find(
-    (server) => server.id === stored.activeServerId && server.enabled !== false && !!server.model
-  )
-  return active ? { ...active, apiKey: serverApiKey(active.id) } : null
+  const active = selectedServer(readStored(), 'text')
+  return active?.model ? { ...active, apiKey: serverApiKey(active.id) } : null
 }
 
 /** Resolve any saved text/vision model reference through its owning server.
@@ -220,11 +251,7 @@ export function getRemoteVisionServerForModel(
 export function getActiveRemoteVisionServerForModality(
   modality: RemoteVisionModality
 ): (StoredRemoteVisionServer & { apiKey: string; selectedModel: string }) | null {
-  if (!remoteModelSelected(modality)) return null
-  const stored = readStored()
-  const active = stored.servers.find(
-    (server) => server.id === stored.activeServerId && server.enabled !== false
-  )
+  const active = selectedServer(readStored(), modality)
   const selectedModel = active?.mediaModels?.[modality]
   return active && selectedModel
     ? { ...active, apiKey: serverApiKey(active.id), selectedModel }
@@ -238,13 +265,15 @@ export function activateRemoteVisionModel(serverId: string, modelId: string): bo
       candidate.id === serverId && candidate.enabled !== false && candidate.model === modelId
   )
   if (!server) return false
+  pinLegacySelections(stored)
   writeStored({ ...stored, activeServerId: server.id })
-  setRemoteModelSelected('text', true)
+  setRemoteModelSelected('text', true, server.id)
   return true
 }
 
 export function deactivateRemoteVisionModel(): void {
   const stored = readStored()
+  pinLegacySelections(stored)
   setRemoteModelSelected('text', false)
   if (stored.activeServerId !== null) writeStored({ ...stored, activeServerId: null })
 }
@@ -262,8 +291,8 @@ export function activateRemoteVisionMediaModel(
       candidate.mediaModels?.[modality] === modelId
   )
   if (!server) return false
-  writeStored({ ...stored, activeServerId: serverId })
-  setRemoteModelSelected(modality, true)
+  // Only this modality moves: chat and the other media keep their own servers.
+  setRemoteModelSelected(modality, true, serverId)
   return true
 }
 
@@ -278,9 +307,7 @@ export function setRemoteVisionServerSettings(
 ): RemoteVisionServerSettings {
   const stored = readStored()
   if (update.provider === 'local') {
-    for (const modality of ['text', 'image', 'voice', 'transcription'] as const) {
-      setRemoteModelSelected(modality, false)
-    }
+    for (const modality of MODALITIES) setRemoteModelSelected(modality, false)
     writeStored({
       ...stored,
       activeServerId: null,
@@ -322,14 +349,23 @@ export function setRemoteVisionServerSettings(
   if (update.clearApiKey) deleteSecret(secretKey(id))
   else if (update.apiKey?.trim()) setSecret(secretKey(id), update.apiKey.trim())
   // Turning one server off leaves the others as they were; the active one hands over to the next.
+  const handover = servers.find((server) => server.id !== id && server.enabled !== false)?.id
   const activeServerId = next.enabled
     ? id
     : stored.activeServerId === id
-      ? (servers.find((server) => server.id !== id && server.enabled !== false)?.id ?? null)
+      ? (handover ?? null)
       : stored.activeServerId
+  pinLegacySelections(stored)
+  if (!next.enabled) {
+    // What ran on the server just turned off moves with the hand-over, or runs locally.
+    for (const modality of MODALITIES) {
+      if (remoteModelServerId(modality) !== id) continue
+      setRemoteModelSelected(modality, Boolean(handover), handover)
+    }
+  }
   writeStored({ version: CONFIG_VERSION, activeServerId, servers })
   if (isNewServer) {
-    setRemoteModelSelected('text', Boolean(mediaModels.text))
+    setRemoteModelSelected('text', Boolean(mediaModels.text), id)
     setRemoteModelSelected('image', false)
     setRemoteModelSelected('voice', false)
     setRemoteModelSelected('transcription', false)
@@ -340,10 +376,9 @@ export function setRemoteVisionServerSettings(
 export function removeRemoteVisionServer(serverId: string): RemoteVisionServerSettings {
   const stored = readStored()
   deleteSecret(secretKey(serverId))
-  if (stored.activeServerId === serverId) {
-    for (const modality of ['text', 'image', 'voice', 'transcription'] as const) {
-      setRemoteModelSelected(modality, false)
-    }
+  pinLegacySelections(stored)
+  for (const modality of MODALITIES) {
+    if (remoteModelServerId(modality) === serverId) setRemoteModelSelected(modality, false)
   }
   writeStored({
     version: CONFIG_VERSION,
