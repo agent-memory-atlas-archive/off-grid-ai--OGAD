@@ -268,6 +268,21 @@ export function remoteContextWindow(remote: RemoteTextModelConnection): Promise<
   return discovered
 }
 
+/** Forget what was learned about a server's models (context window, thinking controls, native
+ *  tools), so the next request asks it again. Testing or saving a server means its setup may have
+ *  changed, such as a larger context window, and a remembered answer would hide that. */
+export function forgetRemoteServerFacts(endpoint: string): void {
+  const base = endpoint.replace(/\/+$/, '')
+  for (const cache of [contextWindows, reasoningCapabilities, nativeToolCapabilities] as Map<
+    string,
+    unknown
+  >[]) {
+    for (const key of [...cache.keys()]) {
+      if (key.split('\n')[1]?.replace(/\/+$/, '') === base) cache.delete(key)
+    }
+  }
+}
+
 export function nativeToolPlannerUnavailableMessage(
   capability: RemoteNativeToolCapability
 ): string {

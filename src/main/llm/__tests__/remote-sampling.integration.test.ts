@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import * as http from 'node:http'
-import { streamRemoteChatCompletion } from '../remote-chat'
+import {
+  forgetRemoteServerFacts,
+  remoteContextWindow,
+  streamRemoteChatCompletion
+} from '../remote-chat'
 
 let server: http.Server | null = null
 
@@ -226,5 +230,31 @@ describe('remote Computer Use sampling transport', () => {
     })
 
     expect(result.content).toBe('There are 10.')
+  })
+})
+
+describe('remote context window', () => {
+  it('reads a changed window again once the server is tested or saved', async () => {
+    let window = 16_384
+    server = http.createServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify({ data: [{ id: 'flint', context_length: window }] }))
+    })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
+    const port = (server.address() as import('node:net').AddressInfo).port
+    const remote = {
+      id: 'gateway',
+      name: 'Gateway',
+      provider: 'ogad' as const,
+      endpoint: `http://127.0.0.1:${port}/v1`,
+      model: 'flint',
+      apiKey: ''
+    }
+
+    expect(await remoteContextWindow(remote)).toBe(16_384)
+    window = 262_144
+    expect(await remoteContextWindow(remote)).toBe(16_384)
+    forgetRemoteServerFacts(`${remote.endpoint}/`)
+    expect(await remoteContextWindow(remote)).toBe(262_144)
   })
 })

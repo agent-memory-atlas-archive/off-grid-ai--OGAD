@@ -2261,6 +2261,7 @@ export function setupIPC(): void {
     'vision:remote-server:set',
     async (_e, update: import('../shared/remote-vision-server').RemoteVisionServerUpdate) => {
       const { setRemoteVisionServerSettings } = await import('./vision/remote-vision-server')
+      ;(await import('./llm/remote-chat')).forgetRemoteServerFacts(update.endpoint)
       return setRemoteVisionServerSettings(update)
     }
   )
@@ -2268,6 +2269,7 @@ export function setupIPC(): void {
     'vision:remote-server:test',
     async (_e, update: import('../shared/remote-vision-server').RemoteVisionServerUpdate) => {
       const { testRemoteVisionServer } = await import('./vision/remote-vision-server')
+      ;(await import('./llm/remote-chat')).forgetRemoteServerFacts(update.endpoint)
       return testRemoteVisionServer(update)
     }
   )
