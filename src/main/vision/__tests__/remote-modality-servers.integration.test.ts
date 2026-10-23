@@ -50,6 +50,8 @@ describe('models picked on different servers', () => {
       model: '',
       mediaModels: { image: 'flux' }
     })
+    // Adding a server for images leaves chat where it was.
+    expect(remote.getActiveRemoteVisionServer()?.id).toBe('pod')
     expect(remote.activateRemoteVisionModel('pod', 'flint')).toBe(true)
     expect(remote.activateRemoteVisionMediaModel('cloud', 'image', 'flux')).toBe(true)
 
@@ -79,5 +81,7 @@ describe('models picked on different servers', () => {
       enabled: false
     })
     expect(remote.getActiveRemoteVisionServer()?.id).toBe('pod')
+    // Image had no other server with an image model: it runs locally, not on the chat server.
+    expect(remote.remoteServerIdFor('image')).toBeNull()
   })
 })

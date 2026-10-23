@@ -190,6 +190,10 @@ export function remoteServerIdFor(modality: RemoteModelModality): string | null 
   return selectedServer(readStored(), modality)?.id ?? null
 }
 
+function offersModel(server: StoredRemoteVisionServer, modality: RemoteModelModality): boolean {
+  return Boolean(modality === 'text' ? server.model : server.mediaModels?.[modality])
+}
+
 // A selection saved before servers were recorded per modality follows the shared active server.
 // Name its server before that changes, so the change cannot carry it along.
 function pinLegacySelections(stored: StoredRemoteVisionConfig): void {
@@ -349,27 +353,26 @@ export function setRemoteVisionServerSettings(
   if (update.clearApiKey) deleteSecret(secretKey(id))
   else if (update.apiKey?.trim()) setSecret(secretKey(id), update.apiKey.trim())
   // Turning one server off leaves the others as they were; the active one hands over to the next.
-  const handover = servers.find((server) => server.id !== id && server.enabled !== false)?.id
+  const others = servers.filter((server) => server.id !== id && server.enabled !== false)
   const activeServerId = next.enabled
     ? id
     : stored.activeServerId === id
-      ? (handover ?? null)
+      ? (others[0]?.id ?? null)
       : stored.activeServerId
   pinLegacySelections(stored)
   if (!next.enabled) {
-    // What ran on the server just turned off moves with the hand-over, or runs locally.
+    // What ran on the server just turned off moves to another that offers a model for it, or
+    // runs locally.
     for (const modality of MODALITIES) {
       if (remoteModelServerId(modality) !== id) continue
+      const handover = others.find((server) => offersModel(server, modality))?.id
       setRemoteModelSelected(modality, Boolean(handover), handover)
     }
   }
+  // A new server takes chat only when no server runs it yet; every other choice stays.
+  const takesChat = isNewServer && Boolean(mediaModels.text) && !selectedServer(stored, 'text')
   writeStored({ version: CONFIG_VERSION, activeServerId, servers })
-  if (isNewServer) {
-    setRemoteModelSelected('text', Boolean(mediaModels.text), id)
-    setRemoteModelSelected('image', false)
-    setRemoteModelSelected('voice', false)
-    setRemoteModelSelected('transcription', false)
-  }
+  if (takesChat) setRemoteModelSelected('text', true, id)
   return getRemoteVisionServerSettings()
 }
 
