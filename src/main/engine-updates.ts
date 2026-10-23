@@ -333,7 +333,14 @@ export function createEngineUpdater(deps: EngineUpdaterDeps): EngineUpdater {
     publish()
     try {
       const index = await fetchIndex()
-      if (index?.performancePack) deps.onPerformancePack?.(index.performancePack)
+      // The CUDA pack is optional: failing to record it never stops the engines' own update.
+      if (index?.performancePack) {
+        try {
+          deps.onPerformancePack?.(index.performancePack)
+        } catch (packError) {
+          console.warn('[engine-updates] CUDA pack offer failed', packError)
+        }
+      }
       const nvidia = deps.hasNvidiaGpu() && Boolean(deps.packBin())
       const pending = index
         ? enginesToInstall(index, installedVersions(), deps.appVersion(), { nvidia })
