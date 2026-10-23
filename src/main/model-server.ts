@@ -1373,7 +1373,12 @@ async function handleKeptModelChat(
       async () => {
         const release = await keepLoadedLimiter(model).acquire()
         try {
-          const result = await callLlamaJson(body, Date.now() + 45_000, port, true)
+          const result = await callLlamaJson(
+            { ...body, model: routerModelName(model) },
+            Date.now() + 45_000,
+            port,
+            true
+          )
           activity.finish(result)
           return result
         } catch (error) {
