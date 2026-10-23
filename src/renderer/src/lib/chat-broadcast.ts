@@ -6,12 +6,19 @@ import { useSyncExternalStore } from 'react'
 
 export const SHARED_COMPOSER_SLOT_ID = 'chat-shared-composer-slot'
 
-type Listener = (from: string, text: string) => void
+/** What every pane sends: the prompt, its attachments, and whether it goes ahead of a queue. */
+export interface ChatBroadcastMessage {
+  text: string
+  sendNow?: boolean
+  attachments?: readonly unknown[]
+}
+
+type Listener = (from: string, message: ChatBroadcastMessage) => void
 
 const listeners = new Set<Listener>()
 
-export function publishChatBroadcast(from: string, text: string): void {
-  for (const listener of listeners) listener(from, text)
+export function publishChatBroadcast(from: string, message: ChatBroadcastMessage): void {
+  for (const listener of listeners) listener(from, message)
 }
 
 export function subscribeChatBroadcast(listener: Listener): () => void {

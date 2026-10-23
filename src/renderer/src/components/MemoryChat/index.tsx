@@ -3105,11 +3105,15 @@ export function MemoryChat({
   }, [split, paneKey])
   const hostComposer = (composer: React.ReactNode): React.ReactNode =>
     sharedComposerSlot ? createPortal(composer, sharedComposerSlot) : composer
-  const submitFromComposer = (): void => {
+  const sendFromComposer = (options: { sendNow?: boolean } = {}): void => {
     const text = draftStore.getSnapshot().trim()
-    if (hostsSharedComposer && text) publishChatBroadcast(paneKey, text)
-    void sendMessage()
+    // The same ready attachments sendMessage takes from this composer go to every pane.
+    const ready = attachments.filter((a) => a.status === 'ready' && (a.text || a.path))
+    if (hostsSharedComposer && (text || ready.length))
+      publishChatBroadcast(paneKey, { text, sendNow: options.sendNow, attachments: ready })
+    void sendMessage(undefined, options.sendNow ? { sendNow: true } : undefined)
   }
+  const submitFromComposer = (): void => sendFromComposer()
 
   useEffect(() => {
     const onSettled = (event: Event): void => {
@@ -3219,8 +3223,13 @@ export function MemoryChat({
   sendMessageRef.current = sendMessage
   useEffect(() => {
     if (!broadcasting) return
-    return subscribeChatBroadcast((from, text) => {
-      if (from !== paneKey) void sendMessageRef.current(text, { asUserInput: true })
+    return subscribeChatBroadcast((from, message) => {
+      if (from === paneKey) return
+      void sendMessageRef.current(message.text, {
+        asUserInput: true,
+        ...(message.sendNow ? { sendNow: true } : {}),
+        ...(message.attachments?.length ? { atts: message.attachments as Attachment[] } : {})
+      })
     })
   }, [broadcasting, paneKey])
   const godRequest = god?.request
@@ -5364,7 +5373,7 @@ export function MemoryChat({
                             )}
                             onPaste={handlePaste}
                             onSubmit={submitFromComposer}
-                            onSendNow={() => void sendMessage(undefined, { sendNow: true })}
+                            onSendNow={() => sendFromComposer({ sendNow: true })}
                             busy={Boolean(activeConversationId && generatingConvs.has(activeConversationId))}
                           />
                           </PromptInputBody>
