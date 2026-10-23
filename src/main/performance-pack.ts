@@ -91,7 +91,11 @@ function previousPack(): { bin: string; version: string } | null {
   } catch {
     return null
   }
-  for (const entry of entries.filter((name) => /^cuda-.+-[a-f0-9]{12}$/.test(name)).sort((a, b) => b.localeCompare(a))) {
+  // Newest version first, by number (12.10 after 12.9); a hash in either case names a pack.
+  const packs = entries
+    .filter((name) => /^cuda-.+-[a-f0-9]{12}$/i.test(name))
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+  for (const entry of packs) {
     const root = path.join(packsDir(), entry)
     const bin = path.join(root, 'bin')
     if (fs.existsSync(path.join(root, 'verified.sha256')) && fs.existsSync(bin)) {
