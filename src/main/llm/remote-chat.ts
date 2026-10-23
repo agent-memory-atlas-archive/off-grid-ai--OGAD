@@ -143,7 +143,10 @@ async function promptOpensThinking(
   try {
     const response = await fetch(`${remote.endpoint.replace(/\/v1\/?$/i, '')}/apply-template`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(remote.apiKey ? { Authorization: `Bearer ${remote.apiKey}` } : {})
+      },
       body: JSON.stringify({
         model: remote.model,
         messages: [{ role: 'user', content: 'Hi' }],
@@ -200,7 +203,10 @@ export async function remoteReasoningCapability(
     // keeping models loaded) answers /props per model; a single-model server ignores the query.
     const response = await fetch(
       `${remote.endpoint.replace(/\/v1\/?$/i, '')}/props?model=${encodeURIComponent(remote.model)}`,
-      { signal: AbortSignal.timeout(5_000) }
+      {
+        headers: remote.apiKey ? { Authorization: `Bearer ${remote.apiKey}` } : {},
+        signal: AbortSignal.timeout(5_000)
+      }
     )
     if (response.ok) {
       const body = (await response.json()) as {
