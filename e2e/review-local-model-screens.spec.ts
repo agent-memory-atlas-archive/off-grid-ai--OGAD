@@ -1,4 +1,5 @@
-// Review capture only (not committed): screenshots of every screen OGAD #206 changes.
+// Review capture, opt-in: screenshots of every screen OGAD #206 changes. It runs only when
+// REVIEW_OUT names the folder to write them to, so the default e2e suite never pays for it.
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -7,7 +8,8 @@ import { completeOnboarding } from './helpers/onboarding'
 import { launchOffGrid } from './helpers/launch'
 import { closeAndWait, mainWindow } from './helpers/windows'
 
-const OUT = process.env.REVIEW_OUT ?? 'e2e/screenshots/review'
+const OUT = process.env.REVIEW_OUT ?? ''
+test.skip(!OUT, 'Review capture: set REVIEW_OUT to a folder to run it.')
 let app: ElectronApplication | null = null
 let page: Page
 let profileDir: string
