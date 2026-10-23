@@ -197,6 +197,10 @@ if (packMode) {
   const asset = JSON.parse(fs.readFileSync(values.pack, 'utf8')).cuda?.[platform]
   if (
     !asset ||
+    // The desktop parser's version rule (SAFE_VERSION in src/shared/performance-pack.ts): a pack it
+    // would reject must never reach the signed index.
+    typeof asset.version !== 'string' ||
+    !/^[a-zA-Z0-9._-]+$/.test(asset.version) ||
     new URL(asset.url).origin !== 'https://runtime.getoffgridai.co' ||
     new URL(asset.url).pathname !== `/desktop/cuda/${platform}/${asset.version}.tar.gz` ||
     !/^[a-f0-9]{64}$/i.test(asset.sha256) ||
@@ -209,6 +213,9 @@ if (packMode) {
     console.log(JSON.stringify(performancePack, null, 2))
     process.exit(0)
   }
+  // Advertise only an archive that is already in the store: clients download what the index names.
+  const archiveKey = `desktop/cuda/${platform}/${asset.version}.tar.gz`
+  if (!(await exists(archiveKey))) throw new Error(`${archiveKey} is not in the store yet`)
   const indexKey = `desktop/engines/${platform}/index-v2.json`
   const index = await readIndex(indexKey)
   if (JSON.stringify(index.performancePack) === JSON.stringify(performancePack)) {
