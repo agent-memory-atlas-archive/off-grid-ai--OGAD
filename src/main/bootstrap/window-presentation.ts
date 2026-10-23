@@ -21,6 +21,10 @@
  *   OFFGRID_E2E_HEADED=1     watch it happen anyway - wins over the above
  *
  * Absent both, this returns the normal presentation, so a real user's app is untouched by any of it.
+ *
+ * macOS only. Linux and Windows CI already run on a display nobody sits at, and there a window that is
+ * never mapped gets a throttled renderer: image generation and queued-chat specs timed out under xvfb
+ * once the window stopped being shown. Hiding buys nothing on those runners and costs the specs.
  */
 export interface WindowPresentation {
   /** Call show() once the renderer has painted. */
@@ -33,8 +37,10 @@ const VISIBLE: WindowPresentation = { showWindow: true, showInDock: true }
 const HEADLESS: WindowPresentation = { showWindow: false, showInDock: false }
 
 export function resolveWindowPresentation(
-  env: Readonly<Record<string, string | undefined>>
+  env: Readonly<Record<string, string | undefined>>,
+  platform: NodeJS.Platform = process.platform
 ): WindowPresentation {
+  if (platform !== 'darwin') return VISIBLE
   if (env.OFFGRID_E2E_HEADED === '1') return VISIBLE
   return env.OFFGRID_E2E_HEADLESS === '1' ? HEADLESS : VISIBLE
 }
