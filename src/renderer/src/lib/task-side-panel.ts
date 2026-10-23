@@ -18,7 +18,48 @@ let workspaceOpen = false
 function setTaskWorkspaceOpen(open: boolean): void {
   if (workspaceOpen === open) return
   workspaceOpen = open
+  // Opening Tasks shows what ended; closing it covers what ended while it was open.
+  markTasksSeen()
   for (const listener of workspaceListeners) listener()
+}
+
+// ─── When the person last looked at their tasks ──────────────────────────────
+
+const SEEN_KEY = 'offgrid:tasks:seen-at'
+const seenListeners = new Set<() => void>()
+let seenAt: number | null = null
+
+function readSeenAt(): number {
+  if (seenAt !== null) return seenAt
+  try {
+    seenAt = Number(window.localStorage.getItem(SEEN_KEY)) || 0
+  } catch {
+    seenAt = 0
+  }
+  return seenAt
+}
+
+/** The person has looked at their tasks now: what ended before this stops asking for attention. */
+export function markTasksSeen(at = Date.now()): void {
+  seenAt = at
+  try {
+    window.localStorage.setItem(SEEN_KEY, String(at))
+  } catch {
+    // Still seen for this session.
+  }
+  for (const listener of seenListeners) listener()
+}
+
+/** When the person last opened Tasks (0 = never). */
+export function useTasksSeenAt(): number {
+  return useSyncExternalStore(
+    (listener) => {
+      seenListeners.add(listener)
+      return () => seenListeners.delete(listener)
+    },
+    readSeenAt,
+    () => 0
+  )
 }
 
 export function openTaskSidePanel(request: OpenTaskPanelRequest = {}): void {

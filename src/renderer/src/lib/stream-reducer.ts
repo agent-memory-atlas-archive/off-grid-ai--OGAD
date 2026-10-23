@@ -84,6 +84,8 @@ export function applyStreamEvent<T extends StreamedMessage>(m: T, e: StreamEvent
   if (e.type === 'reasoning') {
     return {
       ...m,
+      // The server started the turn: it no longer waits in line or for a model to load.
+      ...(isServerWait(m.activity) ? { activity: undefined } : {}),
       reasoning: (m.reasoning || '') + (e.text || ''),
       timeline: appendTimelineEvent(m.timeline, e)
     }
@@ -115,6 +117,14 @@ export function applyStreamEvent<T extends StreamedMessage>(m: T, e: StreamEvent
         }
       : {})
   }
+}
+
+function isServerWait(activity: unknown): boolean {
+  return (
+    !!activity &&
+    typeof activity === 'object' &&
+    (activity as { kind?: unknown }).kind === 'waiting_server'
+  )
 }
 
 function runningToolName(step: unknown): string | null {

@@ -137,7 +137,7 @@ async function createWindow(): Promise<void> {
     width: workAreaSize.width,
     height: workAreaSize.height,
     // The old default is now the floor: below this the dense layouts stop working.
-    minWidth: 900,
+    minWidth: 450,
     minHeight: 670,
     show: false,
     title: PRODUCT_NAME,
@@ -725,6 +725,13 @@ app.whenReady().then(async () => {
       )
     }, 15_000)
   }
+
+  // Saved model servers: read their model lists again, so what each model can do stays current.
+  setTimeout(() => {
+    void import('./vision/remote-vision-server')
+      .then((remote) => remote.refreshRemoteServerCatalogs())
+      .catch((error) => console.error('[remote] catalog refresh failed', error))
+  }, 20_000).unref()
 
   // Document caches no chat uses any more go after 30 days; well after startup, off the hot path.
   setTimeout(() => {

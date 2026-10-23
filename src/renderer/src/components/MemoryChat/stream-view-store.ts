@@ -4,9 +4,33 @@ import type { ChatMessage } from './types'
 
 const streamMessages = new Map<string, ChatMessage>()
 const streamListeners = new Map<string, Set<() => void>>()
+// The one chat view that applies each stream's events. Every view showing the chat (two split-view
+// panes on one chat) hears each event; applying them all would write every token once per view.
+const streamAppliers = new Map<string, object>()
 
 function notifyStream(streamId: string): void {
   for (const listener of streamListeners.get(streamId) ?? []) listener()
+}
+
+// Every repaint re-renders the whole answer so far (its Markdown parsed from the start), so token
+// events repaint in batches. The gap grows with the answers on screen: one chat stays smooth, and
+// six split-view panes streaming at once no longer saturate the renderer.
+const PAINT_MS_PER_STREAM = 33
+const pendingStreams = new Set<string>()
+let paintTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleNotify(streamId: string): void {
+  pendingStreams.add(streamId)
+  if (paintTimer) return
+  paintTimer = setTimeout(
+    () => {
+      paintTimer = null
+      const ids = [...pendingStreams]
+      pendingStreams.clear()
+      for (const id of ids) notifyStream(id)
+    },
+    PAINT_MS_PER_STREAM * Math.max(1, streamListeners.size)
+  )
 }
 
 export function seedStreamViewMessage(message: ChatMessage): void {
@@ -19,11 +43,18 @@ export function streamViewMessage(streamId: string): ChatMessage | undefined {
   return streamMessages.get(streamId)
 }
 
-export function applyStreamViewEvent(streamId: string, event: StreamEvent): void {
+export function applyStreamViewEvent(
+  streamId: string,
+  event: StreamEvent,
+  applier: object
+): void {
   const current = streamMessages.get(streamId)
   if (!current) return
+  const owner = streamAppliers.get(streamId)
+  if (owner && owner !== applier) return
+  if (!owner) streamAppliers.set(streamId, applier)
   streamMessages.set(streamId, applyStreamEvent(current, event) as ChatMessage)
-  notifyStream(streamId)
+  scheduleNotify(streamId)
 }
 
 export function resetStreamViewMessage(streamId: string): void {
@@ -42,6 +73,14 @@ export function resetStreamViewMessage(streamId: string): void {
 
 export function clearStreamViewMessage(streamId: string): void {
   streamMessages.delete(streamId)
+  streamAppliers.delete(streamId)
+}
+
+/** A view stopped hearing stream events: the next view that hears one applies it. */
+export function releaseStreamViewApplier(applier: object): void {
+  for (const [streamId, owner] of streamAppliers) {
+    if (owner === applier) streamAppliers.delete(streamId)
+  }
 }
 
 export function useStreamViewMessage(message: ChatMessage): ChatMessage {

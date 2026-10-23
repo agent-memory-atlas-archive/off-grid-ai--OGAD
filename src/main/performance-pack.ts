@@ -3,16 +3,16 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import type {
-  PerformancePackAsset,
-  PerformancePackManifest,
-  PerformancePackStatus
+import {
+  parsePerformancePackAsset,
+  type PerformancePackAsset,
+  type PerformancePackManifest,
+  type PerformancePackStatus
 } from '../shared/performance-pack'
 import { dataDir, resourceFile } from './runtime-env'
 import { hasWindowsNvidiaDriver, hasLinuxNvidiaDriver } from './transcription/whisper-runtime'
 
 const execFileAsync = promisify(execFile)
-const SHA256 = /^[a-f0-9]{64}$/i
 let controller: AbortController | null = null
 let task: Promise<void> | null = null
 let phase: PerformancePackStatus['phase'] | null = null
@@ -21,26 +21,43 @@ let errorMessage: string | undefined
 let installedThisSession = false
 let notify: ((status: PerformancePackStatus) => void) | undefined
 
-function manifestAsset(): PerformancePackAsset | null {
-  const manifestPath = resourceFile('performance-packs.json')
-  if (!manifestPath) return null
+// The signed engine index names the current pack; the engine updater hands it here and it is kept in
+// LIVE_FILE. Without one, the pack built into this app release is used.
+const LIVE_FILE = 'live.json'
+
+function packsDir(): string {
+  return path.join(dataDir(), 'performance-packs')
+}
+
+function packPlatform(): 'win32' | 'linux' | null {
+  return process.platform === 'win32' || process.platform === 'linux' ? process.platform : null
+}
+
+function liveAsset(): PerformancePackAsset | null {
+  const platform = packPlatform()
+  if (!platform) return null
   try {
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as Omit<PerformancePackManifest, 'schemaVersion'> & { schemaVersion?: number }
-    if (manifest.schemaVersion !== 1 || !['win32', 'linux'].includes(process.platform)) return null
-    const asset = manifest.cuda[process.platform as 'win32' | 'linux']
-    if (
-      !asset ||
-      new URL(asset.url).origin !== 'https://runtime.getoffgridai.co' ||
-      new URL(asset.url).pathname !== `/desktop/cuda/${process.platform}/${asset.version}.tar.gz` ||
-      !SHA256.test(asset.sha256) ||
-      !Number.isSafeInteger(asset.bytes) ||
-      asset.bytes <= 0 ||
-      !/^[a-zA-Z0-9._-]+$/.test(asset.version)
-    ) return null
-    return asset
+    return parsePerformancePackAsset(JSON.parse(fs.readFileSync(path.join(packsDir(), LIVE_FILE), 'utf8')), platform)
   } catch {
     return null
   }
+}
+
+function bundledAsset(): PerformancePackAsset | null {
+  const platform = packPlatform()
+  const manifestPath = resourceFile('performance-packs.json')
+  if (!platform || !manifestPath) return null
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as Omit<PerformancePackManifest, 'schemaVersion'> & { schemaVersion?: number }
+    if (manifest.schemaVersion !== 1) return null
+    return parsePerformancePackAsset(manifest.cuda[platform], platform)
+  } catch {
+    return null
+  }
+}
+
+function manifestAsset(): PerformancePackAsset | null {
+  return liveAsset() ?? bundledAsset()
 }
 
 function hasNvidiaDriver(): boolean {
@@ -50,7 +67,7 @@ function hasNvidiaDriver(): boolean {
 }
 
 function packRoot(asset: PerformancePackAsset): string {
-  return path.join(dataDir(), 'performance-packs', `cuda-${asset.version}-${asset.sha256.slice(0, 12)}`)
+  return path.join(packsDir(), `cuda-${asset.version}-${asset.sha256.slice(0, 12)}`)
 }
 
 function installedBin(asset: PerformancePackAsset): string | null {
@@ -66,19 +83,85 @@ function installedBin(asset: PerformancePackAsset): string | null {
   }
 }
 
+/** A verified pack older than the current one, which keeps working until the current one is in. */
+function previousPack(): { bin: string; version: string } | null {
+  let entries: string[]
+  try {
+    entries = fs.readdirSync(packsDir())
+  } catch {
+    return null
+  }
+  // Newest version first, by number (12.10 after 12.9); a hash in either case names a pack.
+  const packs = entries
+    .filter((name) => /^cuda-.+-[a-f0-9]{12}$/i.test(name))
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+  for (const entry of packs) {
+    const root = path.join(packsDir(), entry)
+    const bin = path.join(root, 'bin')
+    if (fs.existsSync(path.join(root, 'verified.sha256')) && fs.existsSync(bin)) {
+      return { bin, version: entry.slice('cuda-'.length, -13) }
+    }
+  }
+  return null
+}
+
+function activeBin(asset: PerformancePackAsset | null): string | null {
+  return (asset && installedBin(asset)) ?? previousPack()?.bin ?? null
+}
+
+/** Delete packs other than the active one and the current one's unfinished download. Runs before any
+ *  engine starts, so no file in them is in use. */
+function pruneOldPacks(asset: PerformancePackAsset | null, bin: string | null): void {
+  const keep = [bin ? path.basename(path.dirname(bin)) : null, asset ? path.basename(packRoot(asset)) : null]
+  let entries: string[]
+  try {
+    entries = fs.readdirSync(packsDir())
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith('cuda-') || keep.some((name) => name && (entry === name || entry.startsWith(`${name}.`)))) continue
+    try {
+      // The marker goes first, so a folder a locked file keeps half-deleted is never used again.
+      fs.rmSync(path.join(packsDir(), entry, 'verified.sha256'), { force: true })
+      fs.rmSync(path.join(packsDir(), entry), { recursive: true, force: true })
+    } catch (error) {
+      console.warn('[performance-pack] could not remove', entry, error)
+    }
+  }
+}
+
 /** Run once during main-process setup and after installation. */
 export function activateInstalledPerformancePack(): void {
   const asset = manifestAsset()
-  const bin = asset && installedBin(asset)
+  const bin = activeBin(asset)
   if (bin) process.env.OFFGRID_PERFORMANCE_PACK_BIN = bin
   else delete process.env.OFFGRID_PERFORMANCE_PACK_BIN
+  if (task === null) pruneOldPacks(asset, bin)
+}
+
+/**
+ * Record the pack the signed engine index names. A machine that already has an older pack gets the
+ * new one in the background and keeps the old one until it is in; a machine without one still
+ * chooses to download it.
+ */
+export function offerPerformancePack(asset: PerformancePackAsset): void {
+  if (!packPlatform()) return
+  if (liveAsset()?.sha256 !== asset.sha256) {
+    fs.mkdirSync(packsDir(), { recursive: true })
+    const file = path.join(packsDir(), LIVE_FILE)
+    fs.writeFileSync(`${file}.partial`, `${JSON.stringify(asset, null, 2)}\n`)
+    fs.renameSync(`${file}.partial`, file)
+    publish()
+  }
+  if (!installedBin(asset) && previousPack() && hasNvidiaDriver()) startPerformancePack()
 }
 
 /** ONNX loads CUDA with dlopen, so Linux must see these libraries at process start. */
 export function prepareInstalledOnnxCudaLibraries(): boolean {
   if (process.platform !== 'linux') return false
   const asset = manifestAsset()
-  const bin = asset && installedBin(asset)
+  const bin = activeBin(asset)
   if (!bin) return false
   const libraries = path.join(bin, 'onnx-cuda')
   if (!fs.existsSync(path.join(libraries, 'libcublasLt.so.13')) ||
@@ -99,6 +182,9 @@ export function performancePackStatus(): PerformancePackStatus {
       version: asset.version, restartRequired: installedThisSession
     }
   }
+  // The newer pack downloads in the background while the older one keeps CUDA running.
+  const previous = previousPack()
+  if (previous) return { phase: 'installed', bytes: 0, downloadedBytes: 0, version: previous.version }
   const current = phase ?? 'available'
   return {
     phase: current,

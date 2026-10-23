@@ -6,7 +6,8 @@
 // every few hours, downloads only the files it does not already have, starts the new engine once
 // to prove it runs, and then makes it the first engine searched. The previous release stays on
 // disk, and the CUDA pack's and the app's own engines stay behind both, so a launch that fails
-// falls back. CUDA engines install only on a machine with an NVIDIA GPU and the CUDA pack.
+// falls back. CUDA engines install only on a machine with an NVIDIA GPU and the CUDA pack. The index
+// also names the current CUDA pack, which is handed to the pack's own installer.
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -26,6 +27,7 @@ import {
   type EngineRelease,
   type EngineUpdateStatus
 } from '../shared/engine-updates'
+import type { PerformancePackAsset } from '../shared/performance-pack'
 import { engineSpawnEnv } from './llm/spawn-env'
 
 const execFileAsync = promisify(execFile)
@@ -47,6 +49,8 @@ export interface EngineUpdaterDeps {
   hasNvidiaGpu: () => boolean
   /** The installed CUDA pack's bin folder, whose identical files are reused instead of downloaded. */
   packBin: () => string | null
+  /** Receives the CUDA pack the index names. */
+  onPerformancePack?: (asset: PerformancePackAsset) => void
   fetch?: typeof fetch
   indexUrl?: (platform: EnginePlatform) => string
   fileUrl?: (sha256: string) => string
@@ -329,6 +333,14 @@ export function createEngineUpdater(deps: EngineUpdaterDeps): EngineUpdater {
     publish()
     try {
       const index = await fetchIndex()
+      // The CUDA pack is optional: failing to record it never stops the engines' own update.
+      if (index?.performancePack) {
+        try {
+          deps.onPerformancePack?.(index.performancePack)
+        } catch (packError) {
+          console.warn('[engine-updates] CUDA pack offer failed', packError)
+        }
+      }
       const nvidia = deps.hasNvidiaGpu() && Boolean(deps.packBin())
       const pending = index
         ? enginesToInstall(index, installedVersions(), deps.appVersion(), { nvidia })

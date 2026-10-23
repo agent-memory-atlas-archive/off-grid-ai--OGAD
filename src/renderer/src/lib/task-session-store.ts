@@ -211,15 +211,22 @@ export function guidanceTaskForJourney<
   )
 }
 
-export function taskAttentionCount(tasks: readonly TaskSession[]): number {
+/**
+ * Tasks that need the person: every live one (running, paused, waiting, reconnecting), and a failed
+ * or stopped one only until they have seen it, i.e. it ended after they last opened Tasks.
+ */
+export function taskAttentionCount(
+  tasks: readonly Pick<TaskSession, 'status' | 'finishedAt' | 'updatedAt'>[],
+  seenAt = 0
+): number {
   return tasks.filter(
     (task) =>
       task.status === 'running' ||
       task.status === 'paused' ||
       task.status === 'waiting' ||
       task.status === 'reconnecting' ||
-      task.status === 'failed' ||
-      task.status === 'stopped'
+      ((task.status === 'failed' || task.status === 'stopped') &&
+        (task.finishedAt ?? task.updatedAt) > seenAt)
   ).length
 }
 

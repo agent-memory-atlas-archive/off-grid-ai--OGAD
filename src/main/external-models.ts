@@ -11,9 +11,10 @@ const knownPackages = CATALOG.filter((entry) =>
 )
 
 // These weights use other bundled runtimes. A GGUF header alone does not make
-// an image, video, audio, or embedding weight loadable by llama-server.
+// an image, video, audio, or embedding weight loadable by llama-server. A Decider
+// is a Computer Use decision model: it answers with typed actions, not chat.
 const nonChatWeightName =
-  /(?:qwen[-_]?image|z[-_]?image|flux|stable[-_]?diffusion|sd3|wan[-_]?2|ltx[-_]?video|hunyuan[-_]?video|whisper|piper|kokoro|mini[-_]?lm|(?:^|[-_])bge[-_])/i
+  /(?:qwen[-_]?image|z[-_]?image|flux|stable[-_]?diffusion|sd3|wan[-_]?2|ltx[-_]?video|hunyuan[-_]?video|whisper|piper|kokoro|mini[-_]?lm|(?:^|[-_])bge[-_]|(?:^|[-_])decider[-_])/i
 
 function matchingPackage(file: string): (typeof CATALOG)[number] | undefined {
   const name = path.basename(file).toLowerCase()
@@ -123,6 +124,8 @@ function walk(root: string, depth: number, visit: (file: string) => void): void 
     return
   }
   for (const entry of entries) {
+    // Hidden folders hold app internals, such as half-finished device transfers.
+    if (entry.name.startsWith('.')) continue
     const file = path.join(root, entry.name)
     if (entry.isDirectory()) walk(file, depth - 1, visit)
     else if (entry.isFile()) visit(file)

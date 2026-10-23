@@ -19,6 +19,22 @@ import {
 } from '../sse-stream'
 
 describe('parseSseLine', () => {
+  it("reads a gateway's wait status from a frame with no choices", () => {
+    expect(
+      parseSseLine(
+        'data: {"object":"chat.completion.chunk","choices":[],"offgrid_status":{"phase":"queued","ahead":2}}'
+      )
+    ).toEqual({ delta: {}, finishReason: null, status: { phase: 'queued', ahead: 2 } })
+  })
+
+  it('reads an error the server reports inside the stream', () => {
+    expect(parseSseLine('data: {"error":{"message":"Model could not be selected."}}')).toEqual({
+      delta: {},
+      finishReason: null,
+      error: 'Model could not be selected.'
+    })
+  })
+
   it('parses a normal content delta frame', () => {
     const d = parseSseLine('data: {"choices":[{"delta":{"content":"hi"}}]}')
     expect(d).toEqual({ delta: { content: 'hi' }, finishReason: null })
@@ -87,6 +103,15 @@ function runSplit(chunks: string[]): { events: StreamEvent[]; answer: string } {
 }
 
 describe('createThinkSplitter', () => {
+  it('finds a think tag split across chunks', () => {
+    const { events, answer } = runSplit(['<thi', 'nk>reasoning</thi', 'nk>answer'])
+    expect(events).toEqual([
+      { text: 'reasoning', kind: 'reasoning' },
+      { text: 'answer', kind: 'content' }
+    ])
+    expect(answer).toBe('answer')
+  })
+
   it('routes plain content (no think tags) entirely to content and accumulates it', () => {
     const { events, answer } = runSplit(['Hello ', 'world'])
     expect(events).toEqual([

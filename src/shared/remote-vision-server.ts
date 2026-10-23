@@ -1,4 +1,4 @@
-import { describeModel, remoteServerDisplayName } from '@offgrid/models'
+import { describeModel, isGrounderModel, remoteServerDisplayName } from '@offgrid/models'
 
 export const REMOTE_VISION_PROVIDERS = [
   'local',
@@ -19,10 +19,35 @@ export interface RemoteVisionCatalogModel {
   id: string
   name: string
   kind: RemoteVisionModality
+  /** A Computer Use specialist's role, as an Off Grid gateway declares it (its kind
+   *  `grounding_specialist` or `decision_specialist`). */
+  role?: RemoteVisionTaskRole
   inputModalities?: string[]
   outputModalities?: string[]
   supportedParameters?: string[]
   reasoning?: boolean
+}
+
+/**
+ * The Computer Use role a remote server's model plays, or null for a chat model. A server lists its
+ * Computer Use specialists beside its chat models. An Off Grid gateway declares each one's role;
+ * for other servers a decider produces decisions and a grounder is named by the shared grounder rule.
+ */
+export function remoteCatalogRole(
+  model: Pick<RemoteVisionCatalogModel, 'id' | 'role' | 'outputModalities'>
+): RemoteVisionTaskRole | null {
+  if (model.role) return model.role
+  // Servers that do not declare roles (other apps, catalogs saved before roles were declared).
+  if (model.outputModalities?.includes('decisions')) return 'decision'
+  if (isGrounderModel(model.id)) return 'grounding'
+  return null
+}
+
+/** A remote model a person can chat with: a text model that is not a Computer Use specialist. */
+export function isRemoteChatModel(
+  model: Pick<RemoteVisionCatalogModel, 'id' | 'kind' | 'role' | 'outputModalities'>
+): boolean {
+  return model.kind === 'text' && remoteCatalogRole(model) === null
 }
 
 export interface RemoteVisionSavedServer {
@@ -170,6 +195,8 @@ export interface RemoteVisionServerUpdate {
   apiKey?: string
   clearApiKey?: boolean
   screenFramesAllowed?: boolean
+  /** This server's own on/off; off keeps it saved and leaves the other servers alone. */
+  enabled?: boolean
 }
 
 export interface RemoteVisionConnectionResult {

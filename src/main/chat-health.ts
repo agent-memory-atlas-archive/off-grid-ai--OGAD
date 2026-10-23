@@ -23,12 +23,15 @@ export interface ChatHealthInputs {
   /** Human reason the server failed or stopped unexpectedly, if any. Without one, a stopped
    *  server is simply not loaded yet: it loads on first use. */
   lastError?: string | null
+  /** Chat runs on a remote server: its model and server, shown instead of this Mac's engine. */
+  remote?: string | null
 }
 
 export function decideChatStatus(i: ChatHealthInputs): {
   status: ChatHealthStatus
   detail?: string
 } {
+  if (i.remote) return { status: 'ready', detail: i.remote }
   if (i.healthy) return { status: 'ready', detail: i.activeModel ?? undefined }
   if (!i.modelsExist) return { status: 'not_installed', detail: 'No model installed' }
   // Alive-but-loading must be checked BEFORE "down" — otherwise the warm-up

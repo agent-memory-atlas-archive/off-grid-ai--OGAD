@@ -90,11 +90,25 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
       focus: () => textareaRef.current?.focus()
     }))
 
+    // Fit the box to its text. A hidden box (a split pane while one input serves every pane) has
+    // no layout and would measure 0, so it is measured again once it is shown or resized.
     useEffect(() => {
       const textarea = textareaRef.current
       if (!textarea) return
-      textarea.style.height = 'auto'
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 208)}px`
+      const fit = (): void => {
+        if (textarea.clientWidth === 0) return
+        textarea.style.height = 'auto'
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 208)}px`
+      }
+      fit()
+      let width = textarea.clientWidth
+      const observer = new ResizeObserver(() => {
+        if (textarea.clientWidth === width) return
+        width = textarea.clientWidth
+        fit()
+      })
+      observer.observe(textarea)
+      return () => observer.disconnect()
     }, [value])
 
     const completeSkill = (skill: SkillOption): void => {
@@ -104,6 +118,18 @@ export const ChatDraftInput = forwardRef<ChatDraftInputHandle, ChatDraftInputPro
 
     const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
       if (event.nativeEvent.isComposing || event.keyCode === 229) return
+      // ⌘⇧V pastes plain text into the box, however long, instead of attaching it as
+      // "Pasted text". insertText keeps it on the undo stack like typing.
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'v') {
+        event.preventDefault()
+        void window.api
+          .readClipboardText()
+          .then((text) => {
+            if (text) document.execCommand('insertText', false, text)
+          })
+          .catch(() => undefined)
+        return
+      }
       // Tab on an offered suggestion and Escape are TextareaInlineCompletion's (onAccept/onDismiss).
       if (matches.length > 0 && !event.metaKey && !event.ctrlKey) {
         const query = value.slice(value.lastIndexOf('/') + 1).toLowerCase()

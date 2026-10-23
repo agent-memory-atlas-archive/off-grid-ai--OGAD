@@ -19,8 +19,6 @@ import {
 } from './models/download-queue'
 import {
   getAllActiveModals,
-  remoteModelSelected,
-  remoteVoiceSelected,
   setActiveModal as setModal,
   setRemoteModelSelected,
   type Modality
@@ -78,7 +76,8 @@ import {
   activateRemoteVisionModel,
   activateRemoteVisionMediaModel,
   deactivateRemoteVisionMediaModel,
-  getRemoteVisionServerSettings
+  getRemoteVisionServerSettings,
+  remoteServerIdFor
 } from './vision/remote-vision-server'
 import { getComputerUseSettings, setComputerUseSettings } from './computer-use-settings'
 import { getWebUseSettings, setWebUseSettings } from './web-use-settings'
@@ -1669,39 +1668,29 @@ async function deleteModelFiles(modelId: string): Promise<DeleteModelResult> {
 
 type LlamaModelKindGate = (kind: string) => boolean
 
-async function setActiveLlamaModel(
+type LlamaModelFiles = { id: string; primary: string; mmproj: string | null }
+
+/** The files an installed llama.cpp model loads from (file names in the models directory, or an
+ *  imported model's own paths), or why it cannot load as `expectedKind`. Changes nothing. */
+async function resolveLlamaModelFiles(
   modelId: string,
   acceptsKind: LlamaModelKindGate,
-  expectedKind: string,
-  runtimeOnly = false
-): Promise<{ success: boolean; error?: string }> {
-  const activate = (model: { id: string; primary: string; mmproj: string | null }): void => {
-    if (runtimeOnly) {
-      llm.useRuntimeModel(model)
-      return
-    }
-    requireModelStorage()
-    fs.writeFileSync(activeModelFile(), JSON.stringify(model, null, 2))
-    llm.restoreSelectedModel()
-  }
+  expectedKind: string
+): Promise<{ files: LlamaModelFiles } | { error: string }> {
   // Imported local model: resolve from the local registry (not the catalog).
   if (modelId.startsWith('local:') || modelId.startsWith('external:')) {
     const lm = getLocalModels().find((m) => m.id === modelId)
-    if (!lm) return { success: false, error: 'unknown local model' }
+    if (!lm) return { error: 'unknown local model' }
     if (!acceptsKind(lm.kind)) {
-      return { success: false, error: `${lm.kind} models are not loadable as ${expectedKind}` }
+      return { error: `${lm.kind} models are not loadable as ${expectedKind}` }
     }
-    activate({ id: modelId, primary: lm.primary, mmproj: lm.mmproj ?? null })
-    return { success: true }
+    return { files: { id: modelId, primary: lm.primary, mmproj: lm.mmproj ?? null } }
   }
   const { resolveHuggingFaceModel } = await import('@offgrid/models')
   const CATALOG = await desktopCatalog()
   const catalogEntry = CATALOG.find((model) => model.id === modelId)
   if (catalogEntry?.availability === 'coming_soon') {
-    return {
-      success: false,
-      error: catalogEntry.availabilityNote ?? 'This model is coming soon.'
-    }
+    return { error: catalogEntry.availabilityNote ?? 'This model is coming soon.' }
   }
   const dir = llm.getModelsDir()
   const downloaded = reconcileDownloadedModelRegistry(dir, CATALOG as unknown as CatalogEntry[])
@@ -1716,27 +1705,60 @@ async function setActiveLlamaModel(
       downloaded.filter((model) => model.familyId === modelId).at(-1))
   if (transferred) {
     if (!acceptsKind(transferred.kind)) {
-      return {
-        success: false,
-        error: `${transferred.kind} models are not loadable as ${expectedKind}`
-      }
+      return { error: `${transferred.kind} models are not loadable as ${expectedKind}` }
     }
     const primary = downloadedPrimary(transferred)
-    if (!primary) return { success: false, error: 'transferred model has no primary file' }
+    if (!primary) return { error: 'transferred model has no primary file' }
     const mmproj = downloadedProjector(transferred) ?? null
-    activate({ id: transferred.id, primary, mmproj })
-    return { success: true }
+    return { files: { id: transferred.id, primary, mmproj } }
   }
   const entry = catalogEntry ?? (await resolveHuggingFaceModel(modelId))
-  if (!entry) return { success: false, error: 'unknown model' }
+  if (!entry) return { error: 'unknown model' }
   if (!acceptsKind(entry.kind)) {
-    return { success: false, error: `${entry.kind} models are not loadable as ${expectedKind}` }
+    return { error: `${entry.kind} models are not loadable as ${expectedKind}` }
   }
   const primary = primaryFileName(entry as unknown as CatalogEntry)
-  if (!primary) return { success: false, error: 'model has no primary file' }
+  if (!primary) return { error: 'model has no primary file' }
   const mmproj = entry.files.find((f) => f.role === 'mmproj')?.name ?? null
-  activate({ id: modelId, primary, mmproj })
+  return { files: { id: modelId, primary, mmproj } }
+}
+
+/** The files an installed chat model (text or vision) loads from, without selecting it. */
+export function resolveChatModelFiles(
+  modelId: string
+): Promise<{ files: LlamaModelFiles } | { error: string }> {
+  return resolveLlamaModelFiles(modelId, isChatLoadable, 'the chat LLM')
+}
+
+async function setActiveLlamaModel(
+  modelId: string,
+  acceptsKind: LlamaModelKindGate,
+  expectedKind: string,
+  runtimeOnly = false
+): Promise<{ success: boolean; error?: string }> {
+  const resolved = await resolveLlamaModelFiles(modelId, acceptsKind, expectedKind)
+  if ('error' in resolved) return { success: false, error: resolved.error }
+  if (runtimeOnly) {
+    llm.useRuntimeModel(resolved.files)
+  } else {
+    requireModelStorage()
+    fs.writeFileSync(activeModelFile(), JSON.stringify(resolved.files, null, 2))
+    llm.restoreSelectedModel()
+  }
   return { success: true }
+}
+
+/**
+ * Load a local chat model a gateway request names (a phone on this Mac's server). It becomes the
+ * local chat model, but a person who chose a remote server for chat stays on it: only they move
+ * chat between local and remote.
+ */
+export async function loadLocalChatModelForRequest(
+  modelId: string
+): Promise<{ success: boolean; error?: string }> {
+  const result = await setActiveLlamaModel(modelId, isChatLoadable, 'the chat LLM')
+  settingsChanged()
+  return result
 }
 
 /** Set the chat LLM (text/vision). Writes active-model.json + reloads llama-server. */
@@ -1823,7 +1845,7 @@ export async function reconcileActiveModelProjector(): Promise<boolean> {
 export async function getActiveModelIds(): Promise<string[]> {
   const info = await getStorageInfo()
   const settings = getRemoteVisionServerSettings()
-  const remote = settings.servers.find((server) => server.id === settings.activeServerId)
+  const textOnRemote = Boolean(remoteServerIdFor('text'))
   const activeChatId = getActiveModel()
   // Computer Use models are active by the role Tasks gives them (below), not by a pick of their
   // own: the Models screens then show exactly what Tasks > Computer Use and Web Use will run.
@@ -1832,21 +1854,22 @@ export async function getActiveModelIds(): Promise<string[]> {
       (model) =>
         model.active &&
         model.kind !== 'computer_use' &&
-        (!remote || !remoteModelSelected('text') || model.id !== activeChatId)
+        (!textOnRemote || model.id !== activeChatId)
     )
     .map((model) => model.id)
-  const remoteIds =
-    remote && remote.enabled !== false
-      ? remoteVisionInventoryModels([remote])
-          .filter(
-            (model) =>
-              model.kind !== 'computer_use' &&
-              remoteModelSelected(
-                model.kind === 'vision' ? 'text' : model.kind === 'speech' ? 'voice' : model.kind
-              )
-          )
+  // Each modality's model, from the server that modality runs on.
+  const remoteIds = settings.servers.flatMap((server) =>
+    server.enabled === false
+      ? []
+      : remoteVisionInventoryModels([server])
+          .filter((model) => {
+            if (model.kind === 'computer_use') return false
+            const modality =
+              model.kind === 'vision' ? 'text' : model.kind === 'speech' ? 'voice' : model.kind
+            return remoteServerIdFor(modality) === server.id
+          })
           .map((model) => model.id)
-      : []
+  )
   return [...new Set([...localIds, ...remoteIds, ...(await taskRoleModelIds())])]
 }
 
@@ -2024,22 +2047,19 @@ export async function setActiveModalChoice(
 
 export function getActiveModalities(): { text: string | null } & Record<Modality, string | null> {
   const settings = getRemoteVisionServerSettings()
-  const remote = settings.servers.find(
-    (server) => server.id === settings.activeServerId && server.enabled !== false
-  )
+  // Each modality's model comes from the server that modality runs on, or is local.
   const remoteId = (modality: 'text' | 'image' | 'transcription' | 'voice'): string | null => {
+    const remote = settings.servers.find((server) => server.id === remoteServerIdFor(modality))
     const model =
       remote?.mediaModels?.[modality] ?? (modality === 'text' ? remote?.model : undefined)
     return remote && model ? remoteVisionModelId(remote.id, model) : null
   }
   return {
-    text: (remoteModelSelected('text') ? remoteId('text') : null) ?? getActiveModel(),
+    text: remoteId('text') ?? getActiveModel(),
     ...getAllActiveModals(),
-    image: (remoteModelSelected('image') ? remoteId('image') : null) ?? getAllActiveModals().image,
-    speech: (remoteVoiceSelected() ? remoteId('voice') : null) ?? getAllActiveModals().speech,
-    transcription:
-      (remoteModelSelected('transcription') ? remoteId('transcription') : null) ??
-      getAllActiveModals().transcription
+    image: remoteId('image') ?? getAllActiveModals().image,
+    speech: remoteId('voice') ?? getAllActiveModals().speech,
+    transcription: remoteId('transcription') ?? getAllActiveModals().transcription
   }
 }
 

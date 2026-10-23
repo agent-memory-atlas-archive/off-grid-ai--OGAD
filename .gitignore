@@ -58,7 +58,8 @@ resources/bin/location.node
 # App registration credentials (scripts/oauth-build-config.mjs)
 .env.keygen
 test-results/
-outputs/video-verification/
+# Working notes, research and data from sessions — kept on disk, never in git
+outputs/
 
 # Marketing material (dev.to drafts, emails, assets) — publishing, not app code
 /marketing/

@@ -172,7 +172,11 @@ describe('model gateway chat streaming', () => {
         endpoint: 'https://openrouter.ai/api/v1',
         model: modelId,
         serverId,
-        name: 'OpenRouter'
+        name: 'OpenRouter',
+        // What the server's model list said: the gateway lists vision only from it.
+        modelCatalog: [
+          { id: modelId, name: modelId, kind: 'text', inputModalities: ['text', 'image'] }
+        ]
       })
 
       const activeBefore = await fetch(`http://127.0.0.1:${gatewayPort}/v1/models/active`)

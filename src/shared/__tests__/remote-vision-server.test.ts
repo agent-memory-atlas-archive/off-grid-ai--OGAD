@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isRemoteChatModel,
+  remoteCatalogRole,
   parseRemoteVisionModelId,
   remoteVisionApiBase,
   remoteVisionEndpoint,
@@ -145,5 +147,45 @@ describe('remote model display names', () => {
     expect(model.name).toBe(expected)
     expect(model.remoteModelId).toBe(id)
     expect(parseRemoteVisionModelId(model.id)).toEqual({ serverId: 'server', modelId: id })
+  })
+})
+
+describe('isRemoteChatModel', () => {
+  // As an Off Grid gateway lists them: its chat model, a grounder labelled "vision" and a decider
+  // labelled "chat", which the import reads as text alike.
+  const qwen = { id: 'Qwen3.8-27B-UD-Q4_K_M.gguf', name: 'Qwen3.8 27B', kind: 'text' as const }
+  const uiMate = {
+    id: 'bartowski/tencent_UI-Mate-27B-GGUF',
+    name: 'UI-Mate-27B',
+    kind: 'text' as const,
+    inputModalities: ['text', 'image'],
+    outputModalities: ['text']
+  }
+  const kev = {
+    id: 'jaredpalmer/kev-4b',
+    name: 'Kev 4B',
+    kind: 'text' as const,
+    inputModalities: ['text'],
+    outputModalities: ['decisions']
+  }
+
+  it('offers only chat models for chat, never a grounder or a decider', () => {
+    expect([qwen, uiMate, kev].filter(isRemoteChatModel)).toEqual([qwen])
+  })
+
+  it('names the role each Computer Use specialist plays', () => {
+    expect(remoteCatalogRole(uiMate)).toBe('grounding')
+    expect(remoteCatalogRole(kev)).toBe('decision')
+    expect(remoteCatalogRole(qwen)).toBeNull()
+  })
+
+  it('trusts the role an Off Grid gateway declares, whatever the model is named', () => {
+    const declared = { id: 'acme/clicker-7b', kind: 'text' as const, role: 'grounding' as const }
+    expect(isRemoteChatModel(declared)).toBe(false)
+    expect(remoteCatalogRole(declared)).toBe('grounding')
+  })
+
+  it('keeps image, voice and transcription models out of chat', () => {
+    expect(isRemoteChatModel({ id: 'qwen_image_2.1-Q4_K.gguf', kind: 'image' })).toBe(false)
   })
 })

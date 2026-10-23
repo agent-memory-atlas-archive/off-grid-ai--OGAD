@@ -5,6 +5,11 @@ import { CommandPalette } from './components/CommandPalette'
 import logo from './assets/logo.png'
 import { useMeetingRecorder } from './useMeetingRecorder'
 import { MemoryChat } from './components/MemoryChat'
+import {
+  ACTIVE_CHAT_TAB_KEY,
+  OPEN_CHAT_TABS_KEY,
+  readOpenChatTabs
+} from './components/MemoryChat/utlis'
 import type { DemoPreset } from './components/explore/presetCatalog'
 import { Settings, SETTINGS_DESTINATIONS } from './components/Settings'
 import { SettingsPanel } from './components/SettingsPanel'
@@ -74,12 +79,14 @@ import { NavHighlight, ScreenTransition } from '@offgrid/operator-ui/operator/ex
 import { SidebarNavigationMenu } from './components/navigation/SidebarNavigationMenu'
 import { StartupNotice } from './components/StartupNotice'
 import { CHAT_VIEW, setCurrentView } from './lib/current-view'
+import { SHARED_COMPOSER_SLOT_ID } from './lib/chat-broadcast'
 import {
   OPEN_ACTIVE_MODELS_PANEL_EVENT,
   OPEN_MODEL_SETTINGS_PANEL_EVENT,
   type ModelSettingsPanelTab
 } from './lib/model-settings-panel'
 import { callHook } from './bootstrap/hookRegistry'
+import { markTasksSeen } from './lib/task-side-panel'
 import { internalTabLocation, internalTabPath, isInternalTabView } from './lib/internal-tab-route'
 import {
   NOTIFICATION_OPEN_TARGET_CHANNEL,
@@ -340,6 +347,12 @@ function AppContent(): React.JSX.Element {
 
   // Open on Day only where the catalog supports it.
   const [viewMode, commitViewMode] = useState<ViewMode>(landingView(currentPlatform(), isPro))
+  // Visiting the Tasks screen counts as seeing them, on the way in and on the way out.
+  useEffect(() => {
+    if (viewMode !== 'tasks') return
+    markTasksSeen()
+    return () => markTasksSeen()
+  }, [viewMode])
   const [settingsSection, setSettingsSection] = useState<string | null>(null)
   const [settingsNavigationKey, setSettingsNavigationKey] = useState(0)
   const [navigationSubroute, setNavigationSubroute] = useState<string | null>(null)
@@ -353,6 +366,19 @@ function AppContent(): React.JSX.Element {
   // we drive the install explicitly instead of waiting for one.
   const [updateReady, setUpdateReady] = useState<string | null>(null)
   const [installing, setInstalling] = useState(false)
+  // A newer llama.cpp is installed for the gateway's kept models; they move on "Restart models".
+  const [keptEngineReady, setKeptEngineReady] = useState(false)
+  const [restartingKept, setRestartingKept] = useState(false)
+  useEffect(() => {
+    // Checked on load too: an engine that installed before this window opened still shows.
+    window.api
+      .keepLoadedEngineUpdateReady()
+      .then((ready: boolean) => {
+        if (ready) setKeptEngineReady(true)
+      })
+      .catch(() => {})
+    return window.api.onKeepLoadedEngineUpdate(() => setKeptEngineReady(true))
+  }, [])
   const [selectedEntityId, setSelectedEntityId] = useState<number | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -372,6 +398,50 @@ function AppContent(): React.JSX.Element {
   // When set, the Actions to-do list opens filtered to this entity (from clicking
   // a person chip on a to-do — "all to-dos for Ali").
   const [actionsEntity, setActionsEntity] = useState<{ id: number; name: string } | null>(null)
+  // Chat's split view: one pane per open tab (up to six), each keeping its own tabs.
+  const [chatPanes, setChatPanes] = useState<string[] | null>(null)
+  // On by default: the first question goes to every pane's model; follow-ups can go to one pane.
+  const [chatBroadcast, setChatBroadcast] = useState(true)
+  const toggleChatBroadcast = useCallback(() => setChatBroadcast((on) => !on), [])
+  // Add or remove the last pane (two to six). A new pane starts on a new chat; a pane's model choice is kept.
+  const setChatPaneCount = useCallback((count: number) => {
+    setChatPanes((current) => {
+      if (!current) return current
+      const next = Math.min(6, Math.max(2, count))
+      if (next <= current.length) return current.slice(0, next)
+      for (let index = current.length; index < next; index++) {
+        try {
+          window.localStorage.setItem(`${OPEN_CHAT_TABS_KEY}:pane-${index}`, '[]')
+          window.localStorage.removeItem(`${ACTIVE_CHAT_TAB_KEY}:pane-${index}`)
+        } catch {
+          // The pane still opens, on a new chat.
+        }
+      }
+      return [...current, ...Array<string>(next - current.length).fill('')]
+    })
+  }, [])
+  const toggleChatSplit = useCallback(() => {
+    setChatPanes((current) => {
+      if (current) return null
+      const tabs = readOpenChatTabs().slice(0, 6)
+      // At least two panes: with fewer open tabs, the rest start on a new chat.
+      const panes = [...tabs, '', ''].slice(0, Math.max(2, tabs.length))
+      panes.forEach((conversationId, index) => {
+        try {
+          window.localStorage.setItem(
+            `${OPEN_CHAT_TABS_KEY}:pane-${index}`,
+            JSON.stringify(conversationId ? [conversationId] : [])
+          )
+          if (conversationId)
+            window.localStorage.setItem(`${ACTIVE_CHAT_TAB_KEY}:pane-${index}`, conversationId)
+          else window.localStorage.removeItem(`${ACTIVE_CHAT_TAB_KEY}:pane-${index}`)
+        } catch {
+          // Each pane still opens, on a new chat.
+        }
+      })
+      return panes
+    })
+  }, [])
   // Target chat to open in the main Chat screen (from the Projects tab): an
   // existing conversation, or a request to start a new chat scoped to a project.
   const [chatTarget, setChatTarget] = useState<{
@@ -1180,37 +1250,76 @@ function AppContent(): React.JSX.Element {
       {/* Update ready — a new version downloaded and is staged. The button drives
           the install (quit + swap + relaunch); a plain quit/force-kill would leave
           it unapplied. */}
-      {updateReady && (
-        <div className="absolute right-4 top-4 z-50 flex items-center gap-3 rounded-md border border-green-500/40 bg-neutral-900/95 px-3.5 py-2 font-mono text-xs text-neutral-200 shadow-xl backdrop-blur">
-          <IconDownload className="h-4 w-4 text-green-500" />
-          <span>Update {updateReady} is ready</span>
-          <button
-            onClick={async () => {
-              setInstalling(true)
-              try {
-                await window.api.installUpdate()
-              } catch {
-                // quitAndInstall normally never returns (the app exits). If it
-                // rejects, unlock the button so the user can retry.
-                setInstalling(false)
-                addNotification({
-                  type: 'info',
-                  title: 'Update restart failed',
-                  message: 'Try again from the update banner.'
-                })
-              }
-            }}
-            disabled={installing}
-            className="flex items-center gap-1.5 rounded-sm border border-green-500/50 bg-green-500/10 px-2.5 py-1 text-emerald-400 hover:bg-green-500/20 disabled:opacity-60"
-          >
-            {installing ? (
-              <>
-                <IconLoader2 className="h-3.5 w-3.5 animate-spin" /> Restarting…
-              </>
-            ) : (
-              'Restart to update'
-            )}
-          </button>
+      {(updateReady || keptEngineReady) && (
+        <div className="absolute right-4 top-4 z-50 flex flex-col items-end gap-2">
+          {updateReady && (
+            <div className="flex items-center gap-3 rounded-md border border-green-500/40 bg-neutral-900/95 px-3.5 py-2 font-mono text-xs text-neutral-200 shadow-xl backdrop-blur">
+              <IconDownload className="h-4 w-4 text-green-500" />
+              <span>Update {updateReady} is ready</span>
+              <button
+                onClick={async () => {
+                  setInstalling(true)
+                  try {
+                    await window.api.installUpdate()
+                  } catch {
+                    // quitAndInstall normally never returns (the app exits). If it
+                    // rejects, unlock the button so the user can retry.
+                    setInstalling(false)
+                    addNotification({
+                      type: 'info',
+                      title: 'Update restart failed',
+                      message: 'Try again from the update banner.'
+                    })
+                  }
+                }}
+                disabled={installing}
+                className="flex items-center gap-1.5 rounded-sm border border-green-500/50 bg-green-500/10 px-2.5 py-1 text-emerald-400 hover:bg-green-500/20 disabled:opacity-60"
+              >
+                {installing ? (
+                  <>
+                    <IconLoader2 className="h-3.5 w-3.5 animate-spin" /> Restarting…
+                  </>
+                ) : (
+                  'Restart to update'
+                )}
+              </button>
+            </div>
+          )}
+          {/* A newer llama.cpp for the gateway's kept models. They keep serving on the old one
+              until the person restarts them, so no answer is cut off. */}
+          {keptEngineReady && (
+            <div className="flex items-center gap-3 rounded-md border border-green-500/40 bg-neutral-900/95 px-3.5 py-2 font-mono text-xs text-neutral-200 shadow-xl backdrop-blur">
+              <IconDownload className="h-4 w-4 text-green-500" />
+              <span>Engine update ready for kept models</span>
+              <button
+                onClick={async () => {
+                  setRestartingKept(true)
+                  try {
+                    await window.api.restartKeepLoadedModels()
+                    setKeptEngineReady(false)
+                  } catch {
+                    addNotification({
+                      type: 'info',
+                      title: 'Kept models did not restart',
+                      message: 'Try again from the update card.'
+                    })
+                  } finally {
+                    setRestartingKept(false)
+                  }
+                }}
+                disabled={restartingKept}
+                className="flex items-center gap-1.5 rounded-sm border border-green-500/50 bg-green-500/10 px-2.5 py-1 text-emerald-400 hover:bg-green-500/20 disabled:opacity-60"
+              >
+                {restartingKept ? (
+                  <>
+                    <IconLoader2 className="h-3.5 w-3.5 animate-spin" /> Restarting…
+                  </>
+                ) : (
+                  'Restart models'
+                )}
+              </button>
+            </div>
+          )}
         </div>
       )}
       {/* The background is the library LivingField (mounted in main.tsx): one breathing layer
@@ -1408,8 +1517,65 @@ function AppContent(): React.JSX.Element {
                       ) : (
                         <UpgradeScreen feature={getProFeature('explore')} />
                       )
+                    ) : viewMode === 'memory-chat' && chatPanes ? (
+                      <div className="flex h-full min-h-0 flex-col bg-neutral-950">
+                        <div
+                          className={`grid min-h-0 flex-1 gap-px bg-neutral-800 ${chatPanes.length >= 5 ? 'grid-cols-3 grid-rows-2' : chatPanes.length === 4 ? 'grid-cols-2 grid-rows-2' : chatPanes.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}
+                        >
+                          {chatPanes.map((_, index) => {
+                            // The split controls live in the top-right pane: its header ends at the
+                            // window's edge, so they stay put when panes are added or removed.
+                            const controls =
+                              index === (chatPanes.length === 4 || chatPanes.length === 2 ? 1 : 2)
+                            return (
+                              <div
+                                key={index}
+                                data-chat-pane={`pane-${index}`}
+                                // Contains fixed-position panels (artifacts) so they open within the pane.
+                                className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-neutral-950 [contain:layout_paint]"
+                              >
+                                <MemoryChat
+                                  paneKey={`pane-${index}`}
+                                  split
+                                  onToggleSplit={controls ? toggleChatSplit : undefined}
+                                  broadcast={chatBroadcast}
+                                  onToggleBroadcast={controls ? toggleChatBroadcast : undefined}
+                                  paneCount={controls ? chatPanes.length : undefined}
+                                  onPaneCountChange={controls ? setChatPaneCount : undefined}
+                                  onNavigateToMemory={handleSelectMemory}
+                                  onNavigateToChat={handleSelectChat}
+                                  onNavigateToMeeting={(meetingId) =>
+                                    handleProNavigate({ view: 'meetings', meetingId })
+                                  }
+                                  onNavigateToEntity={handleSelectEntity}
+                                  onOpenProject={(id) => {
+                                    navigateTo('projects', () => setSelectedProjectId(id))
+                                  }}
+                                  onSeekReplay={(ts) => {
+                                    navigateTo('replay', () => setReplayTarget(ts || Date.now()))
+                                  }}
+                                  onOpenSkillPreset={handleOpenSkillPreset}
+                                  onOpenConnectors={() => navigateTo('connectors')}
+                                  onOpenAssistantUpgrade={() => navigateTo('tasks')}
+                                  openTarget={index === 0 ? chatTarget : null}
+                                  onTargetConsumed={() => setChatTarget(null)}
+                                />
+                              </div>
+                            )
+                          })}
+                        </div>
+                        {chatBroadcast && (
+                          // The first pane renders its own composer here (see MemoryChat).
+                          <div
+                            id={SHARED_COMPOSER_SLOT_ID}
+                            data-testid="chat-broadcast-composer"
+                            className="border-t border-neutral-800 p-3"
+                          />
+                        )}
+                      </div>
                     ) : viewMode === 'memory-chat' ? (
                       <MemoryChat
+                        onToggleSplit={toggleChatSplit}
                         onNavigateToMemory={handleSelectMemory}
                         onNavigateToChat={handleSelectChat}
                         onNavigateToMeeting={(meetingId) =>

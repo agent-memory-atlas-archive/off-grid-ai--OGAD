@@ -6,7 +6,7 @@ import {
   type CompletionStreamAccumulator,
   type StreamResult
 } from './stream'
-import type { AssembledToolCall } from './sse-stream'
+import type { AssembledToolCall, SseWaitStatus } from './sse-stream'
 import { writeDiagnosticLog } from '../diagnostics-log'
 import { currentAIRequest } from '../ai-request-log'
 import { screenTaskRequestSource } from '../actions/remote-screen-session'
@@ -36,6 +36,16 @@ export interface RemoteChatOptions {
   timeoutMs?: number
   onToolCallStart?: (name?: string) => void
   onToolCallReady?: (call: AssembledToolCall) => void
+  /** What the server says the request waits for, as a line to show: its turn, a model loading. */
+  onWaitStatus?: (label: string) => void
+}
+
+/** "Waiting for RTX Pro 6000 · 2 ahead", "RTX Pro 6000 is loading Flint…". */
+export function remoteWaitLabel(serverName: string, status: SseWaitStatus): string {
+  if (status.phase === 'loading') return `${serverName} is loading ${status.model || 'the model'}…`
+  return status.ahead
+    ? `Waiting for ${serverName} · ${status.ahead} ahead`
+    : `Waiting for ${serverName}…`
 }
 
 export interface RemoteNativeToolCapability {
@@ -56,6 +66,11 @@ export interface RemoteReasoningCapability {
   control: RemoteReasoningControl
   mandatory?: boolean
   tokenBudget?: boolean
+  /** llama.cpp reports the template reads the standard `reasoning_effort` (its chat_template_caps). */
+  reasoningEffort?: boolean
+  /** With thinking on, the rendered prompt already opens the <think> block: the reply starts inside
+   *  it and only closes it. llama.cpp splits that out itself only for templates it recognises. */
+  thinkingOpensInPrompt?: boolean
 }
 const reasoningCapabilities = new Map<string, Promise<RemoteReasoningCapability>>()
 
@@ -119,6 +134,35 @@ export function isLocalModelServer(remote: RemoteTextModelConnection): boolean {
   return remote.id.startsWith('local-grounder:')
 }
 
+/** Whether llama.cpp renders a thinking-on prompt that ends inside an open <think> block. Asked of
+ *  the server (/apply-template), so it holds for any template that does this, whatever its family. */
+async function promptOpensThinking(
+  remote: RemoteTextModelConnection,
+  reasoningEffort: boolean
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${remote.endpoint.replace(/\/v1\/?$/i, '')}/apply-template`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(remote.apiKey ? { Authorization: `Bearer ${remote.apiKey}` } : {})
+      },
+      body: JSON.stringify({
+        model: remote.model,
+        messages: [{ role: 'user', content: 'Hi' }],
+        chat_template_kwargs: { enable_thinking: true },
+        ...(reasoningEffort ? { reasoning_effort: 'high' } : {})
+      }),
+      signal: AbortSignal.timeout(5_000)
+    })
+    if (!response.ok) return false
+    const { prompt } = (await response.json()) as { prompt?: unknown }
+    return typeof prompt === 'string' && /<think[^>]*>\s*$/.test(prompt)
+  } catch {
+    return false
+  }
+}
+
 /** Read the server's model/template facts, never its display name. Failed probes are retried. */
 export async function remoteReasoningCapability(
   remote: RemoteTextModelConnection
@@ -155,12 +199,27 @@ export async function remoteReasoningCapability(
         /\.Think|\.Thinking|\.IsThinkSet/.test(template)
       return { control: supportsThinking ? 'ollama' : 'none' }
     }
-    const response = await fetch(`${remote.endpoint.replace(/\/v1\/?$/i, '')}/props`, {
-      signal: AbortSignal.timeout(5_000)
-    })
+    // Ask about this model: a server holding several (a llama.cpp router, an Off Grid gateway
+    // keeping models loaded) answers /props per model; a single-model server ignores the query.
+    const response = await fetch(
+      `${remote.endpoint.replace(/\/v1\/?$/i, '')}/props?model=${encodeURIComponent(remote.model)}`,
+      {
+        headers: remote.apiKey ? { Authorization: `Bearer ${remote.apiKey}` } : {},
+        signal: AbortSignal.timeout(5_000)
+      }
+    )
     if (response.ok) {
-      const body = (await response.json()) as { chat_template?: string }
-      return { control: detectThinkingDialect(body.chat_template), tokenBudget: true }
+      const body = (await response.json()) as {
+        chat_template?: string
+        chat_template_caps?: { supports_reasoning_effort?: boolean }
+      }
+      const reasoningEffort = body.chat_template_caps?.supports_reasoning_effort === true
+      return {
+        control: detectThinkingDialect(body.chat_template),
+        tokenBudget: true,
+        reasoningEffort,
+        thinkingOpensInPrompt: await promptOpensThinking(remote, reasoningEffort)
+      }
     }
     // A server error is not an answer. An Off Grid gateway answers 502 until its model loads;
     // caching that as 'none' dropped the thinking switch for the whole session. Ask again later.
@@ -223,6 +282,21 @@ export function remoteContextWindow(remote: RemoteTextModelConnection): Promise<
   })
   contextWindows.set(key, discovered)
   return discovered
+}
+
+/** Forget what was learned about a server's models (context window, thinking controls, native
+ *  tools), so the next request asks it again. Testing or saving a server means its setup may have
+ *  changed, such as a larger context window, and a remembered answer would hide that. */
+export function forgetRemoteServerFacts(endpoint: string): void {
+  const base = endpoint.replace(/\/+$/, '')
+  for (const cache of [contextWindows, reasoningCapabilities, nativeToolCapabilities] as Map<
+    string,
+    unknown
+  >[]) {
+    for (const key of [...cache.keys()]) {
+      if (key.split('\n')[1]?.replace(/\/+$/, '') === base) cache.delete(key)
+    }
+  }
 }
 
 export function nativeToolPlannerUnavailableMessage(
@@ -303,24 +377,33 @@ export function remoteReasoningFields(
 ): Record<string, unknown> {
   const ollamaEffort =
     budget > 0 ? (budget <= 1024 ? 'low' : budget <= 4096 ? 'medium' : 'high') : 'medium'
-  return thinking === undefined || capability.control === 'none'
+  // llama.cpp's own controls: it reads enable_thinking itself, maps the standard reasoning_effort
+  // into whichever variable the template uses ("none" switches thinking off), and caps whatever
+  // thinking it finds with the budget. Templates with no switch at all (Flint) still get the cap.
+  const llamaCpp = (on: boolean): Record<string, unknown> => ({
+    chat_template_kwargs: { enable_thinking: on },
+    ...(capability.reasoningEffort ? { reasoning_effort: on ? 'high' : 'none' } : {}),
+    ...(on && budget > 0 ? { reasoning_budget_tokens: budget } : {})
+  })
+  return thinking === undefined
     ? {}
-    : capability.control === 'openrouter'
-      ? thinking
-        ? openRouterReasoningPayload(true, budget)
-        : capability.mandatory
-          ? {}
-          : { reasoning: { effort: 'none' } }
-      : capability.control === 'ollama'
-        ? { reasoning_effort: thinking ? ollamaEffort : 'none' }
-        : capability.control === 'reasoning-strength'
-          ? { chat_template_kwargs: { reasoning_strength: thinking ? 'high' : 'none' } }
-          : {
-              chat_template_kwargs: { enable_thinking: thinking },
-              ...(thinking && capability.tokenBudget && budget > 0
-                ? { reasoning_budget_tokens: budget }
-                : {})
-            }
+    : capability.tokenBudget &&
+        (capability.control === 'none' || capability.control === 'enable-thinking')
+      ? llamaCpp(thinking)
+      : capability.control === 'none'
+        ? {}
+        : capability.control === 'openrouter'
+          ? thinking
+            ? openRouterReasoningPayload(true, budget)
+            : capability.mandatory
+              ? {}
+              : { reasoning: { effort: 'none' } }
+          : capability.control === 'ollama'
+            ? { reasoning_effort: thinking ? ollamaEffort : 'none' }
+            : capability.control === 'reasoning-strength'
+              ? { chat_template_kwargs: { reasoning_strength: thinking ? 'high' : 'none' } }
+              : // LM Studio: the per-request switch, without llama.cpp's budget.
+                { chat_template_kwargs: { enable_thinking: thinking } }
 }
 
 /** The OpenAI-compatible request body. Pure: what we send, with nothing about how we send it. */
@@ -470,7 +553,10 @@ export async function streamRemoteChatCompletion(input: {
       input.onDelta(text, kind)
     },
     options.onToolCallStart,
-    options.onToolCallReady
+    options.onToolCallReady,
+    options.onWaitStatus
+      ? (status) => options.onWaitStatus?.(remoteWaitLabel(remote.name, status))
+      : undefined
   )
   if (options.signal?.aborted) return accumulator.finish()
 
@@ -492,6 +578,8 @@ export async function streamRemoteChatCompletion(input: {
         ? { control: 'none' as const }
         : await remoteReasoningCapability(remote)
     const body = completionRequestBody(remote, request, reasoning)
+    if (request.thinking && 'thinkingOpensInPrompt' in reasoning && reasoning.thinkingOpensInPrompt)
+      accumulator.startInsideThinking()
     log?.update({ effectiveRequest: JSON.parse(body) })
     const response = await fetch(`${remote.endpoint}/chat/completions`, {
       method: 'POST',

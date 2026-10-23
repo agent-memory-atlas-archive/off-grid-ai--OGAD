@@ -2,7 +2,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
-import { closeTaskWorkspace, onOpenTaskSidePanel } from '@renderer/lib/task-side-panel'
+import {
+  closeTaskWorkspace,
+  markTasksSeen,
+  onOpenTaskSidePanel
+} from '@renderer/lib/task-side-panel'
 import { resetTaskSessionStoreForTests } from '@renderer/lib/task-session-store'
 import { TaskPanelTrigger } from '../TaskPanelTrigger'
 
@@ -10,6 +14,8 @@ let emitTask: (task: unknown) => void
 
 beforeEach(() => {
   closeTaskWorkspace()
+  // A person who has never opened Tasks.
+  markTasksSeen(0)
   resetTaskSessionStoreForTests()
   window.api = {
     tasks: {
@@ -93,5 +99,54 @@ describe('<TaskPanelTrigger/>', () => {
       updatedAt: 4
     })
     await waitFor(() => expect(screen.getByTestId('task-attention-badge').textContent).toBe('1'))
+  })
+
+  it('clears a failed or stopped task once Tasks has been opened, but keeps live ones', async () => {
+    render(
+      <TooltipProvider>
+        <TaskPanelTrigger />
+      </TooltipProvider>
+    )
+    const ended = Date.now() - 1_000
+    emitTask({
+      taskId: 'web-failed',
+      kind: 'web_use',
+      title: 'Research',
+      status: 'failed',
+      steps: [],
+      startedAt: ended - 5_000,
+      finishedAt: ended,
+      updatedAt: ended
+    })
+    emitTask({
+      taskId: 'web-running',
+      kind: 'web_use',
+      title: 'Compare prices',
+      status: 'running',
+      steps: [],
+      startedAt: ended,
+      updatedAt: ended
+    })
+    await waitFor(() => expect(screen.getByTestId('task-attention-badge').textContent).toBe('2'))
+
+    // Open Tasks and close it again: the failure has been seen; the running task still counts.
+    fireEvent.click(screen.getByLabelText('Tasks, 2 need attention'))
+    fireEvent.click(screen.getByLabelText('Close Tasks'))
+    await waitFor(() => expect(screen.getByTestId('task-attention-badge').textContent).toBe('1'))
+
+    // A task that stops after that is new again.
+    const later = Date.now() + 1_000
+    emitTask({
+      taskId: 'web-running',
+      kind: 'web_use',
+      title: 'Compare prices',
+      status: 'stopped',
+      steps: [],
+      startedAt: ended,
+      finishedAt: later,
+      updatedAt: later
+    })
+    await waitFor(() => expect(screen.getByTestId('task-attention-badge').textContent).toBe('1'))
+    expect(screen.getByLabelText('Tasks, 1 need attention')).toBeTruthy()
   })
 })

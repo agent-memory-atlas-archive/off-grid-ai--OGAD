@@ -5,6 +5,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui
 import {
   closeTaskWorkspace,
   openTaskSidePanel,
+  useTasksSeenAt,
   useTaskWorkspaceOpen
 } from '@renderer/lib/task-side-panel'
 import {
@@ -23,7 +24,8 @@ export function TaskPanelTrigger({
   const { tasks } = useTaskSessions()
   const workspaceOpen = useTaskWorkspaceOpen()
   const reduceMotion = useReducedMotion()
-  const count = taskAttentionCount(taskSessionsForJourney(tasks, conversationId))
+  const seenAt = useTasksSeenAt()
+  const count = taskAttentionCount(taskSessionsForJourney(tasks, conversationId), seenAt)
   const label = workspaceOpen
     ? 'Close Tasks'
     : count > 0

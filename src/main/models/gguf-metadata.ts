@@ -434,7 +434,14 @@ export function readGgufKvShape(
   p: string,
   fs: GgufFs,
   maxBytes = GGUF_METADATA_PREFIX_BYTES
-): { attentionLayers: number; kvHeads: number; keyDim: number; valueDim: number } | null {
+): {
+  attentionLayers: number
+  kvHeads: number
+  keyDim: number
+  valueDim: number
+  /** Repeating layers (block_count). */
+  blocks: number
+} | null {
   try {
     const size = fs.statSync(p).size
     const toRead = Math.min(size, maxBytes)
@@ -485,7 +492,7 @@ export function readGgufKvShape(
       // Every interval-th layer is full attention (llama.cpp counts (i + 1) % interval === 0).
       attentionLayers = Math.floor(blocks / interval)
     }
-    return { attentionLayers, kvHeads, keyDim, valueDim }
+    return { attentionLayers, kvHeads, keyDim, valueDim, blocks }
   } catch {
     return null
   }

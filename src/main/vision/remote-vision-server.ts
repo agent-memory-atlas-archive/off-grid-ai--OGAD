@@ -2,7 +2,12 @@ import { settingsChanged } from '../settings-version'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { remoteModelSelected, setRemoteModelSelected } from '../active-models'
+import {
+  remoteModelSelected,
+  remoteModelServerId,
+  setRemoteModelSelected,
+  type RemoteModelModality
+} from '../active-models'
 import { modelsDir } from '../runtime-env'
 import { deleteSecret, getSecret, setSecret } from '../secrets'
 import {
@@ -20,7 +25,7 @@ import {
   type RemoteVisionServerSettings,
   type RemoteVisionServerUpdate
 } from '../../shared/remote-vision-server'
-import { parseRemoteVisionModelId } from '../../shared/remote-vision-server'
+import { isRemoteChatModel, parseRemoteVisionModelId } from '../../shared/remote-vision-server'
 
 const LEGACY_API_KEY_SECRET = 'remote-vision-server:api-key'
 const CONFIG_VERSION = 3
@@ -108,8 +113,7 @@ function isStoredConfig(
 function readStored(): StoredRemoteVisionConfig {
   try {
     const value = JSON.parse(fs.readFileSync(configPath(), 'utf8')) as
-      | StoredRemoteVisionConfig
-      | LegacyStoredRemoteVisionServer
+      StoredRemoteVisionConfig | LegacyStoredRemoteVisionServer
     if (isStoredConfig(value)) {
       const servers = value.servers.flatMap((server) => {
         const normalized = normalizeServer(server)
@@ -167,11 +171,45 @@ function publicServer(server: StoredRemoteVisionServer): RemoteVisionSavedServer
   return { ...server, hasApiKey: Boolean(serverApiKey(server.id)) }
 }
 
+const MODALITIES: RemoteModelModality[] = ['text', 'image', 'voice', 'transcription']
+
+/** The enabled server a modality's remote selection names, or null when it runs locally. */
+function selectedServer(
+  stored: StoredRemoteVisionConfig,
+  modality: RemoteModelModality
+): StoredRemoteVisionServer | null {
+  if (!remoteModelSelected(modality)) return null
+  const serverId = remoteModelServerId(modality) ?? stored.activeServerId
+  return (
+    stored.servers.find((server) => server.id === serverId && server.enabled !== false) ?? null
+  )
+}
+
+/** Id of the server a modality runs on, or null when it runs locally. */
+export function remoteServerIdFor(modality: RemoteModelModality): string | null {
+  return selectedServer(readStored(), modality)?.id ?? null
+}
+
+function offersModel(server: StoredRemoteVisionServer, modality: RemoteModelModality): boolean {
+  return Boolean(modality === 'text' ? server.model : server.mediaModels?.[modality])
+}
+
+// A selection saved before servers were recorded per modality follows the shared active server.
+// Name its server before that changes, so the change cannot carry it along.
+function pinLegacySelections(stored: StoredRemoteVisionConfig): void {
+  for (const modality of MODALITIES) {
+    if (!remoteModelSelected(modality) || remoteModelServerId(modality)) continue
+    const server = selectedServer(stored, modality)
+    if (server) setRemoteModelSelected(modality, true, server.id)
+  }
+}
+
 export function getRemoteVisionServerSettings(): RemoteVisionServerSettings {
   const stored = readStored()
-  const active = stored.servers.find(
-    (server) => server.id === stored.activeServerId && server.enabled !== false
-  )
+  // The server Settings marks active is the one chat runs on, when chat is remote.
+  const active =
+    selectedServer(stored, 'text') ??
+    stored.servers.find((server) => server.id === stored.activeServerId && server.enabled !== false)
   return {
     provider: active?.provider ?? 'local',
     endpoint: active?.endpoint ?? '',
@@ -183,14 +221,9 @@ export function getRemoteVisionServerSettings(): RemoteVisionServerSettings {
 }
 
 export function getActiveRemoteVisionServer():
-  | (StoredRemoteVisionServer & { apiKey: string })
-  | null {
-  if (!remoteModelSelected('text')) return null
-  const stored = readStored()
-  const active = stored.servers.find(
-    (server) => server.id === stored.activeServerId && server.enabled !== false && !!server.model
-  )
-  return active ? { ...active, apiKey: serverApiKey(active.id) } : null
+  (StoredRemoteVisionServer & { apiKey: string }) | null {
+  const active = selectedServer(readStored(), 'text')
+  return active?.model ? { ...active, apiKey: serverApiKey(active.id) } : null
 }
 
 /** Resolve any saved text/vision model reference through its owning server.
@@ -210,6 +243,8 @@ export function getRemoteVisionServerForModel(
   if (role && server.roleModels?.[role] !== reference.modelId) return null
   const catalogModel = server.modelCatalog?.find((model) => model.id === reference.modelId)
   if (catalogModel && catalogModel.kind !== 'text') return null
+  // Chat never runs on a server's grounder or decider; their roles reach them by name.
+  if (!role && catalogModel && !isRemoteChatModel(catalogModel)) return null
   return {
     ...server,
     model: reference.modelId,
@@ -220,11 +255,7 @@ export function getRemoteVisionServerForModel(
 export function getActiveRemoteVisionServerForModality(
   modality: RemoteVisionModality
 ): (StoredRemoteVisionServer & { apiKey: string; selectedModel: string }) | null {
-  if (!remoteModelSelected(modality)) return null
-  const stored = readStored()
-  const active = stored.servers.find(
-    (server) => server.id === stored.activeServerId && server.enabled !== false
-  )
+  const active = selectedServer(readStored(), modality)
   const selectedModel = active?.mediaModels?.[modality]
   return active && selectedModel
     ? { ...active, apiKey: serverApiKey(active.id), selectedModel }
@@ -238,13 +269,15 @@ export function activateRemoteVisionModel(serverId: string, modelId: string): bo
       candidate.id === serverId && candidate.enabled !== false && candidate.model === modelId
   )
   if (!server) return false
+  pinLegacySelections(stored)
   writeStored({ ...stored, activeServerId: server.id })
-  setRemoteModelSelected('text', true)
+  setRemoteModelSelected('text', true, server.id)
   return true
 }
 
 export function deactivateRemoteVisionModel(): void {
   const stored = readStored()
+  pinLegacySelections(stored)
   setRemoteModelSelected('text', false)
   if (stored.activeServerId !== null) writeStored({ ...stored, activeServerId: null })
 }
@@ -262,8 +295,8 @@ export function activateRemoteVisionMediaModel(
       candidate.mediaModels?.[modality] === modelId
   )
   if (!server) return false
-  writeStored({ ...stored, activeServerId: serverId })
-  setRemoteModelSelected(modality, true)
+  // Only this modality moves: chat and the other media keep their own servers.
+  setRemoteModelSelected(modality, true, serverId)
   return true
 }
 
@@ -278,9 +311,7 @@ export function setRemoteVisionServerSettings(
 ): RemoteVisionServerSettings {
   const stored = readStored()
   if (update.provider === 'local') {
-    for (const modality of ['text', 'image', 'voice', 'transcription'] as const) {
-      setRemoteModelSelected(modality, false)
-    }
+    for (const modality of MODALITIES) setRemoteModelSelected(modality, false)
     writeStored({
       ...stored,
       activeServerId: null,
@@ -309,7 +340,7 @@ export function setRemoteVisionServerSettings(
     provider: update.provider,
     endpoint,
     model: mediaModels.text?.trim() ?? '',
-    enabled: true,
+    enabled: update.enabled !== false,
     mediaModels,
     roleModels,
     modelCatalog:
@@ -321,23 +352,37 @@ export function setRemoteVisionServerSettings(
     : [...stored.servers, next]
   if (update.clearApiKey) deleteSecret(secretKey(id))
   else if (update.apiKey?.trim()) setSecret(secretKey(id), update.apiKey.trim())
-  writeStored({ version: CONFIG_VERSION, activeServerId: id, servers })
-  if (isNewServer) {
-    setRemoteModelSelected('text', Boolean(mediaModels.text))
-    setRemoteModelSelected('image', false)
-    setRemoteModelSelected('voice', false)
-    setRemoteModelSelected('transcription', false)
+  // Turning one server off leaves the others as they were; the active one hands over to the next.
+  const others = servers.filter((server) => server.id !== id && server.enabled !== false)
+  const activeServerId = next.enabled
+    ? id
+    : stored.activeServerId === id
+      ? (others[0]?.id ?? null)
+      : stored.activeServerId
+  pinLegacySelections(stored)
+  if (!next.enabled) {
+    // What ran on the server just turned off moves to another that offers a model for it, or
+    // runs locally.
+    for (const modality of MODALITIES) {
+      if (remoteModelServerId(modality) !== id) continue
+      const handover = others.find((server) => offersModel(server, modality))?.id
+      setRemoteModelSelected(modality, Boolean(handover), handover)
+    }
   }
+  // A new server saved with a chat model takes chat; one without leaves chat where it was, and
+  // the media choices stay on their own servers either way.
+  const takesChat = isNewServer && Boolean(mediaModels.text)
+  writeStored({ version: CONFIG_VERSION, activeServerId, servers })
+  if (takesChat) setRemoteModelSelected('text', true, id)
   return getRemoteVisionServerSettings()
 }
 
 export function removeRemoteVisionServer(serverId: string): RemoteVisionServerSettings {
   const stored = readStored()
   deleteSecret(secretKey(serverId))
-  if (stored.activeServerId === serverId) {
-    for (const modality of ['text', 'image', 'voice', 'transcription'] as const) {
-      setRemoteModelSelected(modality, false)
-    }
+  pinLegacySelections(stored)
+  for (const modality of MODALITIES) {
+    if (remoteModelServerId(modality) === serverId) setRemoteModelSelected(modality, false)
   }
   writeStored({
     version: CONFIG_VERSION,
@@ -415,6 +460,7 @@ export async function testRemoteVisionServer(
       kind?: unknown
       supported_parameters?: unknown
       reasoning?: unknown
+      capabilities?: unknown
       architecture?: { input_modalities?: unknown; output_modalities?: unknown }
     }> = [
       ...new Map(
@@ -423,22 +469,39 @@ export async function testRemoteVisionServer(
           .map((entry) => [String(entry.id ?? entry.model ?? ''), entry] as const)
       ).values()
     ]
+    // A server relaying a model from one of this app's own servers (this Mac's gateway relaying
+    // its remote chat model) would list it twice, once by a longer road.
+    const ownServers = new Set(readStored().servers.map((server) => server.id))
     const models = entries.flatMap((entry) => {
       const id =
         typeof entry.id === 'string' ? entry.id : typeof entry.model === 'string' ? entry.model : ''
       if (!id) return []
+      const relayed = parseRemoteVisionModelId(id)
+      if (relayed && ownServers.has(relayed.serverId)) return []
       const kind = entry.kind
       const outputs = Array.isArray(entry.architecture?.output_modalities)
         ? entry.architecture.output_modalities
         : []
+      const capabilities = Array.isArray(entry.capabilities) ? entry.capabilities : []
+      // An Off Grid gateway says a chat model reads images by its kind or capabilities.
       const inputs = Array.isArray(entry.architecture?.input_modalities)
         ? entry.architecture.input_modalities
-        : []
+        : kind === 'vision' || capabilities.includes('vision')
+          ? ['text', 'image']
+          : []
       const supportedParameters = Array.isArray(entry.supported_parameters)
         ? entry.supported_parameters.filter((value): value is string => typeof value === 'string')
         : []
+      const role: RemoteVisionTaskRole | undefined =
+        kind === 'grounding_specialist'
+          ? 'grounding'
+          : kind === 'decision_specialist'
+            ? 'decision'
+            : undefined
       const modality: RemoteVisionModality =
-        kind === 'image'
+        role
+          ? 'text'
+          : kind === 'image'
           ? 'image'
           : kind === 'transcription'
             ? 'transcription'
@@ -464,6 +527,7 @@ export async function testRemoteVisionServer(
           id,
           name: typeof entry.name === 'string' ? entry.name : id,
           kind: modality,
+          ...(role ? { role } : {}),
           inputModalities: inputs.filter((value): value is string => typeof value === 'string'),
           outputModalities: outputs.filter((value): value is string => typeof value === 'string'),
           supportedParameters,
@@ -481,5 +545,27 @@ export async function testRemoteVisionServer(
       latencyMs: Date.now() - startedAt,
       error: error instanceof Error ? error.message : 'Connection failed.'
     }
+  }
+}
+
+/**
+ * Read each enabled server's model list again and keep it, so what its models can do (read
+ * images, use tools) stays current without the person pressing Test connection. A server that
+ * does not answer keeps the list it had.
+ */
+export async function refreshRemoteServerCatalogs(): Promise<void> {
+  for (const server of readStored().servers) {
+    if (server.enabled === false) continue
+    const result = await testRemoteVisionServer({ ...server, serverId: server.id })
+    if (!result.ok || !result.models?.length) continue
+    const stored = readStored()
+    if (!stored.servers.some(({ id }) => id === server.id)) continue
+    writeStored({
+      ...stored,
+      servers: stored.servers.map((saved) =>
+        saved.id === server.id ? { ...saved, modelCatalog: result.models } : saved
+      )
+    })
+    ;(await import('../llm/remote-chat')).forgetRemoteServerFacts(server.endpoint)
   }
 }

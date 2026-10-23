@@ -544,6 +544,14 @@ export function setupIPC(): void {
     BrowserWindow.getAllWindows().forEach((window) =>
       window.webContents.send('engine-updates:changed', status)
     )
+    // A newer llama.cpp for the gateway's kept models waits for the person to restart them.
+    if (status.phase === 'up-to-date')
+      void import('./model-server/keep-loaded').then((keepLoaded) => {
+        if (!keepLoaded.keepLoadedEnginesChanged()) return
+        BrowserWindow.getAllWindows().forEach((window) =>
+          window.webContents.send('gateway:keep-loaded:engine-update')
+        )
+      })
   })
   ipcMain.handle('engine-updates:status', () => engineUpdater.status())
   ipcMain.handle('engine-updates:check', () => engineUpdater.check())
@@ -1336,6 +1344,23 @@ export function setupIPC(): void {
   ipcMain.handle('gateway:keys:revoke', async (_, id: string) =>
     (await import('./model-server')).revokeGatewayApiKey(id)
   )
+  // The models the gateway keeps loaded together: the saved set with its plan, a preview of a set's
+  // plan before it is applied, and saving a set (which restarts the router).
+  ipcMain.handle('gateway:keep-loaded:get', async () =>
+    (await import('./model-server/keep-loaded')).keepLoadedState()
+  )
+  ipcMain.handle('gateway:keep-loaded:preview', async (_, ids: string[]) =>
+    (await import('./model-server/keep-loaded')).keepLoadedState(Array.isArray(ids) ? ids : [])
+  )
+  ipcMain.handle('gateway:keep-loaded:set', async (_, ids: string[]) =>
+    (await import('./model-server/keep-loaded')).setKeptModels(ids)
+  )
+  ipcMain.handle('gateway:keep-loaded:engine-update-ready', async () =>
+    (await import('./model-server/keep-loaded')).keepLoadedEngineUpdateReady()
+  )
+  ipcMain.handle('gateway:keep-loaded:restart', async () =>
+    (await import('./model-server/keep-loaded')).restartKeepLoaded()
+  )
 
   // === SETTINGS HANDLERS ===
 
@@ -1586,8 +1611,9 @@ export function setupIPC(): void {
 
   ipcMain.handle('model:check-status', async () => {
     const { llm } = await import('./llm')
+    // A chat model on a remote server is as ready as one on disk.
     return {
-      downloaded: llm.modelsExist(),
+      downloaded: llm.modelsExist() || llm.usesRemoteTextModel(),
       modelsDir: llm.getModelsDir()
     }
   })
@@ -1847,6 +1873,8 @@ export function setupIPC(): void {
   )
   // Whether the active chat model can read images (gate image attachments on this).
   ipcMain.handle('model:chat-vision', () => import('./llm').then((m) => m.llm.hasVision()))
+  // The clipboard's text, for ⌘⇧V plain paste: the renderer is not allowed to read it.
+  ipcMain.handle('clipboard:read-text', () => clipboard.readText())
   // Reliable text→clipboard (the renderer's navigator.clipboard is flaky in Electron).
   ipcMain.handle('clipboard:write-text', (_e, text?: string) => {
     try {
@@ -2070,145 +2098,165 @@ export function setupIPC(): void {
     const { setToolEnabled } = await import('./tools')
     setToolEnabled(name, enabled)
   })
-  ipcMain.handle(
-    'tools:chat',
-    async (
-      event,
-      query: string,
-      history?: { role: string; content: string }[],
-      opts?: {
-        assistantOnly?: boolean
-        allTools?: boolean
-        connectors?: boolean
-        conversationId?: string
-        projectId?: string
-        allMemory?: boolean
-        images?: string[]
-        imageAvailable?: boolean
-        streamId?: string
-        thinking?: boolean
-        /** What the user is doing now (God's context), added to the system prompt. */
-        context?: string
-        /** God's standing rules, which every reply follows. */
-        rules?: readonly string[]
-      }
-    ) => {
-      const { toolChat } = await import('./tools')
-      const { modalityQueue, CHAT_JOB } = await import('./modality-queue/queue')
-      const { imageGenerationRunsBesideChat } = await import('./imagegen')
-      const streamId = opts?.streamId
-      const sender = event.sender
-      // Non-stream fallback (no streamId): buffer, no live deltas (matches streamAnswer).
-      if (!streamId) {
-        return modalityQueue.run(CHAT_JOB, async () => {
-          const { result, modelName } = await runChatWithFallback((attempt) =>
-            toolChat(query, history || [], { ...(opts || {}), ...attempt })
-          )
-          return modelName ? { ...result, metrics: { ...result.metrics, modelName } } : result
-        })
-      }
-      // Streaming: same channel/queue/abort as streamAnswer, so a tools turn streams
-      // thinking -> tool-call activity -> answer, and the stop button (rag:cancel) aborts it.
-      const controller = new AbortController()
-      streamControllers.set(streamId, controller)
-      bindChatStream(streamId, opts.conversationId, opts.thinking ? 'thinking' : 'waiting')
-      let continuesAsImage = false
-      let toolStarted = false
-      try {
-        const { result, modelName } = await modalityQueue.run(CHAT_JOB, () =>
-          runChatWithFallback(
-            (attempt) =>
-              toolChat(query, history || [], {
-                ...opts,
-                ...attempt,
-                thinking: opts.thinking,
-                signal: controller.signal,
-                onDelta: (text, kind) => {
-                  noteChatStreamDelta(streamId, text, kind)
-                  try {
-                    sender.send('rag:stream', { streamId, type: kind, text })
-                  } catch {
-                    /* window gone */
-                  }
-                },
-                onStep: (call) => {
-                  toolStarted = true
-                  noteChatStreamToolStarted(streamId, call.name)
-                  try {
-                    sender.send('rag:stream', {
-                      streamId,
-                      type: 'step',
-                      step: { kind: 'running_tool', name: call.name }
-                    })
-                  } catch {
-                    /* window gone */
-                  }
-                },
-                onActivity: (activity) => {
-                  try {
-                    sender.send('rag:stream', { streamId, type: 'step', step: activity })
-                  } catch {
-                    /* window gone */
-                  }
-                },
-                onToolResult: (call) => {
-                  toolStarted = true
-                  noteChatStreamToolCompleted(streamId, call.name, call.result, call.status)
-                  try {
-                    sender.send('rag:stream', { streamId, type: 'tool_result', call })
-                  } catch {
-                    /* window gone */
-                  }
-                },
-                // A remote image server can start each picture while the model writes the next.
-                ...(imageGenerationRunsBesideChat()
-                  ? {
-                      onImageRequest: (request: { prompt: string; enhancePrompt?: boolean }) => {
-                        toolStarted = true
-                        try {
-                          sender.send('rag:stream', { streamId, type: 'image_request', request })
-                        } catch {
-                          /* window gone */
-                        }
-                      }
-                    }
-                  : {})
-              }),
-            {
+  ipcMain.handle('tools:chat', async (...args: Parameters<typeof toolsChatTurn>) => {
+    const { runWithChatModel } = await import('./llm/chat-model-scope')
+    const { getRemoteVisionServerForModel } = await import('./vision/remote-vision-server')
+    const reference = args[3]?.modelReference
+    const model = getRemoteVisionServerForModel(reference)
+    // A pane's model whose server was turned off or removed fails as that model: it never runs
+    // on the app-wide model in its place.
+    if (reference && !model) throw new Error(await missingPaneModelMessage(reference))
+    return runWithChatModel(model, () => toolsChatTurn(...args))
+  })
+  async function missingPaneModelMessage(reference: string): Promise<string> {
+    const { parseRemoteVisionModelId } = await import('../shared/remote-vision-server')
+    const { getRemoteVisionServerSettings } = await import('./vision/remote-vision-server')
+    const serverId = parseRemoteVisionModelId(reference)?.serverId
+    const server = getRemoteVisionServerSettings().servers.find(({ id }) => id === serverId)
+    if (!server) return 'This pane’s model server was removed. Pick another model for this pane.'
+    if (server.enabled === false)
+      return `${server.name} is turned off. Turn it on in Settings, or pick another model for this pane.`
+    return `${server.name} no longer offers this pane’s model. Pick another model for this pane.`
+  }
+  // eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- the turn's result type is the tools:chat contract, inferred from its many returns
+  async function toolsChatTurn(
+    event: Electron.IpcMainInvokeEvent,
+    query: string,
+    history?: { role: string; content: string }[],
+    opts?: {
+      assistantOnly?: boolean
+      allTools?: boolean
+      connectors?: boolean
+      conversationId?: string
+      projectId?: string
+      allMemory?: boolean
+      images?: string[]
+      imageAvailable?: boolean
+      streamId?: string
+      thinking?: boolean
+      /** What the user is doing now (God's context), added to the system prompt. */
+      context?: string
+      /** God's standing rules, which every reply follows. */
+      rules?: readonly string[]
+      /** A split-view pane's own remote model (a remote-vision: id), for this turn only. */
+      modelReference?: string
+    }
+  ) {
+    const { toolChat } = await import('./tools')
+    const { modalityQueue, CHAT_JOB } = await import('./modality-queue/queue')
+    const { imageGenerationRunsBesideChat } = await import('./imagegen')
+    const streamId = opts?.streamId
+    const sender = event.sender
+    // Non-stream fallback (no streamId): buffer, no live deltas (matches streamAnswer).
+    if (!streamId) {
+      return modalityQueue.run(CHAT_JOB, async () => {
+        const { result, modelName } = await runChatWithFallback((attempt) =>
+          toolChat(query, history || [], { ...(opts || {}), ...attempt })
+        )
+        return modelName ? { ...result, metrics: { ...result.metrics, modelName } } : result
+      })
+    }
+    // Streaming: same channel/queue/abort as streamAnswer, so a tools turn streams
+    // thinking -> tool-call activity -> answer, and the stop button (rag:cancel) aborts it.
+    const controller = new AbortController()
+    streamControllers.set(streamId, controller)
+    bindChatStream(streamId, opts.conversationId, opts.thinking ? 'thinking' : 'waiting')
+    let continuesAsImage = false
+    let toolStarted = false
+    try {
+      const { result, modelName } = await modalityQueue.run(CHAT_JOB, () =>
+        runChatWithFallback(
+          (attempt) =>
+            toolChat(query, history || [], {
+              ...opts,
+              ...attempt,
+              thinking: opts.thinking,
               signal: controller.signal,
-              canRetry: () => !toolStarted,
-              onModelChanged: (failed, next) => {
-                resetChatStreamPartial(streamId)
+              onDelta: (text, kind) => {
+                noteChatStreamDelta(streamId, text, kind)
+                try {
+                  sender.send('rag:stream', { streamId, type: kind, text })
+                } catch {
+                  /* window gone */
+                }
+              },
+              onStep: (call) => {
+                toolStarted = true
+                noteChatStreamToolStarted(streamId, call.name)
                 try {
                   sender.send('rag:stream', {
                     streamId,
                     type: 'step',
-                    step: { kind: 'model_changed', failed, next }
+                    step: { kind: 'running_tool', name: call.name }
                   })
                 } catch {
                   /* window gone */
                 }
+              },
+              onActivity: (activity) => {
+                try {
+                  sender.send('rag:stream', { streamId, type: 'step', step: activity })
+                } catch {
+                  /* window gone */
+                }
+              },
+              onToolResult: (call) => {
+                toolStarted = true
+                noteChatStreamToolCompleted(streamId, call.name, call.result, call.status)
+                try {
+                  sender.send('rag:stream', { streamId, type: 'tool_result', call })
+                } catch {
+                  /* window gone */
+                }
+              },
+              // A remote image server can start each picture while the model writes the next.
+              ...(imageGenerationRunsBesideChat()
+                ? {
+                    onImageRequest: (request: { prompt: string; enhancePrompt?: boolean }) => {
+                      toolStarted = true
+                      try {
+                        sender.send('rag:stream', { streamId, type: 'image_request', request })
+                      } catch {
+                        /* window gone */
+                      }
+                    }
+                  }
+                : {})
+            }),
+          {
+            signal: controller.signal,
+            canRetry: () => !toolStarted,
+            onModelChanged: (failed, next) => {
+              resetChatStreamPartial(streamId)
+              try {
+                sender.send('rag:stream', {
+                  streamId,
+                  type: 'step',
+                  step: { kind: 'model_changed', failed, next }
+                })
+              } catch {
+                /* window gone */
               }
             }
-          )
-        )
-        if (result.imageRequests.length > 0) {
-          continuesAsImage = continueChatStreamWithImage(streamId)
-        }
-        return modelName ? { ...result, metrics: { ...result.metrics, modelName } } : result
-      } finally {
-        streamControllers.delete(streamId)
-        if (!continuesAsImage) {
-          endChatStream(streamId, controller.signal.aborted ? 'discarded' : 'record_pending')
-          try {
-            sender.send('rag:stream', { streamId, type: 'done' })
-          } catch {
-            /* window gone */
           }
+        )
+      )
+      if (result.imageRequests.length > 0) {
+        continuesAsImage = continueChatStreamWithImage(streamId)
+      }
+      return modelName ? { ...result, metrics: { ...result.metrics, modelName } } : result
+    } finally {
+      streamControllers.delete(streamId)
+      if (!continuesAsImage) {
+        endChatStream(streamId, controller.signal.aborted ? 'discarded' : 'record_pending')
+        try {
+          sender.send('rag:stream', { streamId, type: 'done' })
+        } catch {
+          /* window gone */
         }
       }
     }
-  )
+  }
 
   // --- LLM inference settings (temperature, context window) ---------------
   // Settings carry the active model's context window, the same fact chat budgets read.
@@ -2231,6 +2279,7 @@ export function setupIPC(): void {
     'vision:remote-server:set',
     async (_e, update: import('../shared/remote-vision-server').RemoteVisionServerUpdate) => {
       const { setRemoteVisionServerSettings } = await import('./vision/remote-vision-server')
+      ;(await import('./llm/remote-chat')).forgetRemoteServerFacts(update.endpoint)
       return setRemoteVisionServerSettings(update)
     }
   )
@@ -2238,6 +2287,7 @@ export function setupIPC(): void {
     'vision:remote-server:test',
     async (_e, update: import('../shared/remote-vision-server').RemoteVisionServerUpdate) => {
       const { testRemoteVisionServer } = await import('./vision/remote-vision-server')
+      ;(await import('./llm/remote-chat')).forgetRemoteServerFacts(update.endpoint)
       return testRemoteVisionServer(update)
     }
   )

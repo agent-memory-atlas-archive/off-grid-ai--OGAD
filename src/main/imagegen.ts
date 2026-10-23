@@ -11,6 +11,7 @@ import path from 'path'
 import fs from 'fs'
 import { recordAIRequest } from './ai-request-log'
 import os from 'os'
+import { usableCpuCount } from './cpu-cores'
 import { randomUUID } from 'node:crypto'
 import { modalityQueue, IMAGE_JOB, CHAT_JOB } from './modality-queue/queue'
 import { getResidencyMode } from './runtime-residency'
@@ -992,7 +993,7 @@ async function runImageGen(
     }
   }
 
-  const threads = String(Math.max(1, os.cpus().length - 2))
+  const threads = String(Math.max(1, usableCpuCount() - 2))
   // Live preview: write a rough partial image every step ('proj' needs no extra
   // model) so the UI can show the image forming step-by-step.
   const previewArgs = [

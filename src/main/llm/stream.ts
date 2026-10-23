@@ -16,7 +16,8 @@ import {
   type AssembledToolCall,
   type SseReasoningDetail,
   type SseTimings,
-  type SseUsage
+  type SseUsage,
+  type SseWaitStatus
 } from './sse-stream'
 import { modelRequestOptions, serverResponseError } from './http-post'
 import { generationMetrics, type GenerationMetrics } from '../../shared/generation-metrics'
@@ -51,6 +52,8 @@ export interface StreamOptions {
 export interface CompletionStreamAccumulator {
   push(chunk: string): void
   finish(): StreamResult
+  /** The prompt opened the <think> block, so the reply starts inside it (see createThinkSplitter). */
+  startInsideThinking(): void
 }
 
 /** Transport-neutral OpenAI SSE projection. Local HTTP and selected remote
@@ -59,7 +62,9 @@ export interface CompletionStreamAccumulator {
 export function createCompletionStreamAccumulator(
   onDelta: (text: string, kind: 'content' | 'reasoning') => void,
   onToolCallStart?: (name?: string) => void,
-  onToolCallReady?: (call: AssembledToolCall) => void
+  onToolCallReady?: (call: AssembledToolCall) => void,
+  /** A gateway's word on what a waiting request waits for, before its first token. */
+  onWaitStatus?: (status: SseWaitStatus) => void
 ): CompletionStreamAccumulator {
   let buffer = ''
   let finishReason: string | null = null
@@ -87,6 +92,11 @@ export function createCompletionStreamAccumulator(
       buffer = buffer.slice(newline + 1)
       const frame = parseSseLine(line)
       if (!frame) continue
+      if (frame.error) throw new Error(frame.error)
+      if (frame.status) {
+        onWaitStatus?.(frame.status)
+        continue
+      }
       if (frame.finishReason) finishReason = frame.finishReason
       if (frame.usage) usage = frame.usage
       if (frame.timings) timings = frame.timings
@@ -97,7 +107,11 @@ export function createCompletionStreamAccumulator(
       // Reasoning counts: it is the first thing the model produces and the first thing the user
       // sees move, so a thinking model's TTFT would otherwise read as the whole thinking pass.
       if ((reasoning || frame.delta.content) && firstTokenAtMs === undefined) firstTokenAtMs = now()
-      if (reasoning) reasoningMarkup.push(reasoning)
+      if (reasoning) {
+        // The server separates reasoning itself, so content is the answer.
+        splitter.leaveThinking()
+        reasoningMarkup.push(reasoning)
+      }
       if (frame.delta.content) splitter.push(frame.delta.content)
       if (frame.delta.tool_calls) {
         if (!toolCallStarted) {
@@ -113,12 +127,14 @@ export function createCompletionStreamAccumulator(
 
   return {
     push,
+    startInsideThinking: splitter.startInsideThinking,
     finish() {
       // A conforming SSE stream ends frames with a newline. Parse a final line
       // defensively because remote OpenAI-compatible providers can omit it.
       if (buffer) {
         push('\n')
       }
+      splitter.end()
       markup.end()
       reasoningMarkup.end()
       tools.end()

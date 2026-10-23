@@ -10,8 +10,8 @@ describe('remote specialist discovery', () => {
       { id: 'chat', name: 'Chat', kind: 'chat' }
     ]
     expect(specialistModelEntries(catalog, ['ui-mate', 'kev', 'chat'], 1)).toEqual([
-      { id: 'ui-mate', name: 'UI-Mate', kind: 'vision', object: 'model', owned_by: 'off-grid', created: 1, capabilities: ['vision'], architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] } },
-      { id: 'kev', name: 'Kev', kind: 'chat', object: 'model', owned_by: 'off-grid', created: 1, architecture: { input_modalities: ['text'], output_modalities: ['decisions'] } }
+      { id: 'ui-mate', name: 'UI-Mate', kind: 'grounding_specialist', object: 'model', owned_by: 'off-grid', created: 1, capabilities: ['vision'], architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] } },
+      { id: 'kev', name: 'Kev', kind: 'decision_specialist', object: 'model', owned_by: 'off-grid', created: 1, architecture: { input_modalities: ['text'], output_modalities: ['decisions'] } }
     ])
   })
 })

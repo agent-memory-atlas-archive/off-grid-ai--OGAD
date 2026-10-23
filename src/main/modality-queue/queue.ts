@@ -52,6 +52,8 @@ export interface QueueRequest {
    *  (`currentSignal`) and the job runs again from the start once the slot is free. Only for
    *  work that is safe to repeat, such as a single model call with no side effects. */
   preemptible?: boolean
+  /** Told, while the job waits, how many jobs run or will run before it. */
+  onWait?: (ahead: number) => void
 }
 
 // The two standard heavy jobs, defined once instead of spelled out at every
@@ -268,6 +270,20 @@ export class ModalityQueue {
     for (const cb of this.changeCbs) {
       try {
         cb(s)
+      } catch {
+        /* a listener must never break the scheduler */
+      }
+    }
+    for (const waiter of this.waiting) {
+      if (!waiter.request.onWait) continue
+      // Admission order (tier, then arrival), as the policy picks.
+      const before = this.waiting.filter(
+        (other) =>
+          other.job.tier < waiter.job.tier ||
+          (other.job.tier === waiter.job.tier && other.job.seq < waiter.job.seq)
+      ).length
+      try {
+        waiter.request.onWait(this.running.size + before)
       } catch {
         /* a listener must never break the scheduler */
       }

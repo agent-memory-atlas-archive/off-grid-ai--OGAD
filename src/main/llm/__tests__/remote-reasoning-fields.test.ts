@@ -5,7 +5,9 @@ import { remoteReasoningFields } from '../remote-chat'
 describe('remoteReasoningFields', () => {
   it('never switches off reasoning an OpenRouter model requires', () => {
     // OpenRouter answers HTTP 400 "Reasoning is mandatory for this endpoint and cannot be disabled".
-    expect(remoteReasoningFields(false, 512, { control: 'openrouter', mandatory: true })).toEqual({})
+    expect(remoteReasoningFields(false, 512, { control: 'openrouter', mandatory: true })).toEqual(
+      {}
+    )
   })
 
   it('switches it off when the model allows that, and on with the budget', () => {
@@ -18,5 +20,26 @@ describe('remoteReasoningFields', () => {
   it('leaves a request alone when nobody asked or the model has no control', () => {
     expect(remoteReasoningFields(undefined, 512, { control: 'openrouter' })).toEqual({})
     expect(remoteReasoningFields(false, 512, { control: 'none' })).toEqual({})
+  })
+
+  it('still caps thinking on a llama.cpp model whose template has no thinking switch', () => {
+    expect(remoteReasoningFields(true, 512, { control: 'none', tokenBudget: true })).toEqual({
+      chat_template_kwargs: { enable_thinking: true },
+      reasoning_budget_tokens: 512
+    })
+    expect(remoteReasoningFields(true, 512, { control: 'none' })).toEqual({})
+  })
+
+  it("uses llama.cpp's standard reasoning_effort when the template reads it", () => {
+    const capability = { control: 'none' as const, tokenBudget: true, reasoningEffort: true }
+    expect(remoteReasoningFields(true, 512, capability)).toEqual({
+      chat_template_kwargs: { enable_thinking: true },
+      reasoning_effort: 'high',
+      reasoning_budget_tokens: 512
+    })
+    expect(remoteReasoningFields(false, 512, capability)).toEqual({
+      chat_template_kwargs: { enable_thinking: false },
+      reasoning_effort: 'none'
+    })
   })
 })

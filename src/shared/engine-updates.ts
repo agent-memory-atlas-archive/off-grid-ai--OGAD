@@ -11,9 +11,13 @@
 // macOS, Linux and Windows. Apps before it read `index.json`, which only ever lists the CUDA chat
 // engine, because they install whatever their index lists on an NVIDIA machine.
 //
+// The Linux and Windows indexes also name the current CUDA pack, so a new pack reaches apps the same
+// way, without an app release.
+//
 // Pure: parsing, signature verification and file planning. The download and install live in
 // src/main/engine-updates.ts.
 import { createPublicKey, verify } from 'node:crypto'
+import { parsePerformancePackAsset, type PerformancePackAsset } from './performance-pack'
 
 export const ENGINE_STORE_ORIGIN = 'https://runtime.getoffgridai.co'
 
@@ -60,6 +64,8 @@ export interface EngineIndex {
   schemaVersion: 1
   platform: EnginePlatform
   engines: EngineRelease[]
+  /** The current CUDA pack (Linux and Windows only). */
+  performancePack?: PerformancePackAsset
 }
 
 export type EngineUpdatePhase =
@@ -192,7 +198,15 @@ export function parseEngineIndex(value: unknown, platform: EnginePlatform): Engi
   const engines = index.engines.map(parseRelease)
   if (engines.some((engine) => !engine)) return null
   if (new Set(engines.map((engine) => engine!.id)).size !== engines.length) return null
-  return { schemaVersion: 1, platform, engines: engines as EngineRelease[] }
+  // A malformed pack entry is dropped, so it never stops the engines themselves from updating.
+  const performancePack =
+    platform === 'darwin' ? null : parsePerformancePackAsset(index.performancePack, platform)
+  return {
+    schemaVersion: 1,
+    platform,
+    engines: engines as EngineRelease[],
+    ...(performancePack ? { performancePack } : {})
+  }
 }
 
 function versionParts(version: string): number[] {

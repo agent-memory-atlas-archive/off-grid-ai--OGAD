@@ -126,6 +126,8 @@ export type ToolCallStatus = 'completed' | 'failed' | 'pending'
 export type ToolActivity =
   | { kind: 'planning'; label: 'Planning next action…' }
   | { kind: 'preparing_tool_calls'; label: 'Preparing actions…'; name?: string }
+  /** A remote server holds the turn: queued behind others, or loading the model. */
+  | { kind: 'waiting_server'; label: string }
   /** `summary` stands in for every earlier turn; the app keeps it with the conversation. */
   | { kind: 'compacted'; label: 'Compacted'; summary?: string }
   /** Reading the conversation's attached documents, then what was read. */
@@ -877,8 +879,8 @@ export async function toolChat(
       }
     }
   }
-  // A selected remote model does not need the local server to be installed or warm.
-  if (!(await import('./vision/remote-vision-server')).getActiveRemoteVisionServer()) {
+  // A remote model (the app's, or this pane's own) does not need the local server warm.
+  if (!llm.usesRemoteTextModel()) {
     await llm.init() // respects pause; ensures the local server is up
   }
   const onDelta = opts.onDelta ?? ((): void => {})
@@ -901,8 +903,9 @@ export async function toolChat(
   let imageAvailable = opts.imageAvailable ?? false
   if ((!opts.assistantOnly || toolsEnabled) && opts.imageAvailable === undefined) {
     try {
-      const { activeImageModel } = await import('./imagegen')
-      imageAvailable = !!activeImageModel()
+      // The same answer the renderer reads: a runtime and a model, here or on a remote server.
+      const { imageGenStatus } = await import('./imagegen')
+      imageAvailable = imageGenStatus().available
     } catch {
       /* no image runtime -> stay false */
     }
@@ -1232,6 +1235,7 @@ export async function toolChat(
       signal: opts.signal,
       onToolCallStart: (name) =>
         opts.onActivity?.({ kind: 'preparing_tool_calls', label: 'Preparing actions…', name }),
+      onWaitStatus: (label) => opts.onActivity?.({ kind: 'waiting_server', label }),
       onToolCallReady:
         opts.onImageRequest &&
         roundTools.some(

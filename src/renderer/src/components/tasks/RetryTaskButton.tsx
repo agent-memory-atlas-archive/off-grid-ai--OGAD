@@ -27,13 +27,17 @@ const STOPPING_RECHECK_MS = 500
 /** One retry control for task details and linked Chat work cards. */
 export function RetryTaskButton({
   task,
-  onStarted
+  onStarted,
+  reasonInTooltip = false
 }: Readonly<{
   task: TaskSession
   onStarted?: (taskId: string) => void
+  /** In a header row: why it cannot continue goes in the tooltip, not a line of text below. */
+  reasonInTooltip?: boolean
 }>): React.JSX.Element | null {
   const [availability, setAvailability] = useState<RetryAvailability | null>(null)
   const [retrying, setRetrying] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
   const reduceMotion = useReducedMotion()
   const retrySupported = Boolean(window.api.tasks?.retryAvailability && window.api.tasks.retry)
 
@@ -72,6 +76,7 @@ export function RetryTaskButton({
     const retry = window.api.tasks?.retry
     if (!retry) return
     setRetrying(true)
+    setFailure(null)
     void retry(task.taskId, phaseIndex)
       .then((result) => {
         if (result.taskId) {
@@ -82,10 +87,10 @@ export function RetryTaskButton({
         }
       })
       .catch(() => {
-        setAvailability({
-          available: false,
-          reason: 'The task could not continue. Try again on the execution device.'
-        })
+        const reason = 'The task could not continue. Try again on the execution device.'
+        setAvailability({ available: false, reason })
+        // An answer to the person's own click shows where they clicked, never only in a tooltip.
+        setFailure(reason)
       })
       .finally(() => setRetrying(false))
   }
@@ -105,7 +110,7 @@ export function RetryTaskButton({
   const glyph = retrying || checking ? 'busy' : task.status === 'stopped' ? 'continue' : 'retry'
 
   return (
-    <div className="mt-2">
+    <div>
       {/* Its own provider: task details also render outside the app shell's provider. */}
       <TooltipProvider delayDuration={300}>
         <div className="flex items-stretch">
@@ -145,7 +150,11 @@ export function RetryTaskButton({
                 </AnimatePresence>
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{label}</TooltipContent>
+            <TooltipContent>
+              {reasonInTooltip && resolvedAvailability?.available === false
+                ? (resolvedAvailability.reason ?? label)
+                : label}
+            </TooltipContent>
           </Tooltip>
           {earlierPhases.length > 0 ? (
             <DropdownMenu>
@@ -182,9 +191,12 @@ export function RetryTaskButton({
           ) : null}
         </div>
       </TooltipProvider>
-      {resolvedAvailability?.available === false && resolvedAvailability.reason ? (
+      {failure ||
+      (!reasonInTooltip &&
+        resolvedAvailability?.available === false &&
+        resolvedAvailability.reason) ? (
         <p role="alert" className="mt-1.5 text-[10px] text-red-500">
-          {resolvedAvailability.reason}
+          {failure ?? resolvedAvailability?.reason}
         </p>
       ) : null}
     </div>

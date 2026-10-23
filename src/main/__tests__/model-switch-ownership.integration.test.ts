@@ -105,10 +105,7 @@ async function unusedPort(): Promise<number> {
   return port
 }
 
-async function startGateway(
-  server: typeof import('../model-server'),
-  port: number
-): Promise<void> {
+async function startGateway(server: typeof import('../model-server'), port: number): Promise<void> {
   server.startModelServer(port)
   const deadline = Date.now() + 2_000
   for (;;) {
@@ -178,7 +175,7 @@ describe('active chat model handoff', () => {
 })
 
 describe('gateway model choice', () => {
-  it('makes a requested installed chat model the saved model and lists only its live capabilities', async () => {
+  it('makes a requested installed chat model the local model, keeps the remote choice, and lists only live capabilities', async () => {
     const [{ llm }, manager, remote, server] = await Promise.all([
       import('../llm'),
       import('../models-manager'),
@@ -219,8 +216,18 @@ describe('gateway model choice', () => {
       ) as { id: string }
       expect(activeFile.id).toBe(other.id)
       expect(manager.getActiveModel()).toBe(other.id)
-      expect(remote.getActiveRemoteVisionServer()).toBeNull()
+      // A request from another device leaves the person's remote chat choice where it was.
+      expect(remote.getActiveRemoteVisionServer()?.id).toBe(serverId)
+      const withRemote = (await (
+        await fetch(`http://127.0.0.1:${gatewayPort}/v1/models`)
+      ).json()) as { data: Record<string, unknown>[] }
+      expect(withRemote.data[0]).toMatchObject({ remote: true })
+      expect(withRemote.data.find((entry) => entry.id === other.id)).toMatchObject({
+        context_length: llm.engineContextWindow()
+      })
 
+      // Once the person moves chat back to this Mac, the loaded model leads with its live facts.
+      remote.deactivateRemoteVisionModel()
       const listed = (await (await fetch(`http://127.0.0.1:${gatewayPort}/v1/models`)).json()) as {
         data: Record<string, unknown>[]
       }
@@ -271,58 +278,64 @@ describe('gateway model choice', () => {
   it.each([
     { modality: 'speech' as const, kind: 'voice' },
     { modality: 'transcription' as const, kind: 'transcription' }
-  ])('makes a requested installed $modality model the active $modality model', async ({ modality, kind }) => {
-    const [{ llm }, manager, server] = await Promise.all([
-      import('../llm'),
-      import('../models-manager'),
-      import('../model-server')
-    ])
-    const gatewayPort = await unusedPort()
-    const candidates = (await manager.desktopCatalog()).filter(
-      (model) => model.kind === kind && model.files.length > 0
-    )
-    const [first, second] = candidates
-    expect(second).toBeDefined()
-    for (const file of [...first!.files, ...second!.files]) {
-      const target = path.join(llm.getModelsDir(), file.name)
-      fs.mkdirSync(path.dirname(target), { recursive: true })
-      fs.writeFileSync(target, Buffer.alloc(2048, 7))
-    }
-    expect(await manager.listInstalled()).toEqual(expect.arrayContaining([first!.id, second!.id]))
-    expect(await manager.setActiveModalChoice(modality, first!.id)).toEqual({ success: true })
-
-    await startGateway(server, gatewayPort)
-    try {
-      let accepted: Response
-      if (modality === 'speech') {
-        accepted = await fetch(`http://127.0.0.1:${gatewayPort}/v1/audio/speech?async=true`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: second!.id, input: 'Hello there' })
-        })
-      } else {
-        const form = new FormData()
-        form.append('model', second!.id)
-        form.append('file', new Blob([Buffer.alloc(64, 1)], { type: 'audio/wav' }), 'clip.wav')
-        accepted = await fetch(`http://127.0.0.1:${gatewayPort}/v1/audio/transcriptions?async=true`, {
-          method: 'POST',
-          body: form
-        })
-      }
-      expect(accepted.status).toBe(202)
-      expect(manager.getActiveModalities()[modality]).toBe(second!.id)
-      const { request_id: requestId } = (await accepted.json()) as { request_id: string }
-      await vi.waitFor(
-        async () => {
-          const job = (await (
-            await fetch(`http://127.0.0.1:${gatewayPort}/v1/requests/${requestId}`)
-          ).json()) as { status: string }
-          expect(['completed', 'failed']).toContain(job.status)
-        },
-        { timeout: 12_000, interval: 50 }
+  ])(
+    'makes a requested installed $modality model the active $modality model',
+    async ({ modality, kind }) => {
+      const [{ llm }, manager, server] = await Promise.all([
+        import('../llm'),
+        import('../models-manager'),
+        import('../model-server')
+      ])
+      const gatewayPort = await unusedPort()
+      const candidates = (await manager.desktopCatalog()).filter(
+        (model) => model.kind === kind && model.files.length > 0
       )
-    } finally {
-      server.stopModelServer()
+      const [first, second] = candidates
+      expect(second).toBeDefined()
+      for (const file of [...first!.files, ...second!.files]) {
+        const target = path.join(llm.getModelsDir(), file.name)
+        fs.mkdirSync(path.dirname(target), { recursive: true })
+        fs.writeFileSync(target, Buffer.alloc(2048, 7))
+      }
+      expect(await manager.listInstalled()).toEqual(expect.arrayContaining([first!.id, second!.id]))
+      expect(await manager.setActiveModalChoice(modality, first!.id)).toEqual({ success: true })
+
+      await startGateway(server, gatewayPort)
+      try {
+        let accepted: Response
+        if (modality === 'speech') {
+          accepted = await fetch(`http://127.0.0.1:${gatewayPort}/v1/audio/speech?async=true`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: second!.id, input: 'Hello there' })
+          })
+        } else {
+          const form = new FormData()
+          form.append('model', second!.id)
+          form.append('file', new Blob([Buffer.alloc(64, 1)], { type: 'audio/wav' }), 'clip.wav')
+          accepted = await fetch(
+            `http://127.0.0.1:${gatewayPort}/v1/audio/transcriptions?async=true`,
+            {
+              method: 'POST',
+              body: form
+            }
+          )
+        }
+        expect(accepted.status).toBe(202)
+        expect(manager.getActiveModalities()[modality]).toBe(second!.id)
+        const { request_id: requestId } = (await accepted.json()) as { request_id: string }
+        await vi.waitFor(
+          async () => {
+            const job = (await (
+              await fetch(`http://127.0.0.1:${gatewayPort}/v1/requests/${requestId}`)
+            ).json()) as { status: string }
+            expect(['completed', 'failed']).toContain(job.status)
+          },
+          { timeout: 12_000, interval: 50 }
+        )
+      } finally {
+        server.stopModelServer()
+      }
     }
-  })
+  )
 })

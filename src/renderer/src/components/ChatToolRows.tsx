@@ -690,7 +690,9 @@ export function ChatToolRows({
         {/* clip, not hidden: an open step's header pins to the chat (library tool timeline),
             which a scroll container here would stop. */}
         <CollapsibleContent className="offgrid-smooth-collapsible -ml-3 overflow-clip pl-3">
-          <div className="[&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pb-1 [&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pt-2.5 [&>[data-slot=collapsible]>[data-slot=collapsible-trigger]]:hidden">
+          {/* The panel clips while it animates open; an 8px gutter (-ml-2 out, pl-2 back in) keeps
+              the timeline dots' glow inside the clip instead of cut off on the left. */}
+          <div className="[&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pb-1 [&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pt-2.5 [&>[data-slot=collapsible]>[data-slot=collapsible-trigger]]:hidden [&>[data-slot=collapsible]>[data-slot=collapsible-panel]]:-ml-2 [&>[data-slot=collapsible]>[data-slot=collapsible-panel]>div]:pl-2">
             <ToolTimeline
               entries={entries}
               state={workState}

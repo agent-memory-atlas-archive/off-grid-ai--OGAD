@@ -78,11 +78,21 @@ export interface SseTimings {
   predicted_per_second?: number
 }
 
+/** What an Off Grid gateway says a waiting request is waiting for (see model-server/early-stream). */
+export interface SseWaitStatus {
+  phase: 'queued' | 'loading'
+  ahead?: number
+  model?: string
+}
+
 export interface SseFrame {
   delta: SseDelta
   finishReason: string | null
   usage?: SseUsage
   timings?: SseTimings
+  status?: SseWaitStatus
+  /** An error the server reported inside the stream, after its headers had gone out. */
+  error?: string
 }
 
 /** A fully-assembled tool call (after accumulating its streamed fragments). */
@@ -156,6 +166,15 @@ export function parseSseLine(rawLine: string): SseFrame | null {
     // no idea how fast anything generated.
     const usage = (parsed?.usage ?? undefined) as SseUsage | undefined
     const timings = (parsed?.timings ?? undefined) as SseTimings | undefined
+    if (parsed?.error) {
+      const message = parsed.error?.message ?? parsed.error
+      return { delta: {}, finishReason: null, error: String(message) }
+    }
+    // Read from the wire: only a phase this client knows is a wait status.
+    const status = parsed?.offgrid_status as { phase?: unknown } | undefined
+    if (status?.phase === 'queued' || status?.phase === 'loading') {
+      return { delta: {}, finishReason: null, status: status as SseWaitStatus }
+    }
     const choice = parsed?.choices?.[0]
     if (!choice || typeof choice !== 'object') {
       return usage || timings ? { delta: {}, finishReason: null, usage, timings } : null
@@ -190,9 +209,12 @@ export function createToolMarkupFilter(emit: (text: string) => void): {
   push: (text: string) => void
   end: () => void
 } {
-  const suppressOpeners = [...TOOL_CALL_OPENERS, QWEN_TOOL_CALL_START, '<|tool_call|>', '<invoke'].map((value) =>
-    value.toLowerCase()
-  )
+  const suppressOpeners = [
+    ...TOOL_CALL_OPENERS,
+    QWEN_TOOL_CALL_START,
+    '<|tool_call|>',
+    '<invoke'
+  ].map((value) => value.toLowerCase())
   const thinkDelimiter = REASONING_DELIMITERS.find((delimiter) => delimiter.open === '<think>')
   const dropMarkers = thinkDelimiter
     ? [thinkDelimiter.open.toLowerCase(), thinkDelimiter.close.toLowerCase()]
@@ -262,39 +284,71 @@ export function createToolMarkupFilter(emit: (text: string) => void): {
  */
 export function createThinkSplitter(emit: (ev: StreamEvent) => void): {
   push: (text: string) => void
+  /** Flush a held tail that turned out not to be a tag. Call once, after the last push. */
+  end: () => void
   answer: () => string
+  /** The prompt opened the <think> block (the template ends with it), so the reply starts inside. */
+  startInsideThinking: () => void
+  /** The server separates reasoning itself (reasoning_content), so content is the answer. */
+  leaveThinking: () => void
 } {
   let inThink = false
   let answer = ''
+  let pushed = false
+  // A tag can arrive split across chunks ("</thi" then "nk>"): hold a tail that may start one.
+  let pending = ''
+  // Thinking the prompt opened that never closed: the model answered without thinking, so what
+  // streamed as reasoning is the answer after all.
+  let openedByPrompt = false
+  let closed = false
+  let unclosed = ''
 
-  const push = (text: string): void => {
-    let rest = text
-    while (rest) {
-      if (inThink) {
-        const end = rest.indexOf('</think>')
-        if (end === -1) {
-          emit({ text: rest, kind: 'reasoning' })
-          return
-        }
-        if (end > 0) emit({ text: rest.slice(0, end), kind: 'reasoning' })
-        rest = rest.slice(end + 8) // 8 = '</think>'.length
-        inThink = false
-      } else {
-        const start = rest.indexOf('<think>')
-        if (start === -1) {
-          answer += rest
-          emit({ text: rest, kind: 'content' })
-          return
-        }
-        if (start > 0) {
-          answer += rest.slice(0, start)
-          emit({ text: rest.slice(0, start), kind: 'content' })
-        }
-        rest = rest.slice(start + 7) // 7 = '<think>'.length
-        inThink = true
-      }
+  const out = (text: string): void => {
+    if (!text) return
+    if (inThink) {
+      emit({ text, kind: 'reasoning' })
+      if (openedByPrompt && !closed) unclosed += text
+    } else {
+      answer += text
+      emit({ text, kind: 'content' })
     }
   }
 
-  return { push, answer: () => answer }
+  const push = (text: string): void => {
+    pushed = true
+    pending += text
+    while (pending) {
+      const tag = inThink ? '</think>' : '<think>'
+      const at = pending.indexOf(tag)
+      if (at === -1) {
+        const hold = maxPartialTagSuffix(pending, [tag])
+        out(pending.slice(0, pending.length - hold))
+        pending = pending.slice(pending.length - hold)
+        return
+      }
+      out(pending.slice(0, at))
+      pending = pending.slice(at + tag.length)
+      if (inThink) closed = true
+      inThink = !inThink
+    }
+  }
+
+  return {
+    push,
+    end: () => {
+      out(pending)
+      pending = ''
+    },
+    answer: () => (openedByPrompt && !closed && !answer ? unclosed : answer),
+    startInsideThinking: () => {
+      if (pushed) return
+      inThink = true
+      openedByPrompt = true
+    },
+    leaveThinking: () => {
+      if (!openedByPrompt || closed) return
+      inThink = false
+      openedByPrompt = false
+    }
+  }
 }

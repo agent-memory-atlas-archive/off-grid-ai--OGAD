@@ -210,7 +210,10 @@ function recordTaskActionOutcome(outcome: TickOutcome): void {
   const kind = taskKindForActionType(outcome.record.type)
   if (!kind || outcome.outcome === 'done') return
   const detail = outcome.record.attemptLog.at(-1)?.detail?.trim()
-  const status = outcome.outcome === 'rejected' ? 'failed' : 'waiting'
+  // The engine's decision is final: nothing is still running to wait on. A run that needs the
+  // person (a model to download, a change to make) ends stopped, so its task offers Continue;
+  // "waiting" here left a task with no live session and no control at all.
+  const status = outcome.outcome === 'rejected' ? 'failed' : 'stopped'
   const summary =
     detail ||
     (outcome.outcome === 'rejected'

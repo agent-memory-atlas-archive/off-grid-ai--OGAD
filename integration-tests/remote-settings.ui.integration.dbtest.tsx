@@ -146,9 +146,9 @@ describe('remote media choices in Desktop Settings', () => {
       ])
     )
 
-    fireEvent.click(screen.getByRole('switch', { name: 'Use remote server' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Use this server' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await screen.findByText('Local model is active.')
+    await screen.findByText('Server saved and off.')
     expect(getActiveRemoteVisionServerForModality('image')).toBeNull()
     expect(getRemoteVisionServerSettings().servers).toHaveLength(1)
     const localModels = (await (
@@ -162,7 +162,7 @@ describe('remote media choices in Desktop Settings', () => {
       )
     ).toBe(false)
 
-    fireEvent.click(screen.getByRole('switch', { name: 'Use remote server' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Use this server' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByText('Server saved and active.')
     expect(activateRemoteVisionMediaModel(saved.activeServerId!, 'image', 'picture')).toBe(true)

@@ -433,11 +433,14 @@ describe('<MemoryChat/> ordered tool turn', () => {
       })
       boundary.emit({ type: 'reasoning', text: 'Second thought.' })
     })
-    expect(timelineLabels()).toEqual([
-      'Reasoning',
-      expect.stringContaining('Searched the web'),
-      'Thinking'
-    ])
+    // Streaming repaints in batches (a few frames), so the timeline catches up just after.
+    await waitFor(() =>
+      expect(timelineLabels()).toEqual([
+        'Reasoning',
+        expect.stringContaining('Searched the web'),
+        'Thinking'
+      ])
+    )
 
     await act(async () => {
       boundary.emit({ type: 'step', step: { kind: 'running_tool', name: 'read_url' } })
@@ -447,12 +450,14 @@ describe('<MemoryChat/> ordered tool turn', () => {
       })
       boundary.emit({ type: 'content', text: 'The answer is ready.' })
     })
-    expect(timelineLabels()).toEqual([
-      'Reasoning',
-      expect.stringContaining('Searched the web'),
-      'Reasoning',
-      expect.stringContaining('Read web page')
-    ])
+    await waitFor(() =>
+      expect(timelineLabels()).toEqual([
+        'Reasoning',
+        expect.stringContaining('Searched the web'),
+        'Reasoning',
+        expect.stringContaining('Read web page')
+      ])
+    )
 
     await act(async () => boundary.finish())
     expect(await screen.findByText('The answer is ready.')).toBeTruthy()

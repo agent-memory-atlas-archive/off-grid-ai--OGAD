@@ -10,6 +10,7 @@ import {
   type RagChatResultContract,
   type SystemHealthComponentContract,
   type GatewayApiKeySettingsContract,
+  type KeepLoadedStateContract,
   type SystemHealthContract
 } from '../shared/ipc-contracts'
 import type {
@@ -391,6 +392,21 @@ const offGridApi = {
     ipcRenderer.invoke('gateway:keys:create', name, expiresAt, replaceId),
   revokeGatewayApiKey: (id: string): Promise<GatewayApiKeySettingsContract> =>
     ipcRenderer.invoke('gateway:keys:revoke', id),
+  keepLoadedModels: (): Promise<KeepLoadedStateContract> =>
+    ipcRenderer.invoke('gateway:keep-loaded:get'),
+  previewKeepLoadedModels: (ids: string[]): Promise<KeepLoadedStateContract> =>
+    ipcRenderer.invoke('gateway:keep-loaded:preview', ids),
+  setKeepLoadedModels: (ids: string[]): Promise<KeepLoadedStateContract> =>
+    ipcRenderer.invoke('gateway:keep-loaded:set', ids),
+  keepLoadedEngineUpdateReady: (): Promise<boolean> =>
+    ipcRenderer.invoke('gateway:keep-loaded:engine-update-ready'),
+  restartKeepLoadedModels: (): Promise<KeepLoadedStateContract> =>
+    ipcRenderer.invoke('gateway:keep-loaded:restart'),
+  onKeepLoadedEngineUpdate: (callback: () => void): (() => void) => {
+    const subscription = (): void => callback()
+    ipcRenderer.on('gateway:keep-loaded:engine-update', subscription)
+    return unsubscribe('gateway:keep-loaded:engine-update', subscription)
+  },
   getSettings: () => ipcRenderer.invoke('settings:get'),
   aiLogsList: (
     query: import('../shared/ai-request-log').AILogQuery = {}
@@ -668,6 +684,7 @@ const offGridApi = {
   setupPlan: (mode?: string) => ipcRenderer.invoke('setup:plan', mode),
   chatVisionAvailable: () => ipcRenderer.invoke('model:chat-vision'),
   writeClipboardText: (text: string) => ipcRenderer.invoke('clipboard:write-text', text),
+  readClipboardText: (): Promise<string> => ipcRenderer.invoke('clipboard:read-text'),
   autoConfigure: () => ipcRenderer.invoke('setup:auto-configure'),
   restartComponent: (id: string) => ipcRenderer.invoke('system:restart', id),
   estimateModelFit: (modelId: string) => ipcRenderer.invoke('system:estimate-fit', modelId),
@@ -729,6 +746,8 @@ const offGridApi = {
       thinking?: boolean
       context?: string
       rules?: readonly string[]
+      /** A split-view pane's own remote model, for this turn only. */
+      modelReference?: string
       /** Documents attached to this message; earlier ones are read from the conversation. */
       documents?: {
         documentId?: string

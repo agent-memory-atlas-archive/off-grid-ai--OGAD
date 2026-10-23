@@ -69,6 +69,16 @@ import {
   toDataUrl
 } from './model-server/data-url'
 import { errBody, errMeta } from './model-server/errors'
+import {
+  applyKeepLoaded,
+  keepLoadedLimiter,
+  keepLoadedPort,
+  keepLoadedContextLength,
+  keepLoadedServes,
+  keptModelIds,
+  shutdownKeepLoaded
+} from './model-server/keep-loaded'
+import { endStreamWithError, openEarlyStream, type EarlyStream } from './model-server/early-stream'
 import { handleExtensionBridge, handleExtensionUpgrade } from './extension-bridge/bridge-http'
 import { isAsync, matchPollRoute } from './model-server/async-request'
 import {
@@ -116,7 +126,10 @@ import {
 } from './model-server/team-runtimes'
 import type { GatewayRuntime } from '@offgrid/models'
 import { pipeline } from 'stream'
+import { routerModelName } from '../shared/keep-loaded-plan'
+import { remoteTextVision } from '../shared/model-settings-rules'
 import {
+  remoteNativeToolCapability,
   remoteReasoningCapability,
   remoteReasoningFields,
   remoteTextModelProviderError
@@ -322,18 +335,26 @@ async function liveGatewayModalities(imageAvailable: boolean): Promise<GatewayMo
   }
   const transcription = getActiveModal('transcription')
   const speech = getActiveModal('speech')
-  const chat = llm.modelsExist()
+  // Each modality is ready on this Mac or on the remote server the person chose for it.
+  const chat = llm.modelsExist() || !!getActiveRemoteVisionServer()
   return buildGatewayModalities({
     chat,
     vision: chat && llm.hasVision(),
     embeddings: true,
-    transcription: !!whisperModel() || (!!transcription && installed.includes(transcription)),
-    speech: !!speech && installed.includes(speech),
+    transcription:
+      !!getActiveRemoteVisionServerForModality('transcription') ||
+      !!whisperModel() ||
+      (!!transcription && installed.includes(transcription)),
+    speech:
+      !!getActiveRemoteVisionServerForModality('voice') ||
+      (!!speech && installed.includes(speech)),
     image: imageAvailable
   })
 }
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
+  // A stream that already answered (it was waiting its turn) reports the failure in-stream.
+  if (res.headersSent) return endStreamWithError(res, body)
   res.writeHead(status, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify(body))
 }
@@ -474,7 +495,10 @@ function proxyToLlama(
   pooled = false,
   /** Team mode: the slot's turn, ended once llama-server has finished with the request (not as
    *  soon as the client leaves, while the engine may still hold the slot). */
-  release?: Release
+  release?: Release,
+  /** A stream that already answered keeps its connection alive until the engine answers: a long
+   *  prompt or a router loading the model can take minutes. */
+  early?: EarlyStream | null
 ): void {
   const headers = { ...req.headers, host: `${UPSTREAM_HOST}:${targetPort ?? upstreamPort()}` }
   let responded = false
@@ -509,8 +533,26 @@ function proxyToLlama(
         },
         (proxyRes) => {
           responded = true
+          early?.stop()
           const safeResponse = safeProxyResponse(proxyRes.statusCode, proxyRes.headers)
-          res.writeHead(safeResponse.statusCode, safeResponse.headers)
+          if (res.headersSent && safeResponse.statusCode !== 200) {
+            // The stream already answered while it waited: pass the engine's error on in-stream.
+            let raw = ''
+            proxyRes.on('data', (chunk) => (raw += String(chunk)))
+            proxyRes.on('end', () => {
+              let parsed: unknown
+              try {
+                parsed = JSON.parse(raw)
+              } catch {
+                parsed = errBody(raw.slice(0, 500) || 'The model server failed.', 'upstream_error')
+              }
+              activity?.finish(undefined, new Error(raw.slice(0, 200)))
+              endStreamWithError(res, parsed)
+            })
+            resolve()
+            return
+          }
+          if (!res.headersSent) res.writeHead(safeResponse.statusCode, safeResponse.headers)
           // Guard both ends BEFORE piping: a mid-stream reset from llama-server (or a client
           // disconnect) emits 'error' on these streams, and with no listener that becomes an
           // uncaught exception that crashes the main process. Does not re-settle this promise —
@@ -1175,20 +1217,44 @@ async function handleChat(
     json(res, failure.status, errBody(failure.message, failure.type))
     return
   }
+  if (typeof body.model === 'string' && keepLoadedServes(body.model))
+    return handleKeptModelChat(req, res, rid, body, buf)
   if (teamMode()) return handleTeamChat(req, res, rid, body, buf)
-  await modalityQueue.run(CHAT_JOB, async () => {
-    const requested = typeof body.model === 'string' ? body.model : ''
-    if (requested && !parseRemoteVisionModelId(requested)) {
-      const { getCatalog, listInstalled, setActiveModel } = await import('./models-manager')
+  // A streaming chat for a model here answers at once and says what it waits for (its turn, a
+  // model loading) instead of staying silent until its first token.
+  const requestedModel = typeof body.model === 'string' ? body.model : ''
+  const early =
+    body.stream === true && !parseRemoteVisionModelId(requestedModel) && !isAsync(req, body)
+      ? openEarlyStream(res, rid)
+      : null
+  res.once('close', () => early?.stop())
+  const job = early
+    ? {
+        ...CHAT_JOB,
+        onWait: (ahead: number) => {
+          if (ahead > 0) early.status('queued', { ahead })
+        }
+      }
+    : CHAT_JOB
+  await modalityQueue.run(job, async () => {
+    const requested = requestedModel
+    if (!parseRemoteVisionModelId(requested)) {
+      const { getCatalog, listInstalled, loadLocalChatModelForRequest, displayModelName } = await import('./models-manager')
       const installed = await listInstalled()
       const catalog = (await getCatalog()).models as { id: string; kind: string; remoteServerId?: string }[]
-      const selected = catalog.find((model) => model.id === requested && !model.remoteServerId &&
+      const selected = !!requested && catalog.some((model) => model.id === requested && !model.remoteServerId &&
         (model.kind === 'text' || model.kind === 'vision') && installed.includes(model.id))
       if (selected && llm.activeModelInfo()?.id !== requested) {
-        const result = await setActiveModel(requested)
+        early?.status('loading', { model: displayModelName(requested) ?? requested })
+        const result = await loadLocalChatModelForRequest(requested)
         if (!result.success) { json(res, 400, errBody(result.error ?? 'Model could not be selected.')); return }
       }
-      if (selected) await llm.init()
+      // A request that names no model takes this Mac's chat model, loaded if it is not yet.
+      if ((selected || !requested) && llm.modelsExist()) {
+        const active = llm.activeModelInfo()?.id
+        if (!llm.isReady() && active) early?.status('loading', { model: displayModelName(active) ?? active })
+        await llm.init()
+      }
     }
   try {
     let changed = await inlineChatImages(body)
@@ -1207,7 +1273,7 @@ async function handleChat(
 
   // A paired Mobile sends the stable remote inventory id advertised by Desktop.
   // Route that id through the configured remote server instead of llama-server.
-  res.setHeader('X-Request-Id', rid)
+  if (!res.headersSent) res.setHeader('X-Request-Id', rid)
   const activity = new AIRequestHandle({
     modality: 'text',
     source: 'API chat',
@@ -1248,14 +1314,87 @@ async function handleChat(
   await new Promise<void>((resolve) => {
     res.once('close', resolve)
     res.once('finish', resolve)
-    proxyToLlama(req, res, forward, Date.now() + 45_000, activity)
+    proxyToLlama(req, res, forward, Date.now() + 45_000, activity, undefined, false, undefined, early)
   })
   }).catch((error) => {
-    if (!res.headersSent && !res.destroyed) {
+    if (!res.writableEnded && !res.destroyed) {
       const failure = errMeta(error)
       json(res, failure.status, errBody(failure.message, failure.type))
     }
   })
+}
+
+// ─── Kept-loaded models ──────────────────────────────────────────────────────
+
+/** A request for a model the gateway keeps loaded goes to the model router, one at a time per
+ *  model, with no model swap and no wait behind the chat engine. */
+async function handleKeptModelChat(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  rid: string,
+  body: Record<string, unknown>,
+  buf: Buffer
+): Promise<void> {
+  const model = body.model as string
+  const port = keepLoadedPort()
+  let early: EarlyStream | null = null
+  const waitingStream = (): EarlyStream | null =>
+    body.stream === true && !isAsync(req, body) ? (early ??= openEarlyStream(res, rid)) : null
+  res.once('close', () => early?.stop())
+  let forward: Buffer = buf
+  try {
+    await inlineChatImages(body)
+    sanitizeChatMessages(body)
+  } catch {
+    // Image fetch failed — forward the request as it is so the model returns its own error.
+  }
+  // The router knows the model by its router name.
+  forward = Buffer.from(JSON.stringify({ ...body, model: routerModelName(model) }))
+  if (!res.headersSent) res.setHeader('X-Request-Id', rid)
+  const activity = new AIRequestHandle({
+    modality: 'text',
+    source: 'API chat',
+    model,
+    request: body
+  })
+  activity.update({ effectiveRequest: body, backend: 'Model router' })
+  if (port === null) {
+    activity.finish(undefined, new Error('The model router is not running.'))
+    json(res, 503, errBody('The model router is not running.'))
+    return
+  }
+  if (isAsync(req, body)) {
+    await serve(
+      res,
+      rid,
+      'chat',
+      '/v1/chat/completions',
+      true,
+      async () => {
+        const release = await keepLoadedLimiter(model).acquire()
+        try {
+          const result = await callLlamaJson(
+            { ...body, model: routerModelName(model) },
+            Date.now() + 45_000,
+            port,
+            true
+          )
+          activity.finish(result)
+          return result
+        } catch (error) {
+          activity.finish(undefined, error)
+          throw error
+        } finally {
+          release()
+        }
+      },
+      () => {}
+    )
+    return
+  }
+  const release = await admitTeamRequest(keepLoadedLimiter(model), res, 0, 'caller', waitingStream)
+  if (!release) return
+  proxyToLlama(req, res, forward, Date.now() + 45_000, activity, port, true, release, early)
 }
 
 // ─── Team-mode chat ──────────────────────────────────────────────────────────
@@ -1284,7 +1423,10 @@ async function localChatModelIds(): Promise<Set<string>> {
 /** Load or swap the local chat model when this request needs it. Only that goes through the
  *  app-wide queue, with the engine to itself: running streams finish first. Returns an error to
  *  send, or null when the model is ready to take the request. */
-async function prepareTeamChatModel(requested: string): Promise<string | null> {
+async function prepareTeamChatModel(
+  requested: string,
+  onLoading?: (model: string) => void
+): Promise<string | null> {
   const active = llm.activeModelInfo()?.id
   if (llm.isReady() && (!requested || requested === active)) return null
   const selected = !!requested && (await localChatModelIds()).has(requested)
@@ -1293,9 +1435,11 @@ async function prepareTeamChatModel(requested: string): Promise<string | null> {
   let failure: string | null = null
   await modalityQueue.run(CHAT_JOB, () =>
     chatLimiter().exclusive(async () => {
+      const { loadLocalChatModelForRequest, displayModelName } = await import('./models-manager')
+      const loading = swap ? requested : llm.activeModelInfo()?.id
+      if (loading && (swap || !llm.isReady())) onLoading?.(displayModelName(loading) ?? loading)
       if (swap && llm.activeModelInfo()?.id !== requested) {
-        const { setActiveModel } = await import('./models-manager')
-        const result = await setActiveModel(requested)
+        const result = await loadLocalChatModelForRequest(requested)
         if (!result.success) {
           failure = result.error ?? 'Model could not be selected.'
           return
@@ -1330,7 +1474,7 @@ async function admitOnRequestedModel(
     release()
     const failure = await prepareTeamChatModel(requested)
     if (failure) {
-      if (res && !res.headersSent) json(res, 400, errBody(failure))
+      if (res && !res.writableEnded) json(res, 400, errBody(failure))
       return null
     }
   }
@@ -1345,7 +1489,8 @@ function gatewayStatus(): Record<string, unknown> {
     object: 'gateway.status',
     mode,
     requests_at_once: llm.gatewayClients() ?? 'auto',
-    slots: llm.gatewaySlots()
+    slots: llm.gatewaySlots(),
+    kept_models: keptModelIds()
   }
   if (mode === 'team') return { ...base, runtimes: teamRuntimeStatus() }
   const queue = modalityQueue.getState()
@@ -1374,7 +1519,7 @@ function gatewayStatus(): Record<string, unknown> {
 
 /** The client waited too long in line: tell it when to come back. */
 function sendLimiterFull(res: http.ServerResponse, error: LimiterFullError): void {
-  res.setHeader('Retry-After', String(error.retryAfterSeconds))
+  if (!res.headersSent) res.setHeader('Retry-After', String(error.retryAfterSeconds))
   json(res, 429, errBody(error.message, 'rate_limit_error'))
 }
 
@@ -1386,13 +1531,18 @@ async function admitTeamRequest(
   tokens = 0,
   /** 'client': the turn ends when the client's response closes. 'caller': the caller ends it
    *  (proxyToLlama, once llama-server has let go of the request too). */
-  holdUntil: 'client' | 'caller' = 'client'
+  holdUntil: 'client' | 'caller' = 'client',
+  /** A streaming request that has to wait answers at once (see openEarlyStream); one that runs
+   *  at once or is refused keeps its ordinary response. */
+  waitingStream?: () => EarlyStream | null
 ): Promise<Release | null> {
   const gone = new AbortController()
   const onClose = (): void => gone.abort()
   res.once('close', onClose)
   try {
-    const release = await limiter.acquire(gone.signal, tokens)
+    const release = await limiter.acquire(gone.signal, tokens, (ahead) =>
+      waitingStream?.()?.status('queued', ahead > 0 ? { ahead } : {})
+    )
     if (res.destroyed) {
       release()
       return null
@@ -1421,9 +1571,18 @@ async function handleTeamChat(
 ): Promise<void> {
   const requested = typeof body.model === 'string' ? body.model : ''
   const remote = !!requested && !!parseRemoteVisionModelId(requested)
+  // A streaming chat for a model here that has to wait answers at once and says what it waits for.
+  let early: EarlyStream | null = null
+  const waitingStream = (): EarlyStream | null =>
+    body.stream === true && !remote && !isAsync(req, body)
+      ? (early ??= openEarlyStream(res, rid))
+      : null
+  res.once('close', () => early?.stop())
   if (!remote) {
     try {
-      const failure = await prepareTeamChatModel(requested)
+      const failure = await prepareTeamChatModel(requested, (model) =>
+        waitingStream()?.status('loading', { model })
+      )
       if (failure) {
         json(res, 400, errBody(failure))
         return
@@ -1445,7 +1604,7 @@ async function handleTeamChat(
   } catch {
     // Image fetch failed — forward the original request so the model returns its own error.
   }
-  res.setHeader('X-Request-Id', rid)
+  if (!res.headersSent) res.setHeader('X-Request-Id', rid)
   // What this request may take from the shared KV pool: its prompt (images by their token cost,
   // not their encoded size) and its reply cap, which thinking makes longer when none is set.
   const maxTokens = body.max_tokens ?? body.max_completion_tokens
@@ -1497,7 +1656,7 @@ async function handleTeamChat(
     ? await admitTeamRequest(teamLimiter('remote'), res)
     : await admitOnRequestedModel(
         requested,
-        () => admitTeamRequest(teamLimiter('chat'), res, tokens, 'caller'),
+        () => admitTeamRequest(teamLimiter('chat'), res, tokens, 'caller', waitingStream),
         res
       )
   if (!release) return
@@ -1509,7 +1668,7 @@ async function handleTeamChat(
   })
   activity.update({ effectiveRequest: body, backend: llm.activeAccelerator() ?? 'Unknown' })
   if (proxyToSelectedRemote(res, body, activity, true)) return
-  proxyToLlama(req, res, forward, Date.now() + 45_000, activity, undefined, true, release)
+  proxyToLlama(req, res, forward, Date.now() + 45_000, activity, undefined, true, release, early)
 }
 
 /** /v1/completions in team mode: a turn on the local limiter, the chat retry window, pooled. */
@@ -1612,19 +1771,29 @@ async function handleModelsList(
   if (activeRemote) {
     const reasoning = await remoteReasoningCapability(activeRemote)
     const supportsReasoning = reasoning.control !== 'none'
+    // What the server's own model list says, as Desktop's chat reads it: never assumed.
+    const vision = remoteTextVision(
+      activeRemote.modelCatalog?.find((model) => model.id === activeRemote.model)
+    )
+    const tools = (await remoteNativeToolCapability(activeRemote)).status !== 'unsupported'
     text = [
       {
         id: remoteVisionModelId(activeRemote.id, activeRemote.model),
-        name: activeRemote.model,
+        name:
+          activeRemote.modelCatalog?.find((model) => model.id === activeRemote.model)?.name ??
+          activeRemote.model,
         object: 'model',
         created: now,
         owned_by: activeRemote.name,
         kind: 'chat',
         remote: true,
-        // The Desktop gateway has already validated this OpenAI-compatible route.
         // Mobile must not probe the local llama /props endpoint for capabilities of
         // this remote model, because that reports the wrong active model.
-        capabilities: ['vision', 'tools', ...(supportsReasoning ? ['reasoning'] : [])],
+        capabilities: [
+          ...(vision ? ['vision'] : []),
+          ...(tools ? ['tools'] : []),
+          ...(supportsReasoning ? ['reasoning'] : [])
+        ],
         ...(supportsReasoning ? { reasoning: { mandatory: reasoning.mandatory === true } } : {})
       }
     ]
@@ -1695,7 +1864,16 @@ async function handleModelsList(
   const { desktopCatalog, listInstalled, getCatalog, getActiveModel } = await import('./models-manager')
   const installed = await listInstalled()
   const catalog = (await getCatalog()).models as { id: string; name: string; kind: string; remoteServerId?: string }[]
-  if (!activeRemote) {
+  if (activeRemote) {
+    // This Mac's own models stay listed after the remote one: a request naming one loads it here.
+    text = [
+      ...text,
+      ...installedTextModelEntries(catalog, installed, now).map((entry) => ({
+        ...entry,
+        context_length: llm.engineContextWindow()
+      }))
+    ]
+  } else {
     const downloaded = installedTextModelEntries(catalog, installed, now)
     if (downloaded.length) text = downloaded
     // Only the model llama-server is serving has known capabilities; the rest stay unknown.
@@ -1708,6 +1886,11 @@ async function handleModelsList(
       loadedId && liveCaps ? { id: loadedId, capabilities: liveCaps } : null
     )
   }
+  // A kept model runs with the window its router plan gave it, not this Mac's engine setting.
+  text = text.map((entry) => {
+    const kept = typeof entry.id === 'string' ? keepLoadedContextLength(entry.id) : null
+    return kept === null ? entry : { ...entry, context_length: kept }
+  })
   const specialists = specialistModelEntries(await desktopCatalog(), installed, now)
   const data: Record<string, unknown>[] = [
     ...text,
@@ -1812,18 +1995,20 @@ async function handleTranscription(
 
 // ─── Per-request model choice for media modalities ──────────────────────────
 /** A request naming an installed image, voice or transcription model makes it that modality's
- *  active model, as a chat request naming an installed model does for Text. */
+ *  local model, as a chat request naming an installed model does for Text. */
 async function selectRequestedModal(
   modality: 'image' | 'speech' | 'transcription',
   requested: unknown
 ): Promise<void> {
   if (typeof requested !== 'string' || !requested || parseRemoteVisionModelId(requested)) return
-  const remote = getActiveRemoteVisionServerForModality(modality === 'speech' ? 'voice' : modality)
+  // A modality the person put on a remote server stays there: a request moves only a local pick.
+  // Switching it is /v1/models/activate, an explicit choice.
+  if (getActiveRemoteVisionServerForModality(modality === 'speech' ? 'voice' : modality)) return
   const manager = await import('./models-manager')
   if (modality === 'image') {
     if (!listImageModels().includes(requested) || activeImageModel() === requested) return
   } else {
-    if (!remote && getActiveModal(modality) === requested) return
+    if (getActiveModal(modality) === requested) return
     const catalog = (await manager.getCatalog()).models as { id: string; kind: string }[]
     const entry = catalog.find((model) => model.id === requested)
     if (!entry || modalityForKind(entry.kind) !== modality) return
@@ -2269,6 +2454,9 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
     setDecisionGatewayModeSource(() => llm.gatewayMode())
   )
 
+  // The models the person keeps loaded start with the gateway, in their own router.
+  void applyKeepLoaded().catch((error) => console.error('[keep-loaded] start failed:', error))
+
   // Each request runs in its own scope, so the records it starts can name its API key.
   server = http.createServer((req, res) => void withGatewayRequestScope(async () => {
     const origin = req.headers.origin
@@ -2635,6 +2823,43 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
       })()
       return
     }
+    // A kept model's /props (its chat template, so a client knows its thinking controls) comes
+    // from the router that serves it; without this a client asking about it gets the local
+    // llama-server's 502 and drops thinking and its budget.
+    if (url === '/props' && method === 'GET') {
+      const model = new URLSearchParams(req.url?.split('?')[1]).get('model')
+      const port = keepLoadedPort()
+      if (model && port !== null && keepLoadedServes(model)) {
+        req.url = `/props?model=${encodeURIComponent(routerModelName(model))}`
+        return proxyToLlama(req, res, undefined, 0, undefined, port)
+      }
+    }
+    // Rendering a kept model's prompt (a client checking how its template opens thinking) goes to
+    // the router too; the model is named in the body.
+    if (url === '/apply-template' && method === 'POST') {
+      void (async () => {
+        let bytes: Buffer
+        try {
+          bytes = await readBody(req, MAX_UPLOAD)
+        } catch {
+          return json(res, 413, errBody('Request too large.'))
+        }
+        let model: unknown
+        try {
+          model = (JSON.parse(bytes.toString('utf8')) as { model?: unknown }).model
+        } catch {
+          model = undefined
+        }
+        const port = keepLoadedPort()
+        if (typeof model === 'string' && port !== null && keepLoadedServes(model)) {
+          const named = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>
+          const routed = Buffer.from(JSON.stringify({ ...named, model: routerModelName(model) }))
+          return proxyToLlama(req, res, routed, 0, undefined, port)
+        }
+        proxyToLlama(req, res, bytes)
+      })()
+      return
+    }
     // Non-inference routes pass through without generating activity rows.
     proxyToLlama(req, res)
   }))
@@ -2688,6 +2913,7 @@ export async function startModelServer(port = GATEWAY_PORT): Promise<void> {
 }
 
 export function stopModelServer(): void {
+  shutdownKeepLoaded()
   server?.close()
   server = null
   keepAwake?.release()

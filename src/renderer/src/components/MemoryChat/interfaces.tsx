@@ -87,4 +87,16 @@ export interface MemoryChatProps {
   readonly onTaskDetailModeChange?: (detailOpen: boolean) => void
   /** Chat as God (see GodChatOptions). Absent: the Chat screen. */
   readonly god?: GodChatOptions
+  /** One pane of the split view: keeps its own tabs, apart from the main Chat screen's. */
+  readonly paneKey?: string
+  /** Whether Chat is showing its open tabs side by side. */
+  readonly split?: boolean
+  /** Show the open tabs side by side, or go back to one chat. */
+  readonly onToggleSplit?: () => void
+  /** Split view: a prompt sent in one pane is sent by every pane. */
+  readonly broadcast?: boolean
+  readonly onToggleBroadcast?: () => void
+  /** Split view's first pane: how many panes are open, and adding or removing the last one. */
+  readonly paneCount?: number
+  readonly onPaneCountChange?: (count: number) => void
 }

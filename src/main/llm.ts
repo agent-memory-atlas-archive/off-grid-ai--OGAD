@@ -1,7 +1,9 @@
 import { totalmem } from 'os'
+import { cpuQuota, usableCpuCount } from './cpu-cores'
 import { settingsChanged } from './settings-version'
 import { budgetChange, speculativePatch, speculativeOptions } from '../shared/text-settings-rules'
 import type { RuntimeBackend } from '../shared/runtime-backends'
+import { remoteTextVision } from '../shared/model-settings-rules'
 import { parseNativeBackend } from './runtime-backends'
 import { spawn, execSync, ChildProcess } from 'child_process'
 import { Mutex } from 'async-mutex'
@@ -98,6 +100,7 @@ import { emitChangedLlmSettings } from './sync-mutation'
 import { loadGatedVisionModelAdapter } from './vision/model-adapters/registry'
 import type { VisionModelArtifacts } from './vision/model-adapters/types'
 import { getActiveRemoteVisionServer } from './vision/remote-vision-server'
+import { currentChatModel } from './llm/chat-model-scope'
 import {
   currentRemoteScreenTaskSession,
   screenTaskRequestSource
@@ -771,7 +774,11 @@ export class LLMService {
       spillBatch: this.spillBatchFor(effectiveCtxSize, gpuLayers, serverPath),
       flashAttn: this.flashAttn,
       kvCacheType: this.kvCacheType,
-      threads: this.threads,
+      // Unset, llama.cpp takes the host's physical cores; under a container CPU quota that
+      // oversubscribes it and every thread is throttled, so plan from the quota instead.
+      threads:
+        this.threads ??
+        (cpuQuota() === null ? undefined : Math.max(1, Math.floor(usableCpuCount() / 2))),
       batchSize: this.batchSize,
       speculativeDraftMax: this.speculativeDraftMax,
       speculativeDecoding: useSelectedModelSpeculation
@@ -1365,7 +1372,27 @@ export class LLMService {
   // it only adds image input; a vision model still runs text without it. (Gating
   // on mmproj wrongly kept "Setup Required" up for an activated vision model.)
   /** Whether the active chat model can read images (has a vision projector / mmproj). */
-  hasVision(): boolean {
+  /**
+   * Whether the model text goes to reads images: a remote model when its server's model list
+   * says so, a local one when its vision file is on disk. Screen frames go to a remote server
+   * only when the person allowed screen images for it.
+   */
+  hasVision(input: 'attachments' | 'screen' = 'attachments'): boolean {
+    const remote = this.activeRemoteTextModel() as
+      | (RemoteTextModelConnection & {
+          modelCatalog?: { id: string; inputModalities?: string[] }[]
+          screenFramesAllowed?: boolean
+        })
+      | null
+    if (remote && !isLocalModelServer(remote)) {
+      if (input === 'screen' && remote.screenFramesAllowed !== true) return false
+      return remoteTextVision(remote.modelCatalog?.find((model) => model.id === remote.model))
+    }
+    return this.localHasVision()
+  }
+
+  /** This machine's engine reads images: the loaded model's vision file is on disk. */
+  localHasVision(): boolean {
     this.ensureLoaded()
     this.resolveModel()
     return !!this.mmProjPath && fs.existsSync(this.mmProjPath)
@@ -1376,7 +1403,7 @@ export class LLMService {
    *  invoking chat; this remains the engine-boundary invariant that protects every
    *  explicit image entry point if selection changes between capability check and use. */
   private assertImageInputSupported(images: string[]): void {
-    if (images.length > 0 && !this.hasVision()) {
+    if (images.length > 0 && !this.localHasVision()) {
       throw new Error('Active chat model does not support image input (no vision projector)')
     }
   }
@@ -2071,7 +2098,8 @@ export class LLMService {
    * method uses this seam, so no caller needs local/remote branches. */
   private activeRemoteTextModel(): RemoteTextModelConnection | null {
     const screenTask = currentRemoteScreenTaskSession()
-    return screenTask ? screenTask.activeServer : getActiveRemoteVisionServer()
+    if (screenTask) return screenTask.activeServer
+    return currentChatModel() ?? getActiveRemoteVisionServer()
   }
 
   /** Whether text requests go to a remote model server rather than this machine's engine. */
@@ -2132,6 +2160,7 @@ export class LLMService {
       toolChoice?: string
       onToolCallStart?: (name?: string) => void
       onToolCallReady?: (call: AssembledToolCall) => void
+      onWaitStatus?: (label: string) => void
     }
   ): Promise<StreamResult> {
     // A caller's cap always goes out (a suggestion's 40 tokens). Auto sends none, so the server's
@@ -2161,7 +2190,8 @@ export class LLMService {
         signal: options.signal,
         timeoutMs: options.timeoutMs,
         onToolCallStart: options.onToolCallStart,
-        onToolCallReady: options.onToolCallReady
+        onToolCallReady: options.onToolCallReady,
+        onWaitStatus: options.onWaitStatus
       }
     })
   }
@@ -2484,6 +2514,8 @@ export class LLMService {
       responseFormat?: unknown
       onToolCallStart?: (name?: string) => void
       onToolCallReady?: (call: AssembledToolCall) => void
+      /** A remote server is still queueing this turn or loading its model. */
+      onWaitStatus?: (label: string) => void
     } = {},
     timeoutMs?: number
   ): Promise<StreamResult> {
@@ -2513,7 +2545,8 @@ export class LLMService {
             tools: opts.tools,
             toolChoice: opts.toolChoice,
             onToolCallStart: opts.onToolCallStart,
-            onToolCallReady: opts.onToolCallReady
+            onToolCallReady: opts.onToolCallReady,
+            onWaitStatus: opts.onWaitStatus
           })
           return withContextMetrics(result, messages, {
             contextWindowTokens: await this.contextWindow(),
