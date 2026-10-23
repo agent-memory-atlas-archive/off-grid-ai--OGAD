@@ -369,8 +369,9 @@ export function setRemoteVisionServerSettings(
       setRemoteModelSelected(modality, Boolean(handover), handover)
     }
   }
-  // A new server takes chat only when no server runs it yet; every other choice stays.
-  const takesChat = isNewServer && Boolean(mediaModels.text) && !selectedServer(stored, 'text')
+  // A new server saved with a chat model takes chat; one without leaves chat where it was, and
+  // the media choices stay on their own servers either way.
+  const takesChat = isNewServer && Boolean(mediaModels.text)
   writeStored({ version: CONFIG_VERSION, activeServerId, servers })
   if (takesChat) setRemoteModelSelected('text', true, id)
   return getRemoteVisionServerSettings()
