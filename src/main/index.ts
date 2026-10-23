@@ -160,7 +160,11 @@ async function createWindow(): Promise<void> {
   // opens at full size instead of appearing at the constructed size and jumping. It also means anything
   // that reads the window as soon as it exists sees the real geometry - on ready-to-show the renderer
   // can already have loaded, so the size depended on which happened first.
-  mainWindow.maximize()
+  //
+  // Not in a headless run: maximize() also SHOWS a hidden window (Electron documents this), so every
+  // e2e spec put a full-screen app on the primary display. The window is already constructed at the
+  // work-area size, so the renderer still lays out at full size without it.
+  if (windowPresentation.showWindow) mainWindow.maximize()
 
   // Nothing is shown in a headless (e2e) run - see window-presentation for why the suite needs that on
   // macOS, where Playwright cannot make an Electron app headless and there is no xvfb to hide it behind.
