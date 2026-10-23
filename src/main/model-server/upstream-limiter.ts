@@ -138,7 +138,14 @@ export class UpstreamLimiter {
       }
       signal?.addEventListener('abort', onAbort, { once: true })
       this.waiting.push(waiter)
-      onQueued?.(this.waiting.length - 1)
+      try {
+        onQueued?.(this.waiting.length - 1)
+      } catch (error) {
+        // The caller never gets this turn: leave the line, or the slot would be taken for good.
+        this.waiting.splice(this.waiting.indexOf(waiter), 1)
+        signal?.removeEventListener('abort', onAbort)
+        reject(error)
+      }
     })
   }
 
