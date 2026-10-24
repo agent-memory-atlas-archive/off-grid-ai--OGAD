@@ -35,6 +35,7 @@ resources/bin/parakeet/
 # Pro MultipeerConnectivity helper - built from the private Pro repo and staged for packaging.
 resources/bin/proximity-helper
 resources/bin/speaker-diarize
+resources/bin/speaker-diarize.exe
 resources/bin/speaker-diarization-models/
 resources/bin/keychain-bootstrap.node
 resources/bin/location.node

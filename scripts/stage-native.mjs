@@ -49,6 +49,23 @@ function ensureElectronSqlite() {
 
 ensureElectronSqlite()
 
+/**
+ * Pro's speaker-diarize helper ships on every platform: macOS and Windows package resources/bin,
+ * Linux packages build/linux-bin.
+ * @returns {void}
+ */
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+function stageSpeakerDiarize() {
+  const script = path.join(root, 'pro', 'scripts', 'build-speaker-diarize.mjs')
+  if (!fs.existsSync(script)) return
+  const target = process.platform === 'linux' ? path.join(root, 'build', 'linux-bin') : stageDir
+  const result = spawnSync(process.execPath, [script, target], { cwd: root, stdio: 'inherit' })
+  if (result.error) throw result.error
+  if (result.status !== 0) process.exit(result.status ?? 1)
+}
+
+stageSpeakerDiarize()
+
 if (process.platform !== 'darwin') process.exit(0)
 
 /**
@@ -78,4 +95,3 @@ run(path.join(root, 'scripts', 'build-computer-use-capture.sh'), root)
 run(path.join(root, 'scripts', 'build-ocr.sh'), root)
 run(path.join(root, 'scripts', 'build-actions-helper.sh'), root)
 run(path.join(root, 'pro', 'scripts', 'build-proximity-helper.sh'), path.join(root, 'pro'))
-run(path.join(root, 'pro', 'scripts', 'build-speaker-diarize.sh'), path.join(root, 'pro'))
