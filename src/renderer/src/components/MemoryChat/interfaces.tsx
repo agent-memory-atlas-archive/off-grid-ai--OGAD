@@ -62,8 +62,9 @@ export interface ChatContextDocument {
   /** As an attachment's kind: 'pasted' for text. */
   readonly kind: string
   readonly text: string
-  /** A cited passage of it was clicked: show where it comes from (a meeting plays from there). */
-  readonly onOpen?: (passage: string) => void
+  /** A cited passage of it was clicked: show where it comes from (a meeting moves there).
+   *  `answer` is the answer that cited it, to find the very part it means. */
+  readonly onOpen?: (passage: string, answer: string) => void
 }
 
 export interface MemoryChatProps {

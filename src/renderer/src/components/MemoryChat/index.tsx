@@ -4091,7 +4091,7 @@ export function MemoryChat({
         setSkillsOpen(true)
       },
       // A document citation opens the document at the page it cites.
-      onOpenDocument: (documentId, page, passage) => {
+      onOpenDocument: (documentId, page, passage, answer) => {
         const conversation =
           messagesByConvRef.current[activeConversationId ?? NEW_CHAT] ?? EMPTY_MSGS
         const attachment = conversation
@@ -4104,7 +4104,7 @@ export function MemoryChat({
         const own =
           given.find((document) => document.id === documentId) ??
           (!attachment && given.length === 1 ? given[0] : undefined)
-        if (own?.onOpen) return own.onOpen(passage ?? '')
+        if (own?.onOpen) return own.onOpen(passage ?? '', answer ?? '')
         if (!attachment) return
         closePanels()
         const isPdf = attachment.kind === 'pdf' && !!attachment.path

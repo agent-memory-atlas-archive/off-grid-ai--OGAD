@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 //
 // A chat given documents by its host (a meeting's chat on the Meetings screen): it starts on a new
-// chat rather than the last one open, every turn reads the documents, and a cited passage of one
-// is shown by the host.
+// chat rather than the last one open, every turn reads the documents,
+// and a cited passage of one is shown by the host, with the answer that cited it.
 //
 // Drives the REAL <MemoryChat/>: the window.api bridge to MAIN is the only fake. What MAIN
 // receives (toolChat's documents) and what the user sees and clicks are the terminal artifacts.
@@ -66,7 +66,8 @@ function installApi(): { toolChat: ReturnType<typeof vi.fn> } {
     })),
     // Chat already holds another conversation: a meeting's chat must not open it.
     getRagConversations: vi.fn(async () => [
-      { id: 'elsewhere', title: 'Weekend plans', project_id: null, updated_at: '2026-10-01' }
+      { id: 'elsewhere', title: 'Weekend plans', project_id: null, updated_at: '2026-10-01' },
+      { id: 'about-meeting', title: 'Pilot pricing', project_id: null, updated_at: '2026-10-02' }
     ]),
     getRagConversation: vi.fn(async () => ({ id: 'elsewhere', project_id: null })),
     getRagMessages: vi.fn(async () => [
@@ -110,20 +111,21 @@ describe('<MemoryChat/> given documents by its host', () => {
 
   it('starts fresh, reads the documents every turn, and lets the host show a cited passage', async () => {
     const { toolChat } = installApi()
-    const opened: string[] = []
+    const opened: [string, string][] = []
     const user = userEvent.setup()
     render(
       <TooltipProvider>
         <MemoryChat
           paneKey="meeting-7"
           openTarget={{ fresh: true }}
+          conversationIds={['about-meeting']}
           contextDocuments={() => [
             {
               id: 'meeting-7-abc',
               name: 'Meeting: Pricing review',
               kind: 'pasted',
               text: MEETING_TEXT,
-              onOpen: (passage) => opened.push(passage)
+              onOpen: (passage, answer) => opened.push([passage, answer])
             }
           ]}
         />
@@ -151,6 +153,6 @@ describe('<MemoryChat/> given documents by its host', () => {
 
     // The cited passage is the host's to show, even from an answer that names its old fingerprint.
     await user.click(await screen.findByRole('button', { name: /part 2/ }, { timeout: 3000 }))
-    expect(opened).toEqual(['[1:05] Dev: The pilot costs $40k.'])
+    expect(opened).toEqual([['[1:05] Dev: The pilot costs $40k.', 'The pilot costs $40k [S1].']])
   })
 })
