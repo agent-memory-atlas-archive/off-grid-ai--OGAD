@@ -8,7 +8,7 @@
 // receives (toolChat's documents) and what the user sees and clicks are the terminal artifacts.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryChat } from '../MemoryChat'
 import { TooltipProvider } from '../ui/tooltip'
@@ -117,7 +117,7 @@ describe('<MemoryChat/> given documents by its host', () => {
       <TooltipProvider>
         <MemoryChat
           paneKey="meeting-7"
-          openTarget={{ fresh: true }}
+          openTarget={{ fresh: true, draftPrompt: 'What does the pilot cost?' }}
           conversationIds={['about-meeting']}
           contextDocuments={() => [
             {
@@ -136,7 +136,10 @@ describe('<MemoryChat/> given documents by its host', () => {
     // A new chat, not the conversation Chat had open.
     expect(screen.queryByText('Where should we hike?')).toBeNull()
 
-    fireEvent.change(textarea, { target: { value: 'What does the pilot cost?' } })
+    // A fresh start keeps a draft it was handed.
+    await waitFor(() =>
+      expect((textarea as HTMLTextAreaElement).value).toBe('What does the pilot cost?')
+    )
     await user.click(screen.getByRole('button', { name: /^send$/i }))
 
     // MAIN reads the meeting as a document on the turn; the click handler stays in the window.

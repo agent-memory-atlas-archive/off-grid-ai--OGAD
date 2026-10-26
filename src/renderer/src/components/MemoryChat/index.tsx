@@ -17,7 +17,7 @@ import {
   settleUnownedStream,
   type RunStopTarget
 } from '@renderer/lib/chat-run-lifecycle'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { queuedCount } from '@renderer/lib/chat-queue'
 import {
   submitQueuedTurn,
@@ -1605,6 +1605,7 @@ export function MemoryChat({
           setActiveConversationId(null)
           setConvMessages(null, [])
           setActiveProjectId(null)
+          if (openTarget.draftPrompt) draftStore.set(openTarget.draftPrompt)
         } else if (openTarget.presetId) {
           setActiveConversationId(null)
           setConvMessages(null, [])
@@ -4075,7 +4076,9 @@ export function MemoryChat({
   // Read when a source is clicked, so a host re-rendering (a meeting's playhead) does not rebuild
   // every message's navigation.
   const contextDocumentsRef = useRef(contextDocuments)
-  contextDocumentsRef.current = contextDocuments
+  useLayoutEffect(() => {
+    contextDocumentsRef.current = contextDocuments
+  }, [contextDocuments])
   const messageNavigation = useMemo<ContextNavigation>(
     () => ({
       onNavigateToMemory,
