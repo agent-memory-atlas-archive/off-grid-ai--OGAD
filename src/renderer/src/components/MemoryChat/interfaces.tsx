@@ -106,6 +106,8 @@ export interface MemoryChatProps {
    * otherwise the passages that answer the question.
    */
   readonly contextDocuments?: () => readonly ChatContextDocument[]
+  /** List only these conversations (a meeting's chats beside the meeting). Absent: all of them. */
+  readonly conversationIds?: readonly string[]
   /** Chat as God (see GodChatOptions). Absent: the Chat screen. */
   readonly god?: GodChatOptions
   /** One pane of the split view: keeps its own tabs, apart from the main Chat screen's. */

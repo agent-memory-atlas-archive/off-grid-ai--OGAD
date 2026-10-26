@@ -330,6 +330,7 @@ export function MemoryChat({
   onActiveConversationChange,
   onTaskDetailModeChange,
   contextDocuments,
+  conversationIds,
   god,
   paneKey,
   split,
@@ -4323,13 +4324,17 @@ export function MemoryChat({
 
   const conversationListRows = useMemo(() => {
     const query = convSearch.trim().toLowerCase()
+    const allowed = conversationIds ? new Set(conversationIds) : null
+    const listed = allowed
+      ? conversations.filter((conversation) => allowed.has(conversation.id))
+      : conversations
     const filtered = query
-      ? conversations.filter(
+      ? listed.filter(
           (conversation) =>
             (conversation.title || '').toLowerCase().includes(query) ||
             contentMatchIds.has(conversation.id)
         )
-      : conversations
+      : listed
     if (!filtered.length) return []
 
     const today = startOfLocalDay(new Date())
@@ -4364,7 +4369,7 @@ export function MemoryChat({
           ]
         : []
     )
-  }, [contentMatchIds, convSearch, conversations])
+  }, [contentMatchIds, convSearch, conversations, conversationIds])
 
   return (
     <ActiveConversationProvider conversationId={activeConversationId}>
