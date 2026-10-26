@@ -44,7 +44,7 @@ export function openUnifiedContext(item: UnifiedContextItem, navigation: Context
   if (item.kind === 'attachment' && typeof item.key === 'string') {
     // key: attachment:<documentId>:<page>:<position>
     const [, documentId, page] = item.key.split(':')
-    if (documentId) navigation.onOpenDocument?.(documentId, Number(page) || 1)
+    if (documentId) navigation.onOpenDocument?.(documentId, Number(page) || 1, item.snippet)
     return
   }
   navigateSearchHit(

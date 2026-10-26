@@ -222,8 +222,8 @@ export type ContextNavigation = Readonly<{
   installedSkillNames?: readonly string[]
   onOpenInstalledSkill?: (name: string) => void
   onOpenSkillPreset?: (preset: DemoPreset) => void
-  /** Open an attached document at a page (a document citation). */
-  onOpenDocument?: (documentId: string, page: number) => void
+  /** Open an attached document at a page (a document citation); `passage` is the cited text. */
+  onOpenDocument?: (documentId: string, page: number, passage?: string) => void
 }>
 
 export type UnifiedContextItem = NonNullable<RagContext['unified']>[number]
